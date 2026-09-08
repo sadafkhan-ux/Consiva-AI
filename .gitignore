@@ -1,0 +1,37 @@
+# Secrets — never commit. Real values live only in backend/.env (also ignored by
+# backend/.gitignore); .env.example carries empty placeholders and IS committed.
+.env
+.env.local
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Test / tooling artifacts
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Runtime logs (worker/uvicorn output captured during local debugging)
+*.log
+
+# Node / frontend build output
+node_modules/
+dist/
+dist-ssr/
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code local session state
+.claude/

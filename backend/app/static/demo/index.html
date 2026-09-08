@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Consiva Consent Agent — Demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1420; --panel: #161d2e; --panel-2: #1d2740; --border: #2a3454;
+    --text: #e6e9f2; --muted: #8a93ab; --accent: #5b8cff; --green: #35c98e;
+    --amber: #f2b84b; --red: #f2555a; --mono: ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .panel h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 12px; }
+  .run-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1; min-width: 260px; background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); padding: 10px 12px; border-radius: 6px; font-size: 14px;
+  }
+  label.chk { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+  button {
+    background: var(--accent); color: #fff; border: none; padding: 10px 18px;
+    border-radius: 6px; font-weight: 600; font-size: 14px; cursor: pointer;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.secondary { background: var(--panel-2); border: 1px solid var(--border); }
+  button.approve { background: var(--green); }
+  button.reject { background: var(--red); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .stages { display: grid; gap: 6px; }
+  .stage-row {
+    display: grid; grid-template-columns: 22px 1fr auto auto; gap: 10px; align-items: center;
+    padding: 8px 10px; border-radius: 6px; background: var(--panel-2); font-size: 13px;
+  }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #444; }
+  .dot.running { background: var(--amber); box-shadow: 0 0 0 4px rgba(242,184,75,.15); animation: pulse 1.2s infinite; }
+  .dot.completed { background: var(--green); }
+  .dot.failed { background: var(--red); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+  .stage-name { text-transform: capitalize; }
+  .stage-dur { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .stage-status { font-size: 11px; text-transform: uppercase; color: var(--muted); }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .grid5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .stat { background: var(--panel-2); border-radius: 8px; padding: 12px; text-align: center; }
+  .stat .n { font-size: 22px; font-weight: 700; }
+  .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; margin-top: 2px; }
+  .finding { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 10px; }
+  .finding-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; font-weight: 700; }
+  .badge.high { background: rgba(242,85,90,.15); color: var(--red); }
+  .badge.medium { background: rgba(242,184,75,.15); color: var(--amber); }
+  .badge.low { background: rgba(53,201,142,.15); color: var(--green); }
+  .badge.status { background: rgba(91,140,255,.15); color: var(--accent); }
+  .finding-text { margin: 10px 0; font-size: 14px; }
+  .finding-meta { font-size: 12px; color: var(--muted); margin: 4px 0; }
+  .finding-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .review-form { margin-top: 10px; padding: 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+  .review-form label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
+  .review-form input[type=text], .review-form select {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 10px; border-radius: 6px; font-size: 13px; margin-bottom: 8px;
+  }
+  .review-form .row-actions { display: flex; gap: 8px; }
+  .review-form .row-actions button { padding: 6px 14px; font-size: 13px; }
+  .refs { font-size: 12px; color: var(--muted); }
+  .refs code { background: var(--panel); padding: 1px 5px; border-radius: 4px; font-family: var(--mono); }
+  pre.log { background: #0a0e18; border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    font-size: 12px; max-height: 220px; overflow: auto; margin: 0; }
+  .error-box { background: rgba(242,85,90,.1); border: 1px solid rgba(242,85,90,.3); color: #ffb2b4;
+    padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-top: 10px; }
+  .muted { color: var(--muted); }
+  .total-latency { font-size: 28px; font-weight: 700; }
+  .pill { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 700; text-transform: uppercase; }
+  .pill.ok { background: rgba(53,201,142,.15); color: var(--green); }
+  .pill.warn { background: rgba(242,184,75,.15); color: var(--amber); }
+  .pill.bad { background: rgba(242,85,90,.15); color: var(--red); }
+  .pill.neutral { background: rgba(138,147,171,.15); color: var(--muted); }
+  table.state-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.state-table th, table.state-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  table.state-table th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+  .status-banner {
+    display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 8px;
+    font-size: 16px; font-weight: 700; margin-bottom: 12px;
+  }
+  .status-banner.neutral { background: var(--panel-2); color: var(--text); }
+  .status-banner.progress { background: rgba(242,184,75,.12); color: var(--amber); }
+  .status-banner.ok { background: rgba(53,201,142,.12); color: var(--green); }
+  .status-banner.bad { background: rgba(242,85,90,.12); color: var(--red); }
+  .status-banner .dot2 { width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex: none; }
+  .status-banner.progress .dot2 { animation: pulse 1.2s infinite; }
+  .scan-id { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .state-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .state-card { background: var(--panel-2); border-radius: 8px; padding: 12px; }
+  .state-card h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; color: var(--muted); letter-spacing: .04em; }
+  .state-card .counts { display: flex; gap: 14px; font-size: 13px; margin-top: 8px; }
+  .diag-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .diag-list li { padding: 8px 10px; border-radius: 6px; background: var(--panel-2); margin-bottom: 6px; }
+  .diag-list li.err { background: rgba(242,85,90,.1); color: #ffb2b4; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Consiva — Consent Agent Demo</h1>
+  <div class="sub">Enter a website URL to run the full scan → classify → RAG → NVIDIA LLM → findings → review pipeline, live.</div>
+
+  <div class="panel">
+    <div class="run-row">
+      <input id="url" type="text" placeholder="https://example.com" value="https://example.com">
+      <label class="chk"><input id="authorized" type="checkbox" checked> I own / am authorized to scan this domain</label>
+      <button id="runBtn" onclick="runAgent()">RUN CONSENT AGENT</button>
+    </div>
+    <div class="hint">SSRF-protected — private/internal/loopback addresses are always rejected regardless of this checkbox.</div>
+    <div id="scanIdRow" class="scan-id" style="display:none"></div>
+    <div id="topError"></div>
+  </div>
+
+  <div class="panel" id="statusPanel" style="display:none">
+    <h2>Scan Status</h2>
+    <div id="statusBanner"></div>
+  </div>
+
+  <div class="panel" id="stagesPanel" style="display:none">
+    <h2>Pipeline</h2>
+    <div class="stages" id="stages"></div>
+  </div>
+
+  <div class="panel" id="summaryPanel" style="display:none">
+    <h2>Scan Data Summary</h2>
+    <div class="grid5" id="dataSummary"></div>
+  </div>
+
+  <div class="panel" id="consentPanel" style="display:none">
+    <h2>Consent Banner Detection</h2>
+    <div id="consentDetection" class="grid4"></div>
+  </div>
+
+  <div class="panel" id="stateCardsPanel" style="display:none">
+    <h2>Consent Testing — Before / Accept / Reject</h2>
+    <div class="state-cards" id="stateCards"></div>
+  </div>
+
+  <div class="panel" id="diagPanel" style="display:none">
+    <h2>Errors / Diagnostics</h2>
+    <ul class="diag-list" id="diagList"></ul>
+  </div>
+
+  <div class="panel" id="latencyPanel" style="display:none">
+    <h2>Performance</h2>
+    <div class="total-latency" id="totalLatency">—</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">total wall-clock time</div>
+    <div class="grid4" id="latencyBreakdown"></div>
+  </div>
+
+  <div class="panel" id="findingsPanel" style="display:none">
+    <h2>Findings &amp; Human Review</h2>
+    <div id="findings"></div>
+  </div>
+
+  <div class="panel" id="auditPanel" style="display:none">
+    <h2>Audit Trail</h2>
+    <pre class="log" id="auditLog"></pre>
+  </div>
+</div>
+
+<script>
+const API = "";
+let TOKEN = null;
+let ORG_ID = null;
+let currentScanId = null;
+let clientStartMs = null;
+
+const STAGE_ORDER = [
+  "url_validation","website_scan","data_structuring","classification",
+  "rules_check","rag_retrieval","llm_analysis","output_validation",
+  "findings_generated","audit_saved",
+];
+const STAGE_LABELS = {
+  url_validation: "URL Validation", website_scan: "Website Scan",
+  data_structuring: "Data Structuring", classification: "Tracker/Cookie Classification",
+  rules_check: "Rules Check", rag_retrieval: "RAG Retrieval",
+  llm_analysis: "NVIDIA LLM Analysis", output_validation: "Structured Output Validation",
+  findings_generated: "Findings Generated", audit_saved: "Audit Saved",
+};
+
+async function ensureToken() {
+  if (TOKEN) return;
+  const r = await fetch(`${API}/api/v1/dev/demo-token`, { method: "POST" });
+  if (!r.ok) throw new Error("Could not get a demo auth token (is APP_ENV=development?)");
+  const data = await r.json();
+  TOKEN = data.token;
+  ORG_ID = data.org_id;
+}
+
+function authHeaders() {
+  return { "Authorization": `Bearer ${TOKEN}`, "Content-Type": "application/json" };
+}
+
+function showError(msg) {
+  document.getElementById("topError").innerHTML = `<div class="error-box">${escapeHtml(msg)}</div>`;
+}
+function clearError() { document.getElementById("topError").innerHTML = ""; }
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function renderStages(stages) {
+  document.getElementById("stagesPanel").style.display = "block";
+  const byName = {};
+  for (const s of stages) byName[s.stage] = s; // last one wins (latest attempt)
+  const el = document.getElementById("stages");
+  el.innerHTML = STAGE_ORDER.map(name => {
+    const s = byName[name];
+    const status = s ? s.status : "pending";
+    const dur = s && s.duration_ms != null ? `${s.duration_ms} ms` : "";
+    return `<div class="stage-row">
+      <div class="dot ${status}"></div>
+      <div class="stage-name">${STAGE_LABELS[name]}</div>
+      <div class="stage-dur">${dur}</div>
+      <div class="stage-status">${status}</div>
+    </div>`;
+  }).join("");
+  return byName;
+}
+
+function renderLatency(stageMap, totalMs) {
+  document.getElementById("latencyPanel").style.display = "block";
+  document.getElementById("totalLatency").textContent = `${(totalMs/1000).toFixed(2)} sec`;
+  const rows = STAGE_ORDER
+    .map(name => ({ name: STAGE_LABELS[name], ms: stageMap[name]?.duration_ms }))
+    .filter(r => r.ms != null);
+  document.getElementById("latencyBreakdown").innerHTML = rows.map(r => `
+    <div class="stat"><div class="n">${r.ms < 1000 ? r.ms + "ms" : (r.ms/1000).toFixed(2)+"s"}</div><div class="l">${r.name}</div></div>
+  `).join("");
+}
+
+const INTERACTION_LABELS = {
+  clicked: ["ok", "Clicked"],
+  click_failed: ["warn", "Click Failed"],
+  cmp_not_automatable: ["warn", "Not Automatable"],
+  cmp_not_found: ["neutral", "No Banner Found"],
+  page_unreachable: ["bad", "Page Unreachable"],
+};
+
+function interactionPill(status) {
+  const [cls, label] = INTERACTION_LABELS[status] || ["neutral", status || "—"];
+  return `<span class="pill ${cls}">${label}</span>`;
+}
+
+// Top-of-page "Scan Status" banner. Distinct from the per-stage pipeline dots below --
+// this is the single, plain-language answer to "what is happening right now / how did
+// it end", using exactly the vocabulary requested for this testing UI.
+function setStatusBanner(label, tone) {
+  document.getElementById("statusPanel").style.display = "block";
+  document.getElementById("statusBanner").innerHTML =
+    `<div class="status-banner ${tone}"><span class="dot2"></span>${escapeHtml(label)}</div>`;
+}
+
+function renderScanId(id) {
+  const el = document.getElementById("scanIdRow");
+  el.style.display = "block";
+  el.textContent = `Scan ID: ${id}`;
+}
+
+function renderConsentDetection(meta) {
+  if (!meta) return;
+  document.getElementById("consentPanel").style.display = "block";
+
+  const bannerPresent = meta.consent_mechanism && meta.consent_mechanism !== "none";
+  const cmpLabel = meta.cmp_vendor || (meta.consent_mechanism === "banner" ? "Generic banner (vendor unknown)" : "—");
+  const confidencePct = meta.cmp_confidence != null ? `${Math.round(meta.cmp_confidence * 100)}%` : "—";
+
+  document.getElementById("consentDetection").innerHTML = `
+    <div class="stat"><div class="n">${bannerPresent ? "Yes" : "No"}</div><div class="l">Banner Present</div></div>
+    <div class="stat"><div class="n" style="font-size:15px">${escapeHtml(cmpLabel)}</div><div class="l">CMP / Provider</div></div>
+    <div class="stat"><div class="n">${confidencePct}</div><div class="l">Detection Confidence (${escapeHtml(meta.cmp_detection_source || "n/a")})</div></div>
+    <div class="stat"><div class="n" style="font-size:15px">${interactionPill(meta.accept_interaction)}<br>${interactionPill(meta.reject_interaction)}</div><div class="l">Accept / Reject</div></div>
+  `;
+}
+
+// Explicit Before Consent / After Accept / After Reject cards, per the requested
+// layout -- built entirely from website_scan's stage metadata (already returned by
+// GET /scans/{id}/stages), no new endpoint needed.
+function renderStateCards(meta) {
+  if (!meta) return;
+  document.getElementById("stateCardsPanel").style.display = "block";
+  const cByState = meta.cookies_by_consent_state || {};
+  const tByState = meta.trackers_by_consent_state || {};
+
+  const cards = [
+    { key: "pre_consent", title: "Before Consent", pill: null },
+    { key: "post_accept", title: "After Accept", pill: meta.accept_interaction },
+    { key: "post_reject", title: "After Reject", pill: meta.reject_interaction },
+  ];
+  document.getElementById("stateCards").innerHTML = cards.map(c => `
+    <div class="state-card">
+      <h3>${c.title}</h3>
+      ${c.pill ? interactionPill(c.pill) : '<span class="pill neutral">Baseline (no interaction)</span>'}
+      <div class="counts">
+        <div><b>${cByState[c.key] ?? 0}</b> cookies</div>
+        <div><b>${tByState[c.key] ?? 0}</b> trackers</div>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderDataSummary(counts) {
+  document.getElementById("summaryPanel").style.display = "block";
+  const labels = {
+    pages: "Pages", forms: "Forms", cookies: "Cookies", trackers: "Trackers",
+    third_party_services: "3rd-Party Svcs", policies: "Policies",
+  };
+  document.getElementById("dataSummary").innerHTML = Object.entries(labels).map(([k, l]) => `
+    <div class="stat"><div class="n">${counts[k] ?? 0}</div><div class="l">${l}</div></div>
+  `).join("");
+}
+
+// Consolidates every real error/diagnostic signal the existing API already returns --
+// scan-level error, any failed pipeline stage's own error text, and page-level crawl
+// diagnostics (failed/timeout/robots-blocked page counts, scroll steps) -- into one
+// place. Never fabricated: every line here traces back to a real field in a real
+// response; an empty state says so explicitly rather than showing nothing.
+function renderDiagnostics(scanError, stages, meta) {
+  document.getElementById("diagPanel").style.display = "block";
+  const lines = [];
+  if (scanError) lines.push({ text: `Scan error: ${scanError}`, err: true });
+  for (const s of stages || []) {
+    if (s.status === "failed" && s.error) lines.push({ text: `Stage "${s.stage}" failed: ${s.error}`, err: true });
+  }
+  if (meta) {
+    if (meta.pages_failed) lines.push({ text: `${meta.pages_failed} page(s) failed to load`, err: true });
+    if (meta.pages_timeout) lines.push({ text: `${meta.pages_timeout} page(s) timed out`, err: true });
+    if (meta.pages_blocked_robots) lines.push({ text: `${meta.pages_blocked_robots} page(s) blocked by robots.txt`, err: false });
+    if (meta.total_scroll_steps != null) lines.push({ text: `${meta.total_scroll_steps} scroll step(s) across the pre-consent crawl`, err: false });
+  }
+  document.getElementById("diagList").innerHTML = lines.length
+    ? lines.map(l => `<li class="${l.err ? "err" : ""}">${escapeHtml(l.text)}</li>`).join("")
+    : `<li>No errors or warnings for this scan.</li>`;
+}
+
+// Derives the plain-language overall status the requested UI asks for
+// (Page Unreachable / Consent Not Found / CMP Not Automatable / Accept Failed /
+// Reject Failed) from real, already-fetched data -- never a separate guess.
+function deriveFailureReason(scanError, meta) {
+  if (scanError && scanError.includes("Could not reach the site at all")) return "Page Unreachable";
+  if (!meta) return null;
+  if (meta.accept_interaction === "click_failed") return "Accept Failed";
+  if (meta.reject_interaction === "click_failed") return "Reject Failed";
+  if (meta.consent_mechanism === "none") return "Consent Not Found";
+  if (meta.accept_interaction === "cmp_not_automatable" || meta.reject_interaction === "cmp_not_automatable") return "CMP Not Automatable";
+  return null;
+}
+
+function riskBadge(level) { return `<span class="badge ${level}">${level}</span>`; }
+
+let lastFindings = [];
+let openReviewForm = null; // { findingId, action: 'approve'|'reject'|'edit' } | null
+
+async function renderFindings(findings) {
+  lastFindings = findings;
+  document.getElementById("findingsPanel").style.display = "block";
+  const el = document.getElementById("findings");
+  if (findings.length === 0) {
+    el.innerHTML = `<div class="muted">No findings were generated for this scan — either nothing triggered a rule, or the analysis is still running.</div>`;
+    return;
+  }
+  el.innerHTML = findings.map(f => `
+    <div class="finding" id="finding-${f.id}">
+      <div class="finding-head">
+        <div>${riskBadge(f.risk_level)} ${riskBadge(f.priority)} <span class="badge status">${f.status}</span></div>
+        <div class="muted" style="font-size:12px">${f.category}</div>
+      </div>
+      <div class="finding-text">${escapeHtml(f.finding_text)}</div>
+      <div class="finding-meta">Evidence: ${f.evidence.length ? f.evidence.map(e=>`<code>${escapeHtml(e)}</code>`).join(", ") : "none"}</div>
+      <div class="finding-meta refs">DPDP reference: ${f.dpdp_reference.length ? f.dpdp_reference.map(r => `<code>${escapeHtml(r.source_doc)}${r.section ? " — " + escapeHtml(r.section) : ""}</code>`).join(", ") : "none supplied"}</div>
+      <div class="finding-meta">Recommendation: ${f.recommendations.map(r => escapeHtml(r.recommendation_text)).join("; ") || "—"}</div>
+      ${f.status === "pending" ? renderReviewArea(f) : ""}
+    </div>
+  `).join("");
+}
+
+function renderReviewArea(finding) {
+  const open = openReviewForm && openReviewForm.findingId === finding.id ? openReviewForm.action : null;
+  if (!open) {
+    return `
+    <div class="finding-actions">
+      <button class="approve" onclick="showReviewForm('${finding.id}','approve')">APPROVE</button>
+      <button class="reject" onclick="showReviewForm('${finding.id}','reject')">REJECT</button>
+      <button class="secondary" onclick="showReviewForm('${finding.id}','edit')">EDIT</button>
+    </div>`;
+  }
+  const riskField = open === "edit" ? `
+    <label for="risk-${finding.id}">New risk level</label>
+    <select id="risk-${finding.id}">
+      ${["low","medium","high"].map(r => `<option value="${r}" ${r===finding.risk_level?"selected":""}>${r}</option>`).join("")}
+    </select>` : "";
+  const confirmLabel = open === "approve" ? "Confirm approve" : open === "reject" ? "Confirm reject" : "Save edit";
+  const confirmClass = open === "approve" ? "approve" : open === "reject" ? "reject" : "";
+  // Reason is required for reject and edit, and for approving a HIGH-risk finding --
+  // matches the backend's own enforcement (422 without one), not just a UI nicety.
+  const reasonRequired = open !== "approve" || finding.risk_level === "high";
+  return `
+    <div class="review-form">
+      ${riskField}
+      <label for="reason-${finding.id}">Reason ${reasonRequired ? "(required)" : "(optional)"}</label>
+      <input type="text" id="reason-${finding.id}" placeholder="Why?" data-required="${reasonRequired}">
+      <div class="row-actions">
+        <button class="${confirmClass}" onclick="submitReview('${finding.id}')">${confirmLabel}</button>
+        <button class="secondary" onclick="cancelReviewForm('${finding.id}')">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function showReviewForm(findingId, action) {
+  openReviewForm = { findingId, action };
+  renderFindings(lastFindings);
+}
+
+function cancelReviewForm(findingId) {
+  openReviewForm = null;
+  renderFindings(lastFindings);
+}
+
+async function submitReview(findingId) {
+  const action = openReviewForm.action;
+  const reasonInput = document.getElementById(`reason-${findingId}`);
+  const reason = reasonInput.value.trim() || null;
+  if (reasonInput.dataset.required === "true" && !reason) {
+    showError("A reason is required for this decision (reject, edit, or approving a high-risk finding).");
+    return;
+  }
+  const body = action === "edit"
+    ? { edited_payload: { risk_level: document.getElementById(`risk-${findingId}`).value }, reason }
+    : { reason };
+
+  const r = await fetch(`${API}/api/v1/consent/findings/${findingId}/${action}`, {
+    method: "POST", headers: authHeaders(), body: JSON.stringify(body),
+  });
+  if (!r.ok) { showError(`${action} failed: ${await r.text()}`); return; }
+  openReviewForm = null;
+  await afterReviewDecision();
+}
+
+async function afterReviewDecision() {
+  const findings = await (await fetch(`${API}/api/v1/consent/scans/${currentScanId}/findings`, { headers: authHeaders() })).json();
+  await renderFindings(findings);
+  renderAudit(await (await fetch(`${API}/api/v1/consent/scans/${currentScanId}/audit`, { headers: authHeaders() })).json());
+  if (!findings.some(f => f.status === "pending")) {
+    await pollForAuditAfterReview({});
+  }
+}
+
+async function refreshFindingsAndAudit() {
+  const [fr, ar] = await Promise.all([
+    fetch(`${API}/api/v1/consent/scans/${currentScanId}/findings`, { headers: authHeaders() }),
+    fetch(`${API}/api/v1/consent/scans/${currentScanId}/audit`, { headers: authHeaders() }),
+  ]);
+  await renderFindings(await fr.json());
+  renderAudit(await ar.json());
+}
+
+function renderAudit(events) {
+  document.getElementById("auditPanel").style.display = "block";
+  document.getElementById("auditLog").textContent = events.length
+    ? events.map(e => `[${e.action}] entity=${e.entity_type}:${e.entity_id} actor=${e.actor_user_id ?? "system"}${e.provider ? " provider="+e.provider : ""}${e.model_name ? " model="+e.model_name : ""}`).join("\n")
+    : "(no audit events yet)";
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function pollUntil(fn, isDone, timeoutMs, intervalMs) {
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
+    const result = await fn();
+    if (isDone(result)) return result;
+    await sleep(intervalMs);
+  }
+  throw new Error("Still waiting on the backend after several minutes — it may still finish on its own (NVIDIA's LLM endpoint can be slow under load); refresh in a bit to check, rather than re-running the scan.");
+}
+
+async function runAgent() {
+  clearError();
+  const url = document.getElementById("url").value.trim();
+  const authorized = document.getElementById("authorized").checked;
+  if (!url) { showError("Enter a URL first."); return; }
+
+  const btn = document.getElementById("runBtn");
+  btn.disabled = true;
+  ["statusPanel","stagesPanel","summaryPanel","consentPanel","stateCardsPanel","diagPanel","latencyPanel","findingsPanel","auditPanel"]
+    .forEach(id => document.getElementById(id).style.display = "none");
+  document.getElementById("scanIdRow").style.display = "none";
+
+  let websiteScanMeta = null;
+  let lastStages = [];
+  let lastScanError = null;
+
+  try {
+    setStatusBanner("Starting…", "progress");
+    await ensureToken();
+    clientStartMs = performance.now();
+
+    const createRes = await fetch(`${API}/api/v1/consent/scans`, {
+      method: "POST", headers: authHeaders(), body: JSON.stringify({ url, authorized }),
+    });
+    if (!createRes.ok) throw new Error(await createRes.text());
+    const scan = await createRes.json();
+    currentScanId = scan.id;
+    renderScanId(currentScanId);
+
+    // Poll scan status + stages until the scan (evidence-gathering) step finishes.
+    setStatusBanner("Scanning…", "progress");
+    let stageMap = {};
+    const scanResult = await pollUntil(
+      async () => {
+        const [sr, str] = await Promise.all([
+          fetch(`${API}/api/v1/consent/scans/${currentScanId}`, { headers: authHeaders() }),
+          fetch(`${API}/api/v1/consent/scans/${currentScanId}/stages`, { headers: authHeaders() }),
+        ]);
+        const s = await sr.json();
+        lastStages = await str.json();
+        stageMap = renderStages(lastStages);
+        websiteScanMeta = stageMap.website_scan?.metadata || null;
+        renderDataSummary(s.evidence_counts);
+        renderConsentDetection(websiteScanMeta);
+        renderStateCards(websiteScanMeta);
+        return s;
+      },
+      s => s.status === "completed" || s.status === "failed",
+      120000, 1200,
+    );
+    lastScanError = scanResult.error;
+    if (scanResult.status === "failed") {
+      const reason = deriveFailureReason(lastScanError, websiteScanMeta);
+      setStatusBanner(reason ? `Failed — ${reason}` : "Failed", "bad");
+      renderDiagnostics(lastScanError, lastStages, websiteScanMeta);
+      throw new Error(`Scan failed: ${lastScanError}`);
+    }
+
+    // Trigger analysis, then poll stages until either audit_saved completes (no
+    // findings needed review) or findings_generated completes (the common case: the
+    // graph pauses at human_review_gate — a LangGraph interrupt() — awaiting a human
+    // decision below; that pause is a correct terminal state for this run, not a
+    // failure, so it must not be reported as a timeout).
+    setStatusBanner("Analyzing…", "progress");
+    const analyzeRes = await fetch(`${API}/api/v1/consent/scans/${currentScanId}/analyze`, {
+      method: "POST", headers: authHeaders(),
+    });
+    if (!analyzeRes.ok) throw new Error(await analyzeRes.text());
+
+    // 600s, not 180s: the NVIDIA LLM Analysis stage alone has been directly observed
+    // taking 302s (5 min) under real, live endpoint degradation (its own retry/backoff
+    // logic riding out repeated network timeouts) -- a shorter client-side ceiling was
+    // showing "Timed out waiting for the pipeline to finish" over a pipeline that was
+    // actually still working and later succeeded. Matches pollForAuditAfterReview's
+    // own 600000ms ceiling below for consistency.
+    await pollUntil(
+      async () => {
+        const str = await fetch(`${API}/api/v1/consent/scans/${currentScanId}/stages`, { headers: authHeaders() });
+        lastStages = await str.json();
+        stageMap = renderStages(lastStages);
+        return stageMap;
+      },
+      m => m.audit_saved?.status === "completed" || m.audit_saved?.status === "failed"
+        || m.findings_generated?.status === "completed"
+        || Object.values(m).some(s => s.status === "failed"),
+      600000, 1500,
+    );
+
+    const anyStageFailed = Object.values(stageMap).some(s => s.status === "failed");
+    if (anyStageFailed) {
+      const failedStage = Object.values(stageMap).find(s => s.status === "failed");
+      setStatusBanner("Failed", "bad");
+      renderDiagnostics(lastScanError, lastStages, websiteScanMeta);
+      throw new Error(`Analysis failed at stage "${failedStage.stage}": ${failedStage.error}`);
+    }
+
+    const totalMs = performance.now() - clientStartMs;
+    renderLatency(stageMap, totalMs);
+    renderDiagnostics(lastScanError, lastStages, websiteScanMeta);
+    await refreshFindingsAndAudit();
+
+    if (stageMap.audit_saved?.status !== "completed" && stageMap.audit_saved?.status !== "failed") {
+      setStatusBanner("Completed — awaiting human review", "ok");
+      showPauseNotice();
+      pollForAuditAfterReview(stageMap);
+    } else {
+      setStatusBanner("Completed", "ok");
+    }
+  } catch (err) {
+    if (!document.getElementById("statusBanner").textContent.startsWith("Failed")) {
+      setStatusBanner("Failed", "bad");
+    }
+    showError(err.message || String(err));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showPauseNotice() {
+  document.getElementById("topError").innerHTML =
+    `<div class="error-box" style="background:rgba(91,140,255,.1);border-color:rgba(91,140,255,.3);color:#c7d5ff">` +
+    `Analysis complete — one or more findings require human review before the run can close out. ` +
+    `Approve, reject, or edit each finding below; the pipeline resumes and the Audit Saved stage ` +
+    `completes automatically once every pending finding has a decision.</div>`;
+}
+
+// After the human resolves the pending findings (via decide()/editFinding() below), the
+// LangGraph checkpointer resumes the paused run on its own -- this just keeps the stage
+// panel and latency numbers live so audit_saved's completion is visible without a reload.
+async function pollForAuditAfterReview(stageMap) {
+  try {
+    const finalMap = await pollUntil(
+      async () => {
+        const str = await fetch(`${API}/api/v1/consent/scans/${currentScanId}/stages`, { headers: authHeaders() });
+        return renderStages(await str.json());
+      },
+      m => m.audit_saved?.status === "completed" || m.audit_saved?.status === "failed",
+      600000, 2000,
+    );
+    clearError();
+    setStatusBanner(finalMap.audit_saved?.status === "failed" ? "Failed" : "Completed", finalMap.audit_saved?.status === "failed" ? "bad" : "ok");
+    renderLatency(finalMap, performance.now() - clientStartMs);
+    await refreshFindingsAndAudit();
+  } catch {
+    // Still awaiting review decisions -- leave the pause notice in place, not an error.
+  }
+}
+</script>
+</body>
+</html>
