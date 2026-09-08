@@ -99,10 +99,17 @@ class BaseLLMClient:
 
     provider: str
     model_name: str
+    # Class-level defaults so the transport-shaped attributes always exist even when a
+    # subclass instance is built without _init_transport (the __new__ + injected fake
+    # `_client` pattern the mocked tests use). _init_transport overrides all of them.
+    _call_timeout: float = 60.0
+    _max_output_tokens: int = 4000
+    _supports_grammar: bool = False
+    _extra_body: dict = {}  # noqa: RUF012 -- read-only default, always replaced per instance
 
     def _init_transport(
         self, *, base_url: str, api_key: str, model: str, extra_body: dict | None = None,
-        timeout: float = 60.0, max_output_tokens: int = 4000,
+        timeout: float = 60.0, max_output_tokens: int = 4000, supports_grammar: bool = False,
     ) -> None:
         self.model_name = model
         self._extra_body = extra_body or {}
@@ -116,6 +123,13 @@ class BaseLLMClient:
         # was 1,995 tokens -- so 4000 is roughly 2x headroom, and a context-constrained
         # provider can safely lower it (see SelfHostedLLMClient).
         self._max_output_tokens = max_output_tokens
+        # Grammar-constrained decoding (response_format=json_schema) makes
+        # schema-invalid output structurally impossible, which removes entire
+        # generate_structured repair attempts -- each of which costs a full
+        # prefill+decode round trip. Confirmed working live on the self-hosted
+        # llama.cpp server; left OFF for providers where it has not been verified,
+        # since an unsupported response_format is a 400, not a graceful degrade.
+        self._supports_grammar = supports_grammar
         self._client = AsyncOpenAI(
             base_url=base_url, api_key=api_key, timeout=timeout,
             # A clear, honest, self-identifying User-Agent -- normal practice for a
@@ -128,8 +142,20 @@ class BaseLLMClient:
             default_headers={"User-Agent": "Consiva-ConsentAgent/1.0 (+internal LLM client)"},
         )
 
+    def _response_format(self, schema: type[BaseModel] | None) -> dict:
+        """json_schema (grammar-enforced) where the provider is known to support it,
+        plain json_object everywhere else -- both keep the existing "valid JSON only"
+        contract, the former just also guarantees the shape."""
+        if schema is not None and self._supports_grammar:
+            return {
+                "type": "json_schema",
+                "json_schema": {"name": schema.__name__, "schema": schema.model_json_schema(), "strict": True},
+            }
+        return {"type": "json_object"}
+
     async def _chat(
         self, messages: list[dict], *, retry_meta: dict | None = None, deadline_epoch: float | None = None,
+        schema: type[BaseModel] | None = None,
     ) -> tuple[str, dict]:
         """Bounded by BOTH a fixed per-call timeout (self._call_timeout) and, when
         `deadline_epoch` is given, the shared wall-clock budget passed down from
@@ -174,7 +200,7 @@ class BaseLLMClient:
                 response = await self._client.chat.completions.create(
                     model=self.model_name,
                     messages=messages,
-                    response_format={"type": "json_object"},
+                    response_format=self._response_format(schema),
                     temperature=0.1,
                     max_tokens=self._max_output_tokens,
                     extra_body=self._extra_body,
@@ -209,7 +235,9 @@ class BaseLLMClient:
                     f"LLM wall-clock deadline exceeded before attempt {attempt}/{max_attempts} "
                     f"(shared budget across all retry layers); last error: {last_error}"
                 )
-            raw, usage = await self._chat(messages, retry_meta=retry_meta, deadline_epoch=deadline_epoch)
+            raw, usage = await self._chat(
+                messages, retry_meta=retry_meta, deadline_epoch=deadline_epoch, schema=schema
+            )
             usage_by_attempt.append(usage)
             try:
                 parsed = schema.model_validate_json(raw)
@@ -358,6 +386,10 @@ class SelfHostedLLMClient(BaseLLMClient):
             # is context handed back to the prompt. 3000 still leaves ~50% headroom
             # over the largest completion this project has ever produced (1,995).
             max_output_tokens=3000,
+            # Verified live against this server: response_format json_schema is
+            # accepted and returns first-try-valid output (A/B tested against plain
+            # json_object on the real ConsentAnalysisResponse schema).
+            supports_grammar=True,
         )
 
     async def embed(self, texts: list[str], *, input_type: Literal["query", "passage"]) -> list[list[float]]:

@@ -1,0 +1,20 @@
+# Installed fresh inside the build stage via `npm ci` — copying the host's tree in
+# would be both slow and platform-wrong.
+node_modules/
+
+# Build output is produced by the image, never copied from the host.
+dist/
+dist-ssr/
+
+# Secrets / local env overrides. VITE_API_BASE_URL is passed as a build arg instead.
+.env
+.env.*
+!.env.example
+
+# VCS / editor / OS
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+*.log

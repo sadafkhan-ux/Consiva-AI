@@ -9,11 +9,15 @@ import { FormsSection, PoliciesSection } from "./components/FormsAndPoliciesSect
 import { FindingsSection } from "./components/FindingsSection";
 import { DpdpReferencesSection, RecommendationsSection } from "./components/DpdpAndRecommendations";
 import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnostics";
+import { buildReportModel } from "./report/buildReport";
+import { downloadReport } from "./report/downloadReport";
 
 export default function App() {
   const { state, run, afterReviewDecision } = useConsentScan();
   const [url, setUrl] = useState("https://example.com");
   const [authorized, setAuthorized] = useState(true);
+  const [buildingReport, setBuildingReport] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const busy = state.phase !== "idle" && state.phase !== "completed" && state.phase !== "failed" && state.phase !== "awaiting_review";
 
@@ -23,6 +27,28 @@ export default function App() {
   }
 
   const hasRun = state.phase !== "idle";
+
+  // Offered once the analysis has actually produced findings -- i.e. from the
+  // human-review pause (analysis done, audit not yet saved) onward, and still after
+  // the run closes out. Purely additive: it reads state the app already holds and
+  // triggers no request, so the scan/review/audit workflow is untouched.
+  const canDownloadReport =
+    (state.phase === "awaiting_review" || state.phase === "completed") && state.findings.length > 0;
+  const reportIsProvisional = state.findings.some((f) => f.status === "pending");
+
+  async function handleDownloadReport() {
+    setReportError(null);
+    setBuildingReport(true);
+    try {
+      await downloadReport(buildReportModel(state.scan, state.findings, state.websiteScanMeta));
+    } catch (err) {
+      // Surface it rather than failing silently -- the PDF library is fetched on
+      // demand, so an offline/blocked load is a real possibility worth reporting.
+      setReportError(err instanceof Error ? err.message : "Could not generate the PDF report.");
+    } finally {
+      setBuildingReport(false);
+    }
+  }
 
   return (
     <div className="app">
@@ -57,6 +83,23 @@ export default function App() {
         <div className="info-box">
           Analysis complete — one or more findings require human review before the run can close out. Approve, reject,
           or edit each finding below; the pipeline resumes automatically once every pending finding has a decision.
+        </div>
+      )}
+
+      {canDownloadReport && (
+        <div className="report-bar">
+          <div className="report-bar-text">
+            <strong>One-page summary</strong>
+            <span>
+              Client-friendly headlines only — overall risk, main problems, key consent issues, DPDP
+              references and recommended actions.
+              {reportIsProvisional && " Marked provisional until every finding is reviewed."}
+            </span>
+            {reportError && <span className="report-error">{reportError}</span>}
+          </div>
+          <button className="report-btn" onClick={handleDownloadReport} disabled={buildingReport}>
+            {buildingReport ? "Preparing…" : "Download Report (PDF)"}
+          </button>
         </div>
       )}
 

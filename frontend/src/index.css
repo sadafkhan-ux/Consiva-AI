@@ -282,6 +282,27 @@ table.data-table td.mono { font-family: var(--mono); font-size: 12px; word-break
   font-size: 13px;
   margin-bottom: 14px;
 }
+/* One-page PDF summary offer. Sits between the run banner and the detailed result
+   sections, so it reads as an action on the results rather than another data panel. */
+.report-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  padding: 13px 16px;
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+.report-bar-text { display: flex; flex-direction: column; gap: 3px; min-width: 260px; flex: 1; }
+.report-bar-text strong { font-size: 13px; }
+.report-bar-text span { font-size: 12px; color: var(--muted); line-height: 1.45; }
+.report-btn { white-space: nowrap; }
+.report-error { font-size: 12px; color: #ffc4c4; margin-top: 2px; }
+
 .muted { color: var(--muted); }
 .empty-note { color: var(--muted); font-size: 13px; font-style: italic; }
 

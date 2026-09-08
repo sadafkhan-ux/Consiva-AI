@@ -18,9 +18,11 @@ never silently treated as "nothing to report."
 
 Every one of the three passes also runs a bounded progressive scroll (see
 `_progressive_scroll`) after its own settle wait, so IntersectionObserver-gated lazy
-content gets a real chance to fire in every consent state, not just at initial load --
-confirmed live (scanner-hardening audit) that scrolling surfaces 12%-65% more network
-requests than a load+settle-only pass, almost entirely analytics/ad trackers.
+content gets a real chance to fire in every consent state, not just at initial load.
+That scroll is ADAPTIVE: it keeps going while it is still surfacing network requests
+and stops once it demonstrably isn't, because a re-measurement of its marginal value
+per step found no site gaining a new third-party host after step 3 while a fixed
+8 steps cost ~4.7s per scan. See the _SCROLL_* constants for both measurements.
 """
 
 import asyncio
@@ -81,10 +83,25 @@ _TRACKER_SETTLE_MS = 1200
 # Trade Desk) that fire only once their container scrolls into view. Bounded on BOTH
 # step count and wall-clock duration so a pathological infinite-scroll page (or one
 # whose scrollHeight keeps growing) can never hang a scan.
+#
+# Re-measured later (marginal value per step, on prepmyevent.com / swaransoft.com /
+# bbc.com/news, counting only non-static third-party requests -- i.e. excluding the
+# lazy-loaded images/fonts that inflate a raw "network activity" count without carrying
+# any tracking signal). Result: NO site gained a new third-party host after step 3, and
+# steps 4-8 surfaced zero new hosts on all three. swaransoft.com gained nothing at all
+# from any of the 8 steps. So a fixed 8 steps spent ~1.5s per pass (~4.7s per scan,
+# three passes) buying nothing on typical sites.
+#
+# Hence _SCROLL_QUIET_STEPS: keep scrolling while it is still surfacing requests, and
+# stop once it demonstrably isn't. The step/duration ceilings remain as the hard bound
+# for genuinely active pages (bbc.com/news was still producing requests at step 5), so
+# this trades no coverage on the sites that need scrolling -- it only stops paying for
+# it on the sites that don't.
 _SCROLL_MAX_STEPS = 8
 _SCROLL_STEP_WAIT_MS = 300
 _SCROLL_MAX_DURATION_MS = 6000
 _SCROLL_SETTLE_MS = 800
+_SCROLL_QUIET_STEPS = 3
 
 # Bounded retry for a transient navigation failure (DNS blip, connection reset, TLS
 # handshake timeout, a slow/timed-out load). Previously a single failed goto() had zero
@@ -231,21 +248,31 @@ async def _navigate_with_retry(browser_page: Page, url: str, timeout_ms: int) ->
     return None, status, last_exc, _NAV_MAX_ATTEMPTS
 
 
-async def _progressive_scroll(page: Page) -> int:
+async def _progressive_scroll(page: Page, request_count: Callable[[], int] | None = None) -> int:
     """Bounded, stepped scroll toward the bottom so IntersectionObserver-gated lazy
     content (ad/analytics pixels, infinite-scroll sections) gets a real chance to fire
-    -- see the _SCROLL_* constants' docstring above for the live measurement that
-    justified this. Bounded on BOTH step count and wall-clock duration: a page whose
-    scrollHeight keeps growing (genuine infinite scroll) or that never reports "at
-    bottom" can never make this loop run longer than _SCROLL_MAX_DURATION_MS, and it
-    can never take more than _SCROLL_MAX_STEPS steps regardless. Returns the number of
-    scroll steps actually taken (0 if the page couldn't be scrolled at all -- recorded
-    for diagnostics, never fatal to the scan)."""
+    -- see the _SCROLL_* constants' docstring above for the live measurements that
+    justified this and then bounded it.
+
+    Stops on the FIRST of four conditions: the page reports it is at the bottom;
+    `_SCROLL_QUIET_STEPS` consecutive steps produce no new network requests (the
+    adaptive exit -- most sites stop surfacing anything after ~3 steps, so continuing
+    is pure latency); `_SCROLL_MAX_STEPS`; or `_SCROLL_MAX_DURATION_MS`. The last two
+    remain hard bounds so genuine infinite scroll can never hang a scan.
+
+    `request_count` is a zero-arg callable returning the number of network requests
+    seen so far on this page (the caller already accumulates these for evidence, so
+    this reuses that list rather than attaching a second listener). When it is None the
+    adaptive exit is simply disabled and behavior falls back to the step/duration
+    bounds. Returns the number of scroll steps actually taken (0 if the page couldn't
+    be scrolled at all -- recorded for diagnostics, never fatal to the scan)."""
     start = time.monotonic()
     steps_taken = 0
+    quiet_steps = 0
     for _ in range(_SCROLL_MAX_STEPS):
         if (time.monotonic() - start) * 1000 > _SCROLL_MAX_DURATION_MS:
             break
+        before = request_count() if request_count else None
         try:
             reached_bottom = await page.evaluate(
                 """() => {
@@ -261,6 +288,16 @@ async def _progressive_scroll(page: Page) -> int:
         if reached_bottom:
             break
         await page.wait_for_timeout(_SCROLL_STEP_WAIT_MS)
+        if before is not None:
+            # Counted AFTER the step wait, so a request triggered by this step has had
+            # the same window to arrive as it would have had before this change.
+            quiet_steps = 0 if request_count() > before else quiet_steps + 1
+            if quiet_steps >= _SCROLL_QUIET_STEPS:
+                logger.debug(
+                    "Scroll stopped early after %d steps -- %d consecutive steps surfaced no new requests",
+                    steps_taken, quiet_steps,
+                )
+                break
     try:
         await page.wait_for_timeout(_SCROLL_SETTLE_MS)
     except PlaywrightError:
@@ -322,7 +359,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         # Bounded settle window (see _TRACKER_SETTLE_MS) replacing "networkidle" --
         # gives async-loading trackers/tag-managers a fair, predictable chance to fire.
         await browser_page.wait_for_timeout(_TRACKER_SETTLE_MS)
-        scroll_steps = await _progressive_scroll(browser_page)
+        scroll_steps = await _progressive_scroll(browser_page, request_count=lambda: len(request_records))
         http_status = response.status if response else None
         html = await browser_page.content()
         global_vars_present = await browser_page.evaluate(
@@ -530,7 +567,7 @@ async def _crawl_single_page_with_interaction(
                 await browser_page.wait_for_timeout(2000)  # let post-click network activity settle -- separate from
                 # _TRACKER_SETTLE_MS above: this one is conditional on an actual consent decision having just
                 # fired, giving *that* specific action's downstream tag-manager effects time to propagate
-            scroll_steps = await _progressive_scroll(browser_page)
+            scroll_steps = await _progressive_scroll(browser_page, request_count=lambda: len(request_records))
             html = await browser_page.content()
             scripts = parse_page(html, root_url).scripts
     except Exception as exc:  # noqa: BLE001 — this pass is best-effort; failure is recorded, not fatal

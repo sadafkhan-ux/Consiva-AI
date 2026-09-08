@@ -1,0 +1,39 @@
+# Secrets — must never enter an image layer. Real values are injected at runtime via
+# docker-compose env_file / environment instead.
+.env
+.env.*
+!.env.example
+
+# Local virtualenv (Windows-built, wrong platform for a Linux image anyway)
+.venv/
+venv/
+
+# Python bytecode / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Test & tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Local runtime logs written during development (worker/uvicorn output)
+*.log
+
+# Tests are not needed in the runtime image
+tests/
+
+# VCS / editor
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# NOTE: deliberately NOT excluded, because the application genuinely needs them:
+#   data/open-cookie-database.csv  -> seeds the cookie_lookup table (app/lookup/loader.py)
+#   migrations/                    -> applied by migrate.py against the existing DB

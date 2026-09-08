@@ -1,0 +1,107 @@
+# Consiva Consent Agent — production compose.
+#
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Services are exactly the three the current application needs:
+#   frontend — nginx serving the built SPA, and the ONLY published entrypoint
+#   backend  — FastAPI API
+#   worker   — app.jobs.worker, which drains the agent_jobs queue
+#
+# `worker` is not optional: scans and analyses are enqueued by the API and executed by
+# that separate polling process. Without it every scan sits at status "pending"
+# forever (the exact "Timed out waiting for the backend" symptom seen in development).
+#
+# There is deliberately NO scheduler service — the only other __main__ entrypoints in
+# the project (app.rag.ingest, app.lookup.loader, migrate.py) are one-shot CLI tools,
+# not daemons.
+#
+# There is deliberately NO database service — this project uses an existing, external
+# Supabase Postgres (with pgvector) reached over DATABASE_URL. Adding a local Postgres
+# would create a second, empty, wrong database.
+
+name: consiva
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: consiva-backend:latest
+    restart: unless-stopped
+    # Secrets come from backend/.env at RUN time (never baked into the image, and
+    # excluded from the build context by backend/.dockerignore).
+    env_file:
+      - ./backend/.env
+    environment:
+      # Explicit override point; everything else is inherited from env_file above.
+      # NOTE: the frontend's only auth path is POST /api/v1/dev/demo-token, which the
+      # application hard-gates to APP_ENV=development (app/api/v1/routes/dev.py). With
+      # APP_ENV=production the UI cannot obtain a token and every request 401s, so this
+      # defaults to development to keep the stack functional. See the report/README:
+      # real auth must replace the demo-token path before this is internet-facing.
+      APP_ENV: ${APP_ENV:-development}
+    # Not published to the host: the browser reaches the API through the frontend's
+    # nginx proxy on the shared network, so there is no reason to expose port 8000.
+    expose:
+      - "8000"
+    networks:
+      - consiva
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+  worker:
+    # Same image as the backend — same application, different entrypoint. `build` is
+    # repeated so `compose build` works regardless of service order; the identical
+    # image tag means it is built once and reused, not twice.
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: consiva-backend:latest
+    restart: unless-stopped
+    command: ["python", "-m", "app.jobs.worker"]
+    env_file:
+      - ./backend/.env
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+    networks:
+      - consiva
+    depends_on:
+      backend:
+        condition: service_healthy
+    # The worker launches Chromium for every scan. Chromium's sandbox needs more than
+    # Docker's default 64MB /dev/shm or it crashes on content-heavy pages.
+    shm_size: "1gb"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Empty => the SPA issues same-origin /api/... requests, which nginx proxies to
+        # the backend. Set this only if the API is published on a different public
+        # origin than the frontend.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL-}
+    image: consiva-frontend:latest
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    networks:
+      - consiva
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  consiva:
+    driver: bridge
