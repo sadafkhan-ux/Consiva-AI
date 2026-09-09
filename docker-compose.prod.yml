@@ -76,6 +76,14 @@ services:
     # The worker launches Chromium for every scan. Chromium's sandbox needs more than
     # Docker's default 64MB /dev/shm or it crashes on content-heavy pages.
     shm_size: "1gb"
+    # The shared image defines an HTTP HEALTHCHECK against /health, which is correct
+    # for the `backend` service but meaningless here: this container runs the polling
+    # worker, not uvicorn, so nothing is listening on 8000 and the probe can never
+    # pass. Left enabled it reported a perfectly healthy worker as "unhealthy"
+    # indefinitely. Liveness for this process is simply "did it exit" -- which
+    # restart: unless-stopped already handles.
+    healthcheck:
+      disable: true
 
   frontend:
     build:
