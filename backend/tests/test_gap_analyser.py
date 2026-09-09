@@ -55,6 +55,26 @@ def test_banner_detected_from_text_only():
     assert detect.detect_cookie_banner("<div>x</div>", "We use cookies to improve your visit.") is True
 
 
+@pytest.mark.parametrize(
+    ("href", "text", "expected"),
+    [
+        ("/privacy-policy", "Privacy Policy", True),
+        ("/legal", "Cookie Policy", True),
+        # Confirmed live on wordpress.org: its ONLY privacy link. The spec's pattern
+        # requires "privacy" followed by "policy", so this was missed and silently
+        # added 15 points to the score.
+        ("https://wordpress.org/about/privacy/", "Privacy", True),
+        ("/cookies/", "Manage", True),
+        ("/about/data-protection", "Data Protection", True),
+        # Must stay narrow: prose mentioning privacy is not a policy link.
+        ("/blog/privacy-first-marketing-in-2026", "Privacy-first marketing", False),
+        ("/contact", "Contact us", False),
+    ],
+)
+def test_detect_privacy_policy(href, text, expected):
+    assert detect.detect_privacy_policy([{"href": href, "text": text}]) is expected
+
+
 def test_no_banner_when_nothing_matches():
     assert detect.detect_cookie_banner("<div>welcome</div>", "Welcome to our site") is False
 
@@ -347,6 +367,29 @@ def test_tracker_lifetime_stats_ignores_functional_cookies():
 def test_summary_for_cmp_site():
     s = scoring.build_summary({"has_cmp": True, "cmp_name": "OneTrust"})
     assert "OneTrust" in s
+
+
+def test_result_shape_is_identical_for_success_and_failure():
+    """A caller batching thousands of URLs into a table must not have the column set
+    shift depending on whether a page loaded. Previously `error` was popped on success
+    and kept on failure, so the two shapes differed."""
+    from app.gap_analyser.analyser import _empty_result
+
+    ok = _empty_result("https://x.com", "ok")
+    failed = _empty_result("https://x.com", "unreachable", error="DNS failure")
+
+    assert set(ok.keys()) == set(failed.keys())
+    assert "error" in ok and ok["error"] is None
+    assert failed["error"] == "DNS failure"
+
+
+def test_failed_page_is_never_scored():
+    """"Could not measure" and "clean site" must never look alike -- a failed page
+    keeps a null score rather than 0, which would read as a clean bill of health."""
+    from app.gap_analyser.analyser import _empty_result
+
+    for status in ("unreachable", "parked", "blocked"):
+        assert _empty_result("https://x.com", status)["consent_gap_score"] is None
 
 
 def test_summary_when_clean():

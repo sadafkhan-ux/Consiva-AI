@@ -107,8 +107,16 @@ def _pick_page_text(main_text: str, body_text: str) -> str:
 
 
 def _empty_result(url: str, status: str, *, error: str | None = None) -> dict:
-    """Shape-stable failure record. Callers can rely on every key existing regardless
-    of outcome, and a failed page is never scored."""
+    """Shape-stable base record. EVERY key below is present on every returned result,
+    success or failure -- including `error`, which is simply null on success. A caller
+    batching thousands of URLs into a table or dataframe must not have the column set
+    shift depending on whether a page happened to load.
+
+    `error` is the one field beyond the documented output shape; it carries the real
+    exception text for an unreachable page instead of discarding why it failed.
+
+    A failed page is never scored: consent_gap_score stays null rather than 0, because
+    "we could not measure this" and "this site is clean" must never look alike."""
     return {
         "url": url, "final_url": None, "final_domain": None,
         "http_status": None, "page_title": None,
@@ -251,7 +259,6 @@ async def analyse_async(url: str, *, use_llm: bool = True) -> dict:
                 from app.gap_analyser.soft_fields import extract_soft_fields
                 result.update(await extract_soft_fields(page_text, title))
 
-            result.pop("error", None)
             return result
         finally:
             await browser.close()

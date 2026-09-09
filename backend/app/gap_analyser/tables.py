@@ -68,6 +68,21 @@ PRIVACY_LINK_PATTERN = re.compile(
     r"privacy[-_ ]?policy|cookie[-_ ]?policy|privacy[-_ ]?notice|data[-_ ]?protection", re.IGNORECASE
 )
 
+# The pattern above requires "privacy" to be FOLLOWED by "policy"/"notice", so a bare
+# "Privacy" link is missed -- confirmed live on wordpress.org, whose only privacy link
+# is text "Privacy" at href /about/privacy/. That false negative silently adds 15
+# points to a site's score, so these two cover the bare form.
+#
+# Both are deliberately narrow rather than a loose "privacy" substring: anchored to a
+# whole URL path segment, or to link text that IS the word rather than merely contains
+# it. A page discussing "privacy-first marketing" must not read as having a policy.
+PRIVACY_HREF_PATH_PATTERN = re.compile(
+    r"/(privacy|privacy[-_]statement|cookies?|datenschutz)(?:/|\?|#|$)", re.IGNORECASE
+)
+PRIVACY_EXACT_TEXT_PATTERN = re.compile(
+    r"^\s*(privacy|cookies?|privacy\s*&\s*cookies|privacy\s*policy)\s*$", re.IGNORECASE
+)
+
 # --------------------------------------------------------------------------------
 # Tracking cookies, matched as a PREFIX on the cookie name.
 #

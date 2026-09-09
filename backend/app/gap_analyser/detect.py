@@ -36,11 +36,22 @@ def detect_cookie_banner(html: str, visible_text: str) -> bool:
 
 
 def detect_privacy_policy(links: list[dict]) -> bool:
-    """`links`: [{"href": str, "text": str}, ...] -- matched on either."""
-    return any(
-        T.PRIVACY_LINK_PATTERN.search(f"{link.get('href') or ''} {link.get('text') or ''}")
-        for link in links
-    )
+    """`links`: [{"href": str, "text": str}, ...].
+
+    Three ways to qualify, because "Privacy Policy" is only the most formal spelling:
+    the combined href+text phrase, a whole `/privacy/`-style URL path segment, or link
+    text that is exactly the word. The latter two exist because a bare "Privacy" link
+    (wordpress.org's only one) matched nothing and cost the site 15 score points."""
+    for link in links:
+        href = link.get("href") or ""
+        text = link.get("text") or ""
+        if T.PRIVACY_LINK_PATTERN.search(f"{href} {text}"):
+            return True
+        if T.PRIVACY_HREF_PATH_PATTERN.search(href):
+            return True
+        if T.PRIVACY_EXACT_TEXT_PATTERN.match(text):
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------------
