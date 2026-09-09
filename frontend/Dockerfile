@@ -34,21 +34,25 @@ ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN npm run build
 
 # ---------- runtime stage ----------
-FROM nginx:1.29-alpine AS runtime
+# nginx-unprivileged is the official image built for exactly this: it already runs as
+# UID 101, already listens on 8080, and every path nginx needs to write (the
+# client_temp/proxy_temp/fastcgi_temp/uwsgi_temp/scgi_temp cache dirs and the pidfile)
+# is already owned by that user.
+#
+# This replaced a hand-rolled `chown + sed + USER nginx` on the stock nginx:alpine
+# image, which crash-looped on startup (container stuck "Restarting (1)"): the stock
+# config and its docker-entrypoint expect root, so an unprivileged user hits a write
+# it cannot perform and nginx exits immediately. Chasing that with more chowns is
+# fragile -- using the image purpose-built for it is not.
+FROM nginxinc/nginx-unprivileged:1.29-alpine AS runtime
 
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# --chown so the served files are readable by the unprivileged runtime user rather
+# than landing as root-owned (COPY writes as UID 0 by default).
+COPY --from=build --chown=101:101 /app/dist /usr/share/nginx/html
+COPY --chown=101:101 nginx.conf /etc/nginx/conf.d/default.conf
 
-# Port 8080 (not 80) so the server can bind as a non-root user -- ports below 1024
-# would otherwise require root or an added capability.
+# 8080, not 80 -- an unprivileged process cannot bind a port below 1024.
 EXPOSE 8080
-
-# nginx:alpine ships a stock nginx user; give it ownership of the writable paths it
-# needs and move the pidfile out of /var/run, which it cannot write to unprivileged.
-RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx \
-    && sed -i 's|/var/run/nginx.pid|/tmp/nginx.pid|' /etc/nginx/nginx.conf \
-    && sed -i '/^user  nginx;/d' /etc/nginx/nginx.conf
-USER nginx
 
 # busybox wget ships in the alpine base, so no extra package is needed to health-check.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
