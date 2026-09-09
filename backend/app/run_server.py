@@ -18,7 +18,9 @@ so the main process is free to run under SelectorEventLoop).
 manager for anything beyond local development.
 """
 
+import argparse
 import asyncio
+import os
 import sys
 
 
@@ -29,5 +31,19 @@ def _selector_event_loop_factory() -> asyncio.AbstractEventLoop:
 if __name__ == "__main__":
     import uvicorn
 
+    # Host/port are configurable because the previously hardcoded 127.0.0.1:8000 meant
+    # the only way to move the port on Windows was to bypass this launcher and call
+    # `uvicorn` directly -- which immediately fails with "Psycopg cannot use the
+    # 'ProactorEventLoop'", since bypassing it also bypasses the loop factory below.
+    # Env vars as well as flags so a container or shell can set it without changing
+    # the command.
+    parser = argparse.ArgumentParser(description="Run the Consiva API (Windows-safe event loop).")
+    parser.add_argument("--host", default=os.getenv("API_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("API_PORT", "8000")))
+    parser.add_argument("--reload", action="store_true", help="dev autoreload")
+    args = parser.parse_args()
+
     loop_arg = "asyncio" if sys.platform != "win32" else "app.run_server:_selector_event_loop_factory"
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, loop=loop_arg)
+    uvicorn.run(
+        "app.main:app", host=args.host, port=args.port, loop=loop_arg, reload=args.reload,
+    )
