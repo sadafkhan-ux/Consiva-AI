@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     database_url: str
     supabase_jwt_secret: str
 
+    # Connections THIS process may hold. Kept small on purpose: Supabase's session-mode
+    # pooler (port 5432) caps the whole project at 15 clients, and SQLAlchemy's own
+    # defaults would let a single process claim all 15. See app/db/session.py.
+    db_pool_size: int = 3
+    db_max_overflow: int = 2
+
     # Scanner
     scanner_headless: bool = True
     scanner_max_pages: int = 25

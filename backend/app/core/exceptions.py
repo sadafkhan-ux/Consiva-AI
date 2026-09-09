@@ -29,6 +29,20 @@ class ScanAuthorizationError(ConsivaError):
     status_code = 403
 
 
+class ScanTimeoutError(ConsivaError):
+    """Raised when a scan exceeds its overall wall-clock budget and is aborted.
+
+    Exists because a hung scan is not just a slow scan: jobs/worker.py processes one
+    job at a time and runs reap_stale_jobs() at the TOP of its loop, so a scan that
+    never returns blocks BOTH every subsequent job and the reaper that would otherwise
+    recover it. Observed live -- one job held the only worker for 15+ minutes while
+    five later scans sat "queued" and never started. Failing loudly here lets the job
+    be marked failed, retried by the queue's normal policy, and the worker move on.
+    """
+
+    status_code = 504
+
+
 class RateLimitExceededError(ConsivaError):
     """Raised when an org exceeds the scan rate limit (master prompt §5: "rate-limit
     and queue scans")."""

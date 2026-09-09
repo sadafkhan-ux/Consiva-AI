@@ -231,3 +231,44 @@ def test_final_interaction_status_composition(raw_status, mechanism_type, expect
     "cmp_not_automatable" instead -- proving this composition is what changed the
     real, user-facing meaning of that result, not just its label."""
     assert _final_interaction_status(raw_status, mechanism_type) == expected
+
+
+# ---------------------------------------------------------------------------
+# Scan wall-clock budget -- both platform paths
+# ---------------------------------------------------------------------------
+async def test_linux_scan_path_is_bounded_by_the_scan_budget(monkeypatch):
+    """A hung scan must not hang the worker forever.
+
+    Real incident: the non-Windows branch called run_scan() with NO timeout, so a scan
+    that stalled inside Playwright held the only worker for 15+ minutes. Because
+    jobs/worker.py runs reap_stale_jobs() at the TOP of its loop, the hung job also
+    blocked the very mechanism meant to recover it -- five later scans sat "queued" and
+    never started, on every machine sharing the queue. Windows was already bounded by
+    subprocess.run(timeout=...); Linux was not."""
+    import asyncio
+
+    from app.core.exceptions import ScanTimeoutError
+    from app.scanner import crawler
+
+    monkeypatch.setattr(crawler.sys, "platform", "linux")
+    monkeypatch.setattr(crawler, "_scan_budget_seconds", lambda settings: 0.05)
+
+    async def _never_returns(root_url, settings=None):
+        await asyncio.sleep(60)
+
+    monkeypatch.setattr(crawler, "run_scan", _never_returns)
+
+    with pytest.raises(ScanTimeoutError, match="exceeded its"):
+        await crawler.run_scan_isolated("https://example.com")
+
+
+def test_scan_budget_matches_the_configured_page_and_timeout_caps():
+    """The budget is derived, not hardcoded, so raising scanner_max_pages cannot
+    silently make every large scan abort mid-way."""
+    from types import SimpleNamespace
+
+    from app.scanner.crawler import _scan_budget_seconds
+
+    assert _scan_budget_seconds(None) == 25 * 30 + 120
+    settings = SimpleNamespace(scanner_max_pages=10, scanner_timeout_seconds=20)
+    assert _scan_budget_seconds(settings) == 10 * 20 + 120

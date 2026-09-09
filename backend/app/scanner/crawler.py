@@ -40,7 +40,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.config import Settings, get_settings
-from app.core.exceptions import ScanAuthorizationError
+from app.core.exceptions import ScanAuthorizationError, ScanTimeoutError
 from app.rules.tracker_catalog import CMP_CATALOG
 from app.scanner._domain import registered_domain as _registered_domain
 from app.scanner.consent_interactor import click_accept, click_reject
@@ -762,6 +762,18 @@ async def run_scan(root_url: str, settings: Settings | None = None) -> ScanResul
     )
 
 
+def _scan_budget_seconds(settings: Settings | None) -> float:
+    """Overall wall-clock ceiling for one scan, shared by BOTH platform paths.
+
+    Derived from the per-page navigation timeout times the page cap, plus headroom for
+    browser startup and the two consent-interaction passes. Previously this expression
+    lived inline in the Windows subprocess call only, which is exactly how the Linux
+    path ended up with no ceiling at all."""
+    max_pages = settings.scanner_max_pages if settings else 25
+    per_page = settings.scanner_timeout_seconds if settings else 30
+    return max_pages * per_page + 120
+
+
 async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> ScanResult:
     """The entrypoint services should call instead of `run_scan()` directly.
 
@@ -774,10 +786,27 @@ async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> 
     asyncio's own subprocess APIs to launch the child either.
 
     On other platforms this conflict doesn't exist, so it just calls `run_scan()`
-    directly — no subprocess overhead.
+    directly — no subprocess overhead — but still under the SAME overall time budget
+    the Windows subprocess gets (see _scan_budget_seconds).
     """
+    budget = _scan_budget_seconds(settings)
+
     if sys.platform != "win32":
-        return await run_scan(root_url, settings)
+        # The budget is NOT optional here. Without it a scan that hangs inside
+        # Playwright hangs the worker forever, and because jobs/worker.py runs
+        # reap_stale_jobs() at the TOP of its loop, a hung job also blocks the very
+        # mechanism that would recover it -- every subsequent scan then sits "queued"
+        # indefinitely. Observed live: one job held the only worker for 15+ minutes
+        # and five later scans never started, on every machine sharing the queue.
+        # Windows was already bounded by subprocess.run(timeout=...); Linux was not,
+        # which is why this only ever bit the deployed container.
+        try:
+            return await asyncio.wait_for(run_scan(root_url, settings), timeout=budget)
+        except TimeoutError as exc:
+            raise ScanTimeoutError(
+                f"Scan of {root_url} exceeded its {budget:.0f}s budget and was aborted "
+                "so the worker could continue with other jobs."
+            ) from exc
 
     backend_dir = Path(__file__).resolve().parent.parent.parent
 
@@ -796,7 +825,7 @@ async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> 
             # confirmed live against prepmyevent.com before this fix.
             encoding="utf-8",
             check=False,
-            timeout=(settings.scanner_max_pages if settings else 25) * (settings.scanner_timeout_seconds if settings else 30) + 120,
+            timeout=budget,
         )
 
     loop = asyncio.get_running_loop()
