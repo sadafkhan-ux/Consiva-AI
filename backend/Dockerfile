@@ -41,6 +41,10 @@ COPY app ./app
 COPY migrations ./migrations
 COPY data ./data
 COPY migrate.py ./
+# One-shot CLI, same as migrate.py: bootstraps the first organization + admin
+# user, which cannot be done through the API (creating a user requires an
+# authenticated admin, and none exists yet).
+COPY create_user.py ./
 
 # Non-root runtime. The browser cache must be readable (not writable) by this user;
 # /app stays root-owned and read-only to the app, which is correct — the application

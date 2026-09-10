@@ -79,16 +79,29 @@ services:
       - ./backend/.env
     environment:
       # Explicit override point; everything else is inherited from env_file above.
-      # NOTE: the frontend's only auth path is POST /api/v1/dev/demo-token, which the
-      # application hard-gates to APP_ENV=development (app/api/v1/routes/dev.py). With
-      # APP_ENV=production the UI cannot obtain a token and every request 401s, so this
-      # defaults to development to keep the stack functional. See the report/README:
-      # real auth must replace the demo-token path before this is internet-facing.
+      #
+      # This used to be pinned to development because the SPA's only auth path was
+      # POST /api/v1/dev/demo-token, which the application hard-gates to
+      # APP_ENV=development -- meaning anyone who reached the URL could mint a token.
+      # The frontend now signs in against /api/v1/auth/login (first-party auth,
+      # migrations/0010_local_auth.sql), so APP_ENV=production is safe once at least
+      # one user exists:
+      #   docker compose -f docker-compose.prod.yml run --rm backend \
+      #     python create_user.py --email you@example.com --org "Your Org" --admin
+      # The default stays development so an existing deployment keeps working until
+      # that user is created; set APP_ENV=production in /opt/consiva/.env afterwards.
       APP_ENV: ${APP_ENV:-development}
       # Overrides whatever DATABASE_URL is in backend/.env (still the old Supabase URL,
       # kept there as a commented fallback) -- always point this deployment at the
       # local `db` service instead. See the `db` service comment above.
       DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
+    volumes:
+      # Source PDFs for the RAG knowledge base. Read-only, and deliberately a mount
+      # rather than a COPY: they live at the repo root, outside this service's
+      # ./backend build context, and they are ingest-time input rather than
+      # application code. Without this, `python -m app.rag.ingest` inside the
+      # container has no files to ingest and DPDP citations stay empty.
+      - ./knowledge_sources:/app/knowledge_sources:ro
     # Not published to the host: the browser reaches the API through the frontend's
     # nginx proxy on the shared network, so there is no reason to expose port 8000.
     expose:
