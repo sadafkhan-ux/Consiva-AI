@@ -95,6 +95,13 @@ services:
       # kept there as a commented fallback) -- always point this deployment at the
       # local `db` service instead. See the `db` service comment above.
       DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
+      # Signs and verifies login tokens (app/core/tokens.py). Passed explicitly from
+      # /opt/consiva/.env, like POSTGRES_PASSWORD above, because that file is read by
+      # compose for interpolation and is NOT the same file as the `env_file:
+      # ./backend/.env` the container inherits -- putting the secret in the wrong one
+      # is easy, and the symptom is a 500 at login rather than anything obvious.
+      # `:?` makes the stack refuse to start without it instead of failing later.
+      CONSIVA_JWT_SECRET: ${CONSIVA_JWT_SECRET:?set CONSIVA_JWT_SECRET in /opt/consiva/.env}
     volumes:
       # Source PDFs for the RAG knowledge base. Read-only, and deliberately a mount
       # rather than a COPY: they live at the repo root, outside this service's

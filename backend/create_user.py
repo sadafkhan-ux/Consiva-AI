@@ -8,6 +8,7 @@ API by an admin.
 Usage:
     python create_user.py --email you@example.com --org "Swaransoft" --admin
     python create_user.py --email member@example.com --org-id <uuid>
+    python create_user.py --email you@example.com --reset-password
 
 The password is read interactively (never passed as an argument, which would
 leave it in shell history and in the process list). Use --password only for
@@ -55,8 +56,27 @@ async def _run(args: argparse.Namespace) -> int:
         return 1
 
     async with async_session_factory() as db:
-        if await user_repository.get_user_by_email(db, args.email) is not None:
-            print(f"ERROR: a user with email {args.email!r} already exists.", file=sys.stderr)
+        existing_user = await user_repository.get_user_by_email(db, args.email)
+
+        if args.reset_password:
+            # There is no other way back in: /auth/users requires an authenticated
+            # admin, so a forgotten admin password would otherwise mean a lost
+            # deployment.
+            if existing_user is None:
+                print(f"ERROR: no user with email {args.email!r} to reset.", file=sys.stderr)
+                return 1
+            existing_user.password_hash = passwords.hash_password(password)
+            await db.commit()
+            print(f"password reset for {existing_user.email} ({existing_user.role})")
+            print(f"org_id: {existing_user.org_id}")
+            return 0
+
+        if existing_user is not None:
+            print(
+                f"ERROR: a user with email {args.email!r} already exists. "
+                "Use --reset-password to set a new password for them.",
+                file=sys.stderr,
+            )
             return 1
 
         if args.org_id:
@@ -102,6 +122,11 @@ def main() -> int:
     parser.add_argument("--org-id", help="existing organization UUID to attach this user to")
     parser.add_argument("--full-name", default=None)
     parser.add_argument("--admin", action="store_true", help="grant the admin role (can create other users)")
+    parser.add_argument(
+        "--reset-password", action="store_true",
+        help="set a new password for an EXISTING user instead of creating one "
+             "(the only recovery path for a forgotten admin password)",
+    )
     parser.add_argument(
         "--password", default=None,
         help="NOT RECOMMENDED: exposes the password in shell history and the process list",
