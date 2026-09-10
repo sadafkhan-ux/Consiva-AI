@@ -29,6 +29,20 @@ from app.db.session import async_session_factory, engine
 
 
 async def run(args: argparse.Namespace) -> int:
+    """Disposes the engine before returning, inside this same event loop.
+
+    Doing it from main()'s `finally` with a second asyncio.run() built a NEW loop
+    while the pooled asyncpg connections still belonged to the first, which threw
+    "attached to a different loop" followed by "Event loop is closed" -- after the
+    user had already been committed, so it looked like a failure that wasn't one.
+    """
+    try:
+        return await _run(args)
+    finally:
+        await engine.dispose()
+
+
+async def _run(args: argparse.Namespace) -> int:
     password = args.password or getpass.getpass("Password: ")
     if not args.password:
         if password != getpass.getpass("Confirm password: "):
@@ -94,10 +108,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    try:
-        return asyncio.run(run(args))
-    finally:
-        asyncio.run(engine.dispose())
+    return asyncio.run(run(args))
 
 
 if __name__ == "__main__":
