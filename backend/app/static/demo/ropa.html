@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Consiva ROPA Agent — Test Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Same tokens as index.html so merging into one UI later is a merge, not a rewrite. */
+  :root {
+    --bg: #0f1420; --panel: #161d2e; --panel-2: #1d2740; --border: #2a3454;
+    --text: #e6e9f2; --muted: #8a93ab; --accent: #5b8cff; --green: #35c98e;
+    --amber: #f2b84b; --red: #f2555a; --purple: #a97bff;
+    --mono: ui-monospace, "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font-family: -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .sub a { color: var(--accent); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+           padding: 18px; margin-bottom: 16px; }
+  .panel h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em;
+              color: var(--muted); margin: 0 0 12px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  input[type=text], select, textarea {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 10px 12px; border-radius: 6px; font-size: 13px; font-family: inherit;
+  }
+  input[type=text] { flex: 1; min-width: 240px; }
+  textarea { width: 100%; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+             min-height: 240px; resize: vertical; }
+  button { background: var(--accent); color: #fff; border: none; padding: 10px 16px;
+           border-radius: 6px; font-weight: 600; font-size: 13px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.secondary { background: var(--panel-2); border: 1px solid var(--border); }
+  button.approve { background: var(--green); }
+  button.reject { background: var(--red); }
+  button.small { padding: 6px 10px; font-size: 12px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .stat { background: var(--panel-2); border-radius: 8px; padding: 12px; }
+  .stat .n { font-size: 22px; font-weight: 700; font-family: var(--mono); }
+  .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase;
+             letter-spacing: .04em; margin-top: 2px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted);
+       letter-spacing: .04em; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px;
+          font-weight: 600; white-space: nowrap; }
+  .pill.low { background: rgba(53,201,142,.15); color: var(--green); }
+  .pill.medium { background: rgba(242,184,75,.15); color: var(--amber); }
+  .pill.high, .pill.critical { background: rgba(242,85,90,.15); color: var(--red); }
+  .pill.draft { background: var(--panel-2); color: var(--muted); }
+  .pill.in_review { background: rgba(242,184,75,.15); color: var(--amber); }
+  .pill.approved { background: rgba(53,201,142,.15); color: var(--green); }
+  .pill.rejected { background: rgba(242,85,90,.15); color: var(--red); }
+  .pill.pd { background: rgba(169,123,255,.15); color: var(--purple); }
+  .log { background: #0a0e18; border: 1px solid var(--border); border-radius: 6px;
+         padding: 10px; font-family: var(--mono); font-size: 11.5px; max-height: 220px;
+         overflow-y: auto; white-space: pre-wrap; line-height: 1.6; }
+  .log .ok { color: var(--green); } .log .err { color: var(--red); }
+  .log .dim { color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  .banner { padding: 10px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; }
+  .banner.warn { background: rgba(242,184,75,.12); border: 1px solid rgba(242,184,75,.3);
+                 color: var(--amber); }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tab { padding: 8px 14px; border-radius: 6px 6px 0 0; font-size: 13px; cursor: pointer;
+         color: var(--muted); background: transparent; border: none; font-weight: 600; }
+  .tab.active { background: var(--panel-2); color: var(--text); }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 3px;
+         font-family: var(--mono); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Consiva ROPA Agent — Test Console</h1>
+  <p class="sub">
+    Temporary console for testing Agent 2 end to end. Consent Agent demo is at
+    <a href="/index.html">/index.html</a>.
+  </p>
+
+  <div class="banner warn">
+    Test tool only. Uses <code>/api/v1/dev/demo-token</code>, which exists only when
+    <code>APP_ENV=development</code>. Not for production.
+  </div>
+
+  <!-- 1. Session -->
+  <div class="panel">
+    <h2>1 · Session</h2>
+    <div class="row">
+      <button id="btn-token">Get dev token</button>
+      <button id="btn-key" class="secondary" disabled>Mint integration key</button>
+      <span id="session-state" class="mono" style="color:var(--muted)">no token</span>
+    </div>
+    <p class="hint">
+      The <strong>dev token</strong> is a human session (reads, review decisions). The
+      <strong>integration key</strong> is a machine credential — the only thing that can push
+      evidence, exactly as PrepMyEvent's adapter would. It's shown once and stored only as a hash.
+    </p>
+  </div>
+
+  <!-- 2. Push evidence -->
+  <div class="panel">
+    <h2>2 · Push evidence <span style="text-transform:none;color:var(--muted)">(as an external adapter)</span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <select id="preset">
+        <option value="attendees">PrepMyEvent — attendees + payments</option>
+        <option value="full">PrepMyEvent — all 10 researched tables</option>
+        <option value="changed">Attendees + NEW aadhaar column (for change detection)</option>
+        <option value="clean">No personal data (operational tables only)</option>
+      </select>
+      <button id="btn-load" class="secondary small">Load preset</button>
+      <label style="font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center">
+        <input type="checkbox" id="use-idem"> reuse idempotency key
+      </label>
+      <button id="btn-push" disabled>Push evidence →</button>
+    </div>
+    <textarea id="payload" spellcheck="false"></textarea>
+    <p class="hint">
+      This is the exact wire contract (<code>schema_version 1.0</code>) the adapter sends.
+      Note every column's <code>sample_pattern</code> is <code>null</code> — metadata only, never row values.
+    </p>
+  </div>
+
+  <!-- 3. Result -->
+  <div class="panel">
+    <h2>3 · Run result</h2>
+    <div class="stats" id="stats">
+      <div class="stat"><div class="n">–</div><div class="l">Tables</div></div>
+      <div class="stat"><div class="n">–</div><div class="l">Columns</div></div>
+      <div class="stat"><div class="n">–</div><div class="l">Personal data</div></div>
+      <div class="stat"><div class="n">–</div><div class="l">Confidence</div></div>
+      <div class="stat"><div class="n">–</div><div class="l">Changes</div></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <span id="run-id" class="mono" style="color:var(--muted)">no run yet</span>
+      <button id="btn-baseline" class="secondary small" disabled>Promote to baseline</button>
+      <button id="btn-refresh" class="secondary small" disabled>Refresh</button>
+    </div>
+    <p class="hint">
+      Promote a baseline, then push the “NEW aadhaar column” preset — the next run should flag
+      <code>new_personal_data_category</code> for human review.
+    </p>
+  </div>
+
+  <!-- 4. Output -->
+  <div class="panel">
+    <div class="tabs">
+      <button class="tab active" data-tab="records">ROPA Records</button>
+      <button class="tab" data-tab="findings">Risk / Gaps</button>
+      <button class="tab" data-tab="changes">Changes</button>
+    </div>
+    <div id="tab-records"></div>
+    <div id="tab-findings" hidden></div>
+    <div id="tab-changes" hidden></div>
+  </div>
+
+  <div class="panel">
+    <h2>Activity log</h2>
+    <div class="log" id="log"><span class="dim">ready.</span></div>
+  </div>
+</div>
+
+<script>
+const API = "";
+let token = null, apiKey = null, runId = null, idemKey = null;
+
+const $ = (id) => document.getElementById(id);
+function log(msg, cls = "") {
+  const el = $("log");
+  const t = new Date().toLocaleTimeString();
+  el.innerHTML += `\n<span class="dim">${t}</span> <span class="${cls}">${msg}</span>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function api(path, { method = "GET", body = null, auth = "token" } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  const cred = auth === "key" ? apiKey : token;
+  if (cred) headers["Authorization"] = `Bearer ${cred}`;
+  const res = await fetch(API + path, {
+    method, headers, body: body ? JSON.stringify(body) : null,
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${typeof data === "string" ? data : JSON.stringify(data)}`);
+  return data;
+}
+
+// ── Presets ────────────────────────────────────────────────────────────────────
+const col = (i, t, name, type = "text") =>
+  ({ local_id: `column-${i}`, table_local_id: t, column_name: name, data_type: type });
+
+function payloadFor(kind) {
+  const base = (tables, columns, extra = {}) => ({
+    schema_version: "1.0",
+    source_name: "prepmyevent.com",
+    correlation_id: "console-" + Math.random().toString(16).slice(2, 10),
+    generated_at: new Date().toISOString(),
+    adapter_version: "1.0.0",
+    evidence: {
+      org_id: "external",
+      discovery_run_id: "console-" + Date.now(),
+      sources: [{ local_id: "source-1", name: "prepmyevent.com", source_type: "database",
+                  connector: "integration_adapter", location: null }],
+      tables, columns, ...extra,
+    },
+  });
+
+  if (kind === "attendees") {
+    return base(
+      [{ local_id: "table-1", source_local_id: "source-1", table_name: "attendees" },
+       { local_id: "table-2", source_local_id: "source-1", table_name: "payments" }],
+      [col(1, "table-1", "id", "uuid"), col(2, "table-1", "full_name"),
+       col(3, "table-1", "email"), col(4, "table-1", "phone"),
+       col(5, "table-1", "linkedin_url"), col(6, "table-1", "created_at", "timestamptz"),
+       col(7, "table-2", "card_number"), col(8, "table-2", "billing_address")],
+      { vendors: [{ local_id: "vendor-1", name: "Stripe", role: "processor",
+                    integration_local_id: "source-1", location: "US", dpa_status: "Confirmed" }],
+        business_metadata: [{ local_id: "meta-1", subject_local_id: "table-1",
+                              business_owner: "Events Team", retention_policy: "24 months" }] });
+  }
+  if (kind === "changed") {
+    return base(
+      [{ local_id: "table-1", source_local_id: "source-1", table_name: "attendees" }],
+      [col(1, "table-1", "id", "uuid"), col(2, "table-1", "full_name"),
+       col(3, "table-1", "email"), col(4, "table-1", "aadhaar_number")]);
+  }
+  if (kind === "clean") {
+    return base(
+      [{ local_id: "table-1", source_local_id: "source-1", table_name: "job_queue" }],
+      [col(1, "table-1", "id", "uuid"), col(2, "table-1", "status"),
+       col(3, "table-1", "retry_count", "integer"), col(4, "table-1", "created_at", "timestamptz")]);
+  }
+  // full
+  const names = ["leads", "events", "attendees", "campaigns", "emails",
+                 "email_events", "users", "connected_inboxes", "transactions", "audit_logs"];
+  const cols = {
+    leads: ["email", "full_name", "linkedin_url", "company_name"],
+    events: ["event_name", "venue_city", "starts_at"],
+    attendees: ["full_name", "email", "phone", "employer"],
+    campaigns: ["campaign_name", "subject"],
+    emails: ["recipient_email", "sent_at"],
+    email_events: ["event_type", "ip_address", "user_agent"],
+    users: ["email", "full_name", "password_hash"],
+    connected_inboxes: ["email", "provider"],
+    transactions: ["amount", "card_number", "billing_address"],
+    audit_logs: ["actor_email", "action", "created_at"],
+  };
+  const tables = names.map((n, i) => ({ local_id: `table-${i + 1}`, source_local_id: "source-1", table_name: n }));
+  let ci = 0;
+  const columns = names.flatMap((n, i) =>
+    ["id", ...cols[n]].map((c) => col(++ci, `table-${i + 1}`, c, c === "id" ? "uuid" : "text")));
+  return base(tables, columns);
+}
+
+// ── Rendering ──────────────────────────────────────────────────────────────────
+function setStats(run, changeCount) {
+  const conf = run.overall_confidence == null ? "–" : run.overall_confidence.toFixed(2);
+  const vals = [run.tables_scanned, run.columns_scanned, run.personal_data_elements, conf, changeCount ?? "–"];
+  [...$("stats").children].forEach((el, i) => { el.querySelector(".n").textContent = vals[i]; });
+}
+
+function renderRecords(rows) {
+  if (!rows.length) return $("tab-records").innerHTML = `<p class="empty">No ROPA records — no processing activity could be established from this evidence.</p>`;
+  $("tab-records").innerHTML = `<table><thead><tr>
+      <th>Processing activity</th><th>Subjects</th><th>Categories</th><th>Retention</th>
+      <th>Owner</th><th>Conf</th><th>Ver</th><th>Status</th><th></th></tr></thead><tbody>
+    ${rows.map(r => { const p = r.payload; return `<tr>
+      <td><strong>${p.processing_activity}</strong><div class="hint" style="margin:2px 0 0">${(p.data_elements || []).join(", ") || "—"}</div></td>
+      <td>${(p.data_subjects || []).join(", ")}</td>
+      <td>${(p.personal_data_categories || []).map(c => `<span class="pill pd">${c}</span>`).join(" ") || "—"}</td>
+      <td>${p.retention}</td><td>${p.business_owner}</td>
+      <td class="mono">${(r.confidence ?? 0).toFixed(2)}</td>
+      <td class="mono">v${r.version}</td>
+      <td><span class="pill ${r.status}">${r.status}</span></td>
+      <td>${["draft", "in_review"].includes(r.status) ? `
+        <button class="approve small" data-decide="${r.id}" data-kind="record" data-d="approved">Approve</button>
+        <button class="reject small" data-decide="${r.id}" data-kind="record" data-d="rejected">Reject</button>` : ""}</td>
+    </tr>`; }).join("")}</tbody></table>`;
+}
+
+function renderFindings(rows) {
+  if (!rows.length) return $("tab-findings").innerHTML = `<p class="empty">No risk or gap findings.</p>`;
+  $("tab-findings").innerHTML = `<table><thead><tr>
+      <th>Severity</th><th>Status</th><th>Finding</th><th>Why this severity</th><th>Review</th><th></th></tr></thead><tbody>
+    ${rows.map(f => `<tr>
+      <td><span class="pill ${f.severity}">${f.severity}</span></td>
+      <td style="white-space:nowrap">${f.gap_status}</td>
+      <td>${f.finding}<div class="hint" style="margin:2px 0 0">${f.recommendation || ""}</div></td>
+      <td class="hint" style="margin:0">${(f.severity_factors || []).join(" · ")}</td>
+      <td><span class="pill ${f.review_status === "pending" ? "in_review" : f.review_status}">${f.review_status}</span></td>
+      <td>${f.review_status === "pending" ? `
+        <button class="approve small" data-decide="${f.id}" data-kind="finding" data-d="approved">Accept</button>
+        <button class="reject small" data-decide="${f.id}" data-kind="finding" data-d="rejected">Dismiss</button>` : ""}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+function renderChanges(rows) {
+  if (!rows.length) return $("tab-changes").innerHTML = `<p class="empty">No changes detected. Promote a baseline, then push a modified schema.</p>`;
+  $("tab-changes").innerHTML = `<table><thead><tr>
+      <th>Change</th><th>Target</th><th>Was</th><th>Now</th><th>Material</th></tr></thead><tbody>
+    ${rows.map(c => `<tr>
+      <td><span class="pill ${c.is_material ? "high" : "low"}">${c.change_type}</span></td>
+      <td class="mono">${c.target}</td>
+      <td class="mono">${c.previous_value ?? "—"}</td>
+      <td class="mono">${c.current_value ?? "—"}</td>
+      <td>${c.is_material ? "yes — needs review" : "no"}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+async function loadRun() {
+  if (!runId) return;
+  const [records, findings, changes] = await Promise.all([
+    api(`/api/v1/ropa/runs/${runId}/records`),
+    api(`/api/v1/ropa/runs/${runId}/findings`),
+    api(`/api/v1/ropa/runs/${runId}/changes`),
+  ]);
+  renderRecords(records); renderFindings(findings); renderChanges(changes);
+  return { records, findings, changes };
+}
+
+// ── Wiring ─────────────────────────────────────────────────────────────────────
+$("btn-token").onclick = async () => {
+  try {
+    const d = await api("/api/v1/dev/demo-token", { method: "POST" });
+    token = d.token;
+    $("session-state").textContent = `org ${d.org_id.slice(0, 8)}… · token ok`;
+    $("btn-key").disabled = false;
+    log("dev token acquired", "ok");
+  } catch (e) { log(e.message, "err"); }
+};
+
+$("btn-key").onclick = async () => {
+  try {
+    const d = await api("/api/v1/ropa/integration-keys", { method: "POST", body: { name: "test-console" } });
+    apiKey = d.api_key;
+    $("session-state").textContent = `org ok · key ${d.key_prefix}`;
+    $("btn-push").disabled = false;
+    log(`integration key minted: ${d.key_prefix} (shown once, stored as hash)`, "ok");
+  } catch (e) { log(e.message, "err"); }
+};
+
+$("btn-load").onclick = () => {
+  $("payload").value = JSON.stringify(payloadFor($("preset").value), null, 2);
+  log(`loaded preset: ${$("preset").value}`);
+};
+
+$("btn-push").onclick = async () => {
+  try {
+    const body = JSON.parse($("payload").value);
+    if ($("use-idem").checked) {
+      idemKey = idemKey || "console-idem-" + Math.random().toString(16).slice(2, 10);
+      body.idempotency_key = idemKey;
+    }
+    log(`pushing ${body.evidence.tables.length} tables / ${body.evidence.columns.length} columns as adapter…`);
+    const run = await api("/api/v1/ropa/evidence", { method: "POST", body, auth: "key" });
+    runId = run.id;
+    $("run-id").textContent = `run ${run.id} · ${run.ingest_mode} · ${run.status}`;
+    $("btn-baseline").disabled = false; $("btn-refresh").disabled = false;
+    const out = await loadRun();
+    setStats(run, out.changes.length);
+    log(`run ${run.status}: ${run.personal_data_elements} personal-data elements, ` +
+        `${out.records.length} ROPA records, ${out.findings.length} findings, ${out.changes.length} changes`, "ok");
+  } catch (e) { log(e.message, "err"); }
+};
+
+$("btn-baseline").onclick = async () => {
+  try {
+    const d = await api(`/api/v1/ropa/runs/${runId}/promote-baseline`, { method: "POST" });
+    log(`baseline promoted for ${d.source_name} — future pushes diff against this run`, "ok");
+  } catch (e) { log(e.message, "err"); }
+};
+
+$("btn-refresh").onclick = async () => { try { await loadRun(); log("refreshed"); } catch (e) { log(e.message, "err"); } };
+
+document.addEventListener("click", async (ev) => {
+  const t = ev.target.closest("[data-decide]");
+  if (t) {
+    const { decide, kind, d } = t.dataset;
+    try {
+      const path = kind === "record" ? `/api/v1/ropa/records/${decide}/decision`
+                                     : `/api/v1/ropa/findings/${decide}/decision`;
+      await api(path, { method: "POST", body: { decision: d, reason: "test console" } });
+      log(`${kind} ${d}`, "ok");
+      await loadRun();
+    } catch (e) { log(e.message, "err"); }
+    return;
+  }
+  const tab = ev.target.closest(".tab");
+  if (tab) {
+    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("active", x === tab));
+    ["records", "findings", "changes"].forEach(n => { $("tab-" + n).hidden = n !== tab.dataset.tab; });
+  }
+});
+
+$("btn-load").click();
+renderRecords([]); renderFindings([]); renderChanges([]);
+</script>
+</body>
+</html>
