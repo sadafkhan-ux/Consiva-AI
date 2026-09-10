@@ -277,3 +277,38 @@ def test_allow_list_excludes_credentials_and_content():
     for forbidden in ("oauth_tokens", "smtp_credentials", "encryption_keys",
                       "api_keys", "sessions", "message_bodies"):
         assert forbidden not in tables
+
+
+# ── Regression: FK discovery must work for a least-privilege role ───────────────
+
+
+@_live_db_only
+def test_fk_discovery_does_not_depend_on_table_ownership(engine):
+    """information_schema.constraint_column_usage only exposes constraints on
+    tables the role OWNS, so the connector must read pg_catalog instead.
+
+    Live-confirmed before the fix: superuser saw 34 FKs, a genuine read-only
+    role saw 0. This asserts the catalog query is what's in use.
+    """
+    from sqlalchemy import text
+
+    catalog_q = text("""
+        SELECT count(*) FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE c.contype = 'f' AND n.nspname = 'public'
+    """)
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "agents" / "ropa" / "connectors" / "postgres.py").read_text(encoding="utf-8")
+
+    with engine.connect() as conn:
+        assert conn.execute(catalog_q).scalar() > 0, "fixture DB should have foreign keys"
+
+    assert "pg_constraint" in src, "FK discovery must read pg_catalog"
+    # Only the SQL matters -- the docstring deliberately NAMES the rejected view
+    # to explain why, so strip comment lines before asserting.
+    sql_only = "\n".join(
+        line for line in src.splitlines() if not line.lstrip().startswith(("#", "--"))
+    )
+    assert "FROM information_schema.constraint_column_usage" not in sql_only
+    assert "JOIN information_schema.constraint_column_usage" not in sql_only
