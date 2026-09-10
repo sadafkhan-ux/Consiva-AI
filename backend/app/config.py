@@ -37,11 +37,23 @@ class Settings(BaseSettings):
     llm_primary_model: str | None = None
     llm_primary_api_key: str | None = None
 
-    # Supabase / Postgres
-    supabase_url: str
-    supabase_service_role_key: str
+    # Postgres
     database_url: str
-    supabase_jwt_secret: str
+
+    # First-party auth (app/core/tokens.py). Signs and verifies Consiva-issued
+    # access tokens, and seeds the domain-verification HMAC in
+    # services/verification_service.py. Optional ONLY so an existing
+    # Supabase-only deployment still boots unchanged during the transition --
+    # without it, /api/v1/auth/login cannot issue tokens.
+    consiva_jwt_secret: str | None = None
+
+    # Supabase auth -- now OPTIONAL. Identity used to come from Supabase; local
+    # auth replaces it. These stay so a deployment mid-transition keeps
+    # accepting existing Supabase tokens (see core/security.py's dual mode), and
+    # can be deleted outright once every user has a local account.
+    supabase_url: str | None = None
+    supabase_service_role_key: str | None = None
+    supabase_jwt_secret: str | None = None
 
     # Connections THIS process may hold. Kept small on purpose: Supabase's session-mode
     # pooler (port 5432) caps the whole project at 15 clients, and SQLAlchemy's own

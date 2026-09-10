@@ -1,9 +1,18 @@
 from fastapi import APIRouter
 
-from app.api.v1.routes import actions, consent_findings, consent_scans, dev, ropa, websites
+from app.api.v1.routes import (
+    actions,
+    auth,
+    consent_findings,
+    consent_scans,
+    dev,
+    ropa,
+    websites,
+)
 from app.config import get_settings
 
 api_router = APIRouter()
+api_router.include_router(auth.router)
 api_router.include_router(consent_scans.router)
 api_router.include_router(consent_findings.router)
 api_router.include_router(websites.router)
