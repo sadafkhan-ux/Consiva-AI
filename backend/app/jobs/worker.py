@@ -21,7 +21,7 @@ if sys.platform == "win32":
 from app.db.models import AgentJob
 from app.db.session import async_session_factory
 from app.jobs import queue
-from app.services import analysis_service, monitoring_service, scan_service
+from app.services import analysis_service, monitoring_service, ropa_run_service, scan_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +44,16 @@ async def _process_one(job: AgentJob) -> None:
         await analysis_service.run_analysis(
             uuid.UUID(job.payload["agent_run_id"]),
             uuid.UUID(job.payload["scan_id"]),
+            uuid.UUID(job.payload["org_id"]),
+        )
+    elif job.job_type == "ropa_discovery":
+        # Agent 2 (Data Discovery / ROPA) connector run. Only the connector path
+        # is queued: an evidence_push already arrives with its data in hand and
+        # completes inside the request, so queuing it would add latency for
+        # nothing. Uses this same agent_jobs queue rather than a second job
+        # framework.
+        await ropa_run_service.execute_queued_discovery(
+            uuid.UUID(job.payload["run_id"]),
             uuid.UUID(job.payload["org_id"]),
         )
     else:
