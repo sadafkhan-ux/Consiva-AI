@@ -154,6 +154,12 @@ Controlled entirely by `ALLOW_LIST` in `adapter.py`:
 | Foreign keys between approved tables | Message bodies |
 | — | Your DB host, credentials, or `DATABASE_URL` |
 
+The payload is a versioned contract (`schema_version: "1.0"`) carrying a
+`correlation_id` you can quote to Consiva support. Consiva accepts any `1.x`, so
+an added optional field will never break your installed adapter; a breaking
+change would be `2.0` and would be announced before it ships. The exact JSON
+shape, every field, and every error code are in **`DATA_CONTRACT.md`**.
+
 To narrow it further, replace a table entry with an explicit column list:
 
 ```python
