@@ -32,17 +32,20 @@ no firewall change, no new database user required.
 
 ## 2. Installation
 
-Copy two files into your backend:
+Unzip into your backend. Two files are code; the rest are docs for your team.
 
 ```
 backend/
   ropa_integration/
     __init__.py
-    ropa_adapter_sdk.py          ← generic SDK
+    ropa_adapter_sdk.py          ← code: generic SDK, no Consiva dependency
     prepmyevent/
       __init__.py
-      adapter.py                 ← your configuration
+      adapter.py                 ← code: your allow-list and config
       .env.example
+      README.md                  ← this file
+      DATA_CONTRACT.md           ← exact JSON and every error code
+      SECURITY.md                ← reviewer checklist
 ```
 
 No new Python packages required. The SDK uses only the standard library plus
@@ -60,8 +63,10 @@ cp ropa_integration/prepmyevent/.env.example .env.ropa
 | Variable | Required | Notes |
 |---|---|---|
 | `CONSIVA_INTEGRATION_KEY` | yes | Issued by Consiva. Shown once. Format `csv_<prefix>_<secret>` |
-| `CONSIVA_BASE_URL` | yes | Must be `https://` — plain HTTP is refused |
+| `CONSIVA_BASE_URL` | yes | **Consiva will give you the exact host** — it is deployment-specific, so there is no default. Must be `https://`; plain HTTP is refused before any connection is attempted. |
 | `DATABASE_URL` | no | Leave blank to reuse `backend.database` (recommended) |
+
+Neither variable is needed for the dry run in §4 — only for actually sending.
 
 ---
 
@@ -87,6 +92,14 @@ every column — that is the field that would hold data, and it is always null.
 set -a && . ./.env.ropa && set +a
 python -m ropa_integration.prepmyevent.adapter
 ```
+
+Prints a JSON run summary on success, and exits non-zero on failure without ever
+raising into your application.
+
+Optional: `--idempotency-key <value>` makes a retry safe. Consiva returns the
+**existing** run for a key it has already seen rather than starting a duplicate, so
+a re-run after a network wobble costs nothing. Omit it for a scheduled job, where
+every run genuinely is new.
 
 Schedule it weekly with a systemd timer (matches how your backend already runs):
 
