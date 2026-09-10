@@ -38,19 +38,35 @@ def build_data_flows(
                 path.append(storage)
 
             downstream = [v for v in vendors if source is None or v.integration_local_id == source.local_id]
-            for vendor in downstream:
-                path.append(vendor.name)
-                flow_evidence.append(vendor.local_id)
 
-            flows.append(
-                DataFlowMapping(
-                    processing_activity=activity.name,
-                    path=path,
-                    evidence=sorted(set(flow_evidence)),
-                    # No evidenced processor/recipient means the flow is
-                    # incomplete, not that the data stays put.
-                    review_required=not downstream,
+            if not downstream:
+                flows.append(
+                    DataFlowMapping(
+                        processing_activity=activity.name,
+                        path=path,
+                        evidence=sorted(set(flow_evidence)),
+                        # No evidenced processor/recipient means the flow is
+                        # incomplete, not that the data stays put.
+                        review_required=True,
+                    )
                 )
-            )
+                continue
+
+            # One flow PER processor, never one path containing all of them.
+            # Appending them to a single path would render two independent
+            # processors as a chain -- "source -> Stripe -> SendGrid" asserts
+            # that Stripe passes data to SendGrid, a relationship no evidence
+            # supports. Inventing an intermediate hop is exactly what the ROPA
+            # prompt's §10 forbids, and it would be a false statement in a
+            # compliance record.
+            for vendor in downstream:
+                flows.append(
+                    DataFlowMapping(
+                        processing_activity=activity.name,
+                        path=[*path, vendor.name],
+                        evidence=sorted({*flow_evidence, vendor.local_id}),
+                        review_required=False,
+                    )
+                )
 
     return flows

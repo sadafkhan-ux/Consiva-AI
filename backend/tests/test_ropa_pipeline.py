@@ -188,3 +188,38 @@ def test_output_matches_pydantic_contract(evidence):
         "confidence_summary",
     ):
         assert section in payload
+
+
+def test_multiple_processors_are_separate_branches_not_a_chain(evidence):
+    """Two independent processors must never be rendered as one path.
+
+    "source -> Stripe -> SendGrid" asserts that Stripe forwards data to
+    SendGrid -- a relationship no evidence supports, and a false statement in a
+    compliance record. Prompt §10: do not invent intermediate systems.
+    """
+    from app.agents.ropa.schemas.evidence import VendorRecord
+
+    evidence.vendors.append(
+        VendorRecord(local_id="vendor-2", name="SendGrid", role="processor",
+                     integration_local_id="source-1", location="US", dpa_status="Missing")
+    )
+    out = discovery_service.run_pipeline(evidence)
+
+    for flow in out.data_flows:
+        vendors_in_path = [n for n in flow.path if n in {"Stripe", "SendGrid"}]
+        assert len(vendors_in_path) <= 1, (
+            f"path {flow.path} chains multiple processors; each needs its own branch"
+        )
+
+    # Both processors must still be represented, just separately.
+    named = {n for f in out.data_flows for n in f.path}
+    assert {"Stripe", "SendGrid"} <= named
+
+
+def test_flow_with_no_processor_is_flagged_for_review(evidence):
+    """No evidenced processor means the flow is incomplete, not that the data
+    stays put."""
+    evidence.vendors.clear()
+    out = discovery_service.run_pipeline(evidence)
+    assert out.data_flows
+    assert all(f.review_required for f in out.data_flows)
