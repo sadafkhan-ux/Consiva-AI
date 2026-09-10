@@ -315,3 +315,103 @@ table.data-table td.mono { font-family: var(--mono); font-size: 12px; word-break
 }
 .recommendation-item .what { font-weight: 600; margin-bottom: 4px; }
 .recommendation-item .why { color: var(--muted); margin-bottom: 4px; }
+
+/* ── Shell: sign-in gate + agent switcher ─────────────────────────────────────
+   Appended, not edited: every rule above still applies to the Consent Agent
+   view exactly as before. */
+
+.shell-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.shell-session { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.session-user { font-size: 13px; color: var(--muted, #94a3b8); display: flex; align-items: center; gap: 6px; }
+
+.agent-switch { display: flex; gap: 4px; background: var(--panel-2); padding: 4px; border-radius: 8px; }
+.agent-switch button {
+  background: transparent; border: none; color: var(--muted, #94a3b8);
+  padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.agent-switch button.active { background: var(--accent); color: #fff; }
+
+.agent-intro { margin-bottom: 20px; }
+.agent-intro h1 { margin: 0 0 4px; }
+
+button.small { padding: 6px 10px; font-size: 12px; }
+
+/* ── Login ────────────────────────────────────────────────────────────────── */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.login-card {
+  width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border, #263049);
+  border-radius: 12px; padding: 28px; display: flex; flex-direction: column; gap: 8px;
+}
+.login-card .brand { font-size: 20px; font-weight: 700; color: var(--accent); }
+.login-sub { color: var(--muted, #94a3b8); font-size: 13px; margin-bottom: 12px; }
+.login-label { font-size: 12px; color: var(--muted, #94a3b8); margin-top: 8px; }
+.login-card input {
+  background: var(--panel-2); border: 1px solid var(--border, #263049); color: inherit;
+  padding: 10px 12px; border-radius: 6px; font-size: 14px; width: 100%;
+}
+.login-card button { margin-top: 16px; }
+.login-error { margin-top: 12px; }
+.login-hint { font-size: 12px; color: var(--muted, #94a3b8); margin-top: 14px; text-align: center; }
+
+/* ── ROPA dashboard ───────────────────────────────────────────────────────── */
+.ropa-toolbar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.ropa-layout { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .ropa-layout { grid-template-columns: 1fr; } }
+
+.run-list { display: flex; flex-direction: column; gap: 6px; }
+.run-item {
+  text-align: left; background: var(--panel); border: 1px solid var(--border, #263049);
+  border-radius: 8px; padding: 10px 12px; cursor: pointer; color: inherit;
+}
+.run-item.active { border-color: var(--accent); background: var(--panel-2); }
+.run-source { font-weight: 600; font-size: 13px; }
+.run-meta { font-size: 11px; color: var(--muted, #94a3b8); margin-top: 2px; }
+
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.stat { background: var(--panel-2); border-radius: 8px; padding: 12px; }
+.stat-value { font-size: 20px; font-weight: 700; font-family: ui-monospace, Consolas, monospace; }
+.stat-label { font-size: 11px; color: var(--muted, #94a3b8); text-transform: uppercase; letter-spacing: .04em; }
+
+.ropa-tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+.ropa-tab {
+  background: transparent; border: none; color: var(--muted, #94a3b8);
+  padding: 8px 14px; border-radius: 6px 6px 0 0; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.ropa-tab.active { background: var(--panel-2); color: inherit; }
+
+.ropa-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ropa-table th {
+  text-align: left; font-size: 11px; text-transform: uppercase; color: var(--muted, #94a3b8);
+  letter-spacing: .04em; padding: 6px 8px; border-bottom: 1px solid var(--border, #263049);
+}
+.ropa-table td { padding: 8px; border-bottom: 1px solid var(--border, #263049); vertical-align: top; }
+.ropa-table .nowrap { white-space: nowrap; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.muted { color: var(--muted, #94a3b8); }
+.small { font-size: 11.5px; }
+
+.pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+.pill-pd { background: rgba(169,123,255,.15); color: #a97bff; }
+.pill-low { background: rgba(52,211,153,.15); color: var(--green); }
+.pill-medium { background: rgba(251,191,36,.15); color: var(--amber); }
+.pill-high, .pill-critical { background: rgba(248,113,113,.15); color: var(--red); }
+.pill-draft { background: var(--panel-2); color: var(--muted, #94a3b8); }
+.pill-in_review { background: rgba(251,191,36,.15); color: var(--amber); }
+.pill-approved { background: rgba(52,211,153,.15); color: var(--green); }
+.pill-rejected, .pill-superseded { background: rgba(248,113,113,.15); color: var(--red); }
+.pill-admin { background: rgba(91,140,255,.15); color: var(--accent); }
+
+button.approve { background: var(--green); }
+button.reject { background: var(--red); }
+
+.key-box { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.key-value {
+  display: block; width: 100%; word-break: break-all; background: #0a0e18;
+  padding: 8px; border-radius: 6px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+}

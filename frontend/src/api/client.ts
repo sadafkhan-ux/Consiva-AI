@@ -7,6 +7,7 @@ import type {
   ScanStatusResponse,
   StageResponse,
 } from "./types";
+import { getProfile, getToken, logout } from "./auth";
 import { ApiError } from "./types";
 
 // Read from Vite env config, not hardcoded -- see .env.example / .env.development.
@@ -15,34 +16,34 @@ import { ApiError } from "./types";
 // staying overridable per-environment through the real Vite env mechanism.
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-let token: string | null = null;
-let orgId: string | null = null;
-
-// This backend's ONLY local-dev auth path today is its own existing
-// POST /api/v1/dev/demo-token endpoint (hard-gated server-side to
-// APP_ENV=development, see backend/app/api/v1/routes/dev.py) -- the same mechanism
-// the project's existing static demo page already uses. This is not a bypass and not
-// a new insecure endpoint; it is the existing mechanism, reused as instructed.
+// Auth now comes from a real login (api/auth.ts -> POST /api/v1/auth/login).
+// This previously called POST /api/v1/dev/demo-token, which is hard-gated to
+// APP_ENV=development server-side and so forced the entire deployment into
+// development mode -- letting anyone who reached the URL mint a token. The
+// dev endpoint still exists for local scripting; the app no longer depends on it.
 export async function ensureAuth(): Promise<void> {
-  if (token) return;
-  const res = await fetch(`${BASE_URL}/api/v1/dev/demo-token`, { method: "POST" });
-  if (!res.ok) {
-    throw new ApiError(
-      res.status,
-      "Could not obtain a local dev auth token -- is the backend running with APP_ENV=development?"
-    );
+  if (!getToken()) {
+    throw new ApiError(401, "Not signed in.");
   }
-  const data = await res.json();
-  token = data.token;
-  orgId = data.org_id;
 }
 
 export function currentOrgId(): string | null {
-  return orgId;
+  return getProfile()?.org_id ?? null;
+}
+
+/** Signed out because the token was rejected, so the shell can show the login screen. */
+export type UnauthorizedHandler = () => void;
+
+let onUnauthorized: UnauthorizedHandler | null = null;
+
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  onUnauthorized = handler;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  await ensureAuth();
+  const token = getToken();
+  if (!token) throw new ApiError(401, "Not signed in.");
+
   let res: Response;
   try {
     res = await fetch(`${BASE_URL}${path}`, {
@@ -64,6 +65,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   const isJson = res.headers.get("content-type")?.includes("application/json");
   const body = isJson ? await res.json().catch(() => null) : await res.text().catch(() => "");
+
+  if (res.status === 401) {
+    // The token expired or was rejected -- clear it and let the shell fall back
+    // to the login screen rather than leaving a dead session in place.
+    logout();
+    onUnauthorized?.();
+  }
 
   if (!res.ok) {
     // FastAPI's own error shape is {"detail": "..."} for both our ConsivaError

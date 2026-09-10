@@ -273,6 +273,17 @@ async def ingest_evidence(
     return _run_response(run)
 
 
+@router.get("/runs", response_model=list[RunResponse])
+async def list_runs(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> list[RunResponse]:
+    """Recent discovery runs for the caller's org, newest first."""
+    rows = await ropa_repository.list_runs(db, uuid.UUID(user.org_id), limit=min(limit, 200))
+    return [_run_response(r) for r in rows]
+
+
 @router.get("/runs/{run_id}", response_model=RunResponse)
 async def get_run(
     run_id: uuid.UUID,

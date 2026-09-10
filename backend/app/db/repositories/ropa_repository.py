@@ -95,6 +95,17 @@ async def create_run(
     return row
 
 
+async def list_runs(db: AsyncSession, org_id: uuid.UUID, limit: int = 50) -> list[RopaDiscoveryRun]:
+    """Most recent runs for this org, for the dashboard's run list."""
+    result = await db.execute(
+        select(RopaDiscoveryRun)
+        .where(RopaDiscoveryRun.org_id == org_id)
+        .order_by(RopaDiscoveryRun.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def get_run(db: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> RopaDiscoveryRun | None:
     result = await db.execute(
         select(RopaDiscoveryRun).where(RopaDiscoveryRun.id == run_id, RopaDiscoveryRun.org_id == org_id)
