@@ -124,3 +124,45 @@ def test_pipeline_populates_change_detection():
 def test_pipeline_without_baseline_reports_no_changes():
     output = discovery_service.run_pipeline(_evidence({"email": "text"}))
     assert output.change_detection == []
+
+
+# ── Tier-4 LLM enrichment wiring (prompt §6) ────────────────────────────────────
+
+
+async def test_enriched_pipeline_falls_back_to_rules_when_llm_unavailable(monkeypatch):
+    """Enrichment is an escalation, never a dependency: an LLM outage must
+    still produce a complete rules-only ROPA."""
+    async def _boom(*_a, **_k):
+        raise RuntimeError("LLM down")
+
+    monkeypatch.setattr("app.llm.client.generate_structured_with_fallback", _boom)
+    out = await discovery_service.run_pipeline_enriched(_evidence({"email": "text"}))
+    assert out.personal_data_inventory, "rules result must survive an LLM failure"
+    assert out.confidence_summary is not None
+
+
+async def test_enriched_pipeline_applies_suggestions(monkeypatch):
+    """A suggestion for an ambiguous column is applied, but stays unverified."""
+    from app.agents.ropa.services.enrichment_service import ColumnSuggestion, EnrichmentResponse
+
+    async def _fake(*_a, **_k):
+        return EnrichmentResponse(suggestions=[
+            ColumnSuggestion(column="mystery_field", category="Contact Data", reasoning="looks contact-ish")
+        ]), {}
+
+    monkeypatch.setattr("app.llm.client.generate_structured_with_fallback", _fake)
+    out = await discovery_service.run_pipeline_enriched(_evidence({"mystery_field": "text"}))
+    enriched = [e for e in out.classifications if e.column == "mystery_field"]
+    assert enriched and enriched[0].classification == "Contact Data"
+    assert enriched[0].review_required, "an LLM suggestion must never be authoritative"
+    assert "source:llm_suggestion" in enriched[0].evidence
+
+
+def test_sync_pipeline_makes_no_llm_call(monkeypatch):
+    """The default path must stay fully deterministic and offline."""
+    def _explode(*_a, **_k):
+        raise AssertionError("run_pipeline must not call the LLM")
+
+    monkeypatch.setattr("app.llm.client.generate_structured_with_fallback", _explode)
+    out = discovery_service.run_pipeline(_evidence({"email": "text"}))
+    assert out.personal_data_inventory
