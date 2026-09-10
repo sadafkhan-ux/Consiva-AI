@@ -115,7 +115,7 @@ class TableAllowList:
 @dataclass
 class AdapterConfig:
     source_name: str                      # logical name Consiva shows, e.g. 'prepmyevent.com'
-    consiva_base_url: str                 # e.g. 'https://api.consiva.ai'
+    consiva_base_url: str                 # the host Consiva gave you
     integration_key: str                  # 'csv_<prefix>_<secret>' -- from POST /api/v1/ropa/integration-keys
     allow_list: tuple[TableAllowList, ...]
     org_id: str = "external"              # informational; the server derives the real org from the key

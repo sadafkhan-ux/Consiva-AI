@@ -20,7 +20,7 @@ Python + FastAPI backend under systemd on port 8007, SQLAlchemy access via
 USAGE (from inside PrepMyEvent's backend directory):
 
     CONSIVA_INTEGRATION_KEY=csv_xxx_yyy \
-    CONSIVA_BASE_URL=https://api.consiva.ai \
+    CONSIVA_BASE_URL=https://<the host Consiva gave you> \
     python -m ropa_integration.prepmyevent.adapter
 
 Add `--dry-run` to print exactly what WOULD be sent without sending anything --
@@ -178,6 +178,19 @@ def _sync_url(database_url: str) -> str:
     return base  # let SQLAlchemy raise a clear driver error
 
 
+def _require_base_url() -> str:
+    """No default on purpose. A plausible-looking default that points at the wrong
+    host is worse than none: it looks configured and then 404s on the first real
+    push, which is a confusing failure to debug from the customer's side."""
+    base_url = os.getenv("CONSIVA_BASE_URL")
+    if not base_url:
+        raise SystemExit(
+            "CONSIVA_BASE_URL is not set. Consiva will tell you the exact host to use "
+            "-- it is deployment-specific, so there is no safe default."
+        )
+    return base_url
+
+
 def build_config() -> AdapterConfig:
     key = os.getenv("CONSIVA_INTEGRATION_KEY")
     if not key:
@@ -188,7 +201,7 @@ def build_config() -> AdapterConfig:
         )
     return AdapterConfig(
         source_name=SOURCE_NAME,
-        consiva_base_url=os.getenv("CONSIVA_BASE_URL", "https://api.consiva.ai"),
+        consiva_base_url=_require_base_url(),
         integration_key=key,
         allow_list=effective_allow_list(),
     )
