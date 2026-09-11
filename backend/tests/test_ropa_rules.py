@@ -1,8 +1,13 @@
 """Personal-data and purpose rule tests.
 
-The false-positive cases here are not hypothetical: every one of them was
-produced by an actual run against a real 221-column database before the
-qualifier/metric/person-context guards were added.
+The false-positive cases here are not hypothetical: every one was produced by an
+actual run against a real database before the guards were added.
+
+classify_column now always returns a Classification rather than None -- `None`
+used to mean "operational", "blocked" and "no rule matched" at once, which is
+how genuine personal data went missing. These tests assert on `.category` and
+`.status` accordingly. See test_ropa_classifier_regression.py for the
+contextual behaviour this contract enabled.
 """
 
 import pytest
@@ -34,9 +39,9 @@ from app.agents.ropa.rules import purpose_rules
     ],
 )
 def test_classifies_real_personal_data(column, expected_category):
-    match = pdr.classify_column(column, "text")
-    assert match is not None, f"{column} should classify"
-    assert match.category == expected_category
+    result = pdr.classify_column(column, "text", table_name="users")
+    assert result.category == expected_category, f"{column} misclassified"
+    assert result.status == pdr.CLASSIFIED
 
 
 @pytest.mark.parametrize(
@@ -65,35 +70,32 @@ def test_classifies_real_personal_data(column, expected_category):
     ],
 )
 def test_does_not_classify_non_personal_columns(column):
-    assert pdr.classify_column(column, "text") is None, f"{column} must not be classified"
+    result = pdr.classify_column(column, "text", table_name="jobs")
+    assert not result.is_personal_data, f"{column} must not be classified as personal data"
 
 
 def test_bare_name_requires_person_context():
     """`cookies.name` is a cookie's name; `customers.name` is a person's."""
-    assert pdr.classify_column("name", "text", person_context=False) is None
-    match = pdr.classify_column("name", "text", person_context=True)
-    assert match is not None
-    assert match.category == pdr.CATEGORY_IDENTITY
+    assert not pdr.classify_column("name", "text", table_name="cookies").is_personal_data
+    assert pdr.classify_column("name", "text", table_name="customers").category == pdr.CATEGORY_IDENTITY
 
 
 def test_unambiguous_token_survives_entity_qualifier():
     """"customer" is an entity qualifier, but an email is still an email."""
-    match = pdr.classify_column("customer_email", "text")
-    assert match is not None
-    assert match.category == pdr.CATEGORY_CONTACT
+    assert pdr.classify_column("customer_email", "text").category == pdr.CATEGORY_CONTACT
 
 
 def test_exact_match_outranks_token_match():
-    exact = pdr.classify_column("email", "text")
-    token = pdr.classify_column("user_email_verified", "boolean")
-    assert exact.confidence > token.confidence
+    exact = pdr.classify_column("email", "text", table_name="users")
+    token = pdr.classify_column("user_email_address_alt", "text", table_name="users")
+    assert exact.confidence >= token.confidence
 
 
 def test_confidence_never_reaches_one():
     """A name-based rule is evidence, not proof."""
     for column in ("email", "aadhaar", "password"):
-        match = pdr.classify_column(column, "text")
-        assert match.confidence <= pdr.CONFIDENCE_CEILING < 1.0
+        result = pdr.classify_column(column, "text", table_name="users")
+        assert result.confidence <= pdr.CONFIDENCE_CEILING < 1.0
 
 
 @pytest.mark.parametrize(

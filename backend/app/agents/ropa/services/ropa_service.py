@@ -282,7 +282,12 @@ def build_output(
     *,
     changes: list[ChangeDetectionEntry] | None = None,
 ) -> RopaAgentOutput:
-    classified = [e for e in elements if e.classification != "Unknown"]
+    # Use the classifier's own definition of "is this personal data" rather than
+    # a string comparison -- the engine now returns explicit non-personal labels
+    # ("Not Personal Data (operational)"), which a != "Unknown" test let through.
+    from app.agents.ropa.services.classification_service import personal_data_only
+
+    classified = personal_data_only(elements)
     return RopaAgentOutput(
         discovery_summary=DiscoverySummary(
             sources_scanned=len(evidence.sources),
