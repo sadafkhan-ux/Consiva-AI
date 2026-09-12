@@ -40,6 +40,13 @@ create table if not exists dsr_source_authorizations (
     -- "everything". The connector refuses any table/column not named here, so an LLM
     -- or a caller cannot widen the blast radius by asking nicely.
     searchable_tables      jsonb not null default '[]'::jsonb,
+    -- Tables where ONE identifier value means ONE person (customers, users).
+    -- Two rows here for one email is two candidate subjects, and the case stops
+    -- for a human. Everywhere else many rows per person is normal (an orders
+    -- table has many rows for one customer), so counting them as subjects would
+    -- send every ordinary access request to review. Must be a subset of
+    -- searchable_tables.
+    identity_tables        jsonb not null default '[]'::jsonb,
     -- {table: {identifier_kind: column}} e.g. {"customers": {"email": "email"}}
     identifier_columns     jsonb not null default '{}'::jsonb,
     -- Columns returned for an ACCESS request, per table. Data minimization (§18):

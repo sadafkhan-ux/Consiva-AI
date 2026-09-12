@@ -605,6 +605,7 @@ class DsrSourceAuthorization(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     data_source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ropa_data_sources.id"), nullable=False)
     searchable_tables: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    identity_tables: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     identifier_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     returnable_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     allow_execution: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
