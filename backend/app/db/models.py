@@ -751,7 +751,10 @@ class DsrAction(Base):
     risk: Mapped[str] = mapped_column(String, nullable=False, default="medium")
     requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="proposed")
+    # Two audiences, two texts. `blocked_reason` is for the reviewer and names
+    # configuration; `requester_explanation` is what the data subject reads.
     blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requester_explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

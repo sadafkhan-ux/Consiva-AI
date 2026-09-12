@@ -27,6 +27,7 @@ from collections import Counter
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.dsr.rules import constraints as rules
 from app.agents.dsr.schemas import case
 from app.db.models import DsrRequest, DsrResponse
 from app.db.repositories import dsr_repository
@@ -108,7 +109,11 @@ def _collect_facts(evidence, runs, executions, actions) -> list[dict]:
                 "source": action.source_name,
                 "table": action.table_name,
                 "operation": action.operation,
+                # Both, deliberately: grounded_facts is the reviewer's audit view of
+                # what the response was built from, so it keeps the internal reason
+                # alongside the sentence the requester actually saw.
                 "reason": action.blocked_reason,
+                "requester_explanation": getattr(action, "requester_explanation", None),
                 "action_id": str(action.id),
             })
     for execution in executions:
@@ -193,7 +198,12 @@ def _compose(request: DsrRequest, evidence, runs, executions, actions) -> str:
             f"{len(blocked)} record(s) were NOT changed. The reasons are:"
         )
         for action in blocked:
-            lines.append(f"  - {action.source_name}/{action.table_name}: {action.blocked_reason}")
+            # The REQUESTER-facing sentence, never `blocked_reason` -- that one names
+            # our credentials and configuration and is written for a reviewer.
+            explanation = (
+                getattr(action, "requester_explanation", None) or rules.REFERRED_TO_TEAM
+            )
+            lines.append(f"  - {action.source_name}/{action.table_name}: {explanation}")
 
     if failed_exec:
         lines.append("")

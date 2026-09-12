@@ -349,6 +349,7 @@ async def get_plan(
                 "reason": a.reason, "expected_result": a.expected_result,
                 "risk": a.risk, "requires_approval": a.requires_approval,
                 "status": a.status, "blocked_reason": a.blocked_reason,
+                "requester_explanation": a.requester_explanation,
                 "record_reference": a.record_reference,
             }
             for a in actions

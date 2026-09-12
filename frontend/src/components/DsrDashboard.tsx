@@ -402,9 +402,19 @@ function PlanTab({
                 <span className={`pill pill-${a.status === "executed" ? "ok" : a.status === "blocked" || a.status === "failed" ? "bad" : "muted"}`}>
                   {a.status}
                 </span>
-                {/* A blocked action keeps its reason visible -- that is what makes a
-                    partial fulfilment explainable to the requester. */}
-                {a.blocked_reason && <div className="small muted">{a.blocked_reason}</div>}
+                {/* Both texts, labelled. The reviewer needs the configuration
+                    detail to act on; they also need to see exactly what the data
+                    subject will be told, because that is what leaves the building. */}
+                {a.blocked_reason && (
+                  <div className="small muted">
+                    <strong>Internal:</strong> {a.blocked_reason}
+                  </div>
+                )}
+                {a.requester_explanation && (
+                  <div className="small requester-text">
+                    <strong>Requester sees:</strong> {a.requester_explanation}
+                  </div>
+                )}
               </td>
               <td>
                 {a.status === "proposed" && a.requires_approval && (

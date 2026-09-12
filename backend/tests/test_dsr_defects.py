@@ -349,8 +349,11 @@ def test_every_dsr_orm_column_exists_in_the_migration():
 
     from app.db import models
 
-    sql = pathlib.Path(__file__).parent.parent / "migrations" / "0011_dsr_agent.sql"
-    text = sql.read_text(encoding="utf-8")
+    migrations = pathlib.Path(__file__).parent.parent / "migrations"
+    # Every migration, not just 0011: a DSR column may be added by a later one
+    # (0013 adds dsr_actions.requester_explanation), and reading only the original
+    # would report drift that does not exist -- or miss drift that does.
+    text = "\n".join(f.read_text(encoding="utf-8") for f in sorted(migrations.glob("*.sql")))
     # Table-level constraints share the column indentation; they are not columns.
     keywords = {"unique", "primary", "foreign", "check", "constraint"}
 
@@ -367,6 +370,10 @@ def test_every_dsr_orm_column_exists_in_the_migration():
             name for name in re.findall(r"^\s{4}(\w+)\s+\S", body.group(1), re.MULTILINE)
             if name.lower() not in keywords
         }
+        # Columns added by a later ALTER count too.
+        sql_cols |= set(re.findall(
+            rf"alter table {table_name} add column if not exists (\w+)", text
+        ))
         orm_cols = {c.name for c in models.Base.metadata.tables[table_name].columns}
         if missing := orm_cols - sql_cols:
             problems.append(f"{table_name}: in the ORM, missing from 0011 -> {sorted(missing)}")
@@ -521,3 +528,110 @@ def test_a_malicious_schema_name_is_refused():
     )
     with pytest.raises(SourceNotAuthorizedError):
         connector._qualified("subscriptions")
+
+
+# ── Defect 9: internal reasons were shown verbatim to the data subject ───────────
+
+def test_a_configuration_failure_is_not_explained_to_the_requester():
+    """The operator needs to read "enable execution and configure a write
+    credential". The data subject must not: it is our internal state, it tells them
+    nothing about their own data, and it reads as an excuse rather than an answer."""
+    from app.agents.dsr.rules import constraints as rules
+
+    found = rules.evaluate(
+        operation=case.OP_DELETE_RECORD, table_name="subscriptions",
+        grant=_grant(), now=NOW,
+    )
+    blocker = next(c for c in found if c.effect == rules.EFFECT_BLOCK)
+
+    # Operator-facing text is unchanged.
+    assert "write credential" in blocker.reason
+
+    # Requester-facing text says what happened to THEIR data, and nothing about ours.
+    subject_text = blocker.requester_explanation
+    assert subject_text
+    for leak in ("credential", "administrator", "allowlist", "authorized for DSR",
+                 "configure", "source '"):
+        assert leak not in subject_text.lower(), f"internal detail leaked: {leak!r}"
+
+
+def test_a_retention_rule_IS_explained_to_the_requester():
+    """The opposite case. Why an erasure was refused on policy grounds is exactly
+    what a data principal is entitled to know, so this one discloses the substance --
+    whose rule it was and until when."""
+    from datetime import timedelta
+
+    from app.agents.dsr.rules import constraints as rules
+
+    rule = rules.RetentionRule(
+        table_name="subscriptions", minimum_retention=timedelta(days=365 * 7),
+        date_column="created_at", authority="Finance policy FIN-3",
+    )
+    found = rules.evaluate(
+        operation=case.OP_DELETE_RECORD, table_name="subscriptions", grant=_grant(),
+        record_snapshot={"created_at": "2025-01-01T00:00:00Z"},
+        retention_rules=(rule,), now=NOW,
+    )
+    blocker = next(c for c in found if c.code == case.ERR_ACTION_BLOCKED)
+    text = blocker.requester_explanation
+    assert "Finance policy FIN-3" in text
+    # The date the rule actually implies, computed the same way the rule is -- not
+    # hard-coded, so leap years cannot make the test wrong about the code.
+    expected = (datetime(2025, 1, 1, tzinfo=UTC) + rule.minimum_retention).date().isoformat()
+    assert expected in text, f"{expected} not in {text}"
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_action_carries_both_texts(monkeypatch):
+    """The plan keeps the operator's reason; the action also carries the sentence the
+    response will use."""
+    from app.agents.dsr.services import planning_service
+    from app.db.models import DsrEvidence
+
+    evidence = DsrEvidence(
+        id=uuid.uuid4(), org_id=ORG, request_id=uuid.uuid4(), search_run_id=uuid.uuid4(),
+        data_source_id=uuid.uuid4(), source_name="billing", table_name="subscriptions",
+        matched_column="subscriber_email", identifier_kind="email", match_type="exact",
+        confidence=1.0, record_reference={"id": 1}, record_snapshot={"plan": "pro"},
+    )
+    request = SimpleNamespace(
+        id=uuid.uuid4(), org_id=ORG, reference="DSR-X", request_type=case.DELETION,
+    )
+    action, _ = planning_service._plan_one(
+        request=request, evidence=evidence, grant=_grant(),
+        corrections={}, retention_rules=(),
+    )
+    assert action.status == "blocked"
+    assert "write credential" in action.blocked_reason           # operator
+    assert "credential" not in action.requester_explanation.lower()  # data subject
+    assert action.requester_explanation.strip()
+
+
+def test_the_response_uses_the_requester_text_not_the_internal_reason():
+    from app.agents.dsr.services import response_service
+    from app.db.models import DsrRequest
+
+    request = DsrRequest(
+        id=uuid.uuid4(), org_id=ORG, reference="DSR-Y", raw_request="delete my data",
+        request_type=case.DELETION, due_at=NOW + timedelta(days=30),
+        received_at=NOW, status=case.RESPONSE_PENDING,
+    )
+    blocked = SimpleNamespace(
+        status="blocked", source_name="billing", table_name="subscriptions",
+        operation=case.OP_RETAIN, id=uuid.uuid4(),
+        blocked_reason="source 'billing' allows execution but names no write credential",
+        requester_explanation="We were not able to change this record automatically. "
+                              "It has been referred to our team, who will complete it "
+                              "and confirm the outcome to you.",
+    )
+    evidence = SimpleNamespace(
+        source_name="billing", table_name="subscriptions", record_snapshot={"plan": "pro"},
+    )
+    run = SimpleNamespace(
+        source_name="billing", status="completed", match_count=1,
+        tables_searched=["subscriptions"], error_code=None, id=uuid.uuid4(),
+    )
+    body = response_service._compose(request, [evidence], [run], [], [blocked])
+
+    assert "write credential" not in body, "an internal reason reached the requester"
+    assert "referred to our team" in body

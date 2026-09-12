@@ -78,7 +78,10 @@ export interface DsrAction {
   risk: string;
   requires_approval: boolean;
   status: string;
+  /** Operator-facing: names tables, columns and configuration. Reviewer only. */
   blocked_reason: string | null;
+  /** What the data subject is actually told. Never shows our internal state. */
+  requester_explanation: string | null;
   record_reference: Record<string, unknown>;
 }
 

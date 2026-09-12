@@ -133,6 +133,7 @@ def _plan_one(
                 expected_result="record left unchanged and reported to the requester",
                 status="blocked",
                 blocked_reason=f"source {evidence.source_name!r} is not currently authorized",
+                requester_explanation=rules.REFERRED_TO_TEAM,
                 requires_approval=True,
             ),
             (),
@@ -160,6 +161,7 @@ def _plan_one(
                 expected_result="record retained; the requester is told why",
                 status="blocked",
                 blocked_reason=reason,
+                requester_explanation=rules.requester_explanation(evaluated),
                 requires_approval=True,
             ),
             evaluated,
@@ -177,6 +179,7 @@ def _plan_one(
             expected_result=_expected_for(intended, evidence, payload),
             status="proposed",
             blocked_reason=None,
+            requester_explanation=None,
             requires_approval=needs_approval,
         ),
         evaluated,
@@ -204,6 +207,7 @@ def _action(
     expected_result: str,
     status: str,
     blocked_reason: str | None,
+    requester_explanation: str | None,
     requires_approval: bool,
 ) -> DsrAction:
     return DsrAction(
@@ -226,6 +230,7 @@ def _action(
         requires_approval=requires_approval,
         status=status,
         blocked_reason=blocked_reason,
+        requester_explanation=requester_explanation,
     )
 
 

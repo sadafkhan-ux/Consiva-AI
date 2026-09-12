@@ -39,9 +39,34 @@ EFFECT_REVIEW = "review"      # the action may proceed only after a human says s
 EFFECT_ALLOW = "allow"        # explicitly permitted, recorded for the audit trail
 
 
+# What a data subject is told when an action could not be completed for a reason that
+# is about OUR configuration rather than about their data. It says what happened to
+# their record and what happens next, and nothing about which credential is missing --
+# that is our internal state, it tells them nothing they can act on, and it reads as
+# an excuse rather than an answer.
+REFERRED_TO_TEAM = (
+    "We were not able to complete this automatically. It has been referred to our "
+    "team, who will action it manually and confirm the outcome to you."
+)
+
+
 @dataclass(frozen=True)
 class Constraint:
-    """One evaluated rule against one action."""
+    """One evaluated rule against one action.
+
+    TWO AUDIENCES, TWO TEXTS
+    ------------------------
+    `reason` is written for the reviewer who has to decide what to do about this. It
+    names tables, columns, credentials and configuration, because that is what makes
+    it actionable.
+
+    `requester_explanation` is written for the data subject, and the split is not
+    cosmetic. Where the blocker is a POLICY -- a retention requirement -- the
+    substance is disclosed in full, because why an erasure was refused on policy
+    grounds is precisely what a data principal is entitled to know. Where the blocker
+    is our own configuration, they are told their record was not changed and that a
+    human is handling it, and nothing about our internals.
+    """
 
     code: str
     kind: str          # KIND_SYSTEM | KIND_POLICY
@@ -49,11 +74,14 @@ class Constraint:
     reason: str
     source: str        # where the rule came from: 'allowlist', 'retention_policy', ...
     evidence: tuple[str, ...] = ()
+    # None for anything that is not a blocker -- there is nothing to explain.
+    requester_explanation: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "code": self.code, "kind": self.kind, "effect": self.effect,
             "reason": self.reason, "source": self.source, "evidence": list(self.evidence),
+            "requester_explanation": self.requester_explanation,
         }
 
 
@@ -109,6 +137,7 @@ def evaluate(
                 "credential before this action can run"
             ),
             source="source_authorization",
+            requester_explanation=REFERRED_TO_TEAM,
         ))
     elif not grant.write_credential_ref:
         found.append(Constraint(
@@ -118,6 +147,7 @@ def evaluate(
                 "credential; refusing to write using the read credential"
             ),
             source="source_authorization",
+            requester_explanation=REFERRED_TO_TEAM,
         ))
     else:
         found.append(Constraint(
@@ -140,12 +170,14 @@ def evaluate(
                 ),
                 source="column_allowlist",
                 evidence=tuple(f"{table_name}.{c}" for c in unauthorized),
+                requester_explanation=REFERRED_TO_TEAM,
             ))
         if not payload:
             found.append(Constraint(
                 code=case.ERR_ACTION_BLOCKED, kind=KIND_SYSTEM, effect=EFFECT_BLOCK,
                 reason=f"a {operation} on {table_name} named no columns to change",
                 source="column_allowlist",
+                requester_explanation=REFERRED_TO_TEAM,
             ))
 
     if operation == case.OP_DELETE_RECORD:
@@ -187,6 +219,10 @@ def _retention_verdict(
                 f"confirm whether the {rule.authority} retention requirement applies."
             ),
             source="retention_policy",
+            requester_explanation=(
+                f"We are checking whether a retention requirement ({rule.authority}) "
+                "applies to this record before we action it, and will confirm shortly."
+            ),
         )
 
     created = _parse_datetime(raw)
@@ -198,6 +234,10 @@ def _retention_verdict(
                 f"{rule.date_column}={raw!r} is not a readable date"
             ),
             source="retention_policy",
+            requester_explanation=(
+                f"We are checking whether a retention requirement ({rule.authority}) "
+                "applies to this record before we action it, and will confirm shortly."
+            ),
         )
 
     retain_until = created + rule.minimum_retention
@@ -210,6 +250,11 @@ def _retention_verdict(
             ),
             source="retention_policy",
             evidence=(f"{rule.date_column}={created.date().isoformat()}",),
+            requester_explanation=(
+                f"This record is kept under a retention requirement ({rule.authority}) "
+                f"and cannot be deleted until {retain_until.date().isoformat()}. "
+                "We will delete it once that period ends."
+            ),
         )
     return Constraint(
         code="RETENTION_SATISFIED", kind=KIND_POLICY, effect=EFFECT_ALLOW,
@@ -247,6 +292,27 @@ def verdict(constraints: tuple[Constraint, ...]) -> str:
     if EFFECT_REVIEW in effects:
         return EFFECT_REVIEW
     return EFFECT_ALLOW
+
+
+def requester_explanation(constraints: tuple[Constraint, ...]) -> str:
+    """What the data subject is told about a blocked action.
+
+    Policy explanations come first and are disclosed in full; a configuration blocker
+    contributes only the referral sentence, and only when nothing more substantive
+    applies. De-duplicated, because the same referral sentence repeated three times
+    reads as noise rather than as an answer.
+    """
+    policy = [
+        c.requester_explanation for c in constraints
+        if c.effect == EFFECT_BLOCK and c.kind == KIND_POLICY and c.requester_explanation
+    ]
+    if policy:
+        return " ".join(dict.fromkeys(policy))
+    system = [
+        c.requester_explanation for c in constraints
+        if c.effect == EFFECT_BLOCK and c.requester_explanation
+    ]
+    return " ".join(dict.fromkeys(system)) if system else REFERRED_TO_TEAM
 
 
 def blocking_reason(constraints: tuple[Constraint, ...]) -> str | None:
