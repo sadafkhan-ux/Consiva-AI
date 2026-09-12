@@ -52,6 +52,13 @@ create table if not exists dsr_source_authorizations (
     -- Columns returned for an ACCESS request, per table. Data minimization (§18):
     -- the connector selects these, never SELECT *.
     returnable_columns     jsonb not null default '{}'::jsonb,
+    -- How a matched record is ADDRESSED later, per table: {table: [col, ...]}.
+    -- Execution locates the row through this, so it must be a genuine unique key
+    -- and a composite key must be listed whole -- half a key can match another
+    -- row. Defaults to ['id'] for any table not named here, which covers the
+    -- common case without configuration; a table keyed on subscription_id or a
+    -- composite must say so or its searches fail loudly on the missing column.
+    record_key_columns     jsonb not null default '{}'::jsonb,
     -- Execution is opt-in and separately credentialed.
     allow_execution        boolean not null default false,
     write_credential_ref   text,      -- env/secret NAME of the WRITE role -- never the secret

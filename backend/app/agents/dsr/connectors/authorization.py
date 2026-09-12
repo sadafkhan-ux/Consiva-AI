@@ -44,6 +44,8 @@ class SourceGrant:
     identity_tables: frozenset[str]
     identifier_columns: dict[str, dict[str, str]]   # {table: {kind: column}}
     returnable_columns: dict[str, tuple[str, ...]]  # {table: (column, ...)}
+    # How a matched record is ADDRESSED later. Defaults to ('id',) per table.
+    record_key_columns: dict[str, tuple[str, ...]]
     erasable_columns: dict[str, tuple[str, ...]]    # {table: (column, ...)}
     allow_execution: bool
     write_credential_ref: str | None
@@ -63,6 +65,17 @@ class SourceGrant:
         orders table may be searchable by email but have no phone column."""
         self.assert_searchable(table)
         return self.identifier_columns.get(table, {}).get(kind)
+
+    def key_columns(self, table: str) -> tuple[str, ...]:
+        """The columns that locate one record in `table`.
+
+        Defaults to ("id",) so the common case needs no configuration. A table keyed
+        on something else must say so -- selecting a column that does not exist fails
+        the search loudly, which is the right outcome: silently falling back to a
+        non-unique column would address the wrong row at execution time.
+        """
+        self.assert_searchable(table)
+        return self.record_key_columns.get(table) or ("id",)
 
     def columns_for_disclosure(self, table: str) -> tuple[str, ...]:
         """The projection for an ACCESS response. Empty means nothing may be
@@ -178,12 +191,27 @@ def resolve(authorization: Any, *, source_name: str) -> SourceGrant:
         if table in table_set
     }
 
+    record_keys: dict[str, tuple[str, ...]] = {}
+    for table, cols in (getattr(authorization, "record_key_columns", None) or {}).items():
+        if table not in table_set:
+            raise SourceNotAuthorizedError(
+                f"record_key_columns names table {table!r}, which is not in "
+                f"searchable_tables for {source_name!r}"
+            )
+        if not cols:
+            raise SourceNotAuthorizedError(
+                f"record_key_columns for {table!r} is empty; a record with no locator "
+                "cannot be addressed for execution"
+            )
+        record_keys[table] = tuple(validate_identifier(c, kind="column") for c in cols)
+
     return SourceGrant(
         source_name=source_name,
         searchable_tables=tables,
         identity_tables=identity_tables,
         identifier_columns=identifier_columns,
         returnable_columns=returnable,
+        record_key_columns=record_keys,
         erasable_columns=erasable,
         allow_execution=bool(authorization.allow_execution),
         write_credential_ref=authorization.write_credential_ref,

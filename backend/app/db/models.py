@@ -608,6 +608,7 @@ class DsrSourceAuthorization(Base):
     identity_tables: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     identifier_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     returnable_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    record_key_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     allow_execution: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     write_credential_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     erasable_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)

@@ -33,7 +33,7 @@ from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import dsr_repository
 from app.db.session import get_db
 from app.jobs import queue
-from app.services import audit_service
+from app.services import audit_service, dsr_run_service
 
 router = APIRouter(prefix="/api/v1/dsr", tags=["dsr"])
 
@@ -509,6 +509,10 @@ async def complete_case(
     Requires a response to exist: a case cannot be completed without the requester
     having been answered, which is why COMPLETED is reachable only from
     RESPONSE_PENDING in the state machine.
+
+    Closes as PARTIALLY_COMPLETED when any action was blocked or failed. Telling a
+    requester their case is "completed" when one of their records was retained under
+    a policy is telling them something untrue about their own data (§47).
     """
     org_id = uuid.UUID(user.org_id)
     request = await case_service.get_case_or_raise(db, request_id, org_id)
@@ -522,9 +526,33 @@ async def complete_case(
     response.approved_by_user_id = uuid.UUID(user.user_id)
     await db.flush()
 
+    plan = await dsr_repository.get_current_plan(db, request.id, org_id)
+    actions = await dsr_repository.list_actions(db, plan.id, org_id) if plan else []
+    blocked = sum(1 for a in actions if a.status == "blocked")
+    failed = sum(1 for a in actions if a.status == "failed")
+    closing = dsr_run_service.closing_status(blocked=blocked, failed=failed)
+
     await case_service.transition(
-        db, request, case_vocab.COMPLETED,
-        actor_user_id=uuid.UUID(user.user_id), audit_action=case_vocab.AUDIT_COMPLETED,
+        db, request, closing,
+        actor_user_id=uuid.UUID(user.user_id),
+        audit_action=(
+            case_vocab.AUDIT_COMPLETED if closing == case_vocab.COMPLETED
+            else case_vocab.AUDIT_PARTIALLY_COMPLETED
+        ),
+        # PARTIALLY_COMPLETED is one of the statuses the state machine requires a
+        # reason for, so the case row says which half did not happen.
+        error_code=None if closing == case_vocab.COMPLETED else case_vocab.ERR_ACTION_PARTIAL,
+        error_detail=(
+            None if closing == case_vocab.COMPLETED
+            else f"{blocked} action(s) blocked, {failed} failed; see the plan for reasons"
+        ),
+        detail={"blocked": blocked, "failed": failed, "response_id": str(response.id)},
+    )
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action=case_vocab.AUDIT_RESPONSE_SENT, entity_type=case_vocab.AUDIT_ENTITY,
+        entity_id=request.id,
+        after={"response_id": str(response.id), "version": response.version},
     )
     await db.commit()
     return await _case_with_identity(db, request)

@@ -79,6 +79,21 @@ async def find_request_by_idempotency_key(
     return result.scalar_one_or_none()
 
 
+async def reference_exists(db: AsyncSession, org_id: uuid.UUID, reference: str) -> bool:
+    """Whether this org already has a case with that reference.
+
+    A pre-check, not the guarantee: `unique (org_id, reference)` in 0011 is what
+    actually enforces it. This exists so intake can draw a different reference
+    instead of surfacing an integrity error to the requester.
+    """
+    result = await db.execute(
+        select(DsrRequest.id).where(
+            DsrRequest.org_id == org_id, DsrRequest.reference == reference
+        ).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def list_requests(
     db: AsyncSession, org_id: uuid.UUID, *, status: str | None = None, limit: int = 50
 ) -> list[DsrRequest]:
@@ -367,17 +382,23 @@ async def claim_execution(
     Implemented as insert-and-catch rather than check-then-insert on purpose: two
     concurrent callers both pass a prior existence check, but only one can win the
     unique index on (org_id, idempotency_key).
+
+    The insert runs inside a SAVEPOINT. A plain `db.rollback()` here would discard
+    the ENTIRE session transaction, and execute_queued_actions runs several actions
+    in one session -- so a duplicate key on the third action would silently undo the
+    execution rows, case transitions and audit entries already written for the first
+    two. The SAVEPOINT confines the rollback to this one failed insert.
     """
     row = DsrExecution(
         org_id=org_id, request_id=request_id, action_id=action_id,
         idempotency_key=idempotency_key, executed_by_user_id=executed_by_user_id,
         job_id=job_id, correlation_id=correlation_id, status="pending",
     )
-    db.add(row)
     try:
-        await db.flush()
+        async with db.begin_nested():
+            db.add(row)
+            await db.flush()
     except IntegrityError:
-        await db.rollback()
         existing = await find_execution_by_key(db, org_id, idempotency_key)
         if existing is None:
             # The unique index rejected the insert but no row is visible. Something

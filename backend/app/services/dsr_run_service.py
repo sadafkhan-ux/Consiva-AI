@@ -97,17 +97,8 @@ async def execute_queued_search(request_id: uuid.UUID, org_id: uuid.UUID, job_id
 
         grants = await _grants_for(db, request.org_id)
         plan, actions = await planning_service.build_plan(db, request, grants=grants)
-        next_status = (
-            case.APPROVAL_REQUIRED if plan.requires_approval
-            else case.RESPONSE_PENDING if not actions
-            else case.APPROVAL_REQUIRED
-        )
-        if not actions:
-            # Nothing matched. Straight to a response that says so -- never a silent
-            # close (§47).
-            next_status = case.RESPONSE_PENDING
         await case_service.transition(
-            db, request, next_status,
+            db, request, next_status_after_planning(plan, actions),
             audit_action=case.AUDIT_ACTION_PLANNED,
             detail={"plan_id": str(plan.id), "action_count": len(actions)},
         )
@@ -167,16 +158,96 @@ async def execute_queued_actions(request_id: uuid.UUID, org_id: uuid.UUID, job_i
             plan.status = "executed"
         await db.flush()
 
+        counts = {"succeeded": succeeded, "failed": failed, "blocked": blocked}
+        status, code = status_after_execution(succeeded=succeeded, failed=failed, blocked=blocked)
         await case_service.transition(
-            db, request, case.EXECUTION_VERIFIED,
-            audit_action=case.AUDIT_ACTION_VERIFIED,
-            detail={"succeeded": succeeded, "failed": failed, "blocked": blocked},
+            db, request, status,
+            audit_action=case.AUDIT_ACTION_VERIFIED if status == case.EXECUTION_VERIFIED
+            else case.AUDIT_FAILED,
+            error_code=code,
+            error_detail=_execution_detail(succeeded, failed, blocked),
+            detail=counts,
         )
-        await case_service.transition(
-            db, request, case.RESPONSE_PENDING,
-            detail={"succeeded": succeeded, "failed": failed, "blocked": blocked},
-        )
+        if status == case.EXECUTION_VERIFIED:
+            # Even a partial execution owes the requester a response explaining both
+            # halves -- what changed and what did not (§47). A wholly failed one stops
+            # at FAILED, which is recoverable, so a human can retry it.
+            await case_service.transition(
+                db, request, case.RESPONSE_PENDING,
+                error_code=code,
+                error_detail=_execution_detail(succeeded, failed, blocked),
+                detail=counts,
+            )
         await db.commit()
+
+
+def status_after_execution(*, succeeded: int, failed: int, blocked: int) -> tuple[str, str | None]:
+    """Where a case goes once its actions have been attempted, and why.
+
+    EXECUTION_VERIFIED asserts that the system CONFIRMED the outcome (§23). Reaching
+    it with zero successes and several failures would state something that did not
+    happen, so a wholly failed execution goes to FAILED instead -- which is
+    deliberately not terminal, so a connector outage does not permanently kill a case
+    that can simply be retried.
+
+    A mixed result is still EXECUTION_VERIFIED, because some records genuinely did
+    change and were read back, but it carries ACTION_PARTIAL so neither the case nor
+    the response can present itself as a clean success.
+    """
+    if succeeded == 0 and failed > 0:
+        return case.FAILED, case.ERR_ACTION_FAILED
+    if failed or blocked:
+        return case.EXECUTION_VERIFIED, case.ERR_ACTION_PARTIAL
+    return case.EXECUTION_VERIFIED, None
+
+
+def closing_status(*, blocked: int, failed: int) -> str:
+    """COMPLETED or PARTIALLY_COMPLETED.
+
+    Telling a requester their case is "completed" when one of their records was
+    retained under a policy, or when an action failed, is telling them something
+    untrue about their own data. Both statuses are terminal; only one of them claims
+    everything was done.
+    """
+    return case.PARTIALLY_COMPLETED if (blocked or failed) else case.COMPLETED
+
+
+def _execution_detail(succeeded: int, failed: int, blocked: int) -> str | None:
+    if not (failed or blocked):
+        return None
+    parts = []
+    if succeeded:
+        parts.append(f"{succeeded} action(s) completed and verified")
+    if failed:
+        parts.append(f"{failed} failed")
+    if blocked:
+        parts.append(f"{blocked} blocked by a constraint")
+    return "; ".join(parts)
+
+
+def next_status_after_planning(plan, actions) -> str:
+    """Where a case goes once its plan exists.
+
+    Three outcomes, and the middle one is the defect this function was extracted to
+    fix. APPROVAL_REQUIRED is only correct when there is something a reviewer can
+    actually decide: the only thing that moves a case out of that status is a
+    decision recorded against an action, so routing a plan with nothing to approve
+    there left it waiting forever for a decision nobody could make.
+
+      * nothing actionable  -> RESPONSE_PENDING. No match, or every action blocked
+                               by a constraint. The requester is still owed an
+                               explanation (§47), so this is never a silent close.
+      * something to decide -> APPROVAL_REQUIRED.
+      * nothing to decide   -> APPROVED, so execution becomes eligible immediately.
+                               An access request's disclosures are the request being
+                               fulfilled, not a change anyone needs to authorize.
+    """
+    actionable = [a for a in actions if a.status == "proposed"]
+    if not actionable:
+        return case.RESPONSE_PENDING
+    if any(a.requires_approval for a in actionable):
+        return case.APPROVAL_REQUIRED
+    return case.APPROVED
 
 
 async def _grants_for(db, org_id: uuid.UUID) -> dict:

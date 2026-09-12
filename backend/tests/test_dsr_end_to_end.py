@@ -154,6 +154,9 @@ def _install(monkeypatch, w: World):
         return next((r for r in w.requests.values()
                      if r.org_id == org_id and r.idempotency_key == key), None)
 
+    async def reference_exists(db, org_id, reference):
+        return any(r.org_id == org_id and r.reference == reference for r in w.requests.values())
+
     async def create_verification(db, *, org_id, request_id, method, challenge_hash,
                                   expires_at, max_attempts=5):
         row = DsrIdentityVerification(
@@ -251,6 +254,7 @@ def _install(monkeypatch, w: World):
     for name, fn in [
         ("create_request", create_request), ("get_request", get_request),
         ("find_request_by_idempotency_key", find_by_key),
+        ("reference_exists", reference_exists),
         ("create_identity_verification", create_verification),
         ("get_latest_identity_verification", latest_verification),
         ("list_source_authorizations", list_source_auth),
@@ -670,3 +674,71 @@ async def test_every_case_in_every_scenario_ends_somewhere_explicit(world, monke
     # No match -- but the case carries a code and can still reach a response.
     assert request.error_code == case.ERR_NO_MATCH
     assert case.RESPONSE_PENDING in lifecycle.allowed_transitions(request.status)
+
+
+# ── Scenario 3b: DELETION that is only partly possible ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_scenario_3b_partial_deletion_reports_both_halves(world, monkeypatch):
+    """§42 scenario 3 ends "Complete/Partial". A retention rule keeps one record; the
+    other is deleted. The case must not close as "completed", and the response must
+    say which record was kept and why."""
+    from datetime import timedelta
+
+    from app.agents.dsr.connectors import factory
+    from app.agents.dsr.rules import constraints as rules
+    from app.services import dsr_run_service
+
+    _use_connector(monkeypatch, FakeConnector(matches=[match(), match("orders", 11)]))
+    request = await _open_case("Delete my personal information.")
+    await _verify(request)
+    await _search(request)
+
+    # The orders table is under a configured retention rule; customers is not.
+    keep_orders = rules.RetentionRule(
+        table_name="orders", minimum_retention=timedelta(days=365 * 7),
+        date_column="created_at", authority="Finance policy FIN-3",
+    )
+    for item in world.evidence:
+        if item.table_name == "orders":
+            item.record_snapshot = {"created_at": "2025-01-01T00:00:00Z", "order_id": "O-11"}
+
+    grants = {DATA_SOURCE.name: factory.build_grant(AUTHORIZATION, source_name=DATA_SOURCE.name)}
+    _, actions = await planning_service.build_plan(
+        FakeDB(), request, grants=grants, retention_rules=(keep_orders,)
+    )
+    blocked = [a for a in actions if a.status == "blocked"]
+    proposed = [a for a in actions if a.status == "proposed"]
+    assert len(blocked) == 1 and len(proposed) == 1
+
+    await case_service.transition(FakeDB(), request, case.APPROVAL_REQUIRED)
+    await approval_service.decide_action(
+        FakeDB(), request, proposed[0].id, reviewer_user_id=USER,
+        decision="approved", reason="identity confirmed", now=NOW,
+    )
+    await case_service.transition(FakeDB(), request, case.APPROVED)
+    await case_service.transition(FakeDB(), request, case.EXECUTING)
+    await execution_service.execute_action(FakeDB(), request, proposed[0].id, now=NOW)
+
+    # One succeeded, one is blocked -> verified, but explicitly partial.
+    status, code = dsr_run_service.status_after_execution(succeeded=1, failed=0, blocked=1)
+    assert status == case.EXECUTION_VERIFIED
+    assert code == case.ERR_ACTION_PARTIAL
+    await case_service.transition(FakeDB(), request, status, error_code=code,
+                                  error_detail="1 deleted, 1 retained")
+    await case_service.transition(FakeDB(), request, case.RESPONSE_PENDING,
+                                  error_code=code, error_detail="1 deleted, 1 retained")
+
+    response = await response_service.build_response(FakeDB(), request)
+    assert "were NOT changed" in response.body_text
+    assert "Finance policy FIN-3" in response.body_text
+    assert "deleted 1 record(s)" in response.body_text
+
+    # And the case closes honestly.
+    closing = dsr_run_service.closing_status(blocked=1, failed=0)
+    assert closing == case.PARTIALLY_COMPLETED
+    await case_service.transition(FakeDB(), request, closing,
+                                  error_code=case.ERR_ACTION_PARTIAL,
+                                  error_detail="1 record retained under a policy")
+    assert request.status == case.PARTIALLY_COMPLETED
+    assert lifecycle.is_terminal(request.status)

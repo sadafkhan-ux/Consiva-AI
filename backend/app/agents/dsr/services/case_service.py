@@ -39,10 +39,37 @@ from app.services import audit_service
 DEFAULT_SLA_DAYS = 30
 
 
+# 6 random bytes -> 12 hex characters. The reference is unique per organization,
+# so its entropy has to survive the birthday bound, not merely look random: at the
+# 3 bytes this started with, an organization had a ~95% chance of a collision by its
+# ten-thousandth case, at which point intake would start failing outright. 6 bytes
+# puts that under 1% at a million cases per org.
+_REFERENCE_BYTES = 6
+# Draws before giving up. With the entropy above, needing even two is essentially
+# unheard of; this exists so a collision is a retry rather than a 500.
+_REFERENCE_ATTEMPTS = 5
+
+
 def new_reference() -> str:
     """A short, human-quotable case reference. Random rather than sequential so it
     does not disclose how many DSRs an organization has received."""
-    return f"DSR-{secrets.token_hex(3).upper()}"
+    return f"DSR-{secrets.token_hex(_REFERENCE_BYTES).upper()}"
+
+
+async def _unused_reference(db: AsyncSession, org_id: uuid.UUID) -> str:
+    """Draw a reference this org is not already using.
+
+    The database's unique constraint remains the real guarantee -- this only avoids
+    turning an astronomically rare collision into a failed intake.
+    """
+    for _ in range(_REFERENCE_ATTEMPTS):
+        candidate = new_reference()
+        if not await dsr_repository.reference_exists(db, org_id, candidate):
+            return candidate
+    raise CaseNotReadyError(
+        "could not allocate an unused case reference; this indicates a problem with "
+        "reference generation rather than with the request"
+    )
 
 
 async def create_case(
@@ -81,7 +108,7 @@ async def create_case(
     request = await dsr_repository.create_request(
         db,
         org_id=org_id,
-        reference=new_reference(),
+        reference=await _unused_reference(db, org_id),
         raw_request=raw_request.strip(),
         due_at=moment + timedelta(days=sla_days),
         requester_email=(requester_email or "").strip().lower() or None,

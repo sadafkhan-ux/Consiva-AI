@@ -248,16 +248,31 @@ class PostgresDsrConnector:
         marked returnable. When nothing is returnable, the match is still recorded --
         it just carries no snapshot.
         """
-        wanted = {"id", matched_column, *self._grant.columns_for_disclosure(table)}
+        wanted = {
+            *self._grant.key_columns(table),
+            matched_column,
+            *self._grant.columns_for_disclosure(table),
+        }
         return ", ".join(quote_identifier(c, kind="column") for c in sorted(wanted))
 
     def _to_match(
         self, *, table: str, column: str, kind: str, row: asyncpg.Record
     ) -> SubjectMatch:
         data = dict(row)
-        reference = {"id": data["id"]} if "id" in data else {column: data.get(column)}
+        keys = self._grant.key_columns(table)
+        missing = [k for k in keys if k not in data]
+        if missing:
+            # The configured locator is not in the row. Never fall back to matching on
+            # the identifier column: that is not unique, so execution would later
+            # address the wrong record -- or several.
+            raise SearchFailedError(
+                f"record_key_columns for {table} names {missing}, which the source did "
+                "not return; correct the DSR source authorization before searching"
+            )
+        reference = {k: data[k] for k in keys}
         returnable = self._grant.columns_for_disclosure(table)
         snapshot = {k: _jsonable(v) for k, v in data.items() if k in returnable} or None
+        reference = {k: _jsonable(v) for k, v in reference.items()}
         return SubjectMatch(
             table_name=table,
             matched_column=column,
@@ -267,7 +282,7 @@ class PostgresDsrConnector:
             # see which rows needed normalizing.
             match_type="normalized_exact" if kind == "email" else "exact",
             confidence=1.0,
-            record_reference={k: _jsonable(v) for k, v in reference.items()},
+            record_reference=reference,
             record_snapshot=snapshot,
         )
 
