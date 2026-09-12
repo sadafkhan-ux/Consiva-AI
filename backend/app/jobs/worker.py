@@ -18,10 +18,17 @@ import uuid
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+from app.agents.dsr.services import sla_service
 from app.db.models import AgentJob
 from app.db.session import async_session_factory
 from app.jobs import queue
-from app.services import analysis_service, monitoring_service, ropa_run_service, scan_service
+from app.services import (
+    analysis_service,
+    dsr_run_service,
+    monitoring_service,
+    ropa_run_service,
+    scan_service,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -56,6 +63,26 @@ async def _process_one(job: AgentJob) -> None:
             uuid.UUID(job.payload["run_id"]),
             uuid.UUID(job.payload["org_id"]),
         )
+    elif job.job_type == "dsr_search":
+        # Agent 3 (DSR Fulfillment) subject search across authorized sources. Uses
+        # this same agent_jobs queue rather than a third job framework -- a DSR
+        # search can take as long as the slowest source, which is exactly the kind
+        # of work that must not run inside a request.
+        await dsr_run_service.execute_queued_search(
+            uuid.UUID(job.payload["request_id"]),
+            uuid.UUID(job.payload["org_id"]),
+            job_id=job.id,
+        )
+    elif job.job_type == "dsr_execute":
+        # Executes the APPROVED actions on a DSR case. Safe to retry: every action
+        # claims an idempotency key before it does anything, so a job that dies
+        # mid-flight and is retried returns the previous outcome for work already
+        # done rather than performing a deletion twice (§25).
+        await dsr_run_service.execute_queued_actions(
+            uuid.UUID(job.payload["request_id"]),
+            uuid.UUID(job.payload["org_id"]),
+            job_id=job.id,
+        )
     else:
         raise ValueError(f"Unknown job_type: {job.job_type}")
 
@@ -73,6 +100,19 @@ async def run_forever() -> None:
             dispatched = await monitoring_service.dispatch_due_schedules(db)
         if dispatched:
             logger.info("Monitoring: dispatched %d due scheduled re-scan(s)", dispatched)
+
+        # Agent 3 SLA sweep (§36). Rides this existing poll loop rather than adding a
+        # scheduler: a DSR deadline is measured in days, so once every poll is far
+        # more often than it needs to be. Best-effort -- a DB hiccup while flagging
+        # an SLA must not stop the worker from processing jobs.
+        try:
+            async with async_session_factory() as db:
+                breached = await sla_service.sweep_overdue(db)
+                await db.commit()
+            if breached:
+                logger.warning("DSR: %d case(s) newly past their SLA", breached)
+        except Exception:
+            logger.exception("DSR SLA sweep failed; continuing with job processing")
 
         async with async_session_factory() as db:
             job = await queue.dequeue_one(db, worker_id=WORKER_ID)

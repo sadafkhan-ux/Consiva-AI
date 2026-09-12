@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.ropa.connectors.base import registered_connectors
 from app.agents.ropa.schemas.evidence import DiscoveryEvidence
-from app.agents.ropa.schemas.payload import CURRENT_SCHEMA_VERSION, SourcePayload
+from app.agents.ropa.schemas.payload import SourcePayload
 from app.core import integration_auth
 from app.core.security import CurrentUser, get_current_user
 from app.db.models import RopaIntegrationKey
