@@ -13,6 +13,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     Numeric,
@@ -581,3 +582,242 @@ class RopaFinding(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── Agent 3 (DSR Fulfillment) ────────────────────────────────────────────────────
+# Mirrors migrations/0011_dsr_agent.sql. Read that file's header first: it explains
+# why there is no dsr_case_events table (the timeline is audit_logs), why sources are
+# not re-registered here (they point at ropa_data_sources), and why a DSR write needs
+# its own credential rather than reusing Agent 2's read-only connector contract.
+
+
+class DsrSourceAuthorization(Base):
+    """Which authorized source Agent 3 may search, and whether it may write to it.
+
+    Fails closed: the allowlists default to empty, so a source registered for Agent 2
+    discovery grants Agent 3 exactly nothing until an administrator names the tables
+    and columns here.
+    """
+
+    __tablename__ = "dsr_source_authorizations"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    data_source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ropa_data_sources.id"), nullable=False)
+    searchable_tables: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    identifier_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    returnable_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    allow_execution: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    write_credential_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    erasable_columns: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrRequest(Base):
+    """The DSR case. Every other Agent 3 row traces back to this one."""
+
+    __tablename__ = "dsr_requests"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    reference: Mapped[str] = mapped_column(String, nullable=False)
+    raw_request: Mapped[str] = mapped_column(Text, nullable=False)
+    request_type: Mapped[str] = mapped_column(String, nullable=False, default="unclassified")
+    classification_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    classification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    requester_email: Mapped[str | None] = mapped_column(String, nullable=True)
+    requester_phone: Mapped[str | None] = mapped_column(String, nullable=True)
+    requester_reference: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="received")
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sla_breached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrIdentityVerification(Base):
+    """The gate before any sensitive search. `challenge_hash` is a SHA-256 digest --
+    the plaintext challenge is sent to the requester and never stored, so a database
+    dump cannot be replayed to pass verification."""
+
+    __tablename__ = "dsr_identity_verifications"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    method: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    challenge_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    evidence_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrSearchRun(Base):
+    __tablename__ = "dsr_search_runs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    data_source_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ropa_data_sources.id"), nullable=True)
+    source_name: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    identifier_kinds: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    tables_searched: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    match_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    distinct_subject_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrEvidence(Base):
+    """One match, with everything needed to justify it. The matched VALUE is not
+    stored -- it is the requester's own identifier, already on dsr_requests, and
+    repeating it per row multiplies PII for no benefit."""
+
+    __tablename__ = "dsr_evidence"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    search_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_search_runs.id"), nullable=False, index=True)
+    source_name: Mapped[str] = mapped_column(String, nullable=False)
+    schema_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    table_name: Mapped[str] = mapped_column(String, nullable=False)
+    matched_column: Mapped[str] = mapped_column(String, nullable=False)
+    identifier_kind: Mapped[str] = mapped_column(String, nullable=False)
+    match_type: Mapped[str] = mapped_column(String, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    record_reference: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    record_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    ropa_category: Mapped[str | None] = mapped_column(String, nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrActionPlan(Base):
+    __tablename__ = "dsr_action_plans"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    constraints_evaluated: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrAction(Base):
+    __tablename__ = "dsr_actions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    plan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_action_plans.id"), nullable=False, index=True)
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("dsr_evidence.id"), nullable=True)
+    data_source_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ropa_data_sources.id"), nullable=True)
+    source_name: Mapped[str] = mapped_column(String, nullable=False)
+    table_name: Mapped[str] = mapped_column(String, nullable=False)
+    record_reference: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    operation: Mapped[str] = mapped_column(String, nullable=False)
+    operation_payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_result: Mapped[str] = mapped_column(Text, nullable=False)
+    risk: Mapped[str] = mapped_column(String, nullable=False, default="medium")
+    requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="proposed")
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrApproval(Base):
+    """Append-only at the database level (trigger in 0011), the same guarantee 0004
+    gave Agent 1's approvals table. Kept separate from that table only because its
+    finding_id is a NOT NULL FK to consent_findings."""
+
+    __tablename__ = "dsr_approvals"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    plan_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("dsr_action_plans.id"), nullable=True)
+    action_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("dsr_actions.id"), nullable=True)
+    decision: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    reviewer_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrExecution(Base):
+    """The idempotency ledger. The unique index on (org_id, idempotency_key) is what
+    makes a double-click, an API retry or a worker restart return the previous
+    verified result instead of performing a deletion twice."""
+
+    __tablename__ = "dsr_executions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    action_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_actions.id"), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    rows_affected: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    connector_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    verification_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    verification_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    executed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrResponse(Base):
+    """`grounded_facts` is populated from dsr_evidence and dsr_executions only. A
+    sentence in body_text that is not traceable to a row there is not a DSR fact."""
+
+    __tablename__ = "dsr_responses"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    grounded_facts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    drafted_by_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
