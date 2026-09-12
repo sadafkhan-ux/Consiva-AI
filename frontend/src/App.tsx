@@ -2,14 +2,15 @@ import { useEffect, useState } from "react";
 import { getProfile, logout, type Profile } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
 import { ConsentAgentView } from "./ConsentAgentView";
+import { DsrDashboard } from "./components/DsrDashboard";
 import { LoginScreen } from "./components/LoginScreen";
 import { RopaDashboard } from "./components/RopaDashboard";
 
-type Agent = "consent" | "ropa";
+type Agent = "consent" | "ropa" | "dsr";
 
 /**
- * Shell around both agents. Agent 1's UI is unchanged -- it moved verbatim into
- * ConsentAgentView; this file only adds the sign-in gate and the agent switcher.
+ * Shell around the three agents. Agent 1's UI is unchanged -- it moved verbatim
+ * into ConsentAgentView; this file only adds the sign-in gate and the switcher.
  */
 export default function App() {
   const [profile, setProfile] = useState<Profile | null>(() => getProfile());
@@ -50,6 +51,12 @@ export default function App() {
             >
               ROPA Agent
             </button>
+            <button
+              className={agent === "dsr" ? "active" : ""}
+              onClick={() => setAgent("dsr")}
+            >
+              DSR Agent
+            </button>
           </nav>
           <span className="session-user">
             {profile.email}
@@ -59,7 +66,9 @@ export default function App() {
         </div>
       </header>
 
-      {agent === "consent" ? <ConsentAgentView /> : <RopaDashboard />}
+      {agent === "consent" && <ConsentAgentView />}
+      {agent === "ropa" && <RopaDashboard />}
+      {agent === "dsr" && <DsrDashboard />}
     </div>
   );
 }

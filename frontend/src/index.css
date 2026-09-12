@@ -415,3 +415,89 @@ button.reject { background: var(--red); }
   display: block; width: 100%; word-break: break-all; background: #0a0e18;
   padding: 8px; border-radius: 6px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
 }
+
+/* ── Agent 3 (DSR Fulfillment) ──────────────────────────────────────────────────
+   Scoped additions only. Every colour comes from the tokens already defined at the
+   top of this file, and nothing here redefines an existing class, so Agent 1's and
+   Agent 2's surfaces are untouched. */
+
+.pill-ok { background: rgba(52,211,153,.15); color: var(--green); }
+.pill-warn { background: rgba(251,191,36,.15); color: var(--amber); }
+.pill-bad { background: rgba(248,113,113,.15); color: var(--red); }
+.pill-muted { background: var(--panel-2); color: var(--muted); }
+
+.dsr { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
+.dsr .card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px;
+}
+.dsr h2 { margin: 0 0 4px; font-size: 16px; }
+.dsr h3 { margin: 16px 0 8px; font-size: 13px; text-transform: uppercase;
+          letter-spacing: .06em; color: var(--muted); }
+.dsr .small { font-size: 11px; }
+
+.dsr-intake { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+.dsr-intake label { display: flex; flex-direction: column; gap: 4px;
+                    font-size: 12px; color: var(--muted); flex: 1 1 260px; }
+.dsr-intake textarea, .dsr-intake input {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); padding: 8px; font: inherit; resize: vertical;
+}
+
+/* The list stays a fixed column so the detail pane does not reflow when a case
+   with a longer reference is selected. */
+.dsr-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) { .dsr-layout { grid-template-columns: 1fr; } }
+
+.dsr-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.dsr-list button {
+  width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
+  border-radius: 6px; padding: 8px; color: var(--text); cursor: pointer;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+}
+.dsr-list button:hover { background: var(--panel-2); }
+.dsr-list button.active { background: var(--panel-2); border-color: var(--accent); }
+
+.dsr-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.dsr-badges { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.dsr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.dsr-actions button {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); padding: 6px 12px; font-size: 12px; cursor: pointer;
+}
+.dsr-actions button:hover:not(:disabled) { border-color: var(--accent); }
+/* A disabled button here means the backend's own state machine says the move is
+   impossible -- it must read as unavailable, not merely unstyled. */
+.dsr-actions button:disabled { opacity: .4; cursor: not-allowed; }
+
+.dsr .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.dsr .tabs button {
+  background: transparent; border: none; border-bottom: 2px solid transparent;
+  color: var(--muted); padding: 8px 12px; font-size: 12px; cursor: pointer; text-transform: capitalize;
+}
+.dsr .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* Tables can be wider than the pane; they scroll inside it rather than pushing the
+   page sideways. */
+.dsr table.data { width: 100%; border-collapse: collapse; font-size: 12px; display: block; overflow-x: auto; }
+.dsr table.data th { text-align: left; color: var(--muted); font-weight: 600;
+                     padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.dsr table.data td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.dsr table.data button { margin-right: 4px; background: var(--panel-2); border: 1px solid var(--border);
+                         border-radius: 4px; color: var(--text); padding: 3px 8px; font-size: 11px; cursor: pointer; }
+
+.banner { border-radius: 6px; padding: 10px 12px; font-size: 12px; }
+.banner-error { background: rgba(248,113,113,.12); color: var(--red); border: 1px solid rgba(248,113,113,.3); }
+.banner-warn { background: rgba(251,191,36,.12); color: var(--amber); border: 1px solid rgba(251,191,36,.3); }
+.banner-ok { background: rgba(52,211,153,.12); color: var(--green); border: 1px solid rgba(52,211,153,.3); }
+
+.response-body {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px; white-space: pre-wrap; font: inherit; line-height: 1.5;
+}
+.dsr pre.mono { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+                padding: 8px; overflow-x: auto; max-height: 320px; }
+
+.timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.timeline li { border-left: 2px solid var(--border); padding-left: 10px; font-size: 12px; }
+.timeline pre { margin: 4px 0 0; }

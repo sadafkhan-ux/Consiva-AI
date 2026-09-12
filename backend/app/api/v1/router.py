@@ -6,6 +6,7 @@ from app.api.v1.routes import (
     consent_findings,
     consent_scans,
     dev,
+    dsr,
     ropa,
     websites,
 )
@@ -18,6 +19,7 @@ api_router.include_router(consent_findings.router)
 api_router.include_router(websites.router)
 api_router.include_router(actions.router)
 api_router.include_router(ropa.router)
+api_router.include_router(dsr.router)
 
 # Registered ONLY in development -- outside it the route doesn't exist in FastAPI's
 # routing table at all (natural 404), rather than existing and relying solely on the
