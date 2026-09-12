@@ -207,7 +207,7 @@ async def _search_one_source(
         )
         for match in outcome.matches
     ]
-    await dsr_repository.add_evidence(db, evidence_rows)
+    await dsr_repository.add_evidence(db, request.org_id, evidence_rows)
 
     run.match_count = len(evidence_rows)
     run.distinct_subject_count = outcome.distinct_subjects

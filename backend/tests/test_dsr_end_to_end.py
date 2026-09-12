@@ -184,7 +184,7 @@ def _install(monkeypatch, w: World):
     async def list_search_runs(db, request_id, org_id):
         return [r for r in w.search_runs if r.request_id == request_id]
 
-    async def add_evidence(db, rows):
+    async def add_evidence(db, org_id, rows):
         w.evidence.extend(rows)
 
     async def list_evidence(db, request_id, org_id):
@@ -205,7 +205,7 @@ def _install(monkeypatch, w: World):
         w.plans.append(row)
         return row
 
-    async def add_actions(db, rows):
+    async def add_actions(db, org_id, rows):
         w.actions.extend(rows)
 
     async def list_actions(db, plan_id, org_id):

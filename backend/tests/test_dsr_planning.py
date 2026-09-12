@@ -298,7 +298,7 @@ async def _build(monkeypatch, request, evidence, grants, *, corrections=None, re
         created["plan"] = plan
         return plan
 
-    async def _add_actions(db, rows):
+    async def _add_actions(db, org_id, rows):
         created["actions"] = rows
 
     repo = planning_service.dsr_repository

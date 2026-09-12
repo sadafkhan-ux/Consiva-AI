@@ -93,7 +93,7 @@ async def list_overdue_requests(db: AsyncSession, *, limit: int = 200) -> list[D
     """SLA sweep support. Deliberately NOT org-scoped: this is called by the worker,
     which acts for every tenant, not on behalf of a signed-in user. It is the one
     function here without an org filter, and the only caller is
-    services/dsr_sla_service.py -- never a request handler.
+    app/agents/dsr/services/sla_service.py -- never a request handler.
     """
     result = await db.execute(
         select(DsrRequest)
@@ -180,8 +180,19 @@ async def list_search_runs(db: AsyncSession, request_id: uuid.UUID, org_id: uuid
     return list(result.scalars().all())
 
 
-async def add_evidence(db: AsyncSession, rows: list[DsrEvidence]) -> None:
+async def add_evidence(db: AsyncSession, org_id: uuid.UUID, rows: list[DsrEvidence]) -> None:
+    """Insert evidence rows. `org_id` is not a filter here -- it is an ASSERTION.
+
+    These rows are built by the search service from the case it is working on, so
+    they should already carry the right tenant. Checking it anyway means a future
+    caller that builds a row from the wrong case fails loudly here rather than
+    writing one tenant's evidence into another's case.
+    """
     for row in rows:
+        if row.org_id != org_id:
+            raise ValueError(
+                f"refusing to write evidence for org {row.org_id} into a case in org {org_id}"
+            )
         db.add(row)
     await db.flush()
 
@@ -256,8 +267,13 @@ async def get_current_plan(db: AsyncSession, request_id: uuid.UUID, org_id: uuid
     return result.scalar_one_or_none()
 
 
-async def add_actions(db: AsyncSession, rows: list[DsrAction]) -> None:
+async def add_actions(db: AsyncSession, org_id: uuid.UUID, rows: list[DsrAction]) -> None:
+    """Insert planned actions. Same tenant assertion as `add_evidence`."""
     for row in rows:
+        if row.org_id != org_id:
+            raise ValueError(
+                f"refusing to write an action for org {row.org_id} into a plan in org {org_id}"
+            )
         db.add(row)
     await db.flush()
 

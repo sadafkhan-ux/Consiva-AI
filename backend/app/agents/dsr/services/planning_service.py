@@ -104,7 +104,7 @@ async def build_plan(
     )
     for action in actions:
         action.plan_id = plan.id
-    await dsr_repository.add_actions(db, actions)
+    await dsr_repository.add_actions(db, request.org_id, actions)
     return plan, actions
 
 
