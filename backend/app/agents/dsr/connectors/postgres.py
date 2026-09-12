@@ -76,6 +76,10 @@ class PostgresDsrConfig:
     read_password: str
     write_user: str | None = None
     write_password: str | None = None
+    # The schema the allowlisted tables live in. None means "resolve through the
+    # connection's search_path", which is `public` in practice -- fine for a source
+    # that keeps its tables there, and wrong for every source that does not.
+    schema: str | None = None
     sslmode: str = "require"
     connect_timeout_seconds: float = base.DEFAULT_CONNECT_TIMEOUT_SECONDS
     statement_timeout_seconds: float = base.DEFAULT_STATEMENT_TIMEOUT_SECONDS
@@ -96,6 +100,18 @@ class PostgresDsrConnector:
     def __init__(self, *, config: PostgresDsrConfig, grant: SourceGrant):
         self._config = config
         self._grant = grant
+
+    def _qualified(self, table: str) -> str:
+        """`"schema"."table"`, or just `"table"` when no schema is configured.
+
+        The schema goes through the same validate-then-quote path as every other
+        identifier: it comes from source configuration, not from a caller, but it is
+        still interpolated into a statement, so it is held to the same rule.
+        """
+        quoted = quote_identifier(table, kind="table")
+        if not self._config.schema:
+            return quoted
+        return f"{quote_identifier(self._config.schema, kind='schema')}.{quoted}"
 
     # ── Connections ──────────────────────────────────────────────────────────────
 
@@ -212,7 +228,7 @@ class PostgresDsrConnector:
     ) -> tuple[list[asyncpg.Record], bool]:
         """One table, one identifier column. Fetches limit+1 rows so "there were more"
         is distinguishable from "there were exactly limit"."""
-        quoted_table = quote_identifier(table, kind="table")
+        quoted_table = self._qualified(table)
         quoted_column = quote_identifier(column, kind="column")
         projection = self._projection(table, column)
 
@@ -284,6 +300,7 @@ class PostgresDsrConnector:
             confidence=1.0,
             record_reference=reference,
             record_snapshot=snapshot,
+            schema_name=self._config.schema,
         )
 
     def _count_distinct_subjects(self, matches: list[SubjectMatch]) -> int:
@@ -378,7 +395,7 @@ class PostgresDsrConnector:
         self, conn: asyncpg.Connection, *, table: str, reference: dict[str, Any],
         operation: str, payload: dict[str, Any],
     ) -> int:
-        quoted_table = quote_identifier(table, kind="table")
+        quoted_table = self._qualified(table)
         where_sql, where_args = self._where(reference, start=1)
 
         if operation == case.OP_DELETE_RECORD:
@@ -404,7 +421,7 @@ class PostgresDsrConnector:
         operation: str, payload: dict[str, Any],
     ) -> tuple[bool, dict[str, Any]]:
         """Read the record back and check the intended end state actually holds."""
-        quoted_table = quote_identifier(table, kind="table")
+        quoted_table = self._qualified(table)
         where_sql, where_args = self._where(reference, start=1)
 
         if operation == case.OP_DELETE_RECORD:

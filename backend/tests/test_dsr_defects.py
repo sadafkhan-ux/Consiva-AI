@@ -470,3 +470,54 @@ def test_both_closing_statuses_are_terminal():
 
     assert lifecycle.is_terminal(case.COMPLETED)
     assert lifecycle.is_terminal(case.PARTIALLY_COMPLETED)
+
+
+# ── Defect 8: table names were unqualified, so only `public` was reachable ───────
+
+@pytest.mark.asyncio
+async def test_a_source_whose_tables_live_in_a_named_schema_can_be_searched(monkeypatch):
+    """Table names were quoted bare, so they resolved through search_path -- in
+    practice `public` and nothing else. A customer whose DSR tables sit in their own
+    schema could not be searched at all, and the failure would be an UndefinedTable
+    from the driver rather than anything the allowlist could explain."""
+    conn = _FakeConn([{"id": 1, "subscriber_email": "a@b.com", "plan": "pro"}])
+    connector = PostgresDsrConnector(
+        config=PostgresDsrConfig(
+            host="h", port=5432, dbname="d", read_user="r", read_password="p",
+            schema="billing_app",
+        ),
+        grant=_grant(),
+    )
+    monkeypatch.setattr(connector, "_connect", _stub_connect(conn))
+
+    outcome = await connector.search_subject(identifiers={"email": "a@b.com"})
+
+    sql = conn.queries[0][0]
+    assert '"billing_app"."subscriptions"' in sql, f"table not schema-qualified: {sql}"
+    assert outcome.matches[0].schema_name == "billing_app"
+
+
+@pytest.mark.asyncio
+async def test_no_schema_configured_still_produces_a_bare_table_name(monkeypatch):
+    """The default stays exactly as it was, so an existing source keeps working."""
+    conn = _FakeConn([{"id": 1, "subscriber_email": "a@b.com", "plan": "pro"}])
+    connector = _connector()
+    monkeypatch.setattr(connector, "_connect", _stub_connect(conn))
+
+    await connector.search_subject(identifiers={"email": "a@b.com"})
+    sql = conn.queries[0][0]
+    assert 'FROM "subscriptions"' in sql
+
+
+def test_a_malicious_schema_name_is_refused():
+    from app.agents.dsr.errors import SourceNotAuthorizedError
+
+    connector = PostgresDsrConnector(
+        config=PostgresDsrConfig(
+            host="h", port=5432, dbname="d", read_user="r", read_password="p",
+            schema='public"; DROP SCHEMA x; --',
+        ),
+        grant=_grant(),
+    )
+    with pytest.raises(SourceNotAuthorizedError):
+        connector._qualified("subscriptions")

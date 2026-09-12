@@ -96,6 +96,8 @@ def build_connector(
                 read_password=read_password,
                 write_user=write_user,
                 write_password=write_password,
+                # Optional: a source whose DSR tables are not in `public`.
+                schema=config.get("schema") or config.get("search_path"),
                 sslmode=config.get("sslmode", "require"),
                 connect_timeout_seconds=float(config.get("connect_timeout_seconds", 5.0)),
                 statement_timeout_seconds=float(config.get("statement_timeout_seconds", 15.0)),
