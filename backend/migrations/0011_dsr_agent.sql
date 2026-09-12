@@ -178,6 +178,10 @@ create table if not exists dsr_evidence (
     org_id                 uuid not null,
     request_id             uuid not null references dsr_requests(id) on delete cascade,
     search_run_id          uuid not null references dsr_search_runs(id) on delete cascade,
+    -- Which source this record came from. Execution addresses the record through
+    -- its evidence rather than by re-running the search, so the evidence has to
+    -- carry the source id, not just its display name.
+    data_source_id         uuid references ropa_data_sources(id),
     source_name            text not null,
     schema_name            text,
     table_name             text not null,

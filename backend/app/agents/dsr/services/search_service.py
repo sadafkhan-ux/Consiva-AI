@@ -194,6 +194,7 @@ async def _search_one_source(
             org_id=request.org_id,
             request_id=request.id,
             search_run_id=run.id,
+            data_source_id=data_source.id,
             source_name=data_source.name,
             table_name=match.table_name,
             schema_name=match.schema_name,

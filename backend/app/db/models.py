@@ -701,6 +701,7 @@ class DsrEvidence(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
     search_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_search_runs.id"), nullable=False, index=True)
+    data_source_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ropa_data_sources.id"), nullable=True)
     source_name: Mapped[str] = mapped_column(String, nullable=False)
     schema_name: Mapped[str | None] = mapped_column(String, nullable=True)
     table_name: Mapped[str] = mapped_column(String, nullable=False)

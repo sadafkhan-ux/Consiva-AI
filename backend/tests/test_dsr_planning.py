@@ -46,6 +46,7 @@ def make_request(request_type=case.DELETION) -> DsrRequest:
 def make_evidence(table="customers", snapshot=None, source="crm") -> DsrEvidence:
     return DsrEvidence(
         id=uuid.uuid4(), org_id=ORG, request_id=uuid.uuid4(), search_run_id=uuid.uuid4(),
+        data_source_id=uuid.uuid4(),
         source_name=source, table_name=table, matched_column="email", identifier_kind="email",
         match_type="normalized_exact", confidence=1.0, record_reference={"id": 7},
         record_snapshot=snapshot if snapshot is not None else {"name": "A", "email": "a@b.com"},

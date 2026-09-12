@@ -212,6 +212,9 @@ def _action(
         request_id=request.id,
         plan_id=None,  # set once the plan row exists
         evidence_id=evidence.id,
+        # Carried from the evidence so execution can resolve the source without
+        # re-running the search that found the record.
+        data_source_id=evidence.data_source_id,
         source_name=evidence.source_name,
         table_name=evidence.table_name,
         record_reference=evidence.record_reference,
