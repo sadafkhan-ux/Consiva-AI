@@ -95,7 +95,7 @@ async def execute_queued_search(request_id: uuid.UUID, org_id: uuid.UUID, job_id
             await db.commit()
             return
 
-        grants = await _grants_for(db, request.org_id)
+        grants = await grants_for(db, request.org_id)
         plan, actions = await planning_service.build_plan(db, request, grants=grants)
         await case_service.transition(
             db, request, next_status_after_planning(plan, actions),
@@ -250,7 +250,7 @@ def next_status_after_planning(plan, actions) -> str:
     return case.APPROVED
 
 
-async def _grants_for(db, org_id: uuid.UUID) -> dict:
+async def grants_for(db, org_id: uuid.UUID) -> dict:
     """Resolve every DSR authorization in this org to a validated grant, keyed by
     source name -- what the planner needs to evaluate constraints without opening a
     connection."""

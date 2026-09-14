@@ -85,6 +85,10 @@ export interface DsrAction {
   record_reference: Record<string, unknown>;
 }
 
+/** What the requester chose for one discovered record. Mirrors the backend's
+ *  closed vocabulary; the UI never invents a verb the engine cannot execute. */
+export type DsrSelection = "delete" | "keep" | "correct" | "export" | "review";
+
 export interface DsrPlan {
   plan: {
     id: string;
@@ -235,6 +239,17 @@ export const dsrApi = {
     return request(`/api/v1/dsr/requests/${caseId}/actions/${actionId}/decision`, {
       method: "POST",
       body: JSON.stringify({ decision, reason }),
+    });
+  },
+  /** Build the plan from per-record choices. The counts in the response come
+   *  from the backend, so the review screen never tallies its own numbers. */
+  buildPlan(
+    id: string,
+    selections: Array<{ evidence_id: string; action: DsrSelection; corrections?: Record<string, unknown> }>,
+  ): Promise<DsrPlan> {
+    return request(`/api/v1/dsr/requests/${id}/plan`, {
+      method: "POST",
+      body: JSON.stringify({ selections }),
     });
   },
   execute(id: string): Promise<{ job_id: string; case: DsrCase }> {

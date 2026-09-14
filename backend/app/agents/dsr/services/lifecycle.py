@@ -43,11 +43,27 @@ _TRANSITIONS: dict[str, frozenset[str]] = {
     case.SEARCHING: frozenset({case.SEARCH_COMPLETED}),
     # Search can finish and find nothing. That is SEARCH_COMPLETED with an explicit
     # NO_MATCH error code, then a response -- never a silent stop (§47).
-    case.SEARCH_COMPLETED: frozenset({case.REVIEW_REQUIRED, case.APPROVAL_REQUIRED, case.RESPONSE_PENDING}),
-    case.REVIEW_REQUIRED: frozenset({case.APPROVAL_REQUIRED, case.SEARCHING, case.RESPONSE_PENDING}),
+    #
+    # APPROVED is reachable directly from here, without passing through
+    # APPROVAL_REQUIRED, when the plan contains nothing a reviewer could decide --
+    # an access request whose every action is a disclosure, say. Routing such a plan
+    # through APPROVAL_REQUIRED would be a lie about the case AND a dead end: the
+    # only thing that leaves that status is a decision recorded against an action,
+    # and there is no action to decide. What this does NOT do is open a second door
+    # into EXECUTING, which is still reachable from APPROVED alone.
+    case.SEARCH_COMPLETED: frozenset({
+        case.REVIEW_REQUIRED, case.APPROVAL_REQUIRED, case.APPROVED, case.RESPONSE_PENDING,
+    }),
+    case.REVIEW_REQUIRED: frozenset({
+        case.APPROVAL_REQUIRED, case.APPROVED, case.SEARCHING, case.RESPONSE_PENDING,
+    }),
     case.APPROVAL_REQUIRED: frozenset({case.APPROVED, case.REVIEW_REQUIRED}),
-    # The only edge into EXECUTING.
-    case.APPROVED: frozenset({case.EXECUTING}),
+    # The only edge into EXECUTING -- plus two edges BACKWARD, into stricter states.
+    # Building a new plan supersedes the old one, and an approval authorizes specific
+    # actions rather than a case, so a re-plan has to be able to pull the case back
+    # out of APPROVED. Without that the transition was silently skipped and a case
+    # went on claiming it was approved while newly-planned work awaited a decision.
+    case.APPROVED: frozenset({case.EXECUTING, case.APPROVAL_REQUIRED, case.REVIEW_REQUIRED}),
     case.EXECUTING: frozenset({case.EXECUTION_VERIFIED}),
     case.EXECUTION_VERIFIED: frozenset({case.RESPONSE_PENDING}),
     # The only edge into COMPLETED.

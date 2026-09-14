@@ -506,3 +506,96 @@ button.reject { background: var(--red); }
    operator-facing reason sitting directly above it. */
 .requester-text { color: var(--text); border-left: 2px solid var(--accent);
                   padding-left: 6px; margin-top: 4px; }
+
+/* ── Agent 3 email-first flow ───────────────────────────────────────────────────
+   Additions only; every colour comes from the tokens at the top of this file. */
+
+.dsr-console-tabs { padding: 12px 16px 0; }
+
+.stepper {
+  display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0;
+  font-size: 11px; color: var(--muted);
+}
+.stepper li { display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px;
+              border: 1px solid var(--border); border-radius: 20px; text-transform: capitalize; }
+.stepper li.now { color: var(--text); border-color: var(--accent); }
+.stepper .n {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%; background: var(--panel-2);
+  font-size: 10px; font-weight: 600;
+}
+.stepper li.now .n { background: var(--accent); color: #fff; }
+
+.case-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px; font-size: 12px;
+}
+.linkish { background: none; border: none; color: var(--accent); cursor: pointer;
+           font: inherit; padding: 0; text-decoration: underline; }
+
+.ef .hero { display: flex; flex-direction: column; gap: 10px; }
+.email-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.email-form label { font-size: 12px; color: var(--muted); width: 100%; }
+.email-form input {
+  flex: 1 1 260px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); padding: 9px 10px; font: inherit;
+}
+.email-form button, .ef .dsr-actions button {
+  background: var(--accent); border: 1px solid var(--accent); color: #fff;
+  border-radius: 6px; padding: 9px 16px; font-size: 13px; cursor: pointer;
+}
+.ef .dsr-actions button { background: var(--panel-2); border-color: var(--border); color: var(--text); }
+.email-form button:disabled, .ef button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* An indeterminate bar: it shows that work is happening, never a percentage the
+   backend never reported. */
+.bar { height: 3px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
+.bar span { display: block; width: 35%; height: 100%; background: var(--accent);
+            animation: slide 1.1s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .bar span { animation: none; width: 100%; } }
+
+.table-group { margin-top: 12px; }
+.table-group h3 { margin: 0 0 6px; }
+.table-group .count { font-weight: 400; color: var(--muted); text-transform: none; letter-spacing: 0; }
+
+.record {
+  display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-start;
+  border-top: 1px solid var(--border); padding: 10px 0;
+}
+.fields { flex: 1 1 320px; display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; }
+.field { display: flex; gap: 6px; align-items: baseline; font-size: 12px; }
+.field .k { color: var(--muted); }
+.field .v { color: var(--text); }
+
+.choices { display: flex; flex-wrap: wrap; gap: 4px; }
+.choice {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--muted); padding: 5px 11px; font-size: 12px; cursor: pointer;
+}
+.choice:hover:not(:disabled) { color: var(--text); }
+.choice.on { color: #fff; font-weight: 600; }
+.choice.on-ok   { background: var(--green); border-color: var(--green); color: #06281d; }
+.choice.on-bad  { background: var(--red);   border-color: var(--red);   color: #2b0b0b; }
+.choice.on-warn { background: var(--amber); border-color: var(--amber); color: #2e2206; }
+.choice.on-info { background: var(--accent);border-color: var(--accent); }
+.choice.on-muted{ background: var(--border); border-color: var(--border); color: var(--text); }
+
+.correct-box { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.correct-box label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+.correct-box input {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px;
+  color: var(--text); padding: 5px 8px; font: inherit; font-size: 12px; min-width: 180px;
+}
+
+.summary-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.tallies { display: flex; flex-wrap: wrap; gap: 6px; }
+.tally { font-size: 11px; color: var(--muted); background: var(--panel-2);
+         border: 1px solid var(--border); border-radius: 20px; padding: 3px 10px; }
+.tally b { color: var(--text); font-variant-numeric: tabular-nums; }
+.tally.on-ok b   { color: var(--green); }
+.tally.on-bad b  { color: var(--red); }
+.tally.on-warn b { color: var(--amber); }
+.tally.on-info b { color: var(--accent); }
+.grow { flex: 1 1 auto; }

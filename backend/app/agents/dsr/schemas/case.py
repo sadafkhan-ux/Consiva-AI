@@ -100,6 +100,40 @@ OPERATIONS = frozenset({
 # a write credential, an approval, and post-execution verification.
 MUTATING_OPERATIONS = frozenset({OP_UPDATE_FIELD, OP_ANONYMIZE_FIELD, OP_DELETE_RECORD})
 
+# ── Requester selections (email-first flow) ──────────────────────────────────────
+# What a person chooses for ONE discovered record, as opposed to `request_type`,
+# which is what they asked for overall. The two are different questions: someone can
+# open a case saying "delete my data" and then, looking at what was actually found,
+# decide to keep their order history. The selection wins, because it is the more
+# specific and more recent statement of what they want.
+#
+# These are UI-facing verbs deliberately kept separate from the OPERATIONS the engine
+# executes, so the wording shown to a person can change without touching the
+# execution vocabulary the connector and the audit trail depend on.
+SELECT_DELETE = "delete"
+SELECT_KEEP = "keep"
+SELECT_CORRECT = "correct"
+SELECT_EXPORT = "export"
+SELECT_REVIEW = "review"
+
+SELECTIONS = frozenset({SELECT_DELETE, SELECT_KEEP, SELECT_CORRECT, SELECT_EXPORT, SELECT_REVIEW})
+
+OPERATION_FOR_SELECTION = {
+    SELECT_DELETE: OP_DELETE_RECORD,
+    SELECT_KEEP: OP_RETAIN,
+    SELECT_CORRECT: OP_UPDATE_FIELD,
+    SELECT_EXPORT: OP_DISCLOSE,
+    # "Have a human look at this before deciding" is not an operation against the
+    # source -- it is an explicit refusal to act yet, which is why it maps to no_op
+    # and still demands approval.
+    SELECT_REVIEW: OP_NO_OP,
+}
+
+# Selections that always need a human decision before anything proceeds, regardless
+# of what the constraint engine says.
+SELECTIONS_REQUIRING_REVIEW = frozenset({SELECT_DELETE, SELECT_CORRECT, SELECT_REVIEW})
+
+
 # ── Domain error codes (§38) ─────────────────────────────────────────────────────
 # Every non-happy outcome lands on one of these. A case that stopped without one of
 # these in `error_code` is a bug -- see lifecycle.fail(), which requires it.

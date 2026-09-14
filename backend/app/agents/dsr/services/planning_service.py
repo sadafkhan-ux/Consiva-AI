@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.dsr.connectors.authorization import SourceGrant
+from app.agents.dsr.errors import CaseNotReadyError
 from app.agents.dsr.rules import constraints as rules
 from app.agents.dsr.schemas import case
 from app.db.models import DsrAction, DsrActionPlan, DsrEvidence, DsrRequest
@@ -58,6 +59,7 @@ async def build_plan(
     grants: dict[str, SourceGrant],
     corrections: dict[str, Any] | None = None,
     retention_rules: tuple[rules.RetentionRule, ...] = (),
+    selections: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[DsrActionPlan, list[DsrAction]]:
     """Turn this case's evidence into a proposed plan.
 
@@ -65,6 +67,14 @@ async def build_plan(
     {column: new_value} a CORRECTION request asks for -- supplied by the case, never
     inferred from the request text, because guessing what someone meant to change is
     not something a correction may do.
+
+    `selections` is the email-first path: {evidence_id: {"action": ..., "corrections":
+    {...}}}, one entry per record the requester made a decision about. Where a
+    selection exists it OVERRIDES what request_type would have implied, because
+    looking at the records actually found is a more specific and more recent
+    statement of intent than the sentence typed at intake. Evidence with no selection
+    falls back to the request type, so a partially-completed review still produces a
+    complete plan rather than silently dropping the rest.
 
     A previous plan for the same case is superseded, not edited: an approved plan is
     an approval of specific actions, and rewriting it in place would leave that
@@ -80,11 +90,15 @@ async def build_plan(
     actions: list[DsrAction] = []
     all_constraints: list[dict] = []
 
+    chosen = selections or {}
     for item in evidence:
         grant = grants.get(item.source_name)
+        selection = chosen.get(str(item.id)) or {}
         action, evaluated = _plan_one(
             request=request, evidence=item, grant=grant,
-            corrections=corrections or {}, retention_rules=retention_rules,
+            corrections=selection.get("corrections") or corrections or {},
+            retention_rules=retention_rules,
+            selection=selection.get("action"),
         )
         actions.append(action)
         all_constraints.extend(
@@ -115,9 +129,21 @@ def _plan_one(
     grant: SourceGrant | None,
     corrections: dict[str, Any],
     retention_rules: tuple[rules.RetentionRule, ...],
+    selection: str | None = None,
 ) -> tuple[DsrAction, tuple[rules.Constraint, ...]]:
-    """One evidence row in, exactly one action out. Never None."""
-    intended = _OPERATION_FOR_TYPE.get(request.request_type, case.OP_NO_OP)
+    """One evidence row in, exactly one action out. Never None.
+
+    `selection` is the requester's own choice for THIS record and takes precedence
+    over the case-level request_type when present.
+    """
+    if selection and selection not in case.SELECTIONS:
+        raise CaseNotReadyError(
+            f"{selection!r} is not a DSR action; expected one of {sorted(case.SELECTIONS)}"
+        )
+    intended = (
+        case.OPERATION_FOR_SELECTION[selection] if selection
+        else _OPERATION_FOR_TYPE.get(request.request_type, case.OP_NO_OP)
+    )
     payload = _payload_for(intended, evidence, corrections)
 
     if grant is None:
@@ -169,13 +195,17 @@ def _plan_one(
 
     # A disclosure needs no approval unless something flagged it: reading a record to
     # answer an access request is the request being fulfilled, not a change to review.
+    # A requester's own DELETE / CORRECT / REVIEW selection always needs one, even
+    # where no constraint objected -- that is the human gate the whole flow exists for.
     needs_approval = (
-        intended in case.MUTATING_OPERATIONS or effect == rules.EFFECT_REVIEW
+        intended in case.MUTATING_OPERATIONS
+        or effect == rules.EFFECT_REVIEW
+        or (selection in case.SELECTIONS_REQUIRING_REVIEW)
     )
     return (
         _action(
             request, evidence, operation=intended, payload=payload,
-            reason=_reason_for(request, evidence, intended),
+            reason=_reason_for(request, evidence, intended, selection),
             expected_result=_expected_for(intended, evidence, payload),
             status="proposed",
             blocked_reason=None,
@@ -234,9 +264,22 @@ def _action(
     )
 
 
-def _reason_for(request: DsrRequest, evidence: DsrEvidence, operation: str) -> str:
+def _reason_for(
+    request: DsrRequest, evidence: DsrEvidence, operation: str, selection: str | None = None
+) -> str:
     where = f"{evidence.source_name}.{evidence.table_name}"
     matched = f"matched on {evidence.matched_column} ({evidence.match_type})"
+    if selection:
+        # The requester chose this record by record, so say so -- a reviewer reading
+        # the plan needs to know the choice came from the person, not from a rule.
+        chosen = {
+            case.SELECT_DELETE: "asked for this record to be erased",
+            case.SELECT_KEEP: "asked for this record to be kept",
+            case.SELECT_CORRECT: "asked for this record to be corrected",
+            case.SELECT_EXPORT: "asked for a copy of this record",
+            case.SELECT_REVIEW: "asked for this record to be reviewed by a person",
+        }[selection]
+        return f"the requester {chosen} in {where}; {matched}"
     if operation == case.OP_DISCLOSE:
         return f"record in {where} holds the requester's personal data; {matched}"
     if operation == case.OP_UPDATE_FIELD:
@@ -259,6 +302,10 @@ def _expected_for(operation: str, evidence: DsrEvidence, payload: dict[str, Any]
         return f"{', '.join(sorted(payload))} updated on the matched record, then read back to confirm"
     if operation == case.OP_DELETE_RECORD:
         return f"the matched record is removed from {evidence.table_name}, then confirmed absent"
+    if operation == case.OP_NO_OP:
+        return "no change is made until a reviewer decides what should happen to this record"
+    if operation == case.OP_RETAIN:
+        return f"the record in {evidence.table_name} is left exactly as it is"
     return "no change to the source"
 
 

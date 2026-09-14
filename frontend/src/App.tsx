@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getProfile, logout, type Profile } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
 import { ConsentAgentView } from "./ConsentAgentView";
-import { DsrDashboard } from "./components/DsrDashboard";
+import { DsrConsole } from "./components/DsrConsole";
 import { LoginScreen } from "./components/LoginScreen";
 import { RopaDashboard } from "./components/RopaDashboard";
 
@@ -68,7 +68,7 @@ export default function App() {
 
       {agent === "consent" && <ConsentAgentView />}
       {agent === "ropa" && <RopaDashboard />}
-      {agent === "dsr" && <DsrDashboard />}
+      {agent === "dsr" && <DsrConsole />}
     </div>
   );
 }

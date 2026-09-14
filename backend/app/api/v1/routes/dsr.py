@@ -26,6 +26,7 @@ from app.agents.dsr.services import (
     case_service,
     identity_service,
     lifecycle,
+    planning_service,
     response_service,
     sla_service,
 )
@@ -65,6 +66,27 @@ class VerifyIdentity(BaseModel):
 
 class ClassifyRequest(BaseModel):
     override_type: str | None = Field(default=None, max_length=40)
+
+
+class RecordSelection(BaseModel):
+    """One record, and what the requester decided about it."""
+
+    evidence_id: uuid.UUID
+    action: str
+    # Only meaningful for `correct`. The new value is always supplied explicitly --
+    # the agent never infers what someone meant to change.
+    corrections: dict | None = None
+
+    @field_validator("action")
+    @classmethod
+    def _known_action(cls, value: str) -> str:
+        if value not in case_vocab.SELECTIONS:
+            raise ValueError(f"action must be one of {sorted(case_vocab.SELECTIONS)}")
+        return value
+
+
+class PlanSelections(BaseModel):
+    selections: list[RecordSelection] = Field(default_factory=list, max_length=2000)
 
 
 class Decision(BaseModel):
@@ -331,6 +353,10 @@ async def get_plan(
 ) -> dict:
     org_id = uuid.UUID(user.org_id)
     request = await case_service.get_case_or_raise(db, request_id, org_id)
+    return await _plan_response(db, request, org_id)
+
+
+async def _plan_response(db: AsyncSession, request, org_id: uuid.UUID) -> dict:
     plan = await dsr_repository.get_current_plan(db, request.id, org_id)
     if plan is None:
         return {"plan": None, "actions": [], "decisions": None}
@@ -356,6 +382,76 @@ async def get_plan(
         ],
         "decisions": await approval_service.plan_decision_summary(db, request, plan.id),
     }
+
+
+@router.post("/requests/{request_id}/plan")
+async def build_plan_from_selections(
+    request_id: uuid.UUID,
+    payload: PlanSelections,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Build (or rebuild) the action plan from the requester's per-record choices.
+
+    This is what makes the email-first flow possible: the person looks at what was
+    actually found and decides record by record, instead of the plan being inferred
+    from one sentence typed at intake. A previous plan is superseded rather than
+    edited, so an approval already given never silently attaches to different work.
+
+    Every selection must name evidence belonging to THIS case -- an evidence id from
+    somewhere else is rejected rather than ignored, because silently dropping it
+    would produce a plan that does not match what the person chose.
+    """
+    org_id = uuid.UUID(user.org_id)
+    request = await case_service.get_case_or_raise(db, request_id, org_id)
+
+    # Selections describe records; records are only readable once identity is
+    # established, so the same gate applies here as to the search itself.
+    await identity_service.assert_identity_satisfied(db, request)
+
+    known = {str(e.id) for e in await dsr_repository.list_evidence(db, request.id, org_id)}
+    unknown = [str(s.evidence_id) for s in payload.selections if str(s.evidence_id) not in known]
+    if unknown:
+        raise CaseNotReadyError(
+            f"{len(unknown)} selection(s) name evidence that does not belong to case "
+            f"{request.reference}"
+        )
+
+    selections = {
+        str(s.evidence_id): {"action": s.action, "corrections": s.corrections or {}}
+        for s in payload.selections
+    }
+    grants = await dsr_run_service.grants_for(db, org_id)
+    plan, actions = await planning_service.build_plan(
+        db, request, grants=grants, selections=selections,
+    )
+
+    # Not guarded by can_transition: a silently-skipped move here is how a case ends
+    # up claiming APPROVED while freshly-planned work still awaits a decision. If the
+    # move is genuinely illegal that is a bug worth surfacing, not swallowing.
+    next_status = dsr_run_service.next_status_after_planning(plan, actions)
+    if next_status != request.status:
+        await case_service.transition(
+            db, request, next_status,
+            actor_user_id=uuid.UUID(user.user_id),
+            audit_action=case_vocab.AUDIT_ACTION_PLANNED,
+            detail={
+                "plan_id": str(plan.id), "version": plan.version,
+                "action_count": len(actions),
+                "selected": _selection_counts(payload.selections),
+            },
+        )
+    await db.commit()
+    return await _plan_response(db, request, org_id)
+
+
+def _selection_counts(selections: list[RecordSelection]) -> dict:
+    """The live summary the review screen shows, counted from what was actually
+    submitted rather than tallied in the browser."""
+    counts = dict.fromkeys(sorted(case_vocab.SELECTIONS), 0)
+    for s in selections:
+        counts[s.action] += 1
+    return counts
 
 
 @router.post("/requests/{request_id}/actions/{action_id}/decision")
