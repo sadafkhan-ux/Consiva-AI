@@ -16,9 +16,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.agents.ropa.schemas.ropa import PersonalDataElement
-from ropa_integration.ropa_adapter_sdk import AdapterConfig, build_payload
 from app.agents.ropa.services import enrichment_service
 from app.agents.ropa.services.enrichment_service import ColumnSuggestion, EnrichmentResponse
+from ropa_integration.ropa_adapter_sdk import AdapterConfig, build_payload
 
 _ENV_FILE = pathlib.Path(__file__).resolve().parents[1] / ".env"
 _REAL_DATABASE_URL = dotenv_values(_ENV_FILE).get("DATABASE_URL")

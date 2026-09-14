@@ -132,5 +132,5 @@ def match_table(table_name: str) -> PurposeMatch | None:
         hit = tokens & set(rule.tokens)
         if hit:
             return PurposeMatch(rule.rule_id, rule.purpose, rule.data_subject,
-                                CONFIDENCE_TOKEN, sorted(hit)[0])
+                                CONFIDENCE_TOKEN, min(hit))
     return None

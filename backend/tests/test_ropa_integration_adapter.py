@@ -6,7 +6,6 @@ because the whole point of the SDK is that it reads a live Inspector correctly.
 """
 
 import pathlib
-import uuid
 
 import pytest
 from dotenv import dotenv_values

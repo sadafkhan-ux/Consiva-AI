@@ -1,8 +1,12 @@
 """Phase 12: ROPA schema change detection."""
 
-import pytest
 
-from app.agents.ropa.schemas.evidence import ColumnRecord, DiscoveryEvidence, SourceRecord, TableRecord
+from app.agents.ropa.schemas.evidence import (
+    ColumnRecord,
+    DiscoveryEvidence,
+    SourceRecord,
+    TableRecord,
+)
 from app.agents.ropa.schemas.ropa import PersonalDataElement
 from app.agents.ropa.services import change_detection_service as cds
 from app.agents.ropa.services import discovery_service
