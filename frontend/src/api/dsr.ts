@@ -64,6 +64,9 @@ export interface DsrEvidence {
   confidence: number;
   record_reference: Record<string, unknown>;
   record_snapshot: Record<string, unknown> | null;
+  /** Agent 2's data category for the matched column — "Contact Data" rather than
+   *  leaving a reviewer to infer what `customer_email` signifies. */
+  ropa_category: string | null;
   observed_at: string | null;
 }
 

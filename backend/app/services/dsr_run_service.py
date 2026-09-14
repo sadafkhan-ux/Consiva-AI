@@ -21,6 +21,7 @@ import uuid
 
 from app.agents.dsr.connectors import factory
 from app.agents.dsr.errors import DsrError
+from app.agents.dsr.rules import constraints as rules
 from app.agents.dsr.schemas import case
 from app.agents.dsr.services import (
     case_service,
@@ -96,7 +97,10 @@ async def execute_queued_search(request_id: uuid.UUID, org_id: uuid.UUID, job_id
             return
 
         grants = await grants_for(db, request.org_id)
-        plan, actions = await planning_service.build_plan(db, request, grants=grants)
+        plan, actions = await planning_service.build_plan(
+            db, request, grants=grants,
+            retention_rules=await retention_rules_for(db, request.org_id),
+        )
         await case_service.transition(
             db, request, next_status_after_planning(plan, actions),
             audit_action=case.AUDIT_ACTION_PLANNED,
@@ -136,11 +140,16 @@ async def execute_queued_actions(request_id: uuid.UUID, org_id: uuid.UUID, job_i
             if a.status == "approved" or (a.status == "proposed" and not a.requires_approval)
         ]
 
+        # Re-read at execution time rather than reusing what planning saw: a retention
+        # rule added between approval and execution must block the write (§24).
+        rules_at_execution = await retention_rules_for(db, request.org_id)
+
         succeeded, failed = 0, 0
         for action in runnable:
             try:
                 await execution_service.execute_action(
                     db, request, action.id, job_id=job_id, correlation_id=str(request_id),
+                    retention_rules=rules_at_execution,
                 )
                 succeeded += 1
             except DsrError as exc:
@@ -248,6 +257,17 @@ def next_status_after_planning(plan, actions) -> str:
     if any(a.requires_approval for a in actionable):
         return case.APPROVAL_REQUIRED
     return case.APPROVED
+
+
+async def retention_rules_for(db, org_id: uuid.UUID) -> tuple:
+    """This organisation's configured retention rules, as engine rule objects.
+
+    Loaded fresh at both planning and execution. The constraint engine stays a pure
+    function of its inputs -- it never reads a database -- so this is the seam where
+    stored configuration becomes applied policy.
+    """
+    rows = await dsr_repository.list_retention_rules(db, org_id)
+    return rules.rules_from_config(rows)
 
 
 async def grants_for(db, org_id: uuid.UUID) -> dict:

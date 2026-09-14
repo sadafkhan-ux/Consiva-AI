@@ -14,12 +14,14 @@ did not report (§33).
 
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.dsr.errors import CaseNotReadyError
+from app.agents.dsr.connectors import authorization
+from app.agents.dsr.errors import CaseNotReadyError, DsrNotFoundError
 from app.agents.dsr.schemas import case as case_vocab
 from app.agents.dsr.services import (
     approval_service,
@@ -31,7 +33,7 @@ from app.agents.dsr.services import (
     sla_service,
 )
 from app.core.security import CurrentUser, get_current_user
-from app.db.repositories import dsr_repository
+from app.db.repositories import dsr_repository, ropa_repository
 from app.db.session import get_db
 from app.jobs import queue
 from app.services import audit_service, dsr_run_service
@@ -66,6 +68,61 @@ class VerifyIdentity(BaseModel):
 
 class ClassifyRequest(BaseModel):
     override_type: str | None = Field(default=None, max_length=40)
+
+
+class SourceAuthorizationIn(BaseModel):
+    """A source's DSR authorization, as an administrator configures it.
+
+    Everything here is an allowlist, and every one defaults to empty. A source with no
+    authorization -- or one whose lists are empty -- permits nothing, which is the
+    behaviour to want if this endpoint is ever called with a half-built body.
+    """
+
+    data_source_id: uuid.UUID
+    searchable_tables: list[str] = Field(default_factory=list, max_length=500)
+    identity_tables: list[str] = Field(default_factory=list, max_length=500)
+    identifier_columns: dict[str, dict[str, str]] = Field(default_factory=dict)
+    returnable_columns: dict[str, list[str]] = Field(default_factory=dict)
+    record_key_columns: dict[str, list[str]] = Field(default_factory=dict)
+    erasable_columns: dict[str, list[str]] = Field(default_factory=dict)
+    allow_execution: bool = False
+    # The NAME of the environment entry holding the write password -- never the
+    # password. Validated as a name, and never echoed back in a response.
+    write_credential_ref: str | None = Field(default=None, max_length=128)
+
+    @field_validator("write_credential_ref")
+    @classmethod
+    def _looks_like_a_ref(cls, value: str | None) -> str | None:
+        if value and not value.replace("_", "").isalnum():
+            raise ValueError(
+                "write_credential_ref is the NAME of a secret, not the secret itself; "
+                "it must look like an environment variable name"
+            )
+        return value
+
+
+class RetentionRuleIn(BaseModel):
+    """One retention rule. `authority` is mandatory because a block with no attributable
+    source is exactly the unattributable legal claim the engine refuses to make."""
+
+    table_name: str = Field(min_length=1, max_length=63)
+    date_column: str = Field(min_length=1, max_length=63)
+    retention_days: int = Field(gt=0, le=100 * 365)
+    authority: str = Field(min_length=3, max_length=200)
+    data_source_id: uuid.UUID | None = None
+    applies_to_operations: list[str] = Field(default_factory=lambda: ["delete_record"])
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("applies_to_operations")
+    @classmethod
+    def _known_operations(cls, value: list[str]) -> list[str]:
+        unknown = [op for op in value if op not in case_vocab.MUTATING_OPERATIONS]
+        if unknown:
+            raise ValueError(
+                f"a retention rule may only restrict a writing operation; "
+                f"{unknown} are not in {sorted(case_vocab.MUTATING_OPERATIONS)}"
+            )
+        return value
 
 
 class RecordSelection(BaseModel):
@@ -336,6 +393,10 @@ async def list_results(
                 "matched_column": e.matched_column, "identifier_kind": e.identifier_kind,
                 "match_type": e.match_type, "confidence": e.confidence,
                 "record_reference": e.record_reference, "record_snapshot": e.record_snapshot,
+                # Agent 2's data category for the column that matched, so a reviewer
+                # reads "Contact Data" rather than having to know what `customer_email`
+                # signifies. Null where the classifier could not place the column.
+                "ropa_category": e.ropa_category,
                 "observed_at": e.observed_at.isoformat() if e.observed_at else None,
             }
             for e in evidence
@@ -424,6 +485,7 @@ async def build_plan_from_selections(
     grants = await dsr_run_service.grants_for(db, org_id)
     plan, actions = await planning_service.build_plan(
         db, request, grants=grants, selections=selections,
+        retention_rules=await dsr_run_service.retention_rules_for(db, org_id),
     )
 
     # Not guarded by can_transition: a silently-skipped move here is how a case ends
@@ -653,6 +715,179 @@ async def complete_case(
     )
     await db.commit()
     return await _case_with_identity(db, request)
+
+
+# ── Configuration: authorized sources and retention rules ────────────────────────
+#
+# Before these existed both were written straight to the table by hand, which meant no
+# validation, no audit entry, and no way for an administrator to see what a source was
+# actually permitted to do. Both are admin-only: they decide what the agent may read
+# and what it may erase.
+
+def _require_admin(user: CurrentUser) -> None:
+    """Configuration changes what the agent is allowed to touch, so they are not
+    something an ordinary member may do. A token with no role is not an admin."""
+    if user.role != "admin":
+        raise CaseNotReadyError(
+            "changing DSR source authorization or retention policy requires an "
+            "administrator"
+        )
+
+
+@router.get("/config/sources")
+async def list_source_authorizations(
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """What each source is permitted to do. Never returns a credential -- the row holds
+    only the NAME of one, and even that is reported as a boolean."""
+    org_id = uuid.UUID(user.org_id)
+    rows = await dsr_repository.list_source_authorizations(db, org_id)
+    out = []
+    for a in rows:
+        source = await ropa_repository.get_data_source(db, a.data_source_id, org_id)
+        out.append({
+            "id": str(a.id),
+            "data_source_id": str(a.data_source_id),
+            "source_name": source.name if source else None,
+            "searchable_tables": a.searchable_tables,
+            "identity_tables": a.identity_tables,
+            "identifier_columns": a.identifier_columns,
+            "returnable_columns": a.returnable_columns,
+            "record_key_columns": a.record_key_columns,
+            "erasable_columns": a.erasable_columns,
+            "allow_execution": a.allow_execution,
+            "write_credential_configured": bool(a.write_credential_ref),
+            "enabled": a.enabled,
+        })
+    return out
+
+
+@router.put("/config/sources", status_code=status.HTTP_200_OK)
+async def put_source_authorization(
+    payload: SourceAuthorizationIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Replace a source's DSR authorization.
+
+    Validated through the SAME resolver the connector uses, before it is stored. A
+    configuration that would fail at search time -- a malformed identifier, an identity
+    table outside the searchable set -- is rejected here instead, where an
+    administrator can see why.
+    """
+    _require_admin(user)
+    org_id = uuid.UUID(user.org_id)
+    source = await ropa_repository.get_data_source(db, payload.data_source_id, org_id)
+    if source is None:
+        raise DsrNotFoundError(f"data source {payload.data_source_id} not found")
+
+    candidate = SimpleNamespace(
+        enabled=True,
+        searchable_tables=payload.searchable_tables,
+        identity_tables=payload.identity_tables,
+        identifier_columns=payload.identifier_columns,
+        returnable_columns=payload.returnable_columns,
+        record_key_columns=payload.record_key_columns,
+        erasable_columns=payload.erasable_columns,
+        allow_execution=payload.allow_execution,
+        write_credential_ref=payload.write_credential_ref,
+    )
+    authorization.resolve(candidate, source_name=source.name)  # raises on anything invalid
+
+    row = await dsr_repository.upsert_source_authorization(
+        db, org_id=org_id, data_source_id=payload.data_source_id,
+        searchable_tables=payload.searchable_tables,
+        identity_tables=payload.identity_tables,
+        identifier_columns=payload.identifier_columns,
+        returnable_columns=payload.returnable_columns,
+        record_key_columns=payload.record_key_columns,
+        erasable_columns=payload.erasable_columns,
+        allow_execution=payload.allow_execution,
+        write_credential_ref=payload.write_credential_ref,
+    )
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="dsr.source_authorization_changed",
+        entity_type="dsr_source_authorization", entity_id=row.id,
+        after={
+            "source": source.name,
+            "searchable_tables": payload.searchable_tables,
+            "allow_execution": payload.allow_execution,
+            # The NAME only. The secret itself never enters the audit trail.
+            "write_credential_ref": payload.write_credential_ref,
+        },
+    )
+    await db.commit()
+    return {"id": str(row.id), "source_name": source.name, "allow_execution": row.allow_execution}
+
+
+@router.get("/config/retention")
+async def list_retention(
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    rows = await dsr_repository.list_retention_rules(db, uuid.UUID(user.org_id))
+    return [
+        {
+            "id": str(r.id), "table_name": r.table_name, "date_column": r.date_column,
+            "retention_days": r.retention_days, "authority": r.authority,
+            "applies_to_operations": r.applies_to_operations,
+            "data_source_id": str(r.data_source_id) if r.data_source_id else None,
+            "scope": "source" if r.data_source_id else "organisation",
+            "notes": r.notes, "enabled": r.enabled,
+        }
+        for r in rows
+    ]
+
+
+@router.put("/config/retention", status_code=status.HTTP_200_OK)
+async def put_retention_rule(
+    payload: RetentionRuleIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    _require_admin(user)
+    org_id = uuid.UUID(user.org_id)
+    row = await dsr_repository.upsert_retention_rule(
+        db, org_id=org_id, table_name=payload.table_name, date_column=payload.date_column,
+        retention_days=payload.retention_days, authority=payload.authority,
+        data_source_id=payload.data_source_id,
+        applies_to_operations=payload.applies_to_operations,
+        notes=payload.notes, created_by_user_id=uuid.UUID(user.user_id),
+    )
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="dsr.retention_rule_changed",
+        entity_type="dsr_retention_rule", entity_id=row.id,
+        after={
+            "table": payload.table_name, "retention_days": payload.retention_days,
+            "authority": payload.authority,
+        },
+    )
+    await db.commit()
+    return {"id": str(row.id), "table_name": row.table_name, "authority": row.authority}
+
+
+@router.delete("/config/retention/{rule_id}", status_code=status.HTTP_200_OK)
+async def disable_retention_rule(
+    rule_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Disables rather than deletes. A rule that blocked an erasure last month is part
+    of why that case ended as it did, and the audit trail refers to it."""
+    _require_admin(user)
+    org_id = uuid.UUID(user.org_id)
+    if not await dsr_repository.delete_retention_rule(db, rule_id, org_id):
+        raise DsrNotFoundError(f"retention rule {rule_id} not found")
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="dsr.retention_rule_disabled",
+        entity_type="dsr_retention_rule", entity_id=rule_id, after={"enabled": False},
+    )
+    await db.commit()
+    return {"id": str(rule_id), "enabled": False}
 
 
 # ── Audit timeline ───────────────────────────────────────────────────────────────

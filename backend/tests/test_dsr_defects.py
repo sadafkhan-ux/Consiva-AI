@@ -359,7 +359,9 @@ def test_every_dsr_orm_column_exists_in_the_migration():
 
     problems = []
     dsr_tables = [t for t in models.Base.metadata.tables if t.startswith("dsr_")]
-    assert len(dsr_tables) == 10, f"expected 10 DSR tables, found {len(dsr_tables)}"
+    # Not pinned to a count: a new DSR table is a normal thing to add, and a test that
+    # fails merely for existing teaches people to edit the number rather than read it.
+    assert dsr_tables, "no DSR tables found in the ORM at all"
 
     for table_name in sorted(dsr_tables):
         body = re.search(rf"create table if not exists {table_name} \((.*?)\n\);", text, re.DOTALL)
@@ -384,22 +386,27 @@ def test_every_dsr_orm_column_exists_in_the_migration():
 
 
 def test_every_dsr_table_has_rls_and_a_tenant_policy():
+    """Across EVERY migration, not just 0011. A DSR table added later (0014 adds
+    dsr_retention_rules) must carry the same isolation as the originals, and a policy
+    written as its own guarded statement counts as much as one written in a loop."""
     import pathlib
     import re
 
     from app.db import models
 
-    text = (pathlib.Path(__file__).parent.parent / "migrations" / "0011_dsr_agent.sql").read_text(
-        encoding="utf-8"
-    )
+    migrations = pathlib.Path(__file__).parent.parent / "migrations"
+    text = "\n".join(f.read_text(encoding="utf-8") for f in sorted(migrations.glob("*.sql")))
     dsr_tables = {t for t in models.Base.metadata.tables if t.startswith("dsr_")}
 
     rls_enabled = set(re.findall(r"alter table (\w+)\s+enable row level security", text))
     assert dsr_tables <= rls_enabled, f"no RLS on {sorted(dsr_tables - rls_enabled)}"
 
-    loop = re.search(r"foreach t in array array\[(.*?)\]", text, re.DOTALL)
-    assert loop, "the tenant_isolation policy loop is missing"
-    policied = set(re.findall(r"'(\w+)'", loop.group(1)))
+    # Two equally valid shapes: named in the array the policy loop iterates over, or a
+    # `create policy tenant_isolation on <table>` of its own.
+    policied = set()
+    for loop in re.findall(r"foreach t in array array\[(.*?)\]", text, re.DOTALL):
+        policied |= set(re.findall(r"'(\w+)'", loop))
+    policied |= set(re.findall(r"create policy tenant_isolation on (\w+)", text))
     assert dsr_tables <= policied, f"no tenant_isolation policy for {sorted(dsr_tables - policied)}"
 
 

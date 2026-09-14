@@ -617,6 +617,35 @@ class DsrSourceAuthorization(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class DsrRetentionRule(Base):
+    """An organisation's own retention policy, as configuration.
+
+    Consiva does not decide how long a record must be kept. `authority` records whose
+    rule it is, and is shown both to the reviewer and to the data principal, because
+    why an erasure was refused on policy grounds is what they are entitled to know.
+    """
+
+    __tablename__ = "dsr_retention_rules"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    # NULL means "every source in this org that has this table" -- how an
+    # organisation-wide policy is expressed.
+    data_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ropa_data_sources.id"), nullable=True
+    )
+    table_name: Mapped[str] = mapped_column(String, nullable=False)
+    date_column: Mapped[str] = mapped_column(String, nullable=False)
+    retention_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    authority: Mapped[str] = mapped_column(String, nullable=False)
+    applies_to_operations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class DsrRequest(Base):
     """The DSR case. Every other Agent 3 row traces back to this one."""
 

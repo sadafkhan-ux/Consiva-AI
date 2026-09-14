@@ -29,10 +29,35 @@ from app.agents.dsr.connectors import factory
 from app.agents.dsr.errors import DsrError, SearchFailedError, SourceNotAuthorizedError
 from app.agents.dsr.schemas import case
 from app.agents.dsr.services import identity_service
+from app.agents.ropa.rules import personal_data_rules
 from app.db.models import DsrEvidence, DsrRequest, DsrSearchRun
 from app.db.repositories import dsr_repository, ropa_repository
 
 logger = logging.getLogger(__name__)
+
+
+def _ropa_category(table_name: str, column_name: str) -> str | None:
+    """Label a matched column with Agent 2's data category (blueprint §22).
+
+    Uses Agent 2's CLASSIFIER rather than reading its stored ROPA records, and the
+    difference matters. A stored record describes the schema as it stood at the last
+    discovery run; the classifier describes the column actually found by this search.
+    A DSR decision taken against stale metadata is a decision about data that may no
+    longer be shaped that way, so the labelling is applied to what is in front of us.
+
+    Best-effort by design: a column the rules cannot place returns None and the
+    evidence simply carries no category. A label is useful context for a reviewer, not
+    a fact the case depends on -- the record reference and snapshot are the evidence.
+    """
+    try:
+        result = personal_data_rules.classify_column(column_name, table_name=table_name)
+    except (ValueError, TypeError, AttributeError):
+        # The classifier is pure and total, so this should not happen -- but a
+        # labelling failure must never fail a search, and the label is context for a
+        # reviewer rather than a fact the case depends on.
+        logger.debug("could not classify %s.%s for a ROPA label", table_name, column_name)
+        return None
+    return result.category if result.is_personal_data else None
 
 
 def requester_identifiers(request: DsrRequest) -> dict[str, str]:
@@ -204,6 +229,7 @@ async def _search_one_source(
             confidence=match.confidence,
             record_reference=match.record_reference,
             record_snapshot=match.record_snapshot,
+            ropa_category=_ropa_category(match.table_name, match.matched_column),
         )
         for match in outcome.matches
     ]

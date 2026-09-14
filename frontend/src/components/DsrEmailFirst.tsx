@@ -347,7 +347,14 @@ export function DsrEmailFirst() {
               <h2>{source}</h2>
               {Object.entries(tables).map(([table, rows]) => (
                 <div key={table} className="table-group">
-                  <h3>{table} <span className="count">{rows.length} record(s)</span></h3>
+                  <h3>
+                    {table} <span className="count">{rows.length} record(s)</span>
+                    {/* One category per table is enough -- every row here matched the
+                        same column, so repeating it per record would be noise. */}
+                    {rows[0]?.ropa_category && (
+                      <span className="pill pill-pd">{rows[0].ropa_category}</span>
+                    )}
+                  </h3>
                   {rows.map((e) => (
                     <div className="record" key={e.id}>
                       <div className="fields">

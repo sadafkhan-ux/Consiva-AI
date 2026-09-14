@@ -16,7 +16,7 @@ a future caller would otherwise have to remember:
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,7 @@ from app.db.models import (
     DsrIdentityVerification,
     DsrRequest,
     DsrResponse,
+    DsrRetentionRule,
     DsrSearchRun,
     DsrSourceAuthorization,
 )
@@ -493,6 +494,129 @@ async def get_source_authorization(
         )
     )
     return result.scalar_one_or_none()
+
+
+# ── Retention rules (organisation configuration) ─────────────────────────────────
+
+
+async def list_retention_rules(
+    db: AsyncSession, org_id: uuid.UUID, *, data_source_id: uuid.UUID | None = None
+) -> list[DsrRetentionRule]:
+    """Every enabled rule that could apply to this source.
+
+    A rule with a NULL data_source_id is organisation-wide and applies to any source
+    holding a table of that name, so both are returned and the caller matches on the
+    table. Filtering the wide rules out here would silently drop the policies most
+    likely to matter.
+    """
+    stmt = select(DsrRetentionRule).where(
+        DsrRetentionRule.org_id == org_id,
+        DsrRetentionRule.enabled.is_(True),
+    )
+    if data_source_id is not None:
+        stmt = stmt.where(
+            or_(
+                DsrRetentionRule.data_source_id == data_source_id,
+                DsrRetentionRule.data_source_id.is_(None),
+            )
+        )
+    result = await db.execute(stmt.order_by(DsrRetentionRule.table_name))
+    return list(result.scalars().all())
+
+
+async def upsert_retention_rule(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    table_name: str,
+    date_column: str,
+    retention_days: int,
+    authority: str,
+    data_source_id: uuid.UUID | None = None,
+    applies_to_operations: list | None = None,
+    notes: str | None = None,
+    created_by_user_id: uuid.UUID | None = None,
+) -> DsrRetentionRule:
+    existing = await db.execute(
+        select(DsrRetentionRule).where(
+            DsrRetentionRule.org_id == org_id,
+            DsrRetentionRule.table_name == table_name,
+            DsrRetentionRule.date_column == date_column,
+            DsrRetentionRule.data_source_id.is_(None)
+            if data_source_id is None
+            else DsrRetentionRule.data_source_id == data_source_id,
+        )
+    )
+    row = existing.scalar_one_or_none()
+    if row is None:
+        row = DsrRetentionRule(
+            org_id=org_id, data_source_id=data_source_id, table_name=table_name,
+            date_column=date_column, created_by_user_id=created_by_user_id,
+        )
+        db.add(row)
+    row.retention_days = retention_days
+    row.authority = authority
+    row.applies_to_operations = applies_to_operations or ["delete_record"]
+    row.notes = notes
+    row.enabled = True
+    await db.flush()
+    return row
+
+
+async def delete_retention_rule(db: AsyncSession, rule_id: uuid.UUID, org_id: uuid.UUID) -> bool:
+    """Disable rather than delete: a rule that blocked an erasure last month is part of
+    why that case ended the way it did, and the audit trail references it."""
+    result = await db.execute(
+        select(DsrRetentionRule).where(
+            DsrRetentionRule.id == rule_id, DsrRetentionRule.org_id == org_id
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        return False
+    row.enabled = False
+    await db.flush()
+    return True
+
+
+# ── Source authorizations (write side) ───────────────────────────────────────────
+
+
+async def upsert_source_authorization(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    data_source_id: uuid.UUID,
+    searchable_tables: list,
+    identity_tables: list,
+    identifier_columns: dict,
+    returnable_columns: dict,
+    record_key_columns: dict,
+    erasable_columns: dict,
+    allow_execution: bool,
+    write_credential_ref: str | None,
+) -> DsrSourceAuthorization:
+    """Create or replace a source's DSR authorization.
+
+    Replaces wholesale rather than merging. An allowlist that is partially updated is
+    the worst of both: an administrator removing a table would find it still
+    searchable, which is precisely the mistake this configuration exists to prevent.
+    """
+    existing = await get_source_authorization(db, data_source_id, org_id)
+    if existing is None:
+        existing = DsrSourceAuthorization(org_id=org_id, data_source_id=data_source_id)
+        db.add(existing)
+    existing.searchable_tables = searchable_tables
+    existing.identity_tables = identity_tables
+    existing.identifier_columns = identifier_columns
+    existing.returnable_columns = returnable_columns
+    existing.record_key_columns = record_key_columns
+    existing.erasable_columns = erasable_columns
+    existing.allow_execution = allow_execution
+    existing.write_credential_ref = write_credential_ref
+    existing.enabled = True
+    await db.flush()
+    return existing
 
 
 # ── Case timeline ────────────────────────────────────────────────────────────────

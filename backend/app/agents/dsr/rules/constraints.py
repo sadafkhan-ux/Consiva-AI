@@ -101,6 +101,30 @@ class RetentionRule:
     applies_to_operations: frozenset[str] = frozenset({case.OP_DELETE_RECORD})
 
 
+def rules_from_config(rows, *, source_name: str | None = None) -> tuple[RetentionRule, ...]:
+    """Turn stored `dsr_retention_rules` rows into the engine's own rule objects.
+
+    The engine stays a pure function of its inputs -- it never reads a database -- so
+    this is the one place configuration becomes policy. Rows whose operations do not
+    parse into the known vocabulary are dropped WITH the rest of the rule intact: a
+    rule naming one valid and one invalid operation still applies to the valid one,
+    because dropping the whole rule would silently weaken a retention guarantee.
+    """
+    built: list[RetentionRule] = []
+    for row in rows:
+        operations = frozenset(
+            op for op in (row.applies_to_operations or []) if op in case.MUTATING_OPERATIONS
+        ) or frozenset({case.OP_DELETE_RECORD})
+        built.append(RetentionRule(
+            table_name=row.table_name,
+            minimum_retention=timedelta(days=int(row.retention_days)),
+            date_column=row.date_column,
+            authority=row.authority,
+            applies_to_operations=operations,
+        ))
+    return tuple(built)
+
+
 def evaluate(
     *,
     operation: str,
