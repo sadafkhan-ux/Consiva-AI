@@ -599,3 +599,23 @@ button.reject { background: var(--red); }
 .tally.on-warn b { color: var(--amber); }
 .tally.on-info b { color: var(--accent); }
 .grow { flex: 1 1 auto; }
+
+/* ── Agent 4 (Breach Response) ──────────────────────────────────────────────────
+   Scoped additions only. Agent 4's console reuses Agent 3's layout classes rather
+   than introducing a design of its own, so the only genuinely new rule here is the
+   one for <select> inside an intake row -- the DSR forms never needed one. Nothing
+   below redefines an existing class, so Agents 1-3 are untouched. */
+
+.dsr-intake select {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); padding: 8px; font: inherit;
+}
+
+/* A claim and its confidence sit on one line; this keeps the chip from wrapping
+   away from the thing it qualifies. */
+.dsr .stat-row { display: flex; flex-wrap: wrap; gap: 20px; }
+.dsr .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+                   color: var(--muted); margin-bottom: 4px; }
+
+/* Evidence detail can be long JSON; let it scroll rather than stretch the table. */
+.dsr .key-value { max-height: 200px; overflow: auto; white-space: pre-wrap; }

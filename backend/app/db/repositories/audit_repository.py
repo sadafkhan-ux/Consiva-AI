@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,13 @@ async def record(
     row = AuditLog(
         org_id=org_id, actor_user_id=actor_user_id, action=action, entity_type=entity_type,
         entity_id=entity_id, before=before, after=after, agent_run_id=agent_run_id, model_name=model_name,
+        # Stamped here rather than left to the column's `now()` default, which in
+        # Postgres is TRANSACTION start time: every audit row written in one request
+        # got an identical timestamp, so ordering a trail by created_at returned them
+        # in arbitrary order. A live incident run produced a trail that read
+        # "classified, created, validated", which is nonsense in the one artifact
+        # that has to be readable by someone reconstructing what happened.
+        created_at=datetime.now(UTC),
     )
     db.add(row)
     await db.flush()

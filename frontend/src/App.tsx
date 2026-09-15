@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
 import { getProfile, logout, type Profile } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
+import { BreachConsole } from "./components/BreachConsole";
 import { ConsentAgentView } from "./ConsentAgentView";
 import { DsrConsole } from "./components/DsrConsole";
 import { LoginScreen } from "./components/LoginScreen";
 import { RopaDashboard } from "./components/RopaDashboard";
 
-type Agent = "consent" | "ropa" | "dsr";
+type Agent = "consent" | "ropa" | "dsr" | "breach";
 
 /**
- * Shell around the three agents. Agent 1's UI is unchanged -- it moved verbatim
+ * Shell around the four agents. Agent 1's UI is unchanged -- it moved verbatim
  * into ConsentAgentView; this file only adds the sign-in gate and the switcher.
  */
 export default function App() {
@@ -57,6 +58,12 @@ export default function App() {
             >
               DSR Agent
             </button>
+            <button
+              className={agent === "breach" ? "active" : ""}
+              onClick={() => setAgent("breach")}
+            >
+              Breach Agent
+            </button>
           </nav>
           <span className="session-user">
             {profile.email}
@@ -69,6 +76,7 @@ export default function App() {
       {agent === "consent" && <ConsentAgentView />}
       {agent === "ropa" && <RopaDashboard />}
       {agent === "dsr" && <DsrConsole />}
+      {agent === "breach" && <BreachConsole />}
     </div>
   );
 }

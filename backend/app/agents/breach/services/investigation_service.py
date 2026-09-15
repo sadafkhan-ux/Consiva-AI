@@ -18,7 +18,9 @@ incident scope.
 
 from __future__ import annotations
 
+import itertools
 import logging
+import re
 import uuid
 from datetime import datetime
 
@@ -39,15 +41,103 @@ from app.services import audit_service
 
 logger = logging.getLogger(__name__)
 
-# Keys whose values must never be stored in evidence detail, whatever a caller sends.
-# Incident evidence routinely arrives as a raw log line, and a raw log line is exactly
-# where a bearer token ends up.
-_SECRET_KEYS = frozenset({
-    "password", "passwd", "secret", "token", "api_key", "apikey", "authorization",
-    "auth", "credential", "credentials", "private_key", "session", "cookie",
-    "access_token", "refresh_token", "bearer",
+# Words that name a secret in their own right, whatever they are attached to. Matched
+# against the WORDS of a key rather than the whole key: an exact-match list lets
+# `db_password` straight through, which a live run found it doing.
+_SECRET_WORDS = frozenset({
+    "password", "passwd", "pwd", "passphrase", "secret", "token", "apikey",
+    "credential", "credentials", "privatekey", "authorization", "cookie", "bearer",
+    "signature", "otp",
 })
+
+# Words that are only a secret in company. `session_id` is replayable and `auth_token`
+# is a credential, but `session_count` is a number and `auth_event_type` is a log
+# category -- redacting those would blind an investigation for no gain. Each entry
+# maps a word to the words that, following it, make it a secret.
+_QUALIFIED_SECRET_WORDS = {
+    "session": frozenset({"id", "key", "token", "secret", "cookie"}),
+    "auth": frozenset({"token", "key", "code", "header", "secret"}),
+    "access": frozenset({"token", "key"}),
+    "refresh": frozenset({"token"}),
+    "client": frozenset({"secret"}),
+    "private": frozenset({"key"}),
+    "api": frozenset({"key", "secret", "token"}),
+}
+
+# ...and the same words standing alone. A field called exactly `session` holds a
+# session identifier, which is replayable; a field called exactly `auth` holds an
+# Authorization header. `session_count` is a number and `auth_event` is a category,
+# which is why the qualifier table above exists -- but the bare word is a credential.
+# Not extended to `api`, `client`, `access` or `private`, whose bare forms usually
+# are not ("access: denied").
+_SECRET_WHEN_BARE = frozenset({"session", "auth"})
+
+# Secrets in VALUES, not keys. Incident evidence routinely arrives as a raw log line,
+# and a raw log line is exactly where a bearer token ends up -- `{"line": "curl -H
+# 'Authorization: Bearer eyJ...'"}` has no secret-shaped key at all. These patterns are
+# deliberately narrow: each one matches a shape that is a credential and essentially
+# nothing else, and each replaces only the secret, leaving the surrounding line intact
+# so the evidence is still worth reading.
+_SECRET_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
+    # A JWT: three dot-separated base64url segments starting with the "{"alg" header.
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*"), 0),
+    # An HTTP bearer/basic credential.
+    (re.compile(r"\b(?:Bearer|Basic)\s+([A-Za-z0-9._~+/=-]{12,})"), 1),
+    # An AWS access key id, which is a fixed, unmistakable shape.
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), 0),
+    # `PGPASSWORD=hunter2`, `api_key: sk-...`, `token="..."` inside a log line.
+    (
+        re.compile(
+            r"(?i)\b\w*(?:password|passwd|pwd|passphrase|secret|token|api[_-]?key)\b"
+            r"\s*[=:]\s*(\"[^\"]+\"|'[^']+'|[^\s,;&]+)"
+        ),
+        1,
+    ),
+)
+
 _REDACTED = "[redacted]"
+
+
+def _key_words(key: object) -> list[str]:
+    """Break a field name into its words: `db_password` and `dbPassword` and
+    `X-API-Key` all come apart the same way."""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(key))
+    return [word for word in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if word]
+
+
+def is_secret_key(key: object) -> bool:
+    """Whether a field name says its value is a credential."""
+    words = _key_words(key)
+    if not words:
+        return False
+    if any(word in _SECRET_WORDS for word in words):
+        return True
+    # `api_key` -> `apikey`, `private_key` -> `privatekey`.
+    if "".join(words) in _SECRET_WORDS:
+        return True
+    if len(words) == 1 and words[0] in _SECRET_WHEN_BARE:
+        return True
+    return any(
+        word in _QUALIFIED_SECRET_WORDS
+        and next_word in _QUALIFIED_SECRET_WORDS[word]
+        for word, next_word in itertools.pairwise(words)
+    )
+
+
+def redact_text(value: str) -> tuple[str, bool]:
+    """Strip credential-shaped substrings from one string, keeping the rest."""
+    found = False
+    for pattern, group in _SECRET_VALUE_PATTERNS:
+        def _replace(match: re.Match[str], group: int = group) -> str:
+            nonlocal found
+            found = True
+            if group == 0:
+                return _REDACTED
+            start, end = match.span(group)
+            return match.group(0)[: start - match.start()] + _REDACTED + match.group(0)[end - match.start():]
+
+        value = pattern.sub(_replace, value)
+    return value, found
 
 
 def redact(detail: dict) -> tuple[dict, bool]:
@@ -56,32 +146,45 @@ def redact(detail: dict) -> tuple[dict, bool]:
     Applied on the way IN, not on the way out. Evidence is append-only, so a secret
     that reaches the table cannot be removed afterwards -- the only safe place to do
     this is before the insert.
+
+    Two passes, because secrets arrive two ways. A structured alert names the field
+    (`db_password`), and a raw log line does not (`Authorization: Bearer eyJ...`). The
+    key check is word-level so a prefix or a camelCase spelling does not evade it; the
+    value check is pattern-level and narrow enough not to eat ordinary log text.
+
+    `found_any` is stored on the row, so a reviewer looking at evidence knows
+    something was removed rather than assuming the field was empty.
     """
     if not isinstance(detail, dict):
         return {}, False
     clean: dict = {}
     found = False
     for key, value in detail.items():
-        if str(key).lower() in _SECRET_KEYS:
+        if is_secret_key(key):
             clean[key] = _REDACTED
             found = True
-        elif isinstance(value, dict):
-            nested, nested_found = redact(value)
-            clean[key] = nested
-            found = found or nested_found
-        elif isinstance(value, list):
-            items = []
-            for item in value:
-                if isinstance(item, dict):
-                    nested, nested_found = redact(item)
-                    items.append(nested)
-                    found = found or nested_found
-                else:
-                    items.append(item)
-            clean[key] = items
-        else:
-            clean[key] = value
+            continue
+        cleaned, nested_found = _redact_value(value)
+        clean[key] = cleaned
+        found = found or nested_found
     return clean, found
+
+
+def _redact_value(value):
+    """Redact inside whatever a caller nested: dicts, lists and strings all reach here."""
+    if isinstance(value, dict):
+        return redact(value)
+    if isinstance(value, list):
+        items = []
+        found = False
+        for item in value:
+            cleaned, item_found = _redact_value(item)
+            items.append(cleaned)
+            found = found or item_found
+        return items, found
+    if isinstance(value, str):
+        return redact_text(value)
+    return value, False
 
 
 async def add_evidence(

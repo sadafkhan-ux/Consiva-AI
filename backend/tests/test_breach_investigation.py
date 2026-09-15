@@ -73,6 +73,69 @@ def test_redaction_survives_a_non_dict(value):
     assert inv.redact(value) == ({}, False)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        # The one a live run caught: an exact-match list let this straight through.
+        "db_password", "dbPassword", "DB_PASSWORD",
+        "admin_token", "X-API-Key", "api_key", "apiKey",
+        "client_secret", "private_key", "refresh_token", "access_token",
+        "session_id", "sessionCookie", "auth_header", "user_passphrase",
+        # And the bare forms, which conventionally hold the credential itself.
+        "session", "auth", "password", "Authorization",
+    ],
+)
+def test_a_secret_is_caught_however_the_field_is_spelt(key):
+    clean, found = inv.redact({key: "hunter2", "src_ip": "10.0.0.4"})
+    assert found, f"{key} was not recognised as a secret"
+    assert clean[key] == "[redacted]"
+    assert clean["src_ip"] == "10.0.0.4"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        # Over-redaction blinds an investigation, so the qualified words must not fire
+        # on their own. Each of these is a fact a responder needs.
+        "session_count", "session_duration", "auth_event_type", "authentication_event",
+        "api_version", "access_time", "client_ip", "private_network", "query_count",
+        "refresh_interval",
+    ],
+)
+def test_ordinary_log_fields_are_not_redacted(key):
+    clean, found = inv.redact({key: 42})
+    assert not found, f"{key} was redacted; the value a responder needs is gone"
+    assert clean[key] == 42
+
+
+def test_a_secret_inside_a_log_line_is_stripped_but_the_line_survives():
+    """A raw log line has no secret-shaped key at all -- the credential is in the
+    value. Redacting the whole line would throw away the evidence, so only the
+    credential goes."""
+    clean, found = inv.redact({
+        "line": "curl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig' https://api",
+        "cmd": "PGPASSWORD=hunter2 psql -h db -U app",
+        "aws": "used AKIAIOSFODNN7EXAMPLE to list the bucket",
+    })
+    assert found
+    blob = str(clean)
+    assert "eyJhbGciOiJIUzI1NiJ9" not in blob
+    assert "hunter2" not in blob
+    assert "AKIAIOSFODNN7EXAMPLE" not in blob
+    # The part a responder actually reads is still there.
+    assert "curl -H 'Authorization: Bearer [redacted]' https://api" == clean["line"]
+    assert "psql -h db -U app" in clean["cmd"]
+    assert clean["aws"].startswith("used [redacted] to list")
+
+
+def test_ordinary_prose_is_not_mangled():
+    clean, found = inv.redact({
+        "note": "The session lasted 40 minutes and the user had access to two tables.",
+    })
+    assert not found
+    assert clean["note"].startswith("The session lasted 40 minutes")
+
+
 @pytest.mark.asyncio
 async def test_evidence_records_that_it_was_redacted(monkeypatch):
     """The flag matters: a reviewer must know the stored detail is not the whole log

@@ -26,6 +26,7 @@ from app.agents.breach.schemas import incident as vocab
 from app.agents.breach.services import (
     incident_service,
     investigation_service,
+    lifecycle,
     response_service,
 )
 from app.config import get_settings
@@ -51,27 +52,50 @@ async def run_analysis(
         case = await incident_service.get_incident_or_raise(db, incident_id, org_id)
         try:
             await investigation_service.seed_timeline_from_evidence(db, case)
+
+            # The status says what the job is doing while it does it. It also has to:
+            # the lifecycle has no INVESTIGATING -> RESPONSE_PENDING edge, and should
+            # not have one -- an incident that reaches response planning has had its
+            # impact and its risk assessed, and the status history is where that is
+            # evidenced. Jumping the stages made the worker fail the whole analysis on
+            # a live run.
+            await _step(db, case, vocab.IMPACT_ASSESSMENT, vocab.AUDIT_SYSTEMS_IDENTIFIED)
             _, gaps = await investigation_service.derive_affected_data(db, case)
+
+            await _step(db, case, vocab.RISK_ASSESSMENT, vocab.AUDIT_REVIEW_REQUESTED)
             assessment = await assess_and_store_risk(db, case, extra_gaps=gaps)
 
             # Where the assessment is thin, the incident goes to a human rather than
             # onward: a risk level held with UNKNOWN confidence is not a basis for
             # planning containment.
-            target = (
-                vocab.REVIEW_REQUIRED
-                if assessment.confidence == vocab.UNKNOWN
-                else vocab.RESPONSE_PENDING
-            )
+            target = next_status_after_analysis(assessment)
+            detail = {
+                "risk_level": assessment.level,
+                "confidence": assessment.confidence,
+                "open_questions": len(assessment.gaps),
+            }
             if case.status != target:
-                await incident_service.transition(
-                    db, case, target,
-                    audit_action=vocab.AUDIT_RISK_ASSESSED,
-                    detail={
-                        "risk_level": assessment.level,
-                        "confidence": assessment.confidence,
-                        "open_questions": len(assessment.gaps),
-                    },
-                )
+                if lifecycle.can_transition(case.status, target):
+                    await incident_service.transition(
+                        db, case, target,
+                        audit_action=vocab.AUDIT_RISK_ASSESSED, detail=detail,
+                    )
+                else:
+                    # Unreachable from here, which means the incident moved under us or
+                    # the graph has a gap. Either way a person should look at it --
+                    # never FAILED, which would read as "the analysis broke" when the
+                    # analysis in fact completed and is stored.
+                    logger.warning(
+                        "Incident %s: %s is not reachable from %s; routing to review",
+                        case.reference, target, case.status,
+                    )
+                    target = vocab.REVIEW_REQUIRED
+                    if lifecycle.can_transition(case.status, target):
+                        await incident_service.transition(
+                            db, case, target,
+                            audit_action=vocab.AUDIT_REVIEW_REQUESTED,
+                            detail=detail | {"note": "analysis completed; routing unclear"},
+                        )
 
             if target == vocab.RESPONSE_PENDING:
                 await response_service.build_response_plan(db, case)
@@ -94,6 +118,18 @@ async def run_analysis(
             await db.commit()
             logger.exception("Unexpected error analysing incident %s", case.reference)
             raise
+
+
+async def _step(db, case, status: str, audit_action: str) -> None:
+    """Move the incident into the stage the job is about to perform, if it is not
+    there already and the move is legal.
+
+    Best-effort by design: a stage that cannot be entered (because a person moved the
+    incident on, or because it is already past this point) is not a reason to abandon
+    an analysis that is otherwise fine.
+    """
+    if case.status != status and lifecycle.can_transition(case.status, status):
+        await incident_service.transition(db, case, status, audit_action=audit_action)
 
 
 async def assess_and_store_risk(
