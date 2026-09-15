@@ -322,3 +322,47 @@ async def test_no_tenant_table_is_left_without_a_policy():
         assert not naked, f"tables holding org_id with no RLS policy: {[r['relname'] for r in naked]}"
     finally:
         await conn.close()
+
+
+# ── Secrets named by a credential_ref must be readable from .env ────────────────
+
+def test_dotenv_is_loaded_into_the_process_environment():
+    """Agents 2 and 3 resolve source credentials with a plain `os.getenv(credential_ref)`.
+
+    The NAME of that variable lives in the database and is chosen by whoever configures
+    the source, so it can never be a declared Settings field — which means
+    pydantic-settings' `env_file` does not load it, and it was simply absent. A DSR
+    search against a correctly configured demo database failed with "credential_ref
+    'DEMO_DB_READ_PASSWORD' is not set in this environment" for exactly that reason.
+    """
+    source = (BACKEND / "app" / "config.py").read_text(encoding="utf-8")
+    assert "load_dotenv" in source, (
+        "app/config.py no longer loads .env into os.environ; every credential_ref that "
+        "names a variable living only in .env will read as unset"
+    )
+    assert "override=False" in source, (
+        "load_dotenv must not override a real environment variable -- compose sets "
+        "DATABASE_URL in the environment while an older value may sit in a baked .env"
+    )
+
+
+def test_a_credential_ref_is_read_by_name_and_never_logged():
+    """The error path names the reference, never the value. These messages reach logs
+    and API responses."""
+    import os
+
+    from app.agents.dsr.connectors import factory
+
+    os.environ["CONSIVA_TEST_SECRET_REF"] = "super-secret-value"
+    try:
+        assert factory._resolve_secret("CONSIVA_TEST_SECRET_REF", purpose="read") == "super-secret-value"
+    finally:
+        del os.environ["CONSIVA_TEST_SECRET_REF"]
+
+    from app.agents.dsr.errors import SourceNotAuthorizedError
+
+    with pytest.raises(SourceNotAuthorizedError) as caught:
+        factory._resolve_secret("CONSIVA_DEFINITELY_NOT_SET", purpose="read")
+    message = str(caught.value)
+    assert "CONSIVA_DEFINITELY_NOT_SET" in message
+    assert "super-secret" not in message

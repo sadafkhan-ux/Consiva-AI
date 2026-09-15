@@ -1,7 +1,24 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load backend/.env into the PROCESS environment, once, before anything reads it.
+#
+# `env_file` below already feeds the Settings fields declared in this class -- but
+# only those. Secrets named by a `credential_ref` are different: their names live in
+# the database (DEMO_DB_READ_PASSWORD, and whatever a customer calls theirs), they can
+# never be declared here, and the connectors read them with a plain `os.getenv`. Put
+# such a secret in .env, as .env.example tells you to, and without this line it simply
+# was not there: Agent 3's search failed with "credential_ref ... is not set in this
+# environment" against a database that was otherwise correctly configured.
+#
+# override=False so a real environment variable always beats the file. That is the
+# precedence Docker needs -- compose sets DATABASE_URL in the environment while an
+# older value may still sit in the baked .env.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 class Settings(BaseSettings):
