@@ -69,6 +69,14 @@ _PHRASES: tuple[tuple[str, str], ...] = (
     # reported as a configuration mistake and the remedy differs.
     (r"(publicly accessible|public(ly)? exposed|no authentication|misconfigur|open to the internet|world.?readable)", incident.TYPE_MISCONFIGURATION),
     (r"(bucket|storage|database) (was |is )?(public|open|unsecured)", incident.TYPE_MISCONFIGURATION),
+    # Real reports rarely say "publicly exposed". They say a thing "was set to public"
+    # or "left publicly readable", often with words in between, which the rigid
+    # pattern above walks straight past. Found by seeding demo data written the way a
+    # person would write it.
+    ((r"(bucket|storage|folder|share|file|drive|database|server|link)[^.]{0,40}"
+      r"(publicly (readable|accessible|visible|available)|set to public|left public|"
+      r"open to anyone|anyone with the link)"), incident.TYPE_MISCONFIGURATION),
+    (r"(publicly|public(ly)?) (readable|accessible|visible|available)", incident.TYPE_MISCONFIGURATION),
     # Third-party.
     (r"(vendor|supplier|third.?party|processor|sub.?processor) (breach|incident|notified|reported)", incident.TYPE_THIRD_PARTY),
     # Insider.
@@ -85,7 +93,16 @@ _PHRASES: tuple[tuple[str, str], ...] = (
     (r"(data|records|table|customer information)[^.]{0,45}(exposed|visible|accessible|disclosed)", incident.TYPE_DATA_EXPOSURE),
     # Unauthorized access -- the broadest, so it is matched last among phrases.
     (r"unauthori[sz]ed (access|login|entry|query|read)", incident.TYPE_UNAUTHORIZED_ACCESS),
-    (r"(suspicious|anomalous|unexpected|unusual) (login|access|activity|query|connection)", incident.TYPE_UNAUTHORIZED_ACCESS),
+    ((r"(suspicious|anomalous|unexpected|unusual(ly)?) ?(large|high|big)? "
+      r"(login|access|activity|query|connection|number|volume|amount|read|download)"),
+     incident.TYPE_UNAUTHORIZED_ACCESS),
+    # An account that outlived its owner. The access should not have been possible at
+    # all, which is what makes it unauthorized rather than insider activity.
+    ((r"(former|ex.?|departed|terminated|offboarded|previous)[- ]?"
+      r"(employee|staff|contractor|user|colleague)"), incident.TYPE_UNAUTHORIZED_ACCESS),
+    ((r"account[^.]{0,40}(was |is )?"
+      r"(still (active|enabled)|not (yet )?(disabled|removed|revoked))"),
+     incident.TYPE_UNAUTHORIZED_ACCESS),
     (r"(accessed|logged in|queried)[^.]{0,30}without (permission|authori)", incident.TYPE_UNAUTHORIZED_ACCESS),
     (r"brute.?force", incident.TYPE_UNAUTHORIZED_ACCESS),
 )
@@ -193,10 +210,20 @@ def classify(title: str, description: str = "") -> ClassificationResult:
             method=METHOD_DETERMINISTIC, evidence=evidence,
         )
 
+    # Nothing matched. That is NOT the same answer as "this is an 'other' incident",
+    # and it used to be reported as if it were: type `other`, ambiguous False, which
+    # reads as a confident classification of a catch-all. Competing rules already
+    # returned ambiguous=True; silence should too, so a caller can tell "I could not
+    # tell" apart from "I decided", and route it to a person or a model.
+    #
+    # The stored outcome is unchanged -- incident_service writes `other` at confidence
+    # 0.0 either way -- so this costs nothing and makes the signal honest.
     return ClassificationResult(
         incident_type=incident.TYPE_OTHER, confidence=CONF_NONE,
         method=METHOD_DETERMINISTIC,
-        evidence=("no deterministic rule matched the incident text",),
+        evidence=(("no deterministic rule matched the incident text; "
+                   "a person should set the type"),),
+        ambiguous=True,
     )
 
 

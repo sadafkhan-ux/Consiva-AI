@@ -40,9 +40,29 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
   onUnauthorized = handler;
 }
 
+/**
+ * Drop the dead token AND tell the shell, so it returns to the login screen.
+ *
+ * Every agent's API client must call this on a 401, not just `logout()`. Clearing
+ * the token without telling the shell leaves the app in a state that looks signed in
+ * and is not: the header still shows your email, the console still renders, and every
+ * request fails locally with "Not signed in." before it reaches the server -- with no
+ * way back except finding the Sign out button. Agents 2, 3 and 4 all did exactly that
+ * until a real session expired on the Breach tab and showed it.
+ */
+export function handleUnauthorized(): void {
+  logout();
+  onUnauthorized?.();
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
-  if (!token) throw new ApiError(401, "Not signed in.");
+  if (!token) {
+    // Already signed out -- tell the shell, or it keeps rendering a console for a
+    // session that is gone and every request fails here without ever being sent.
+    handleUnauthorized();
+    throw new ApiError(401, "Not signed in.");
+  }
 
   let res: Response;
   try {
@@ -69,8 +89,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 401) {
     // The token expired or was rejected -- clear it and let the shell fall back
     // to the login screen rather than leaving a dead session in place.
-    logout();
-    onUnauthorized?.();
+    handleUnauthorized();
   }
 
   if (!res.ok) {

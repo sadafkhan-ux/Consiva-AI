@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   COMMUNICATION_AUDIENCES,
   EVIDENCE_KINDS,
+  INCIDENT_ERROR_CODES,
   INCIDENT_SOURCES,
   SYSTEM_KINDS,
   incidentsApi,
@@ -356,7 +357,10 @@ export function BreachConsole() {
                   disabled={busy || !can("rejected")}
                   onReject={(reason) =>
                     act("Recorded as not an incident.", () =>
-                      incidentsApi.transition(selected.id, "rejected", reason, "invalid_incident"),
+                      incidentsApi.transition(
+                        selected.id, "rejected", reason,
+                        INCIDENT_ERROR_CODES.INVALID_INCIDENT,
+                      ),
                     )
                   }
                 />

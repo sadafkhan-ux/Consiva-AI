@@ -8,7 +8,8 @@
 // "personal data involved: yes" when the backend said "probable" is the exact
 // failure this agent is built to avoid.
 
-import { getToken, logout } from "./auth";
+import { getToken } from "./auth";
+import { handleUnauthorized } from "./client";
 import { ApiError } from "./types";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -231,7 +232,12 @@ export interface IncidentAuditEntry {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
-  if (!token) throw new ApiError(401, "Not signed in.");
+  if (!token) {
+    // Already signed out -- tell the shell, or it keeps rendering a console for a
+    // session that is gone and every request fails here without ever being sent.
+    handleUnauthorized();
+    throw new ApiError(401, "Not signed in.");
+  }
 
   let res: Response;
   try {
@@ -250,7 +256,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => null);
 
-  if (res.status === 401) logout();
+  // Not just logout(): the shell has to hear about it, or the console keeps
+  // rendering for a session that no longer exists.
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     const detail =
       body && typeof body === "object" && "detail" in body
@@ -451,6 +459,23 @@ export const SYSTEM_KINDS = [
   "vendor",
   "other",
 ] as const;
+
+/** Error codes, UPPERCASE exactly as the backend declares them in
+ *  app/agents/breach/schemas/incident.py. Spelled lowercase here once, the
+ *  "Not an incident" button 409'd every time it was pressed. */
+export const INCIDENT_ERROR_CODES = {
+  INVALID_INCIDENT: "INVALID_INCIDENT",
+  UNAUTHORIZED_ACCESS: "UNAUTHORIZED_ACCESS",
+  EVIDENCE_UNAVAILABLE: "EVIDENCE_UNAVAILABLE",
+  INVESTIGATION_FAILED: "INVESTIGATION_FAILED",
+  IMPACT_UNKNOWN: "IMPACT_UNKNOWN",
+  RISK_ASSESSMENT_FAILED: "RISK_ASSESSMENT_FAILED",
+  APPROVAL_REQUIRED: "APPROVAL_REQUIRED",
+  ACTION_BLOCKED: "ACTION_BLOCKED",
+  ACTION_FAILED: "ACTION_FAILED",
+  VERIFICATION_FAILED: "VERIFICATION_FAILED",
+  NOTIFICATION_FAILED: "NOTIFICATION_FAILED",
+} as const;
 
 export const CONFIDENCE_LEVELS: Confidence[] = ["confirmed", "probable", "possible", "unknown"];
 

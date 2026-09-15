@@ -1,7 +1,8 @@
 // Agent 2 (Data Discovery / ROPA) API client. Separate file from client.ts so
 // Agent 1's surface stays exactly as it was; both share the same bearer token.
 
-import { getToken, logout } from "./auth";
+import { getToken } from "./auth";
+import { handleUnauthorized } from "./client";
 import { ApiError } from "./types";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -76,7 +77,12 @@ export interface IntegrationKeyCreated {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
-  if (!token) throw new ApiError(401, "Not signed in.");
+  if (!token) {
+    // Already signed out -- tell the shell, or it keeps rendering a console for a
+    // session that is gone and every request fails here without ever being sent.
+    handleUnauthorized();
+    throw new ApiError(401, "Not signed in.");
+  }
 
   let res: Response;
   try {
@@ -95,7 +101,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => null);
 
-  if (res.status === 401) logout();
+  // Not just logout(): the shell has to hear about it, or the console keeps
+  // rendering for a session that no longer exists.
+  if (res.status === 401) handleUnauthorized();
   if (!res.ok) {
     const detail =
       body && typeof body === "object" && "detail" in body
