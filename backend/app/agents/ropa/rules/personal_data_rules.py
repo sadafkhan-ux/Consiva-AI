@@ -533,6 +533,37 @@ def _score(base: float, type_match: bool, context_supports: bool, *, conflicts: 
     return round(min(max(score, CONFIDENCE_FLOOR), CONFIDENCE_CEILING), 4)
 
 
+# Every category this module can return for a column that IS personal data. Built
+# from the constants above rather than retyped, so adding a category cannot leave this
+# set behind. Exposed because Agent 4 needs to ask "is this label personal data?" of a
+# category string it read back from a stored ROPA baseline, where the Classification
+# object that produced it is long gone.
+PERSONAL_CATEGORIES = frozenset({
+    CATEGORY_CONTACT,
+    CATEGORY_IDENTITY,
+    CATEGORY_GOVERNMENT_ID,
+    CATEGORY_ONLINE_ID,
+    CATEGORY_LOCATION,
+    CATEGORY_FINANCIAL,
+    CATEGORY_EMPLOYMENT,
+    CATEGORY_CREDENTIAL,
+    CATEGORY_HEALTH,
+    CATEGORY_PROFESSIONAL,
+    CATEGORY_FREE_TEXT,
+    CATEGORY_BEHAVIOURAL,
+})
+
+
+def is_personal_category(category: str | None) -> bool:
+    """Whether a category NAME denotes personal data.
+
+    The counterpart to `Classification.is_personal_data`, for callers holding only the
+    stored label -- the engine's non-personal outcomes are recorded as explicit labels
+    like "Not Personal Data (operational)", which must not be mistaken for a category.
+    """
+    return bool(category) and category in PERSONAL_CATEGORIES
+
+
 def is_operational(column_name: str, data_type: str | None = None, *, table_name: str | None = None) -> bool:
     """Kept for callers that only need the boolean. Context-aware now: `title` in
     a person table is NOT operational, which the old global blocklist got wrong."""

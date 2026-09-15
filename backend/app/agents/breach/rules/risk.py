@@ -26,7 +26,7 @@ evidence, by different people.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from app.agents.breach.schemas import incident

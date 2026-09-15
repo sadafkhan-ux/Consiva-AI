@@ -13,7 +13,6 @@ from app.agents.breach.rules import classification as clf
 from app.agents.breach.rules import risk
 from app.agents.breach.schemas import incident
 
-
 # ── Classification ───────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize(
