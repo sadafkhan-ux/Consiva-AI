@@ -856,3 +856,315 @@ class DsrResponse(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── Agent 4 (Breach Response) ────────────────────────────────────────────────────
+# Mirrors migrations/0015_breach_agent.sql. Read that file's header first: it explains
+# why the timeline is separate from audit_logs, why response actions are tracked work
+# by default, and why evidence is append-only.
+
+
+class IncidentCase(Base):
+    """The incident. Every other Agent 4 row traces back to this one.
+
+    `initial_severity` is what the reporter claimed; `severity` is what the engine
+    concluded from evidence. Keeping both means an under-reported critical incident
+    stays visible rather than being overwritten by the assessment.
+    """
+
+    __tablename__ = "incident_cases"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    reference: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    reported_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    incident_type: Mapped[str] = mapped_column(String, nullable=False, default="unclassified")
+    classification_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    classification_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    initial_severity: Mapped[str | None] = mapped_column(String, nullable=True)
+    severity: Mapped[str | None] = mapped_column(String, nullable=True)
+    severity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    severity_confidence: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Never promoted to 'confirmed' by any rule or model -- only a named human.
+    personal_data_involved: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
+    breach_confirmed: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
+    status: Mapped[str] = mapped_column(String, nullable=False, default="reported")
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sla_breached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closure_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentEvidence(Base):
+    """Append-only at the database level. An investigation whose evidence can be
+    rewritten afterwards is not evidence, it is a narrative -- superseding is done by
+    adding a row that references the old one, which stays."""
+
+    __tablename__ = "incident_evidence"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String, nullable=False)
+    source_system: Mapped[str] = mapped_column(String, nullable=False)
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Marks a row whose detail must never reach the UI or an export.
+    contains_secrets: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Something Consiva worked out about itself rather than something that happened.
+    is_derived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incident_evidence.id"), nullable=True)
+    added_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentTimelineEntry(Base):
+    """What happened in the WORLD, reconstructed from evidence -- as distinct from
+    audit_logs, which is what happened in Consiva. Each entry carries its own
+    confidence, because "the database was read at 10:05" is a claim and how strongly
+    it is believed is part of the claim."""
+
+    __tablename__ = "incident_timeline"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_system: Mapped[str | None] = mapped_column(String, nullable=True)
+    confidence: Mapped[str] = mapped_column(String, nullable=False, default="possible")
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incident_evidence.id"), nullable=True)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentAffectedSystem(Base):
+    __tablename__ = "incident_affected_systems"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    system_name: Mapped[str] = mapped_column(String, nullable=False)
+    system_kind: Mapped[str] = mapped_column(String, nullable=False)
+    component: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Set only where the affected system is one Consiva already knows about.
+    data_source_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ropa_data_sources.id"), nullable=True)
+    confidence: Mapped[str] = mapped_column(String, nullable=False, default="possible")
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incident_evidence.id"), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentAffectedData(Base):
+    """`derived_from` records HOW the category was established. A ROPA lookup is a
+    strong prior but is not the same as having observed the data in the incident."""
+
+    __tablename__ = "incident_affected_data"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    affected_system_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incident_affected_systems.id"), nullable=True
+    )
+    data_category: Mapped[str] = mapped_column(String, nullable=False)
+    table_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    column_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    confidence: Mapped[str] = mapped_column(String, nullable=False, default="possible")
+    derived_from: Mapped[str] = mapped_column(String, nullable=False, default="ropa_metadata")
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incident_evidence.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentAffectedSubjects(Base):
+    """`count_basis` says whether a figure was counted, estimated or is unknown --
+    "11,500 customers affected" and "we think roughly 11,500" are different statements
+    and only one of them belongs in a regulator's inbox."""
+
+    __tablename__ = "incident_affected_subjects"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    subject_group: Mapped[str] = mapped_column(String, nullable=False)
+    record_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    count_basis: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
+    basis_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[str] = mapped_column(String, nullable=False, default="possible")
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incident_evidence.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentRiskAssessment(Base):
+    """Versioned: re-assessing as evidence arrives is normal, and the earlier
+    assessment is part of the incident's history rather than something to overwrite.
+
+    `regulatory_context` holds passages retrieved from the approved knowledge base,
+    kept strictly separate from the system facts in `factors`. It is never a
+    determination that a law applies -- it is what a human should read before deciding.
+    """
+
+    __tablename__ = "incident_risk_assessments"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    risk_level: Mapped[str] = mapped_column(String, nullable=False)
+    risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[str] = mapped_column(String, nullable=False)
+    factors: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    regulatory_context: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    assessed_by: Mapped[str] = mapped_column(String, nullable=False, default="engine")
+    review_status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentAction(Base):
+    """`execution_mode` is the honest part of this agent: 'tracked' means a person
+    performs it in a system Consiva has no connector to and attests what they did;
+    'connector' is the narrow case where Agent 3's connector performs it for real."""
+
+    __tablename__ = "incident_actions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    action_kind: Mapped[str] = mapped_column(String, nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String, nullable=False, default="tracked")
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_result: Mapped[str] = mapped_column(Text, nullable=False)
+    target: Mapped[str | None] = mapped_column(String, nullable=True)
+    affected_system_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incident_affected_systems.id"), nullable=True
+    )
+    risk: Mapped[str] = mapped_column(String, nullable=False, default="medium")
+    requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="proposed")
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assignee_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentApproval(Base):
+    """Append-only at the database level. Kept separate from Agent 1's approvals table
+    only because that table's finding_id is a NOT NULL FK to consent_findings."""
+
+    __tablename__ = "incident_approvals"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    action_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incident_actions.id"), nullable=True)
+    risk_assessment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incident_risk_assessments.id"), nullable=True
+    )
+    communication_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("incident_communications.id"), nullable=True
+    )
+    subject: Mapped[str] = mapped_column(String, nullable=False)
+    decision: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    reviewer_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentExecution(Base):
+    """The idempotency ledger, and the place where "a connector confirmed it" and "a
+    person said they did it" are kept apart. `verification_status` distinguishes
+    `read_back` from `attested` rather than blurring them into "done"."""
+
+    __tablename__ = "incident_executions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    action_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_actions.id"), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String, nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    rows_affected: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    connector_response: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    performed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    attestation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    verification_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    verification_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    correlation_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    executed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentCommunication(Base):
+    """`sent_at` is only ever set when something was actually sent. No outbound
+    provider is configured, so in practice a human records that they sent it -- the
+    system never claims it did."""
+
+    __tablename__ = "incident_communications"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    audience: Mapped[str] = mapped_column(String, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
+    drafted_by_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    grounded_facts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IncidentReport(Base):
+    """`grounded_facts` is the machine-checkable set the prose was assembled from. A
+    sentence not traceable to one of those rows is not an incident fact."""
+
+    __tablename__ = "incident_reports"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    incident_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("incident_cases.id"), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    grounded_facts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    drafted_by_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
