@@ -18,13 +18,15 @@ import uuid
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from app.agents.dsr.services import sla_service
+from app.agents.breach.services import sla_service as incident_sla_service
+from app.agents.dsr.services import sla_service as dsr_sla_service
 from app.db.models import AgentJob
 from app.db.session import async_session_factory
 from app.jobs import queue
 from app.services import (
     analysis_service,
     dsr_run_service,
+    incident_run_service,
     monitoring_service,
     ropa_run_service,
     scan_service,
@@ -83,6 +85,19 @@ async def _process_one(job: AgentJob) -> None:
             uuid.UUID(job.payload["org_id"]),
             job_id=job.id,
         )
+    elif job.job_type == "incident_analysis":
+        # Agent 4 (Breach Response) analysis: derive the affected-data map from ROPA,
+        # seed the timeline from evidence, assess risk. Queued because it reads schema
+        # baselines and iterates evidence, which should not sit inside a request.
+        #
+        # Containment is deliberately NOT a job type. A person performs a tracked
+        # action and attests to it; a queued "disable account" job would be exactly the
+        # fake execution the build forbids.
+        await incident_run_service.run_analysis(
+            uuid.UUID(job.payload["incident_id"]),
+            uuid.UUID(job.payload["org_id"]),
+            job_id=job.id,
+        )
     else:
         raise ValueError(f"Unknown job_type: {job.job_type}")
 
@@ -107,12 +122,27 @@ async def run_forever() -> None:
         # an SLA must not stop the worker from processing jobs.
         try:
             async with async_session_factory() as db:
-                breached = await sla_service.sweep_overdue(db)
+                breached = await dsr_sla_service.sweep_overdue(db)
                 await db.commit()
             if breached:
                 logger.warning("DSR: %d case(s) newly past their SLA", breached)
         except Exception:
             logger.exception("DSR SLA sweep failed; continuing with job processing")
+
+        # Agent 4 incident sweep. Rides the same loop for the same reason, and flags
+        # the organisation's own internal response target -- NOT a statutory deadline.
+        # Whether a notification obligation applies is a decision for a person against
+        # approved guidance, never a timer.
+        try:
+            async with async_session_factory() as db:
+                overdue = await incident_sla_service.sweep_overdue(db)
+                await db.commit()
+            if overdue:
+                logger.warning(
+                    "Incidents: %d newly past their internal response target", overdue
+                )
+        except Exception:
+            logger.exception("Incident sweep failed; continuing with job processing")
 
         async with async_session_factory() as db:
             job = await queue.dequeue_one(db, worker_id=WORKER_ID)
