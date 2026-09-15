@@ -18,6 +18,7 @@ JWKS (ES256) before production"):
     token leaked, closing the gap the previous placeholder left open.
 """
 
+import uuid
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -28,6 +29,7 @@ from jwt import PyJWKClient
 
 from app.config import Settings, get_settings
 from app.core import tokens
+from app.db.session import clear_org_scope, set_org_scope
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -86,7 +88,12 @@ def get_current_user(
             if not settings.supabase_url:
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
             signing_key = _jwks_client(settings.supabase_url).get_signing_key_from_jwt(token)
-            payload = jwt.decode(token, signing_key.key, algorithms=[alg], audience="authenticated")
+            payload = jwt.decode(
+                token, signing_key.key, algorithms=[alg], audience="authenticated",
+                # Same rule as the first-party path: a token with no expiry is not a
+                # session, it is a permanent credential.
+                options={"require": ["exp"]},
+            )
         elif alg == "HS256":
             if not settings.supabase_jwt_secret:
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
@@ -99,7 +106,8 @@ def get_current_user(
                 # outright rather than explain why.
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
             payload = jwt.decode(
-                token, settings.supabase_jwt_secret, algorithms=["HS256"], audience="authenticated"
+                token, settings.supabase_jwt_secret, algorithms=["HS256"], audience="authenticated",
+                options={"require": ["exp"]},
             )
         else:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token")
@@ -116,4 +124,52 @@ def _current_user_from(payload: dict) -> CurrentUser:
     if not org_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Token missing org_id claim")
 
+    # Validated here, applied in bind_request_scope below. A malformed org_id is a
+    # rejected token, not a request that proceeds unscoped.
+    try:
+        uuid.UUID(str(org_id))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Token carries a malformed org_id") from exc
+
     return CurrentUser(user_id=payload["sub"], org_id=org_id, role=payload.get("role"))
+
+
+async def bind_request_scope(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """Bind this request's database connection to the caller's organisation.
+
+    Registered once on the v1 router, so every route gets it without eighty-seven
+    call sites opting in. Postgres row-level security reads `app.org_id` (migration
+    0018); this is the only thing that sets it, and it sets it from a VERIFIED token.
+
+    WHY THIS IS ASYNC, WHICH IS THE WHOLE POINT
+    -------------------------------------------
+    `get_current_user` is a sync `def`, so FastAPI runs it in a worker thread. A
+    ContextVar set in that thread is set in a COPY of the context and is gone by the
+    time the handler runs -- which is exactly how the first version of this failed:
+    the policies were live, nothing set the scope, and every query correctly returned
+    nothing. An async dependency runs in the request's own context, so both the
+    ContextVar and the transaction stamp stick.
+
+    It records the scope and touches NO database. The stamp itself happens in
+    app/db/session.py's `after_begin` hook, when and if a transaction actually starts.
+    That matters: doing the SQL here would put a database round-trip in front of every
+    request, including ones that are about to fail validation and never need a
+    connection at all.
+
+    Deliberately silent on failure. An unauthenticated route (login, health) has no
+    organisation to bind, and a bad token is the route's own auth dependency's problem
+    to report. Binding nothing leaves `current_org_id()` NULL, which every tenant
+    policy evaluates false -- so the failure mode is "sees nothing", not "sees
+    everything".
+    """
+    clear_org_scope()
+    if credentials is None:
+        return
+    try:
+        user = get_current_user(credentials, settings)
+    except HTTPException:
+        return
+    set_org_scope(user.org_id)

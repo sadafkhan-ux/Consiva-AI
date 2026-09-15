@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import RopaIntegrationKey
-from app.db.session import get_db
+from app.db.session import apply_org_scope, get_db
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -123,6 +123,10 @@ async def get_integration_principal(
     principal = await resolve_integration_key(db, credentials.credentials)
     if principal is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or revoked integration key")
+
+    # The key names its organisation; scope the connection to it before the adapter
+    # writes anything (migration 0018).
+    await apply_org_scope(db, principal.org_id)
     return principal
 
 

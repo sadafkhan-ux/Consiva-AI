@@ -106,6 +106,7 @@ def test_create_scan_endpoint_returns_422_for_malformed_url(bad_url):
     so lifespan never runs (see tests/test_api_validation.py's docstring).
     """
     import os
+    from datetime import UTC, datetime, timedelta
 
     import jwt
     from fastapi.testclient import TestClient
@@ -114,7 +115,14 @@ def test_create_scan_endpoint_returns_422_for_malformed_url(bad_url):
 
     client = TestClient(app, raise_server_exceptions=False)
     token = jwt.encode(
-        {"sub": str(uuid.uuid4()), "org_id": str(uuid.uuid4()), "aud": "authenticated"},
+        {
+            "sub": str(uuid.uuid4()),
+            "org_id": str(uuid.uuid4()),
+            "aud": "authenticated",
+            # Required since the verifiers stopped accepting tokens with no expiry --
+            # a token without one was previously valid forever.
+            "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        },
         os.environ["SUPABASE_JWT_SECRET"],
         algorithm="HS256",
     )

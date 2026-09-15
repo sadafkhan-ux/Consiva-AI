@@ -23,7 +23,7 @@ from app.config import Settings, get_settings
 from app.core import passwords, tokens
 from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import audit_repository, user_repository
-from app.db.session import get_db
+from app.db.session import apply_org_scope, get_db
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
@@ -96,6 +96,10 @@ async def login(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
     if not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
+
+    # Authenticated. Everything from here -- the login timestamp, the audit row -- is
+    # this organisation's data, so scope the connection before writing any of it.
+    await apply_org_scope(db, user.org_id)
 
     try:
         access_token, expires_in = tokens.issue_access_token(

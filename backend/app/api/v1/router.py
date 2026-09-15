@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.v1.routes import (
     actions,
@@ -12,8 +12,13 @@ from app.api.v1.routes import (
     websites,
 )
 from app.config import get_settings
+from app.core.security import bind_request_scope
 
-api_router = APIRouter()
+# Every v1 route binds its database connection to the caller's organisation before the
+# handler runs, so Postgres row-level security has something to enforce (migration
+# 0018). One registration rather than a parameter on all eighty-seven endpoints, and
+# nothing can forget it.
+api_router = APIRouter(dependencies=[Depends(bind_request_scope)])
 api_router.include_router(auth.router)
 api_router.include_router(consent_scans.router)
 api_router.include_router(consent_findings.router)

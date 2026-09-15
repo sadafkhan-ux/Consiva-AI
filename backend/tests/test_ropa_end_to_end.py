@@ -8,6 +8,7 @@ data flow -> risk -> ROPA record -> persistence -> human review -> audit.
 import os
 import pathlib
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
@@ -117,7 +118,14 @@ def auth_headers():
     """Same real-JWT approach Agent 1's own API tests use (test_api_validation.py),
     so these routes are exercised through the production auth dependency."""
     token = jwt.encode(
-        {"sub": str(uuid.uuid4()), "org_id": str(uuid.uuid4()), "aud": "authenticated"},
+        {
+            "sub": str(uuid.uuid4()),
+            "org_id": str(uuid.uuid4()),
+            "aud": "authenticated",
+            # Required since the verifiers stopped accepting tokens with no expiry --
+            # a token without one was previously valid forever.
+            "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        },
         os.environ["SUPABASE_JWT_SECRET"],
         algorithm="HS256",
     )

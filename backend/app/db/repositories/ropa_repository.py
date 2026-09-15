@@ -74,6 +74,28 @@ async def find_run_by_idempotency_key(
     return result.scalar_one_or_none()
 
 
+async def find_active_run_for_source(
+    db: AsyncSession, org_id: uuid.UUID, data_source_id: uuid.UUID
+) -> RopaDiscoveryRun | None:
+    """A run against this source that has not finished yet.
+
+    'pending' and 'discovering' are the two non-terminal states; 'completed' and
+    'failed' are both done and neither should block a fresh attempt -- re-running
+    after a failure is exactly what an operator does next.
+    """
+    result = await db.execute(
+        select(RopaDiscoveryRun)
+        .where(
+            RopaDiscoveryRun.org_id == org_id,
+            RopaDiscoveryRun.data_source_id == data_source_id,
+            RopaDiscoveryRun.status.in_(("pending", "discovering")),
+        )
+        .order_by(RopaDiscoveryRun.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def create_run(
     db: AsyncSession,
     *,

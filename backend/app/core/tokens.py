@@ -67,6 +67,11 @@ def decode_access_token(token: str, settings: Settings) -> dict:
             algorithms=[ALGORITHM],
             audience=AUDIENCE,
             issuer=ISSUER,
+            # `exp` is REQUIRED, not merely honoured when present. PyJWT checks an
+            # expiry it finds and says nothing about one that is absent, so without
+            # this a token minted with no `exp` was accepted forever -- which made the
+            # 12-hour TTL above a convention rather than a guarantee.
+            options={"require": ["exp"]},
         )
     except jwt.PyJWTError as exc:
         raise TokenError(str(exc)) from exc

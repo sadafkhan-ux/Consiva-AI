@@ -18,6 +18,7 @@ from app.agents.ropa.connectors.factory import build_connector
 from app.agents.ropa.schemas.evidence import DiscoveryEvidence
 from app.agents.ropa.schemas.output import RopaAgentOutput
 from app.agents.ropa.services import change_detection_service, discovery_service
+from app.core.exceptions import DiscoveryAlreadyInProgressError
 from app.db.models import RopaDiscoveryRun, RopaFinding, RopaRecordRow
 from app.db.repositories import audit_repository, ropa_repository
 
@@ -43,6 +44,18 @@ async def run_discovery_for_source(
         raise ValueError(f"data source {source_id} not found for this organization")
     if not source.enabled:
         raise ValueError(f"data source {source.name!r} is disabled")
+
+    # One run at a time per source. `idempotency_key` above dedupes a caller that
+    # supplies one; this covers the caller that does not, which is the common case --
+    # a double-click, or a retry after a slow response. Without it, each attempt
+    # opened another connection to the customer's production database and read their
+    # whole schema again, and Consiva is a guest on that system.
+    in_flight = await ropa_repository.find_active_run_for_source(db, org_id, source.id)
+    if in_flight is not None:
+        raise DiscoveryAlreadyInProgressError(
+            f"discovery is already running for {source.name!r} (run {in_flight.id}); "
+            "wait for it to finish, or read its result"
+        )
 
     run = await ropa_repository.create_run(
         db, org_id=org_id, source_name=source.name, data_source_id=source.id,

@@ -7,6 +7,7 @@ versions; confirm `AsyncPostgresSaver.from_conn_string()` + `.setup()` against t
 version pinned in pyproject.toml on first run (see docs/architecture §P).
 """
 
+import logging
 from contextlib import AsyncExitStack
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -55,6 +56,8 @@ def build_graph() -> StateGraph:
     return graph
 
 
+logger = logging.getLogger(__name__)
+
 _exit_stack: AsyncExitStack | None = None
 _compiled_graph = None
 
@@ -71,10 +74,57 @@ async def get_compiled_graph():
     checkpointer = await _exit_stack.enter_async_context(
         AsyncPostgresSaver.from_conn_string(settings.psycopg_database_url)
     )
-    await checkpointer.setup()  # idempotent; creates checkpoint tables on first run
+    await _ensure_checkpoint_tables(checkpointer)
 
     _compiled_graph = build_graph().compile(checkpointer=checkpointer)
     return _compiled_graph
+
+
+async def _ensure_checkpoint_tables(checkpointer) -> None:
+    """Create the checkpoint tables, or confirm somebody already did.
+
+    `setup()` issues DDL, which the application's database role is not guaranteed to
+    have: running the API as a least-privilege user (migration 0018) is the whole
+    point of row-level security, and such a role cannot CREATE TABLE. On those
+    deployments the tables are created by the owner -- by migrate.py, or by a first
+    boot that ran privileged -- and this call is the only thing that needed DDL.
+
+    So a permission error is tolerated ONLY after confirming the tables are actually
+    there. Starting up without a working checkpointer would mean a human-review pause
+    silently failing to survive a restart, which is worse than refusing to start.
+    """
+    try:
+        await checkpointer.setup()
+        return
+    except Exception as exc:
+        if not _is_permission_error(exc):
+            raise
+        logger.info(
+            "No DDL rights for the checkpointer; assuming its tables already exist "
+            "and verifying before continuing."
+        )
+
+    try:
+        await checkpointer.aget_tuple({"configurable": {"thread_id": "__startup_probe__"}})
+    except Exception as exc:
+        raise RuntimeError(
+            "The LangGraph checkpoint tables are missing and this database role "
+            "cannot create them. Run migrations as the owner, or grant the role "
+            "CREATE on the schema."
+        ) from exc
+
+
+def _is_permission_error(exc: BaseException) -> bool:
+    """psycopg raises InsufficientPrivilege; match on the SQLSTATE rather than the
+    class, so this keeps working across driver versions."""
+    seen: list[BaseException] = []
+    err: BaseException | None = exc
+    while err is not None and err not in seen:
+        seen.append(err)
+        if getattr(err, "sqlstate", None) == "42501":
+            return True
+        err = err.__cause__
+    return "permission denied" in str(exc).lower()
 
 
 async def close_graph_resources() -> None:

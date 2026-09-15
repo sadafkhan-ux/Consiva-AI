@@ -5,9 +5,22 @@ one — `SELECT ... FOR UPDATE SKIP LOCKED` in jobs/queue.py makes that safe.
 
 import asyncio
 import logging
+import os
 import socket
 import sys
 import uuid
+
+# Must also run before app.db.session is imported, because that module builds the
+# engine at import time.
+#
+# The worker is deliberately CROSS-TENANT: the SLA sweeps walk every organisation's
+# rows and the monitoring dispatcher walks every schedule, and there is no single
+# org_id to scope them to. Once the API moves to the least-privilege role that
+# migration 0018 creates, row-level security would correctly show this process
+# nothing -- and the sweeps would stop silently, which is the worst way for them to
+# stop. So the worker takes its own connection string when one is given.
+if os.getenv("WORKER_DATABASE_URL"):
+    os.environ["DATABASE_URL"] = os.environ["WORKER_DATABASE_URL"]
 
 # Must run before any event loop is created (see scanner/run_single_scan.py for the
 # full explanation): the LangGraph checkpointer's psycopg needs SelectorEventLoop on

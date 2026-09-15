@@ -11,6 +11,7 @@ skips lifespan and is enough for pure request-validation checks.
 
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi.testclient import TestClient
@@ -22,7 +23,14 @@ client = TestClient(app)
 
 def _auth_headers() -> dict:
     token = jwt.encode(
-        {"sub": str(uuid.uuid4()), "org_id": str(uuid.uuid4()), "aud": "authenticated"},
+        {
+            "sub": str(uuid.uuid4()),
+            "org_id": str(uuid.uuid4()),
+            "aud": "authenticated",
+            # Required since the verifiers stopped accepting tokens with no expiry --
+            # a token without one was previously valid forever.
+            "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        },
         os.environ["SUPABASE_JWT_SECRET"],
         algorithm="HS256",
     )
