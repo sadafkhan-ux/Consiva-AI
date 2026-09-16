@@ -47,6 +47,96 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         ),
         cookie_name_prefixes=("_gcl", "IDE", "test_cookie"),
     ),
+    # ── Product analytics the Google-family entries above do not cover ──────────
+    #
+    # PostHog and Razorpay were caught UNCLASSIFIED on a live scan of prepmyevent.com
+    # (the `ph_phc_*` and `rzp_unified_session_id` cookies, both set pre-consent), which
+    # matters more than it looks: R-001 -- "analytics/marketing fired before consent",
+    # the flagship rule -- only considers cookies and scripts whose category is
+    # analytics or marketing. An uncategorised analytics cookie is therefore INVISIBLE
+    # to it, and the scan reports nothing rather than reporting a violation.
+    #
+    # The Open Cookie Database (data/open-cookie-database.csv, 2,266 entries, Layer 1)
+    # has no entry for either vendor, so loading it does not close the gap.
+    #
+    # The rest of this block are the mainstream analytics/ad products in the same
+    # position -- absent from the cookie database, unmistakable domains, and each would
+    # slip past R-001 in exactly the same way.
+    VendorSignature(
+        vendor="PostHog",
+        default_category="analytics",
+        domain_substrings=("posthog.com",),
+        # `ph_phc_<project key>` -- observed directly on a live scan.
+        cookie_name_prefixes=("ph_phc_", "ph_"),
+    ),
+    VendorSignature(
+        vendor="Razorpay",
+        # A payment processor, not a tracker: categorised functional so it is described
+        # accurately rather than left blank, without R-001 treating checkout as a
+        # consent violation.
+        default_category="functional",
+        domain_substrings=("razorpay.com",),
+        cookie_name_prefixes=("rzp_",),
+    ),
+    VendorSignature(
+        vendor="Mixpanel",
+        default_category="analytics",
+        domain_substrings=("mixpanel.com", "mxpnl.com"),
+        cookie_name_prefixes=("mp_",),
+    ),
+    VendorSignature(
+        vendor="Amplitude",
+        default_category="analytics",
+        domain_substrings=("amplitude.com",),
+        cookie_name_prefixes=("amp_",),
+    ),
+    VendorSignature(
+        vendor="Segment",
+        default_category="analytics",
+        domain_substrings=("segment.com", "segment.io"),
+        cookie_name_prefixes=("ajs_",),
+    ),
+    VendorSignature(
+        vendor="Matomo",
+        default_category="analytics",
+        domain_substrings=("matomo.cloud", "matomo.org"),
+        cookie_name_prefixes=("_pk_",),
+    ),
+    VendorSignature(
+        vendor="Plausible Analytics",
+        default_category="analytics",
+        domain_substrings=("plausible.io",),
+    ),
+    VendorSignature(
+        vendor="Heap Analytics",
+        default_category="analytics",
+        domain_substrings=("heap.io", "heapanalytics.com"),
+        cookie_name_prefixes=("_hp2_",),
+    ),
+    VendorSignature(
+        vendor="FullStory",
+        default_category="analytics",
+        domain_substrings=("fullstory.com",),
+        cookie_name_prefixes=("fs_uid",),
+    ),
+    VendorSignature(
+        vendor="TikTok Pixel",
+        default_category="marketing",
+        domain_substrings=("analytics.tiktok.com",),
+        cookie_name_prefixes=("_ttp", "_tt_enable_cookie"),
+    ),
+    VendorSignature(
+        vendor="Pinterest Tag",
+        default_category="marketing",
+        domain_substrings=("ct.pinterest.com", "s.pinimg.com"),
+        cookie_name_prefixes=("_pinterest_",),
+    ),
+    VendorSignature(
+        vendor="Snap Pixel",
+        default_category="marketing",
+        domain_substrings=("tr.snapchat.com", "sc-static.net"),
+        cookie_name_prefixes=("_scid",),
+    ),
     VendorSignature(
         # Real, live third-party web analytics vendor (getclicky.com / in.getclicky.com
         # / static.getclicky.com) -- found unclassified on a live scan, not a guess.

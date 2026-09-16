@@ -13,7 +13,9 @@ at all, both reviewed here.
 """
 
 import ast
+import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 APP_ROOT = Path(__file__).resolve().parent.parent / "app"
 REPOSITORY_FILE = APP_ROOT / "db" / "repositories" / "finding_repository.py"
@@ -88,3 +90,58 @@ def test_review_service_decision_functions_all_change_status():
                         and inner.func.attr == expected[node.name]:
                     found[node.name] = inner.func.attr
     assert found == expected, f"missing sanctioned status-write call in: {set(expected) - set(found)}"
+
+
+# ── A high-risk finding cannot be auto-approved by the model ────────────────────
+
+def test_a_high_risk_finding_always_requires_human_review():
+    """`requires_human_review` is chosen by the LLM, per finding. On a live scan of a
+    real site it set False on both high-risk findings -- "analytics fired before any
+    consent interaction" and "analytics continued firing after the visitor clicked
+    Reject" -- and True on a low-risk "could not classify one script". The serious
+    violations would have reached the customer auto-accepted.
+
+    A high-risk DPDP finding is an accusation against the customer's website. The model
+    may raise review; it may not waive it.
+    """
+    from app.agents.consent_agent.nodes import validate_output as vo
+
+    findings = [
+        SimpleNamespace(risk_level="high", requires_human_review=False,
+                        dpdp_reference=[{"chunk_id": "c1"}], finding="fired pre-consent",
+                        recommendation="gate it"),
+        SimpleNamespace(risk_level="medium", requires_human_review=False,
+                        dpdp_reference=[{"chunk_id": "c1"}], finding="no cookie policy",
+                        recommendation="publish one"),
+        SimpleNamespace(risk_level="low", requires_human_review=False,
+                        dpdp_reference=[{"chunk_id": "c1"}], finding="one unclassified",
+                        recommendation="check it"),
+    ]
+
+    forced = 0
+    for f in findings:
+        if f.risk_level == "high" and not f.requires_human_review:
+            f.requires_human_review = True
+            forced += 1
+
+    source = inspect.getsource(vo)
+    assert 'finding.risk_level == "high"' in source, (
+        "the high-risk backstop is gone; the model can auto-approve a high-risk "
+        "DPDP violation again"
+    )
+    assert "high_risk_forced_review" in source
+
+    assert findings[0].requires_human_review is True
+    assert findings[1].requires_human_review is False, "only high risk is forced"
+    assert findings[2].requires_human_review is False
+
+
+def test_the_backstop_runs_after_the_citation_ones_and_does_not_replace_them():
+    """Three distinct guards, all still present: uncited findings, unverified narrative
+    citations, and now severity."""
+    from app.agents.consent_agent.nodes import validate_output as vo
+
+    source = inspect.getsource(vo)
+    for marker in ("uncited_forced_review", "unverified_narrative_citations",
+                   "high_risk_forced_review"):
+        assert marker in source, f"{marker} backstop is missing"

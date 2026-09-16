@@ -83,6 +83,26 @@ async def validate_output(state: AgentState) -> dict:
                     finding.requires_human_review = True
             meta["unverified_narrative_citations"] = unverified_by_finding
 
+            # Third backstop, and the only one about SEVERITY rather than citations.
+            #
+            # `requires_human_review` is chosen by the LLM, per finding. On a live scan
+            # of a real site it set False on both high-risk findings -- "analytics fired
+            # before any consent interaction" and "analytics continued firing after the
+            # visitor clicked Reject" -- while setting True on a low-risk "could not
+            # classify one script". The serious violations would have reached the
+            # customer auto-accepted; the trivial one got the human.
+            #
+            # A high-risk DPDP finding is an accusation against the customer's website.
+            # Whether it is auto-approved is not a judgement to delegate to the model,
+            # so it is taken away from it here. The LLM may still RAISE review on
+            # anything it likes; it can no longer waive it on the findings that matter.
+            high_risk_forced_review = 0
+            for finding in response.findings:
+                if finding.risk_level == "high" and not finding.requires_human_review:
+                    finding.requires_human_review = True
+                    high_risk_forced_review += 1
+            meta["high_risk_forced_review"] = high_risk_forced_review
+
             meta["outcome"] = "valid"
             return {"validation_status": "valid", "error": None, "llm_output": response.model_dump()}
 
