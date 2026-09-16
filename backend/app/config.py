@@ -78,6 +78,20 @@ class Settings(BaseSettings):
     db_pool_size: int = 3
     db_max_overflow: int = 2
 
+    # Worker
+    # How many queued jobs one worker process runs at once. 1 restores the old
+    # strictly-serial behaviour.
+    #
+    # Sized against the connection pool above, not against CPU: the work itself is
+    # network-bound (Playwright, LLM endpoints), but every concurrent job still needs
+    # a pool connection at each of its stage boundaries. Sessions here are
+    # deliberately short-lived per write (observability/stage_tracker.py's docstring
+    # explains why a stage must not pin a connection for its whole duration), so
+    # demand is bursty rather than sustained -- but N slots can still collide on a
+    # 3+2 pool and then block for pool_timeout. Raise DB_POOL_SIZE with this value:
+    # the worker service in docker-compose.prod.yml does exactly that.
+    worker_concurrency: int = 4
+
     # Scanner
     scanner_headless: bool = True
     scanner_max_pages: int = 25

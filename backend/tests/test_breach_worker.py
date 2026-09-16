@@ -153,13 +153,28 @@ def test_the_two_sla_sweeps_do_not_shadow_one_another():
 
 
 def test_the_incident_sweep_runs_in_the_worker_loop():
+    """Both sweeps have to be on a loop the worker actually starts.
+
+    They used to sit in run_forever itself. They now live in _maintenance_loop, which
+    run_forever runs as its own task so that a long job cannot block the periodic
+    duties. So this checks both halves: the calls are in the maintenance loop, AND
+    run_forever still starts that loop. Asserting only the first would pass happily if
+    the loop were never scheduled, which is the silent stop the sweeps' own comments
+    warn about.
+    """
     import inspect
 
     from app.jobs import worker
 
-    source = inspect.getsource(worker.run_forever)
-    assert "incident_sla_service.sweep_overdue" in source
-    assert "dsr_sla_service.sweep_overdue" in source
+    maintenance = inspect.getsource(worker._maintenance_loop)
+    assert "incident_sla_service.sweep_overdue" in maintenance
+    assert "dsr_sla_service.sweep_overdue" in maintenance
+
+    started = inspect.getsource(worker.run_forever)
+    assert "_maintenance_loop" in started, (
+        "the sweeps live in _maintenance_loop but run_forever no longer starts it, so "
+        "neither sweep would ever run"
+    )
 
 
 # ── The audit trail has to read in order ─────────────────────────────────────────

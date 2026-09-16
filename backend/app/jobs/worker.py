@@ -1,11 +1,30 @@
 """Polling worker for the agent_jobs queue (docs/architecture §B/§N step 9). Run as a
-separate process from the API: `python -m app.jobs.worker`. Scale by running more than
-one — `SELECT ... FOR UPDATE SKIP LOCKED` in jobs/queue.py makes that safe.
+separate process from the API: `python -m app.jobs.worker`.
+
+Scales two ways, both resting on `SELECT ... FOR UPDATE SKIP LOCKED` in jobs/queue.py:
+WORKER_CONCURRENCY slots inside one process, and more than one process against the
+same queue. Concurrency lives here rather than in the job bodies because on Linux the
+scan path is already a plain coroutine -- run_scan_isolated() only shells out to a
+child process on Windows -- so N scans in one event loop really do overlap.
+
+Two independent loops run here, and keeping them apart is the point:
+
+  * the job pump claims work and runs it in up to N slots;
+  * the maintenance loop reaps stale jobs, dispatches due monitoring schedules and
+    runs the two SLA sweeps.
+
+These used to be one loop, with the job processed inline. That meant a long job
+blocked every periodic duty for its whole duration -- including reap_stale_jobs, the
+one mechanism that recovers a hung job, so a wedged job prevented its own recovery and
+nothing else ran either (scanner/crawler.py's run_scan_isolated carries the live
+incident: one job held the only worker 15+ minutes and five later scans never started).
 """
 
 import asyncio
+import contextlib
 import logging
 import os
+import signal
 import socket
 import sys
 import uuid
@@ -33,6 +52,7 @@ if sys.platform == "win32":
 
 from app.agents.breach.services import sla_service as incident_sla_service
 from app.agents.dsr.services import sla_service as dsr_sla_service
+from app.config import get_settings
 from app.db.models import AgentJob
 from app.db.session import async_session_factory
 from app.jobs import queue
@@ -49,6 +69,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 2
+# The maintenance loop's own cadence, now that it no longer shares the job loop. 2s was
+# never a requirement of the work -- a DSR deadline is measured in days and a monitoring
+# interval in hours -- it was just whatever the job poll happened to be. 30s also keeps
+# three cross-tenant queries off the database 15x less often, which matters more now
+# that several workers may each be running them.
+MAINTENANCE_INTERVAL_SECONDS = 30
 WORKER_ID = f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
 
 
@@ -115,24 +141,67 @@ async def _process_one(job: AgentJob) -> None:
         raise ValueError(f"Unknown job_type: {job.job_type}")
 
 
-async def run_forever() -> None:
-    logger.info("Worker %s starting", WORKER_ID)
-    while True:
+async def _sleep_or_stop(stopping: asyncio.Event, seconds: float) -> None:
+    """Sleep, but wake the moment shutdown is requested, so SIGTERM doesn't have to
+    wait out a full interval before anything responds to it."""
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(stopping.wait(), timeout=seconds)
+
+
+async def _run_job(job: AgentJob) -> None:
+    """One job start to finish, including recording its own outcome.
+
+    Every exception is handled in here. This runs as a detached task, so anything that
+    escaped would surface only as an "exception was never retrieved" warning at garbage
+    collection time, and the job row would sit at status="running" until the reaper
+    noticed it ten minutes later.
+    """
+    logger.info("Processing job %s (%s)", job.id, job.job_type)
+    try:
+        await _process_one(job)
+    except Exception as exc:  # a bad job must not kill the worker loop
+        logger.exception("Job %s (%s) failed", job.id, job.job_type)
         async with async_session_factory() as db:
-            reaped = await queue.reap_stale_jobs(db)
+            await queue.mark_failed(db, job.id, str(exc))
             await db.commit()
-        if reaped:
-            logger.warning("Reaped %d stale job(s) whose worker never released them", reaped)
-
+    else:
         async with async_session_factory() as db:
-            dispatched = await monitoring_service.dispatch_due_schedules(db)
-        if dispatched:
-            logger.info("Monitoring: dispatched %d due scheduled re-scan(s)", dispatched)
+            await queue.mark_done(db, job.id)
+            await db.commit()
 
-        # Agent 3 SLA sweep (§36). Rides this existing poll loop rather than adding a
-        # scheduler: a DSR deadline is measured in days, so once every poll is far
-        # more often than it needs to be. Best-effort -- a DB hiccup while flagging
-        # an SLA must not stop the worker from processing jobs.
+
+async def _maintenance_loop(stopping: asyncio.Event) -> None:
+    """Stale-job reaping, the monitoring dispatcher and the two SLA sweeps.
+
+    Every step is wrapped. On the old shared loop, reaping and dispatch were bare, so a
+    failure there killed the process and `restart: unless-stopped` brought it back --
+    crude, but it did not fail silently. On a dedicated task an unhandled exception
+    would instead kill just this task and leave the pump running happily, which is
+    exactly the silent stop the DSR sweep's own comment warns about. So each step
+    catches, logs and continues, and the loop itself is the only thing that can end.
+    """
+    while not stopping.is_set():
+        try:
+            async with async_session_factory() as db:
+                reaped = await queue.reap_stale_jobs(db)
+                await db.commit()
+            if reaped:
+                logger.warning("Reaped %d stale job(s) whose worker never released them", reaped)
+        except Exception:
+            logger.exception("Stale-job reaping failed; continuing with the other duties")
+
+        try:
+            async with async_session_factory() as db:
+                dispatched = await monitoring_service.dispatch_due_schedules(db)
+            if dispatched:
+                logger.info("Monitoring: dispatched %d due scheduled re-scan(s)", dispatched)
+        except Exception:
+            logger.exception("Monitoring dispatch failed; continuing with the other duties")
+
+        # Agent 3 SLA sweep (§36). Rides this loop rather than adding a scheduler: a
+        # DSR deadline is measured in days, so once every maintenance tick is far more
+        # often than it needs to be. Best-effort -- a DB hiccup while flagging an SLA
+        # must not stop the worker from processing jobs.
         try:
             async with async_session_factory() as db:
                 breached = await dsr_sla_service.sweep_overdue(db)
@@ -157,26 +226,86 @@ async def run_forever() -> None:
         except Exception:
             logger.exception("Incident sweep failed; continuing with job processing")
 
-        async with async_session_factory() as db:
-            job = await queue.dequeue_one(db, worker_id=WORKER_ID)
-            await db.commit()
+        await _sleep_or_stop(stopping, MAINTENANCE_INTERVAL_SECONDS)
 
-        if job is None:
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
-            continue
 
-        logger.info("Processing job %s (%s)", job.id, job.job_type)
-        try:
-            await _process_one(job)
-        except Exception as exc:  # a bad job must not kill the worker loop
-            logger.exception("Job %s (%s) failed", job.id, job.job_type)
-            async with async_session_factory() as db:
-                await queue.mark_failed(db, job.id, str(exc))
-                await db.commit()
+async def _job_pump(stopping: asyncio.Event, concurrency: int) -> None:
+    """Keep up to `concurrency` jobs running, and never await one inline."""
+    in_flight: set[asyncio.Task] = set()
+
+    while not stopping.is_set():
+        claimed: list[AgentJob] = []
+        free = concurrency - len(in_flight)
+        if free > 0:
+            try:
+                async with async_session_factory() as db:
+                    claimed = await queue.dequeue_batch(db, worker_id=WORKER_ID, limit=free)
+                    # Commit before running anything: the claim has to be durable, not
+                    # just row-locked, before this transaction's connection goes back
+                    # to the pool. See dequeue_batch's docstring.
+                    await db.commit()
+            except Exception:
+                logger.exception("Could not claim jobs; retrying after the poll interval")
+
+        for job in claimed:
+            task = asyncio.create_task(_run_job(job), name=f"job-{job.id}")
+            in_flight.add(task)
+            # discard, not remove: the shutdown drain below may already have taken it.
+            task.add_done_callback(in_flight.discard)
+
+        if claimed:
+            continue  # slots may still be free, and more work may be queued -- refill now
+
+        if in_flight:
+            # Every slot is busy. Wake on the first completion rather than sleeping a
+            # fixed interval, so a freed slot is refilled immediately; the timeout is
+            # what still bounds the wait when nothing finishes.
+            await asyncio.wait(in_flight, return_when=asyncio.FIRST_COMPLETED, timeout=POLL_INTERVAL_SECONDS)
         else:
-            async with async_session_factory() as db:
-                await queue.mark_done(db, job.id)
-                await db.commit()
+            await _sleep_or_stop(stopping, POLL_INTERVAL_SECONDS)
+
+    if in_flight:
+        # Shutting down: stop claiming, but let what is already running finish and
+        # record its own outcome. Anything still going when the container's
+        # stop_grace_period expires is SIGKILLed and recovered by reap_stale_jobs --
+        # correct, but ten minutes later, so the grace period is set in
+        # docker-compose.prod.yml to cover a realistic scan instead.
+        logger.info("Shutting down: waiting for %d in-flight job(s)", len(in_flight))
+        await asyncio.gather(*in_flight, return_exceptions=True)
+
+
+async def run_forever() -> None:
+    concurrency = max(1, get_settings().worker_concurrency)
+    logger.info("Worker %s starting with %d concurrent slot(s)", WORKER_ID, concurrency)
+
+    stopping = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        # Not available on Windows' ProactorEventLoop; there the process is stopped
+        # the blunt way and reap_stale_jobs cleans up, same as before.
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stopping.set)
+
+    tasks = {
+        asyncio.create_task(_maintenance_loop(stopping), name="maintenance"),
+        asyncio.create_task(_job_pump(stopping, concurrency), name="job-pump"),
+    }
+
+    # If either loop ends -- shutdown signal, or a bug that got past its own handlers
+    # -- bring the other down too and let the process exit, so the restart policy is
+    # what decides what happens next. A worker running with half its duties silently
+    # missing is the failure mode worth avoiding.
+    done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    stopping.set()
+    for task in done:
+        # .exception() re-raises on a cancelled task, so a Ctrl-C landing between the
+        # wait and this line must not turn shutdown reporting into its own crash.
+        if task.cancelled():
+            continue
+        if (exc := task.exception()) is not None:
+            logger.error("Worker loop %r exited with an exception", task.get_name(), exc_info=exc)
+    await asyncio.gather(*tasks, return_exceptions=True)
+    logger.info("Worker %s stopped", WORKER_ID)
 
 
 if __name__ == "__main__":

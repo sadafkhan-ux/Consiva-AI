@@ -197,7 +197,7 @@ async def test_run_analysis_marks_agent_run_failed_on_llm_output_validation_erro
     caught by run_analysis's try/except, which sets agent_run.status="failed" and
     agent_run.error to the message -- not an unhandled crash. run_analysis then
     re-raises the original exception by design (see app/jobs/worker.py's
-    run_forever(), which wraps _process_one in its own broad except Exception and
+    _run_job(), which wraps _process_one in its own broad except Exception and
     marks the *job* row failed -- so the worker process itself does not crash either;
     that outer layer is outside this file's scope but is what makes the re-raise
     here safe)."""

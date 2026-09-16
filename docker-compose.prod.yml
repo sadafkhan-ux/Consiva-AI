@@ -144,6 +144,24 @@ services:
       APP_ENV: "${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}"
       # Same override as backend -- see the `db` service comment above.
       DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
+      # How many queued jobs this worker runs at once. Before this existed the worker
+      # took one job per poll and ran it inline, so a second scan waited out the
+      # first: two scans started 48s apart were measured at 73s of pure queue time
+      # and 151s end to end, which is what made the UI report a backend timeout over
+      # a scan that completed fine.
+      #
+      # 4 is deliberately modest. The ceiling is not CPU -- the work is network-bound
+      # -- it is that each concurrent scan drives its own Chromium, so memory and
+      # /dev/shm below are what actually bound this. Raise both together.
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-4}"
+      # Must be raised WITH WORKER_CONCURRENCY. The app default is 3+2=5 connections
+      # per process, sized years ago for Supabase's 15-client session pooler; this
+      # deployment is on the local `db` container instead, where max_connections is
+      # 100. Four concurrent jobs plus the maintenance loop plus the pump's own claim
+      # query would contend on a 5-connection pool and block for pool_timeout, so the
+      # worker gets 10+5. With the backend's 5 that is 20 of 100.
+      DB_POOL_SIZE: "${WORKER_DB_POOL_SIZE:-10}"
+      DB_MAX_OVERFLOW: "${WORKER_DB_MAX_OVERFLOW:-5}"
     networks:
       - consiva
     depends_on:
@@ -152,8 +170,18 @@ services:
       db:
         condition: service_healthy
     # The worker launches Chromium for every scan. Chromium's sandbox needs more than
-    # Docker's default 64MB /dev/shm or it crashes on content-heavy pages.
-    shm_size: "1gb"
+    # Docker's default 64MB /dev/shm or it crashes on content-heavy pages -- and with
+    # WORKER_CONCURRENCY scans now overlapping, several Chromiums share this one
+    # tmpfs, so the 1gb that sufficed for a strictly serial worker is scaled with it.
+    shm_size: "4gb"
+    # A scan in flight is worth finishing. On SIGTERM the worker stops claiming new
+    # jobs and drains what is running (jobs/worker.py's _job_pump), so the grace
+    # period needs to cover a realistic scan -- observed at 78s and 120s -- rather
+    # than Docker's default 10s, which would SIGKILL every in-flight scan on any
+    # ordinary restart and leave the rows for reap_stale_jobs to recover ten minutes
+    # later. Not the 870s worst case a scan is budgeted for: past this the blunt stop
+    # plus the reaper is the right trade against blocking a deploy.
+    stop_grace_period: 180s
     # The shared image defines an HTTP HEALTHCHECK against /health, which is correct
     # for the `backend` service but meaningless here: this container runs the polling
     # worker, not uvicorn, so nothing is listening on 8000 and the probe can never

@@ -29,23 +29,43 @@ async def enqueue(db: AsyncSession, *, org_id: uuid.UUID, job_type: str, payload
     return job
 
 
-async def dequeue_one(db: AsyncSession, *, worker_id: str) -> AgentJob | None:
+async def dequeue_batch(db: AsyncSession, *, worker_id: str, limit: int) -> list[AgentJob]:
+    """Claim up to `limit` runnable jobs in one round trip, oldest first.
+
+    Same SKIP LOCKED contract as before -- this changes only how many rows a single
+    call claims, so neither two worker processes nor two concurrent slots inside one
+    process can ever be handed the same job. Claiming N at once rather than looping on
+    dequeue_one keeps filling a worker's free slots to one query instead of N.
+
+    The caller must COMMIT before it starts running them: until the status="running"
+    write lands, the rows are only row-locked by this transaction, and another worker
+    skipping them relies on that lock being real. Holding the transaction open for the
+    duration of the work would also pin a pool connection behind every in-flight job.
+    """
+    if limit <= 0:
+        return []
     stmt = (
         select(AgentJob)
         .where(AgentJob.status == "queued", AgentJob.run_after <= datetime.now(UTC))
         .order_by(AgentJob.created_at)
-        .limit(1)
+        .limit(limit)
         .with_for_update(skip_locked=True)
     )
-    job = (await db.execute(stmt)).scalar_one_or_none()
-    if job is None:
-        return None
-    job.status = "running"
-    job.locked_at = datetime.now(UTC)
-    job.locked_by = worker_id
-    job.attempts += 1
+    jobs = list((await db.execute(stmt)).scalars().all())
+    claimed_at = datetime.now(UTC)
+    for job in jobs:
+        job.status = "running"
+        job.locked_at = claimed_at
+        job.locked_by = worker_id
+        job.attempts += 1
     await db.flush()
-    return job
+    return jobs
+
+
+async def dequeue_one(db: AsyncSession, *, worker_id: str) -> AgentJob | None:
+    """Single-job form of dequeue_batch, for callers that want exactly one."""
+    jobs = await dequeue_batch(db, worker_id=worker_id, limit=1)
+    return jobs[0] if jobs else None
 
 
 async def mark_done(db: AsyncSession, job_id: uuid.UUID) -> None:
