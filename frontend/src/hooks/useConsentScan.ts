@@ -149,7 +149,16 @@ export function useConsentScan() {
             return s;
           },
           (s) => s.status === "completed" || s.status === "failed",
-          120_000,
+          // 600s, matching the analysis ceiling below -- 120s here was less than a
+          // single observed website_scan, so this loop reported "timed out" over
+          // scans that were still running and did complete. Two real measurements
+          // from one session: website_scan alone took 120s and 78s, and because the
+          // worker takes one job per poll (app/jobs/worker.py dequeue_one, single
+          // replica) a scan started while another is mid-Chromium also waits out the
+          // first -- 73s of queue time was observed, for 151s end-to-end against the
+          // old 120s budget. The queue wait scales with whatever else is in flight,
+          // so the ceiling has to cover queue time + scan, not just scan.
+          600_000,
           1_200
         );
         if (runIdRef.current !== myRunId) return;
