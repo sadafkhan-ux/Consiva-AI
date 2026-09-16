@@ -32,12 +32,14 @@ def test_prod_compose_never_defaults_app_env_to_development():
         pytest.skip("docker-compose.prod.yml not present")
     text = compose.read_text(encoding="utf-8")
 
-    unsafe = re.findall(r"APP_ENV:\s*\$\{APP_ENV:-([^}]*)\}", text)
+    # The optional quote matters: the value MUST be quoted (see the YAML test below),
+    # so a pattern that only matched the bare form silently stopped checking anything.
+    unsafe = re.findall(r'APP_ENV:\s*"?\$\{APP_ENV:-([^}]*)\}', text)
     assert not unsafe, (
         f"APP_ENV falls back to {unsafe} in the production compose file; "
         "it must fail closed with ${APP_ENV:?...} instead"
     )
-    settings = re.findall(r"APP_ENV:\s*\$\{APP_ENV([^}]*)\}", text)
+    settings = re.findall(r'APP_ENV:\s*"?\$\{APP_ENV([^}]*)\}', text)
     assert settings, "APP_ENV is not set from the environment at all"
     assert all(v.startswith(":?") for v in settings), (
         f"every APP_ENV reference must be required, found: {settings}"
@@ -368,3 +370,37 @@ def test_a_credential_ref_is_read_by_name_and_never_logged():
     message = str(caught.value)
     assert "CONSIVA_DEFINITELY_NOT_SET" in message
     assert "super-secret" not in message
+
+
+# ── The compose file has to actually parse ─────────────────────────────────────
+
+def test_the_production_compose_file_is_valid_yaml():
+    """A fail-closed APP_ENV message containing `: ` was written unquoted, so YAML read
+    it as the start of a nested mapping and the whole file stopped parsing. Every
+    `docker compose` command then failed on the server — including `down`, which is what
+    you reach for to recover.
+
+    The APP_ENV test above only regex-matched the line; it never parsed the document.
+    """
+    yaml = pytest.importorskip("yaml")
+    compose = REPO / "docker-compose.prod.yml"
+    if not compose.exists():
+        pytest.skip("docker-compose.prod.yml not present")
+
+    parsed = yaml.safe_load(compose.read_text(encoding="utf-8"))
+    assert isinstance(parsed, dict), "compose file did not parse to a mapping"
+    services = parsed.get("services", {})
+    for expected in ("db", "backend", "worker", "frontend"):
+        assert expected in services, f"service {expected} missing after parsing"
+
+
+def test_every_compose_file_parses():
+    """Same check for any other compose file in the repo."""
+    yaml = pytest.importorskip("yaml")
+    found = sorted(REPO.glob("docker-compose*.yml"))
+    assert found, "no compose files found at all"
+    for path in found:
+        try:
+            yaml.safe_load(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise AssertionError(f"{path.name} is not valid YAML: {exc}") from exc

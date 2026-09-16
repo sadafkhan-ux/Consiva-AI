@@ -93,6 +93,11 @@ services:
       # minter and handed a valid token to anyone who reached the URL. Compose now
       # refuses to start until the value is stated, the same fail-closed treatment
       # POSTGRES_PASSWORD already gets below.
+      #
+      # The QUOTES are load-bearing. `(use: production)` contains a colon-space, and
+      # an unquoted YAML scalar containing `: ` scans as the start of a nested
+      # mapping -- the document then fails to load entirely and `docker compose`
+      # refuses every command, including the `down` you reach for to recover.
       APP_ENV: "${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}"
       # Overrides whatever DATABASE_URL is in backend/.env (still the old Supabase URL,
       # kept there as a commented fallback) -- always point this deployment at the
