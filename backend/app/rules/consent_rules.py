@@ -144,6 +144,15 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
         t for t in trackers if t["category"] in ("analytics", "marketing")
     ]
 
+    # The three-pass scanner's own account of whether it could actually operate the
+    # banner (crawler.py's _final_interaction_status): "clicked", "click_failed",
+    # "page_unreachable", "cmp_not_found" or "cmp_not_automatable". Read here rather
+    # than further down because R-003 depends on it. `evidence` defaults to {} for
+    # scans and fixtures predating this being surfaced, so the outcomes read as None.
+    interaction_evidence = (signals or {}).get("evidence", {}) or {}
+    accept_outcome = interaction_evidence.get("accept_interaction")
+    reject_outcome = interaction_evidence.get("reject_interaction")
+
     # R-001 / R-003 depend on the three-pass consent-state scan (crawler.py). Both stay
     # silent (not "no violation found") until an item is actually observed in that state —
     # `consent_states` defaults to [] for scans/fixtures that predate three-pass scanning.
@@ -174,8 +183,26 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             confidence="high",
         ))
 
+    # R-003 asserts a specific human action -- that somebody clicked Reject and the
+    # tracking carried on anyway -- so it may only fire when that click actually
+    # happened. The scanner records post_reject evidence for the whole pass whether or
+    # not the Reject control was successfully operated, so keying off consent_states
+    # alone reported "AFTER the visitor clicked Reject", at high risk and high
+    # confidence, on scans where Reject was never clicked. That is a compliance report
+    # asserting an event that did not occur, and it contradicted R-009/R-010 sitting in
+    # the same output at lower severity saying the control could not be reached.
+    #
+    # Suppressing the other outcomes leaves no silent gap -- each already has its own
+    # honest rule, which is why this is a gate and not a downgrade:
+    #   clicked             R-003, the only outcome its wording is true of
+    #   click_failed        R-009, Reject control could not be automated
+    #   cmp_not_automatable R-009, same
+    #   page_unreachable    R-010, state untested and evidence incomplete
+    #   cmp_not_found       R-002, tracking with no consent mechanism at all
+    #   absent              silent, the same treatment R-009/R-010 already give a
+    #                       missing evidence dict rather than guessing
     post_reject_hits = [e for e in non_essential if "post_reject" in e.get("consent_states", [])]
-    if post_reject_hits:
+    if post_reject_hits and reject_outcome == "clicked":
         findings.append(RuleFinding(
             rule_id="R-003",
             category="other",
@@ -244,10 +271,6 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     # scan-hardening audit) -- "not just whether a mechanism exists, but whether it
     # could actually be exercised." `evidence` defaults to {} for scans/fixtures that
     # predate this being surfaced, so both stay silent rather than false-positive.
-    interaction_evidence = (signals or {}).get("evidence", {}) or {}
-    reject_outcome = interaction_evidence.get("reject_interaction")
-    accept_outcome = interaction_evidence.get("accept_interaction")
-
     if mechanism_type in ("banner", "cmp") and reject_outcome in ("cmp_not_automatable", "click_failed"):
         findings.append(RuleFinding(
             rule_id="R-009",

@@ -1,3 +1,5 @@
+import pytest
+
 from app.rules.consent_rules import classify_cookie, classify_tracker, evaluate_consent_rules
 from app.scanner.schemas import CookieRecord, TrackerRecord
 
@@ -79,17 +81,107 @@ def test_tracker_fired_before_consent_flagged_high_risk():
     assert r001.evidence_ids == ["t1"]
 
 
+def _signals_with_reject(outcome: str | None, mechanism_type: str = "cmp") -> list[dict]:
+    """A consent_signals entry carrying a specific reject_interaction outcome, the way
+    crawler.py surfaces it. `None` omits the evidence dict entirely, which is what
+    scans predating the scanner-hardening audit look like."""
+    signal = {"mechanism_type": mechanism_type, "cmp_vendor": "OneTrust",
+              "has_reject_all": True, "has_granular_choices": True}
+    if outcome is not None:
+        signal["evidence"] = {"accept_interaction": "clicked", "reject_interaction": outcome}
+    return [signal]
+
+
+def _post_reject_cookie() -> list[dict]:
+    return [{"id": "c1", "name": "_fbp", "domain": "example.com", "category": "marketing",
+             "consent_states": ["post_reject"]}]
+
+
+_BOTH_POLICIES = [
+    {"id": "p1", "url": "https://example.com/privacy", "policy_type": "privacy_policy"},
+    {"id": "p2", "url": "https://example.com/cookies", "policy_type": "cookie_policy"},
+]
+
+
 def test_tracker_fires_after_reject_flagged_high_risk():
+    """The Reject control was actually operated -- the one case R-003's wording is true of."""
     evidence = _evidence(
-        cookies=[{"id": "c1", "name": "_fbp", "domain": "example.com", "category": "marketing",
-                  "consent_states": ["post_reject"]}],
-        policies=[{"id": "p1", "url": "https://example.com/privacy", "policy_type": "privacy_policy"},
-                  {"id": "p2", "url": "https://example.com/cookies", "policy_type": "cookie_policy"}],
+        cookies=_post_reject_cookie(),
+        consent_signals=_signals_with_reject("clicked"),
+        policies=_BOTH_POLICIES,
     )
     findings = evaluate_consent_rules(evidence)
     r003 = next(f for f in findings if f.rule_id == "R-003")
     assert r003.risk_level == "high"
     assert r003.evidence_ids == ["c1"]
+
+
+# ── R-003 may not assert a click that never happened ────────────────────────────
+# The scanner records post_reject evidence for the whole pass whether or not it managed
+# to operate the Reject control, so R-003 used to report "AFTER the visitor clicked
+# Reject" at high risk and high confidence on scans where Reject was never clicked --
+# while R-009/R-010 sat in the same output saying the control could not be reached.
+
+@pytest.mark.parametrize("outcome", ["click_failed", "cmp_not_automatable", "page_unreachable"])
+def test_r003_is_silent_when_the_reject_click_did_not_succeed(outcome):
+    evidence = _evidence(
+        cookies=_post_reject_cookie(),
+        consent_signals=_signals_with_reject(outcome),
+        policies=_BOTH_POLICIES,
+    )
+    rule_ids = {f.rule_id for f in evaluate_consent_rules(evidence)}
+    assert "R-003" not in rule_ids, (
+        f"R-003 asserts the visitor clicked Reject, but the scanner reported {outcome!r}"
+    )
+
+
+def test_the_failure_is_still_reported_just_not_as_a_post_reject_violation():
+    """Suppressing R-003 must not lose the finding -- R-009 carries the real story, at a
+    severity and confidence that match what was actually observed."""
+    evidence = _evidence(
+        cookies=_post_reject_cookie(),
+        consent_signals=_signals_with_reject("click_failed"),
+        policies=_BOTH_POLICIES,
+    )
+    findings = evaluate_consent_rules(evidence)
+    r009 = next(f for f in findings if f.rule_id == "R-009")
+    assert r009.confidence == "low"  # an automation limit, not confirmed non-compliance
+    assert "click_failed" in r009.summary
+
+
+def test_page_unreachable_during_the_reject_pass_reports_incomplete_evidence():
+    evidence = _evidence(
+        cookies=_post_reject_cookie(),
+        consent_signals=_signals_with_reject("page_unreachable"),
+        policies=_BOTH_POLICIES,
+    )
+    findings = evaluate_consent_rules(evidence)
+    r010 = next(f for f in findings if f.rule_id == "R-010")
+    assert "post_reject" in r010.summary
+
+
+def test_r003_is_silent_when_no_consent_mechanism_was_found_at_all():
+    """cmp_not_found means there was no banner to reject. R-002 is the honest finding."""
+    evidence = _evidence(
+        cookies=_post_reject_cookie(),
+        consent_signals=_signals_with_reject("cmp_not_found", mechanism_type="none"),
+        policies=_BOTH_POLICIES,
+    )
+    rule_ids = {f.rule_id for f in evaluate_consent_rules(evidence)}
+    assert "R-003" not in rule_ids
+    assert "R-002" in rule_ids
+
+
+def test_r003_is_silent_when_the_scan_never_recorded_an_interaction_outcome():
+    """Scans predating the hardening audit carry no evidence dict. Staying silent is the
+    same fail-closed treatment R-009/R-010 already give a missing outcome."""
+    evidence = _evidence(
+        cookies=_post_reject_cookie(),
+        consent_signals=_signals_with_reject(None),
+        policies=_BOTH_POLICIES,
+    )
+    rule_ids = {f.rule_id for f in evaluate_consent_rules(evidence)}
+    assert "R-003" not in rule_ids
 
 
 def test_missing_consent_state_data_does_not_trigger_r001_or_r003():
@@ -156,3 +248,33 @@ def test_page_unreachable_during_accept_or_reject_pass_flagged_r010():
     r010 = next(f for f in findings if f.rule_id == "R-010")
     assert "post_reject" in r010.summary
     assert "post_accept" not in r010.summary
+
+
+# ── The same constraint has to reach the LLM, which writes the customer-facing text ──
+
+def test_the_prompt_tells_the_model_what_post_reject_does_not_prove():
+    """R-003's gate only governs the deterministic finding. The model is handed the raw
+    consent_states too, and `post_reject` reads like a proven rejection unless the
+    prompt says otherwise -- so the same constraint is stated there, next to the
+    interaction fields that carry the answer."""
+    from app.llm.prompts import build_analysis_prompt
+
+    prompt = build_analysis_prompt(
+        scan_summary={"cookies": [], "trackers": [], "forms": [], "policies": [],
+                      "consent_signals": []},
+        rule_findings=[],
+        rag_chunks=[],
+    )
+    assert "reject_interaction" in prompt
+    assert "only `clicked` means the control was actually operated" in prompt
+
+
+def test_the_interaction_outcome_reaches_the_model_at_all():
+    """The guidance above is useless if compaction strips the field it points at."""
+    from app.llm.prompts import compact_scan_evidence
+
+    compacted = compact_scan_evidence({
+        "consent_signals": [{"mechanism_type": "cmp", "cmp_vendor": "OneTrust",
+                             "evidence": {"reject_interaction": "click_failed"}}],
+    })
+    assert compacted["consent_signals"][0]["evidence"]["reject_interaction"] == "click_failed"
