@@ -38,8 +38,14 @@ def _unverified_narrative_citations(text: str, chunk_pool_text: str) -> list[str
 async def validate_output(state: AgentState) -> dict:
     """Step 9 — Pydantic schema validity is already guaranteed by llm/client.py's own
     retry loop; what's checked here is domain-specific: every dpdp_reference must be a
-    chunk_id that was actually retrieved. An ungrounded citation is treated as a hard
-    failure of this attempt, not a warning (docs/architecture §I)."""
+    chunk_id that was actually retrieved.
+
+    An ungrounded citation is never a warning: it is removed, and the finding that
+    carried it is forced to human review, so it cannot reach a customer either as an
+    invented citation or as an auto-approved claim. It escalates to a hard failure of
+    the whole attempt (a retry) only when EVERY finding is ungrounded -- see the
+    comment on the stripping step for why one bad reference no longer discards the
+    findings that were correctly grounded."""
     async with track_stage(
         uuid.UUID(state.scan_id), "output_validation", agent_run_id=uuid.UUID(state.agent_run_id)
     ) as meta:
@@ -50,6 +56,31 @@ async def validate_output(state: AgentState) -> dict:
         })
         meta["findings_checked"] = len(response.findings)
         meta["ungrounded_citations"] = ungrounded
+
+        # A citation the model invented does not require throwing away the findings it
+        # got right. Previously ANY ungrounded id failed the whole attempt and re-ran
+        # the entire analysis: one bad reference out of six findings cost a second full
+        # generate/validate cycle (measured live -- 6 findings drafted, 1 ungrounded id,
+        # a 33.6s re-run on top of a 365.7s first attempt). Worse, the id in that run
+        # was an EVIDENCE id, not a chunk id, so the model had confused two namespaces
+        # and a blind re-roll was not especially likely to fix it.
+        #
+        # So strip the ungrounded ids from the findings carrying them and force those
+        # findings to human review. The grounding guarantee is unchanged -- no customer
+        # ever sees an invented citation, because it is removed, and the finding cannot
+        # be auto-approved either, since the uncited-findings backstop below routes
+        # anything with no dpdp_reference to a human. A retry is still the right answer
+        # when EVERY finding is ungrounded, which reads as the model misunderstanding
+        # the task rather than slipping on one reference.
+        findings_with_bad_refs = [
+            f for f in response.findings if any(ref not in valid_chunk_ids for ref in f.dpdp_reference)
+        ]
+        if ungrounded and len(findings_with_bad_refs) < len(response.findings):
+            for finding in findings_with_bad_refs:
+                finding.dpdp_reference = [r for r in finding.dpdp_reference if r in valid_chunk_ids]
+                finding.requires_human_review = True
+            meta["ungrounded_stripped_from_findings"] = len(findings_with_bad_refs)
+            ungrounded = []
 
         if not ungrounded:
             # The grounding check above only verifies citations that are PRESENT --

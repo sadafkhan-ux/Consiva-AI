@@ -35,6 +35,15 @@ drafting — NOT fact invention. Strict rules:
 - Never assert a fact about the website that is not present in the supplied evidence.
 - Never cite a legal provision that is not present in the supplied knowledge excerpts. \
 Every `dpdp_reference` entry MUST be one of the provided chunk ids, verbatim.
+- A chunk id is ONLY ever one of the `chunk_id=` values in the retrieved excerpts \
+section. The evidence items are numbered separately (p1, t3, c2, ...) and those ids are \
+NEVER valid in `dpdp_reference` — putting an evidence id there is a citation to a \
+document that does not exist.
+- Cite the excerpt that actually supports THAT finding. Several excerpts are supplied \
+because different findings rest on different provisions; reusing one id for every \
+finding is wrong whenever another excerpt is the one on point. If genuinely no supplied \
+excerpt supports a finding, leave its `dpdp_reference` empty rather than attaching the \
+nearest-looking one — an empty citation is handled correctly downstream, a wrong one is not.
 - Never write a specific rule/section/sub-clause number (e.g. "Rule 17(1)(b)", \
 "Section 9") inside the `finding` or `recommendation` text unless that exact number \
 appears verbatim in the retrieved excerpts above. If you know of a real-world \
