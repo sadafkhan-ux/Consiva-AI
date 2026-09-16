@@ -51,8 +51,21 @@ async def get_schedule_by_id(db: AsyncSession, schedule_id: uuid.UUID, org_id: u
 
 
 async def due_schedules(db: AsyncSession) -> list[ScanSchedule]:
+    """Schedules eligible to fire now, locked for the caller.
+
+    FOR UPDATE SKIP LOCKED is load-bearing here, more so than in the SLA sweeps. The
+    caller (monitoring_service.dispatch_due_schedules) reads this list, then for each
+    row creates a scan, writes an audit entry, enqueues a real "scan" job and bumps
+    next_run_at. mark_dispatched's forward bump protects against the NEXT poll
+    re-firing a schedule, but nothing protected against two workers polling in the
+    same instant: both saw the same due row and both dispatched it, which is a
+    duplicate Chromium crawl and a duplicate audit trail for one schedule. Locking the
+    rows at selection time means the second worker skips what the first is already
+    dispatching."""
     result = await db.execute(
-        select(ScanSchedule).where(ScanSchedule.enabled.is_(True), ScanSchedule.next_run_at <= datetime.now(UTC))
+        select(ScanSchedule)
+        .where(ScanSchedule.enabled.is_(True), ScanSchedule.next_run_at <= datetime.now(UTC))
+        .with_for_update(skip_locked=True)
     )
     return list(result.scalars().all())
 

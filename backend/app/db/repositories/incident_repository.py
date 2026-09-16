@@ -111,7 +111,11 @@ async def list_incidents(
 async def list_overdue_incidents(db: AsyncSession, *, limit: int = 200) -> list[IncidentCase]:
     """SLA sweep support. Deliberately NOT org-scoped: called by the worker, which acts
     for every tenant rather than on behalf of a signed-in user. The only caller is
-    app/agents/breach/services/sla_service.py -- never a request handler."""
+    app/agents/breach/services/sla_service.py -- never a request handler.
+
+    FOR UPDATE SKIP LOCKED for the same reason as the DSR sweep's own overdue query:
+    two workers sweeping at once would otherwise both flag the same case and both
+    append to an append-only audit log. See dsr_repository.list_overdue_requests."""
     result = await db.execute(
         select(IncidentCase)
         .where(
@@ -122,6 +126,7 @@ async def list_overdue_incidents(db: AsyncSession, *, limit: int = 200) -> list[
         )
         .order_by(IncidentCase.due_at)
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
     return list(result.scalars().all())
 

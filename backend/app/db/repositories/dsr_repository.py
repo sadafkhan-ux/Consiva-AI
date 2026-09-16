@@ -110,6 +110,13 @@ async def list_overdue_requests(db: AsyncSession, *, limit: int = 200) -> list[D
     which acts for every tenant, not on behalf of a signed-in user. It is the one
     function here without an org filter, and the only caller is
     app/agents/dsr/services/sla_service.py -- never a request handler.
+
+    FOR UPDATE SKIP LOCKED because more than one worker may sweep at the same moment.
+    Without it both read the same overdue row, both set sla_breached, and both append
+    an SLA-breach entry to the audit log -- and that log is append-only by migration
+    0004, so a duplicate cannot be tidied up afterwards. With it, concurrent sweepers
+    split the overdue set instead of racing over it. Same reasoning, and the same
+    clause, as jobs/queue.py's dequeue_batch.
     """
     result = await db.execute(
         select(DsrRequest)
@@ -120,6 +127,7 @@ async def list_overdue_requests(db: AsyncSession, *, limit: int = 200) -> list[D
         )
         .order_by(DsrRequest.due_at)
         .limit(limit)
+        .with_for_update(skip_locked=True)
     )
     return list(result.scalars().all())
 
