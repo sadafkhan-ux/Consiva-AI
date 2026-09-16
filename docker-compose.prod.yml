@@ -93,7 +93,7 @@ services:
       # minter and handed a valid token to anyone who reached the URL. Compose now
       # refuses to start until the value is stated, the same fail-closed treatment
       # POSTGRES_PASSWORD already gets below.
-      APP_ENV: ${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}
+      APP_ENV: "${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}"
       # Overrides whatever DATABASE_URL is in backend/.env (still the old Supabase URL,
       # kept there as a commented fallback) -- always point this deployment at the
       # local `db` service instead. See the `db` service comment above.
@@ -141,7 +141,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      APP_ENV: ${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}
+      APP_ENV: "${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}"
       # Same override as backend -- see the `db` service comment above.
       DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
     networks:
