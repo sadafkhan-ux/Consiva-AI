@@ -765,13 +765,19 @@ async def run_scan(root_url: str, settings: Settings | None = None) -> ScanResul
 def _scan_budget_seconds(settings: Settings | None) -> float:
     """Overall wall-clock ceiling for one scan, shared by BOTH platform paths.
 
-    Derived from the per-page navigation timeout times the page cap, plus headroom for
-    browser startup and the two consent-interaction passes. Previously this expression
-    lived inline in the Windows subprocess call only, which is exactly how the Linux
-    path ended up with no ceiling at all."""
-    max_pages = settings.scanner_max_pages if settings else 25
-    per_page = settings.scanner_timeout_seconds if settings else 30
-    return max_pages * per_page + 120
+    The formula lives on Settings.scan_budget_seconds, because jobs/queue.py needs the
+    same number to keep its stale-job threshold above it -- see that property's
+    docstring.
+
+    `None` resolves the real settings, exactly as run_scan() does one frame down, rather
+    than falling back to the defaults. The production path passes no settings at all
+    (scan_service.execute_scan_and_persist -> run_scan_isolated(url)), so a hardcoded
+    fallback here would cap every real scan at the 25-page budget while run_scan()
+    crawled to the configured limit: raising SCANNER_MAX_PAGES would then abort every
+    large scan part-way through, which is the failure this budget exists to prevent.
+    It would also pin the ceiling below the reaper threshold jobs/queue.py derives from
+    the same property, putting back the drift that moved the formula here."""
+    return (settings or get_settings()).scan_budget_seconds
 
 
 async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> ScanResult:
