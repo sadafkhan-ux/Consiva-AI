@@ -454,3 +454,45 @@ async def test_no_primary_configured_goes_straight_to_fallback(monkeypatch):
     assert meta["primary_attempted"] is False
     assert meta["fallback_triggered"] is False
     primary_ctor.assert_not_called()
+
+
+# ── The SDK must not retry underneath the retry loop that owns the budget ───────
+
+def test_the_openai_sdk_does_not_add_its_own_retries():
+    """_chat bounds its tenacity attempts against the remaining shared deadline, but the
+    openai SDK defaults to max_retries=2, so ONE `await .create()` was really up to 3
+    HTTP requests. stop_after_delay only re-checks between attempts, so it could not see
+    that: measured live, an APITimeoutError surfaced at seconds_since_start=181.62 (3x
+    the 60s call timeout) and the tenacity retry then added a second, making one
+    llm_analysis stage take 365.7s against a 480s budget for the whole analysis."""
+    from app.llm.client import NvidiaLLMClient
+
+    client = NvidiaLLMClient()
+
+    assert client._client.max_retries == 0, (
+        "the SDK is retrying underneath _chat, multiplying every per-call timeout"
+    )
+
+
+# ── A permanently misconfigured primary must be distinguishable from a blip ─────
+
+def test_context_overflow_is_parsed_from_the_real_llama_cpp_error():
+    """Verbatim from agent_run_stages for a real run: llama-server was started with
+    `-c 32768 --parallel 8`, and llama.cpp divides context across slots, so each slot
+    held 4096 tokens against an ~11k-token prompt. Every analysis silently fell back to
+    the remote provider, and `primary_status: "failed"` looked the same as a one-off."""
+    from app.llm.client import _context_overflow
+
+    exc = Exception(
+        "Error code: 400 - {'error': {'code': 400, 'message': 'request (10577 tokens) "
+        "exceeds the available context size (4096 tokens), try increasing it', 'type': "
+        "'exceed_context_size_error', 'n_prompt_tokens': 10577, 'n_ctx': 4096}}"
+    )
+
+    assert _context_overflow(exc) == (10577, 4096)
+
+
+def test_an_unrelated_failure_is_not_reported_as_a_context_overflow():
+    from app.llm.client import _context_overflow
+
+    assert _context_overflow(Exception("APITimeoutError: Request timed out.")) is None
