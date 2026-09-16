@@ -38,13 +38,20 @@ from app.scanner.schemas import (
     ScanResult,
     TrackerRecord,
 )
+from tests.live_db import read_only_dsn
 
 _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 def _real_settings() -> Settings | None:
     values = dotenv_values(_ENV_FILE)
-    database_url = values.get("DATABASE_URL")
+    # read_only_dsn, not writable_dsn, even though this test does INSERT: per the module
+    # docstring it builds its own synthetic org/website/scan from fresh uuid4s (those
+    # columns carry no FK) and rolls the whole transaction back, so it commits nothing
+    # and cannot touch a pre-existing row. Requiring TEST_DATABASE_URL would mean it
+    # skips by default -- and then the FK-ordering regression it was written for, which
+    # only a real database can catch, would go unguarded.
+    database_url = read_only_dsn()
     if not database_url:
         return None
     return Settings(

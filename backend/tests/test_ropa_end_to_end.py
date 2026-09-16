@@ -6,13 +6,11 @@ data flow -> risk -> ROPA record -> persistence -> human review -> audit.
 """
 
 import os
-import pathlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
-from dotenv import dotenv_values
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -20,16 +18,36 @@ from app.agents.ropa.schemas.ropa import PersonalDataElement
 from app.agents.ropa.services import enrichment_service
 from app.agents.ropa.services.enrichment_service import ColumnSuggestion, EnrichmentResponse
 from ropa_integration.ropa_adapter_sdk import AdapterConfig, build_payload
-
-_ENV_FILE = pathlib.Path(__file__).resolve().parents[1] / ".env"
-_REAL_DATABASE_URL = dotenv_values(_ENV_FILE).get("DATABASE_URL")
-
-# conftest sets a dummy DATABASE_URL so imports validate; these tests need the
-# REAL one from backend/.env, same approach as test_rag_retrieval_quality.py.
-_live_db_only = pytest.mark.skipif(
-    not _REAL_DATABASE_URL,
-    reason="DATABASE_URL not configured in backend/.env; this test needs a real database",
+from tests.live_db import (
+    READ_ONLY_SKIP_REASON,
+    WRITABLE_SKIP_REASON,
+    read_only_dsn,
+    writable_dsn,
 )
+
+# writable_dsn, because these tests COMMIT: they create ROPA runs, approve them and
+# leave the records behind. That makes DATABASE_URL the wrong thing to read -- it is
+# routinely the deployment, and this suite would then be seeding it with test data. So
+# it runs only against a database named deliberately in TEST_DATABASE_URL, and skips
+# otherwise. See tests/live_db.py.
+_REAL_DATABASE_URL = writable_dsn()
+
+_live_db_only = pytest.mark.skipif(not _REAL_DATABASE_URL, reason=WRITABLE_SKIP_REASON)
+
+# Two tests in this file assert that a request is REJECTED, so they create nothing: the
+# inline-secret check is refused by a pydantic validator before the route body runs, and
+# the auth check is refused before anything is authenticated at all (auth_headers just
+# mints a JWT locally -- it writes nothing either). Gating those behind
+# TEST_DATABASE_URL would mean two security assertions quietly stop running against the
+# deployment, which is the opposite of what tightening this was for.
+_read_only_db = pytest.mark.skipif(not read_only_dsn(), reason=READ_ONLY_SKIP_REASON)
+
+# The `client` fixture is shared by both kinds, so it takes whichever DSN is available:
+# the writable one when the committing tests are enabled, otherwise the read-only one
+# for the two rejection tests. The committing tests skip before the fixture is built
+# when writable_dsn() is None, so this can never hand them a database they must not
+# write to.
+_FIXTURE_DSN = _REAL_DATABASE_URL or read_only_dsn()
 
 
 def _attendee_evidence() -> dict:
@@ -76,13 +94,13 @@ def _payload(idempotency_key: str | None = None) -> dict:
 
 @pytest.fixture
 async def client():
-    """Real app, with get_db pointed at the REAL database from backend/.env.
+    """Real app, with get_db pointed at a real database (see _FIXTURE_DSN).
     Lifespan is not run (it would build a Postgres LangGraph checkpointer that
     these routes don't need) -- same reasoning as test_api_validation.py."""
     from app.db.session import get_db
     from app.main import app
 
-    engine = create_async_engine(_REAL_DATABASE_URL, pool_size=2, max_overflow=0)
+    engine = create_async_engine(_FIXTURE_DSN, pool_size=2, max_overflow=0)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async def _override_get_db():
@@ -218,7 +236,7 @@ async def test_idempotency_key_returns_same_run(client, auth_headers, integratio
     assert first["id"] == second["id"], "same idempotency key must not start a second run"
 
 
-@_live_db_only
+@_read_only_db
 async def test_source_config_rejects_inline_secrets(client, auth_headers):
     """A password must go in the environment, never into the stored config."""
     response = await client.post(
@@ -233,7 +251,7 @@ async def test_source_config_rejects_inline_secrets(client, auth_headers):
     assert "credential_ref" in response.text
 
 
-@_live_db_only
+@_read_only_db
 async def test_routes_require_authentication(client):
     assert (await client.get("/api/v1/ropa/sources")).status_code in (401, 403)
     assert (await client.get("/api/v1/ropa/connectors")).status_code in (401, 403)

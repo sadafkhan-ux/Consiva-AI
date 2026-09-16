@@ -32,6 +32,7 @@ from app.config import Settings
 from app.db.models import KnowledgeDocument
 from app.llm.client import NvidiaLLMClient
 from app.rag.retriever import retrieve
+from tests.live_db import read_only_dsn
 
 QUERY = "Consent withdrawal and notice requirements"
 _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
@@ -39,8 +40,12 @@ _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 def _real_settings() -> Settings | None:
     values = dotenv_values(_ENV_FILE)
+    # The NVIDIA key still comes from the file on purpose (see the comment above: under
+    # pytest, os.environ carries conftest's "test-key"). The DSN does not -- the file's
+    # is the abandoned Supabase one, so it goes through tests/live_db.py instead. This
+    # test only reads, so the deployment is a fine target for it.
     api_key = values.get("NVIDIA_API_KEY")
-    database_url = values.get("DATABASE_URL")
+    database_url = read_only_dsn()
     if not api_key or not database_url:
         return None
     return Settings(

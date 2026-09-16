@@ -8,7 +8,6 @@ because the whole point of the SDK is that it reads a live Inspector correctly.
 import pathlib
 
 import pytest
-from dotenv import dotenv_values
 
 from app.core import integration_auth
 from ropa_integration.ropa_adapter_sdk import (
@@ -18,13 +17,15 @@ from ropa_integration.ropa_adapter_sdk import (
     collect_evidence,
     push_evidence,
 )
+from tests.live_db import READ_ONLY_SKIP_REASON, read_only_dsn
 
-_ENV_FILE = pathlib.Path(__file__).resolve().parents[1] / ".env"
-_REAL_DATABASE_URL = dotenv_values(_ENV_FILE).get("DATABASE_URL")
+# Read-only: this reads the live catalog and SELECTs from a couple of tables, and one
+# of the tests below asserts the adapter never emits write SQL at all. Environment
+# first, so it exercises the deployed database rather than the abandoned Supabase DSN
+# still sitting in backend/.env -- see tests/live_db.py.
+_REAL_DATABASE_URL = read_only_dsn()
 
-_live_db_only = pytest.mark.skipif(
-    not _REAL_DATABASE_URL, reason="DATABASE_URL not configured in backend/.env"
-)
+_live_db_only = pytest.mark.skipif(not _REAL_DATABASE_URL, reason=READ_ONLY_SKIP_REASON)
 
 
 @pytest.fixture

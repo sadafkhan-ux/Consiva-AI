@@ -15,7 +15,8 @@ from pathlib import Path
 
 import jwt
 import pytest
-from dotenv import dotenv_values
+
+from tests.live_db import READ_ONLY_SKIP_REASON, as_sync, read_only_dsn
 
 BACKEND = Path(__file__).resolve().parents[1]
 REPO = BACKEND.parent
@@ -265,17 +266,18 @@ def test_every_migration_on_disk_is_numbered_uniquely_and_in_order():
 
 # ── Live-database checks, skipped when there is none ────────────────────────────
 
-# conftest sets a dummy DATABASE_URL so imports validate; these need the REAL one
-# from backend/.env, the same approach test_ropa_end_to_end.py uses.
-_REAL_DATABASE_URL = dotenv_values(BACKEND / ".env").get("DATABASE_URL")
+# These two only SELECT -- from pg_class and pg_policies -- so they are safe to point
+# at the deployment, and that is the whole value of them: they are the check that the
+# database people actually use has RLS forced. They previously read backend/.env
+# directly, which is still the abandoned Supabase DSN, so they were reporting on a
+# database nobody runs. See tests/live_db.py.
+_REAL_DATABASE_URL = read_only_dsn()
 
-live_only = pytest.mark.skipif(
-    not _REAL_DATABASE_URL, reason="needs a real DATABASE_URL in backend/.env"
-)
+live_only = pytest.mark.skipif(not _REAL_DATABASE_URL, reason=READ_ONLY_SKIP_REASON)
 
 
 def _dsn() -> str:
-    return _REAL_DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://", 1)
+    return as_sync(_REAL_DATABASE_URL)
 
 
 @live_only
