@@ -1168,3 +1168,203 @@ class IncidentReport(Base):
     approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── Agent 5: Regulatory Watch (migration 0019) ──────────────────────────────────
+
+
+class RegWatchSource(Base):
+    """An approved regulatory source. Only these are ever monitored.
+
+    `credential_ref` names an environment variable, the same secret-by-reference
+    pattern Agents 2 and 3 use -- the value never lands in this table.
+
+    `last_checked_at` and `last_success_at` are deliberately separate. A source checked
+    ten minutes ago that FAILED is not the same as one that succeeded ten minutes ago,
+    and a UI showing only "last checked" would present them identically -- which is
+    exactly what the spec's final guardrail forbids.
+    """
+
+    __tablename__ = "regwatch_sources"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    connector: Mapped[str] = mapped_column(String, nullable=False, default="http")
+    jurisdiction: Mapped[str] = mapped_column(Text, nullable=False)
+    topic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    authority: Mapped[str | None] = mapped_column(Text, nullable=True)
+    check_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=1440)
+    credential_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegWatchCollection(Base):
+    """One attempt to fetch a source -- including the ones that failed.
+
+    APPEND-ONLY (trigger, migration 0019). This is the evidence every change record
+    downstream rests on; if it could be rewritten afterwards, none of them would mean
+    anything.
+    """
+
+    __tablename__ = "regwatch_collections"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regwatch_sources.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    content_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegWatchBaseline(Base):
+    """The content a person has accepted as the reference point for a source.
+
+    `approved_by_user_id` is NOT NULL and there is no code path around it. An agent
+    that advanced its own baseline would report a change once and then absorb it.
+    """
+
+    __tablename__ = "regwatch_baselines"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regwatch_sources.id"), nullable=False)
+    collection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("regwatch_collections.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String, nullable=False)
+    approved_by_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegWatchChange(Base):
+    """What changed in the world, between an accepted baseline and a new collection.
+
+    Distinct from audit_logs, which is what happened in Consiva. A change is a claim
+    about a regulator's website; an audit entry is a record of our own action.
+    """
+
+    __tablename__ = "regwatch_changes"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regwatch_sources.id"), nullable=False)
+    from_baseline_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("regwatch_baselines.id"), nullable=True)
+    to_collection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("regwatch_collections.id"), nullable=False)
+    change_kind: Mapped[str] = mapped_column(String, nullable=False)
+    added_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    removed_lines: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    diff_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegWatchFinding(Base):
+    """The interpreted, reviewable item a compliance team acts on."""
+
+    __tablename__ = "regwatch_findings"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    change_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regwatch_changes.id"), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regwatch_sources.id"), nullable=False)
+    reference: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="detected")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    jurisdiction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    relevance: Mapped[str] = mapped_column(String, nullable=False, default="undetermined")
+    relevance_confidence: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
+    relevance_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    impact_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    priority: Mapped[str | None] = mapped_column(String, nullable=True)
+    priority_confidence: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
+    citations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    grounded_facts: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    drafted_by_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    open_questions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    requires_human_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegWatchImpact(Base):
+    """What in THIS organisation a change may touch. By reference to the other agents'
+    rows, never by copying their data."""
+
+    __tablename__ = "regwatch_impacts"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regwatch_findings.id"), nullable=False)
+    target_kind: Mapped[str] = mapped_column(String, nullable=False)
+    target_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    target_label: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[str] = mapped_column(String, nullable=False, default="possible")
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    derived_from: Mapped[str] = mapped_column(String, nullable=False, default="rule")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegWatchApproval(Base):
+    """Append-only (trigger, migration 0019). A decision that can be edited afterwards
+    is not a decision anyone can rely on."""
+
+    __tablename__ = "regwatch_approvals"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regwatch_findings.id"), nullable=False)
+    reviewer_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    subject: Mapped[str] = mapped_column(String, nullable=False)
+    decision: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegWatchAction(Base):
+    """Tracked follow-up work. Consiva does not perform regulatory work: like Agent
+    4's containment, an action is carried out by a person and attested to."""
+
+    __tablename__ = "regwatch_actions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    finding_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("regwatch_findings.id"), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_result: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="open")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    completion_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
