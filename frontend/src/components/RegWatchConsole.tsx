@@ -50,6 +50,9 @@ const HEALTH_TONE: Record<string, string> = {
   stale: "warn",
   failing: "bad",
   never_collected: "warn",
+  // Disabled is not neutral. Nobody is watching this source, and the row should not
+  // read as an inert setting.
+  not_monitored: "warn",
 };
 
 const RELEVANCE_TONE: Record<string, string> = {

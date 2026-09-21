@@ -237,9 +237,10 @@ def health(source: RegWatchSource, *, now: datetime | None = None) -> dict:
     """What the UI shows about a source, with the honesty built in.
 
     `is_current` is the field that matters and it is deliberately narrow: it is true
-    only when the last attempt SUCCEEDED and was within the check interval. A source
-    that has never been collected, or whose last attempt failed, is not current, and
-    the UI has no way to render it as though it were.
+    only when the source is ENABLED and its last attempt succeeded within the check
+    interval. A source that is disabled, has never been collected, or whose last
+    attempt failed is not current, and the UI has no way to render it as though it
+    were.
     """
     moment = now or datetime.now(UTC)
     never_checked = source.last_checked_at is None
@@ -253,7 +254,19 @@ def health(source: RegWatchSource, *, now: datetime | None = None) -> dict:
         > source.check_interval_minutes * 60 * 2
     )
 
-    if never_checked:
+    if not source.enabled:
+        # Checked FIRST, before anything about collections. A source whose last
+        # collection succeeded an hour ago but which has since been disabled is not
+        # being watched at all, and the freshness of that last success says nothing
+        # about what the page holds now. Found live: four disabled sources, and the
+        # one with a recent success reported state='current', is_current=True -- the
+        # console would have painted a switched-off watch green, which is the exact
+        # failure this agent exists to prevent.
+        state, note = "not_monitored", (
+            "Monitoring is disabled for this source. Its current content is unknown, "
+            "however recently it was last collected."
+        )
+    elif never_checked:
         state, note = "never_collected", "This source has never been successfully collected."
     elif last_attempt_failed:
         state, note = "failing", (

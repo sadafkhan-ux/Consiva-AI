@@ -39,9 +39,10 @@ export const REGWATCH_ERROR_CODES = {
 
 /** Computed in ONE place on the backend so no surface can disagree about whether a
  *  source is being watched. `is_current` is deliberately narrow: true only when the
- *  last attempt SUCCEEDED and was recent. */
+ *  source is ENABLED and its last attempt succeeded recently. A disabled source is
+ *  never current, however fresh its last collection. */
 export interface SourceHealth {
-  state: "never_collected" | "failing" | "stale" | "current";
+  state: "not_monitored" | "never_collected" | "failing" | "stale" | "current";
   is_current: boolean;
   note: string;
   enabled: boolean;

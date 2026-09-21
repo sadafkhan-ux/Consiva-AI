@@ -223,7 +223,10 @@ def test_a_source_that_has_never_been_collected_is_not_current():
 
     source = RegWatchSource(
         org_id=_uuid(), name="x", url="https://example.gov.in", jurisdiction="India",
-        check_interval_minutes=1440, consecutive_failures=0,
+        # enabled explicitly: the column default applies at INSERT, so a bare instance
+        # has enabled=None, which health treats as not monitored -- correct, but it
+        # would mask the branch this test is about.
+        check_interval_minutes=1440, consecutive_failures=0, enabled=True,
     )
     health = source_service.health(source)
     assert health["is_current"] is False
@@ -238,7 +241,7 @@ def test_a_source_whose_last_attempt_failed_is_not_current():
     now = datetime.now(UTC)
     source = RegWatchSource(
         org_id=_uuid(), name="x", url="https://example.gov.in", jurisdiction="India",
-        check_interval_minutes=1440, consecutive_failures=2,
+        check_interval_minutes=1440, consecutive_failures=2, enabled=True,
         last_success_at=now - timedelta(minutes=30),
         last_checked_at=now,  # attempted since, and it failed
     )
@@ -420,3 +423,61 @@ def test_the_audit_serialiser_uses_the_columns_audit_logs_actually_has():
     body = inspect.getsource(routes.finding_audit)
     assert "e.before_state" not in body
     assert "e.before" in body and "e.after" in body
+
+
+def test_a_disabled_source_is_never_reported_as_current():
+    """Found live. Four sources had been disabled; the one whose last collection had
+    succeeded recently still reported state='current', is_current=True, because health
+    only looked at collection freshness. Monitoring was switched off and the console
+    would have painted it green -- the exact failure this agent exists to prevent."""
+    from datetime import UTC, datetime
+
+    from app.db.models import RegWatchSource
+
+    now = datetime.now(UTC)
+    source = RegWatchSource(
+        org_id=_uuid(), name="x", url="https://example.gov.in", jurisdiction="India",
+        check_interval_minutes=1440, consecutive_failures=0,
+        last_checked_at=now, last_success_at=now,  # collected successfully, just now
+        enabled=False,                             # ...but nobody is watching it
+    )
+    health = source_service.health(source)
+    assert health["is_current"] is False
+    assert health["state"] == "not_monitored"
+    assert "disabled" in health["note"]
+
+    # Enabling it, with everything else identical, makes it current.
+    source.enabled = True
+    assert source_service.health(source)["is_current"] is True
+
+
+def test_a_disabled_source_counts_as_unwatched():
+    """The count on the dashboard has to include it, or the number reads as
+    'everything is fine' while a regulator is unmonitored."""
+    from datetime import UTC, datetime
+
+    from app.db.models import RegWatchSource
+    from app.services import regwatch_run_service
+
+    now = datetime.now(UTC)
+    source = RegWatchSource(
+        org_id=_uuid(), name="retired", url="https://example.gov.in",
+        jurisdiction="India", check_interval_minutes=1440, consecutive_failures=0,
+        last_checked_at=now, last_success_at=now, enabled=False,
+    )
+    assert len(regwatch_run_service.unwatched_sources([source])) == 1
+
+
+def test_an_unset_enabled_flag_fails_safe():
+    """`enabled` is defaulted by the column, so an object that never reached the
+    database has enabled=None. That resolves to not-monitored rather than current,
+    which is the safe direction: the failure mode of guessing wrong here is a green
+    dashboard over an unwatched regulator."""
+    from app.db.models import RegWatchSource
+
+    source = RegWatchSource(
+        org_id=_uuid(), name="x", url="https://example.gov.in", jurisdiction="India",
+        check_interval_minutes=1440, consecutive_failures=0,
+    )
+    assert source.enabled is None
+    assert source_service.health(source)["is_current"] is False
