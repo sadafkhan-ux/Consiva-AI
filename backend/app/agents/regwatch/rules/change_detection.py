@@ -130,6 +130,84 @@ def detect(
     )
 
 
+def summarise_stored(
+    *, change_kind: str, added_lines: int, removed_lines: int, source_name: str
+) -> str:
+    """`summarise`, rebuilt from a STORED change row rather than a ChangeResult.
+
+    Same reason as `notes_for_change`: assessment can run more than once, and the
+    deterministic half of a finding's summary has to be reproducible on each run so it
+    can be REPLACED rather than appended to. `shape` is not a stored column, so it is
+    reconstructed here from the counts that are.
+    """
+    if change_kind == watch.CHANGE_NONE:
+        shape = ""
+    elif change_kind == watch.CHANGE_UNREACHABLE:
+        shape = "the source could not be collected, so nothing was compared"
+    elif change_kind == watch.CHANGE_FIRST_CAPTURE:
+        shape = f"first capture of this source, {added_lines} lines"
+    else:
+        shape = f"{added_lines} line(s) added, {removed_lines} removed"
+
+    return summarise(
+        ChangeResult(
+            kind=change_kind, added_lines=added_lines,
+            removed_lines=removed_lines, shape=shape,
+        ),
+        source_name=source_name,
+    )
+
+
+def notes_for_change(
+    *, change_kind: str, added_lines: int, removed_lines: int,
+    failure_reason: str | None = None,
+) -> tuple[str, ...]:
+    """The notes `detect` would produce, rebuilt from a STORED change row.
+
+    Exists because assessment can run more than once on the same finding -- a retry, or
+    a reviewer sending it back -- and the notes fall into two kinds that must not be
+    treated alike:
+
+      * notes about the CHANGE ("no baseline existed", "content was only added").
+        Permanently true of that change, however many times it is assessed.
+      * notes about an ASSESSMENT RUN ("no passage was close enough to ground an
+        interpretation"). True of one run and possibly false of the next.
+
+    Appending the second kind to the first left a finding carrying five citations AND
+    a note saying nothing could be cited -- self-contradictory, in the one agent whose
+    whole purpose is to be exact about what is and is not known. So assessment rebuilds
+    the change notes from here each time and adds only its own run's notes to them.
+
+    Deliberately derived from the stored columns rather than from the original
+    ChangeResult: the row is what survives, so the row has to be enough.
+    """
+    if change_kind == watch.CHANGE_UNREACHABLE:
+        return (
+            failure_reason or "collection failed without a recorded reason",
+            ("This is NOT a report that the source is unchanged. Its current "
+             "content is unknown."),
+        )
+    if change_kind == watch.CHANGE_FIRST_CAPTURE:
+        return (
+            ("No baseline existed. Accepting this finding is what creates one; "
+             "until then every re-check will report this again."),
+        )
+    if change_kind != watch.CHANGE_CONTENT:
+        return ()
+
+    notes: list[str] = []
+    if added_lines + removed_lines <= MINOR_LINE_THRESHOLD:
+        notes.append(
+            "A small diff. Reported in full regardless -- size is not a proxy for "
+            "significance, and a one-line amendment can be the whole change."
+        )
+    if added_lines and not removed_lines:
+        notes.append("Content was added; nothing was taken away.")
+    elif removed_lines and not added_lines:
+        notes.append("Content was removed; nothing was added.")
+    return tuple(notes)
+
+
 def _diff(before: str, after: str) -> tuple[int, int, str]:
     """Unified diff, counting only real content lines.
 

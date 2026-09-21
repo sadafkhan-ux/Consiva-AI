@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.regwatch.rules import change_detection
 from app.agents.regwatch.rules import relevance as relevance_rules
 from app.agents.regwatch.schemas import watch
 from app.agents.regwatch.services import impact_service, lifecycle
@@ -57,10 +58,18 @@ logger = logging.getLogger(__name__)
 # both cost more and bury the change.
 MAX_CHANGE_CHARS = 6000
 RAG_TOP_K = 5
-# Beyond this cosine distance a chunk is not really about the query. Retrieving five
-# barely-related passages and inviting the model to cite them is how a citation that
-# supports nothing gets written.
-RAG_MAX_DISTANCE = 0.55
+# The cutoff beyond which a chunk is not really about the query comes from
+# `settings.rag_max_distance`, the SAME value Agents 1 and 4 retrieve with. It is not
+# a constant here.
+#
+# It was a constant here, set to 0.55, and that was wrong in a way worth recording.
+# This embedding model's cosine distances sit in a higher band than that: measured
+# against the live corpus, the query "consent notice withdrawal data principal rights"
+# returns the DPDP Act itself at 0.635. Every retrieval was therefore discarded, every
+# finding reported "no passage was close enough to ground an interpretation", and the
+# whole grounded-interpretation path was dead code -- while looking, from the outside,
+# exactly like an honest corpus miss. Reading one number off the other two agents
+# beats inventing one, and it means a future re-tuning applies to all three.
 
 
 class _Interpretation(BaseModel):
@@ -177,10 +186,38 @@ async def assess(
     )
     finding.impact_summary = impact_service.summarise_impact(impacts, gaps)
 
-    questions = list(finding.open_questions or [])
+    # Rebuilt from the change row, NOT carried over from `finding.open_questions`.
+    # Assessment can run more than once -- a retry, a reviewer sending it back -- and
+    # appending this run's notes to the last run's produced a finding that carried
+    # five citations AND a note saying nothing could be cited. The change-level notes
+    # are permanently true of the change; this run's notes are not.
+    questions = list(change_detection.notes_for_change(
+        change_kind=change.change_kind,
+        added_lines=change.added_lines,
+        removed_lines=change.removed_lines,
+        failure_reason=_failure_reason(finding),
+    ))
     questions.extend(gaps)
 
     # ── 4. Interpretation, optional, grounded ──────────────────────────────────
+    #
+    # Everything the interpretation owns is RESET first and written only on success.
+    # Leaving the previous run's citations in place while this run reported that it
+    # had nothing to cite produced a finding carrying five citations under a note
+    # saying none could be found -- and re-merging the drafted prose onto an already
+    # merged summary compounded it a paragraph at a time. Each of these fields is now
+    # a function of this run alone.
+    deterministic_summary = change_detection.summarise_stored(
+        change_kind=change.change_kind,
+        added_lines=change.added_lines,
+        removed_lines=change.removed_lines,
+        source_name=source.name,
+    )
+    finding.summary = deterministic_summary
+    finding.citations = []
+    finding.grounded_facts = []
+    finding.drafted_by_model = None
+
     if use_llm and change.change_kind != watch.CHANGE_UNREACHABLE:
         interpreted, note = await _interpret(db, finding, source, change)
         if interpreted is None:
@@ -190,7 +227,9 @@ async def assess(
                 "Interpretation unavailable for finding %s: %s", finding.reference, note
             )
         else:
-            finding.summary = _merge_summary(finding.summary, interpreted["plain_summary"])
+            finding.summary = _merge_summary(
+                deterministic_summary, interpreted["plain_summary"]
+            )
             finding.citations = interpreted["citations"]
             finding.grounded_facts = interpreted["grounded_facts"]
             finding.drafted_by_model = interpreted["model"]
@@ -254,6 +293,18 @@ async def org_jurisdictions(db: AsyncSession, org_id: uuid.UUID) -> tuple[str, .
     return tuple(str(j).strip() for j in row if str(j).strip())
 
 
+def _failure_reason(finding: RegWatchFinding) -> str | None:
+    """The collector's reason, as recorded on the finding when it was raised.
+
+    Read from the finding rather than re-fetched: the collection that failed is the
+    one this finding was raised from, and its reason was written into the first open
+    question at creation. Re-deriving it would mean another round trip to say the
+    same thing.
+    """
+    existing = list(finding.open_questions or [])
+    return existing[0] if existing else None
+
+
 def _change_text(change: RegWatchChange) -> str | None:
     """What the rules read. The diff excerpt, because that is what moved."""
     return (change.diff_excerpt or "")[:MAX_CHANGE_CHARS] or None
@@ -314,7 +365,7 @@ async def _interpret(
             db=db,
             llm_client=NvidiaLLMClient(settings),
             top_k=RAG_TOP_K,
-            max_distance=RAG_MAX_DISTANCE,
+            max_distance=settings.rag_max_distance,
         )
     except Exception as exc:  # noqa: BLE001 -- any retrieval failure is the same outcome here
         logger.warning("Regulatory corpus retrieval failed: %s", exc)

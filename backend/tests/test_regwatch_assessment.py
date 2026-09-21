@@ -288,3 +288,112 @@ def test_a_missing_source_or_change_fails_the_finding_rather_than_leaving_it_det
     assert "watch.FAILED" in body
     assert "error_code" in body
     assert "requires_human_review = True" in body
+
+
+# ── Assessment must be idempotent ───────────────────────────────────────────────
+#
+# Three bugs of one shape, all found by re-assessing a real finding rather than by
+# reading the code. Assessment can run more than once -- a retry, a reviewer sending
+# it back -- and every field it writes has to be a function of THAT run. It wasn't:
+#
+#   * open_questions accumulated, so a finding carried five citations AND a note
+#     saying nothing could be cited;
+#   * citations / grounded_facts / drafted_by_model survived a run that failed to
+#     ground anything, contradicting that run's own note;
+#   * the drafted prose was merged onto an already-merged summary, compounding a
+#     paragraph at a time.
+
+@pytest.mark.parametrize("kind,added,removed", [
+    (watch.CHANGE_FIRST_CAPTURE, 99, 0),
+    (watch.CHANGE_CONTENT, 4, 1),
+    (watch.CHANGE_CONTENT, 1, 0),
+    (watch.CHANGE_CONTENT, 0, 2),
+    (watch.CHANGE_UNREACHABLE, 0, 0),
+])
+def test_notes_rebuilt_from_a_stored_row_match_what_detect_produced(kind, added, removed):
+    """The row is what survives, so the row has to be enough to rebuild them."""
+    from app.agents.regwatch.rules import change_detection as cd
+
+    rebuilt = cd.notes_for_change(
+        change_kind=kind, added_lines=added, removed_lines=removed,
+        failure_reason="probe failed",
+    )
+    if kind == watch.CHANGE_FIRST_CAPTURE:
+        original = cd.detect(
+            baseline_text=None, baseline_hash=None,
+            new_text="\n".join("x" for _ in range(added)), new_hash="h",
+        )
+    elif kind == watch.CHANGE_UNREACHABLE:
+        original = cd.detect(
+            baseline_text=None, baseline_hash=None, new_text=None, new_hash=None,
+            collection_failed=True, failure_reason="probe failed",
+        )
+    else:
+        before = "\n".join(f"line {i}" for i in range(20))
+        after_lines = [f"line {i}" for i in range(20)]
+        for i in range(removed):
+            after_lines.pop(0)
+        after = "\n".join([f"new {i}" for i in range(added)] + after_lines)
+        original = cd.detect(
+            baseline_text=before, baseline_hash="a", new_text=after, new_hash="b",
+        )
+        # The diff decides the real counts; rebuild against those, not the request.
+        rebuilt = cd.notes_for_change(
+            change_kind=original.kind,
+            added_lines=original.added_lines,
+            removed_lines=original.removed_lines,
+        )
+    assert rebuilt == original.notes
+
+
+@pytest.mark.parametrize("kind", sorted(watch.CHANGE_KINDS))
+def test_the_deterministic_summary_can_be_rebuilt_from_the_row(kind):
+    """It has to be reproducible so a re-assessment can REPLACE it rather than append
+    a second copy of the drafted prose to it."""
+    from app.agents.regwatch.rules import change_detection as cd
+
+    first = cd.summarise_stored(
+        change_kind=kind, added_lines=3, removed_lines=1, source_name="MeitY"
+    )
+    again = cd.summarise_stored(
+        change_kind=kind, added_lines=3, removed_lines=1, source_name="MeitY"
+    )
+    assert first == again
+    assert first.startswith("MeitY")
+    if kind == watch.CHANGE_UNREACHABLE:
+        assert "not a report that it is unchanged" in first
+
+
+def test_assessment_rebuilds_its_questions_instead_of_appending_to_them():
+    body = inspect.getsource(assessment_service.assess)
+    assert "change_detection.notes_for_change" in body
+    assert "list(finding.open_questions or [])" not in body, (
+        "assessment is carrying the previous run's notes forward again"
+    )
+
+
+def test_a_failed_interpretation_clears_the_previous_ones_artifacts():
+    """Otherwise the finding shows citations under a note saying none were found."""
+    body = inspect.getsource(assessment_service.assess)
+    assert "finding.citations = []" in body
+    assert "finding.grounded_facts = []" in body
+    assert "finding.drafted_by_model = None" in body
+    # And the merge takes the freshly rebuilt head, never the stored summary.
+    assert "_merge_summary(\n                deterministic_summary" in body
+    assert "_merge_summary(finding.summary" not in body
+
+
+def test_the_retrieval_cutoff_is_the_platforms_not_this_modules():
+    """It was a local constant at 0.55. Measured against the live corpus, the query
+    'consent notice withdrawal data principal rights' returns the DPDP Act itself at
+    0.635, so every retrieval was discarded and the grounded-interpretation path was
+    dead code -- while looking exactly like an honest corpus miss."""
+    from app.config import get_settings
+
+    body = inspect.getsource(assessment_service._interpret)
+    assert "settings.rag_max_distance" in body
+    assert not hasattr(assessment_service, "RAG_MAX_DISTANCE"), (
+        "the local threshold constant is back"
+    )
+    # And it is loose enough to actually retain this corpus's distances.
+    assert get_settings().rag_max_distance >= 0.7
