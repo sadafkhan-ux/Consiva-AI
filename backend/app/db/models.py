@@ -400,6 +400,10 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String, nullable=False)
     slug: Mapped[str | None] = mapped_column(String, nullable=True, unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Where this organisation operates. Read only by Agent 5's relevance rules;
+    # empty means "not recorded", which is reported as undetermined, never as
+    # irrelevance (migration 0020).
+    jurisdictions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

@@ -61,6 +61,7 @@ from app.services import (
     dsr_run_service,
     incident_run_service,
     monitoring_service,
+    regwatch_run_service,
     ropa_run_service,
     scan_service,
 )
@@ -134,6 +135,24 @@ async def _process_one(job: AgentJob) -> None:
         # fake execution the build forbids.
         await incident_run_service.run_analysis(
             uuid.UUID(job.payload["incident_id"]),
+            uuid.UUID(job.payload["org_id"]),
+            job_id=job.id,
+        )
+    elif job.job_type == "regwatch_collect":
+        # Agent 5 (Regulatory Watch): fetch one approved source, compare it against
+        # the accepted baseline, and raise a finding if anything moved -- including
+        # when the fetch FAILED, which is a finding in its own right.
+        await regwatch_run_service.run_collection(
+            uuid.UUID(job.payload["source_id"]),
+            uuid.UUID(job.payload["org_id"]),
+            job_id=job.id,
+        )
+    elif job.job_type == "regwatch_assess":
+        # Relevance, priority and impact are deterministic and always run; the
+        # interpretation step is optional and its failure leaves an open question on
+        # the finding rather than failing the job.
+        await regwatch_run_service.run_assessment(
+            uuid.UUID(job.payload["finding_id"]),
             uuid.UUID(job.payload["org_id"]),
             job_id=job.id,
         )
@@ -225,6 +244,19 @@ async def _maintenance_loop(stopping: asyncio.Event) -> None:
                 )
         except Exception:
             logger.exception("Incident sweep failed; continuing with job processing")
+
+        # Agent 5 due-source sweep. Enqueues rather than collecting inline, so one
+        # slow regulator cannot hold up every other organisation's watch. A source
+        # whose interval has elapsed and which is NOT collected is the failure mode
+        # this agent exists to make visible, so a failure here is logged loudly.
+        try:
+            enqueued = await regwatch_run_service.sweep_due_sources()
+            if enqueued:
+                logger.info("Regulatory watch: %d source collection(s) enqueued", enqueued)
+        except Exception:
+            logger.exception(
+                "Regulatory watch sweep failed; due sources were NOT enqueued this tick"
+            )
 
         await _sleep_or_stop(stopping, MAINTENANCE_INTERVAL_SECONDS)
 
