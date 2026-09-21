@@ -42,6 +42,13 @@ class ScanResponse(BaseModel):
 class ScanStatusResponse(ScanResponse):
     error: str | None
     evidence_counts: dict
+    # `status` above is the SCAN. These describe the ANALYSIS, which is a separate
+    # step that may not have run, may still be running, or may have failed -- and
+    # without them all three look identical to a clean result: status `completed`,
+    # zero findings. A consumer reading that as a clean bill of health is the exact
+    # false-negative the rest of this platform is built to refuse.
+    analysis_status: str | None = None
+    findings_complete: bool = False
 
 
 class AgentRunResponse(BaseModel):
@@ -184,7 +191,17 @@ async def get_scan(
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
     counts = await scan_repository.get_scan_counts(db, scan_id)
-    return ScanStatusResponse(id=scan.id, url=scan.url, status=scan.status, error=scan.error, evidence_counts=counts)
+    run = await scan_repository.latest_agent_run(db, scan_id)
+    # `findings_complete` is true ONLY when analysis reached a state where the finding
+    # list is the whole answer. `paused` counts: that is the human-review gate, and the
+    # findings are all present and waiting on a decision. Everything else -- never run,
+    # still running, failed -- means the list is not yet the answer.
+    return ScanStatusResponse(
+        id=scan.id, url=scan.url, status=scan.status, error=scan.error,
+        evidence_counts=counts,
+        analysis_status=run.status if run else None,
+        findings_complete=bool(run and run.status in ("completed", "paused")),
+    )
 
 
 @router.post("/{scan_id}/analyze", response_model=AgentRunResponse, status_code=202)

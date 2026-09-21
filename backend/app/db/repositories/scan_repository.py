@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
+    AgentRun,
     ConsentForm,
     ConsentScan,
     ConsentSignal,
@@ -287,3 +288,19 @@ async def get_scan_evidence_summary(db: AsyncSession, scan_id: uuid.UUID) -> dic
     signals = await _rows(ConsentSignal)
 
     return _serialize_evidence(pages, forms, cookies, trackers, services, policies, signals)
+
+
+async def latest_agent_run(db: AsyncSession, scan_id: uuid.UUID) -> AgentRun | None:
+    """The most recent analysis run for a scan, or None if one was never started.
+
+    Exists so a caller can tell "analysis ran and found nothing" apart from "analysis
+    has not run". Those are the same response without it -- status `completed`, zero
+    findings -- and the first reads as a clean bill of health.
+    """
+    result = await db.execute(
+        select(AgentRun)
+        .where(AgentRun.scan_id == scan_id)
+        .order_by(AgentRun.started_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
