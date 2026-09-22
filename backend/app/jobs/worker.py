@@ -28,6 +28,9 @@ import signal
 import socket
 import sys
 import uuid
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Must also run before app.db.session is imported, because that module builds the
 # engine at import time.
@@ -38,6 +41,16 @@ import uuid
 # migration 0018 creates, row-level security would correctly show this process
 # nothing -- and the sweeps would stop silently, which is the worst way for them to
 # stop. So the worker takes its own connection string when one is given.
+#
+# The .env load below is not redundant. This block runs BEFORE app.config is imported,
+# and app.config is what reads .env -- so without this, a WORKER_DATABASE_URL that
+# lives in the file rather than in the real environment was invisible here, and the
+# worker quietly ran on the restricted role with every sweep returning nothing. That
+# is the exact silent failure the paragraph above warns about, reintroduced by the
+# order of two imports. `override=False` keeps a real environment variable (compose,
+# systemd) winning over the file.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+
 if os.getenv("WORKER_DATABASE_URL"):
     os.environ["DATABASE_URL"] = os.environ["WORKER_DATABASE_URL"]
 

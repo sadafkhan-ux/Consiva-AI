@@ -102,7 +102,26 @@ services:
       # Overrides whatever DATABASE_URL is in backend/.env (still the old Supabase URL,
       # kept there as a commented fallback) -- always point this deployment at the
       # local `db` service instead. See the `db` service comment above.
+      #
+      # ROW-LEVEL SECURITY: THIS URL IS NOT YET CUT OVER.
+      # ------------------------------------------------
+      # `consiva` here is the database owner. Owners bypass their own RLS policies
+      # unless FORCE is set, and a superuser bypasses them unconditionally -- so with
+      # this URL the 61 forced policies from migration 0018 are never consulted and
+      # tenant isolation rests entirely on every query carrying its own org_id filter.
+      # The API now REFUSES TO START in production on such a role (see
+      # app/db/privilege_check.py), which is why the escape hatch below exists.
+      #
+      # To complete the cutover on this deployment:
+      #   docker compose -f docker-compose.prod.yml exec db       #     psql -U consiva -c "alter role consiva_app login password '<generated>'"
+      # then swap the two lines below and drop ALLOW_PRIVILEGED_DB_ROLE:
+      #   DATABASE_URL: postgresql+asyncpg://consiva_app:${CONSIVA_APP_PASSWORD}@db:5432/consiva
+      #   WORKER_DATABASE_URL stays on the owner -- see the worker service.
       DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
+      # Deliberate, temporary, and loud: without it this stack will not boot, because
+      # the role above cannot enforce RLS. Remove it the moment the cutover above is
+      # done. Every boot logs at ERROR while this is set.
+      ALLOW_PRIVILEGED_DB_ROLE: "i-accept-no-database-tenant-isolation"
       # Signs and verifies login tokens (app/core/tokens.py). Passed explicitly from
       # /opt/consiva/.env, like POSTGRES_PASSWORD above, because that file is read by
       # compose for interpolation and is NOT the same file as the `env_file:
@@ -148,6 +167,13 @@ services:
     environment:
       APP_ENV: "${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}"
       # Same override as backend -- see the `db` service comment above.
+      #
+      # The worker STAYS on the privileged role even after the API cuts over. It is
+      # deliberately cross-tenant: the DSR and incident SLA sweeps and the regulatory
+      # due-source sweep walk every organisation's rows and have no single org_id to
+      # scope to. On the restricted role they would correctly see nothing and stop
+      # sweeping silently -- the worst way for a compliance sweep to stop. After the
+      # cutover, set WORKER_DATABASE_URL to this same value; worker.py prefers it.
       DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
       # How many queued jobs this worker runs at once. Before this existed the worker
       # took one job per poll and ran it inline, so a second scan waited out the
