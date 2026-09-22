@@ -52,6 +52,7 @@ if sys.platform == "win32":
 
 from app.agents.breach.services import sla_service as incident_sla_service
 from app.agents.dsr.services import sla_service as dsr_sla_service
+from app.agents.regwatch.services import action_sla_service as regwatch_action_sla_service
 from app.config import get_settings
 from app.db.models import AgentJob
 from app.db.session import async_session_factory
@@ -244,6 +245,21 @@ async def _maintenance_loop(stopping: asyncio.Event) -> None:
                 )
         except Exception:
             logger.exception("Incident sweep failed; continuing with job processing")
+
+        # Agent 5 action sweep. Flags work whose own target date has passed -- the
+        # organisation's date, never a statutory one, which every row it writes says
+        # explicitly. Marks once per action and never again, because this loop runs
+        # every tick and the audit log is append-only.
+        try:
+            async with async_session_factory() as db:
+                overdue = await regwatch_action_sla_service.sweep_overdue(db)
+                await db.commit()
+            if overdue:
+                logger.warning(
+                    "Regulatory watch: %d action(s) newly past their target date", overdue
+                )
+        except Exception:
+            logger.exception("Regulatory action sweep failed; continuing with job processing")
 
         # Agent 5 due-source sweep. Enqueues rather than collecting inline, so one
         # slow regulator cannot hold up every other organisation's watch. A source

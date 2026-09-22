@@ -76,6 +76,11 @@ class Fetched:
     text: str
     content_hash: str
     byte_count: int
+    # The undecoded-then-decoded body, before `normalize` flattened it. Carried so a
+    # connector that reads the document's STRUCTURE -- a feed, say -- still can: the
+    # HTML stripper removes the very tags it would need. In memory only; what gets
+    # persisted is `text`.
+    raw: str = ""
 
 
 def normalize(raw: str) -> str:
@@ -165,7 +170,8 @@ async def fetch(
                     f"{current} returned HTTP {response.status_code}")
 
             raw = response.content[:MAX_BYTES]
-            text = normalize(raw.decode(response.encoding or "utf-8", errors="replace"))
+            decoded = raw.decode(response.encoding or "utf-8", errors="replace")
+            text = normalize(decoded)
 
             if len(text) < min_usable_chars:
                 raise ContentUnusableError(
@@ -187,6 +193,7 @@ async def fetch(
                 text=text,
                 content_hash=hash_content(text),
                 byte_count=len(raw),
+                raw=decoded,
             )
 
     raise SourceUnreachableError(f"{url} exceeded {MAX_REDIRECTS} redirects")

@@ -106,6 +106,20 @@ export interface WatchAction {
   completed_at: string | null;
   /** The platform did not do this work and does not claim to have verified it. */
   attested_not_verified: boolean;
+  /** Four-valued, not a boolean. "No date was set" and "on track" are different
+   *  facts, and `overdue: false` would collapse them into one. */
+  due: ActionDue;
+}
+
+export interface ActionDue {
+  state: "no_date" | "settled" | "overdue" | "due_soon" | "on_track";
+  overdue: boolean;
+  due_at: string | null;
+  remaining_seconds: number | null;
+  note: string;
+  /** Always false. This is the organisation's own target, never a legal deadline,
+   *  and the flag is on the payload so no screen has to remember the caveat. */
+  is_statutory_deadline: boolean;
 }
 
 export interface WatchCitation {
@@ -164,6 +178,8 @@ export interface WatchSummary {
   findings_by_status: Record<string, number>;
   awaiting_review: number;
   open_actions: number;
+  overdue_actions: number;
+  overdue_note: string;
   coverage_note: string;
 }
 
@@ -221,6 +237,9 @@ export const regwatchApi = {
     name: string;
     url: string;
     jurisdiction: string;
+    /** http, rss, or manual_upload. A manual source is never fetched; a feed is
+     *  parsed as items so a new entry is a one-line diff. */
+    connector?: string;
     topic?: string | null;
     authority?: string | null;
     check_interval_minutes?: number;
@@ -287,6 +306,36 @@ export const regwatchApi = {
       method: "POST",
       body: JSON.stringify({ completed_by: completedBy, note }),
     }),
+
+  /** Open / in progress / blocked / cancelled. Completion is deliberately NOT here:
+   *  it goes through completeAction, which requires a name and a description of the
+   *  work, because the platform did not do it and cannot verify it. */
+  setActionStatus: (actionId: string, status: string, reason?: string) =>
+    request<WatchAction>(`/api/v1/regwatch/actions/${actionId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, reason }),
+    }),
+
+  overdueActions: () =>
+    request<{ count: number; actions: (ActionDue & { id: string; finding_id: string; finding_reference: string; title: string; owner_label: string | null; status: string })[]; note: string }>(
+      "/api/v1/regwatch/actions/overdue",
+    ),
+
+  /** Adopt the snapshot a finding was raised from as the source's baseline. One act
+   *  with two consequences -- the baseline moves and the finding closes -- so it is
+   *  one call, not a button for each. */
+  acceptBaselineFromFinding: (findingId: string, note?: string) =>
+    request<{ baseline: { id: string; version: number; content_hash: string }; finding: WatchFinding }>(
+      `/api/v1/regwatch/findings/${findingId}/accept-baseline`,
+      { method: "POST", body: JSON.stringify({ note }) },
+    ),
+
+  /** Content for a manual-upload source, which is never fetched. */
+  uploadManualContent: (sourceId: string, content: string, note?: string) =>
+    request<{ collection: WatchCollection; change_kind: string; finding: WatchFinding | null }>(
+      `/api/v1/regwatch/sources/${sourceId}/upload`,
+      { method: "POST", body: JSON.stringify({ content, note }) },
+    ),
 
   closeFinding: (id: string, reason?: string) =>
     request<WatchFinding>(`/api/v1/regwatch/findings/${id}/close`, {

@@ -55,6 +55,20 @@ const HEALTH_TONE: Record<string, string> = {
   not_monitored: "warn",
 };
 
+const ACTION_TONE: Record<string, string> = {
+  completed: "ok",
+  cancelled: "neutral",
+  blocked: "bad",
+  in_progress: "info",
+  open: "warn",
+};
+
+const DUE_TONE: Record<string, string> = {
+  overdue: "bad",
+  due_soon: "warn",
+  on_track: "ok",
+};
+
 const RELEVANCE_TONE: Record<string, string> = {
   relevant: "warn",
   not_relevant: "neutral",
@@ -214,6 +228,19 @@ export function RegWatchConsole() {
               onOpenActions={(actions) =>
                 act(() => regwatchApi.openActions(selected.id, actions), "Actions raised.")
               }
+              onAcceptBaseline={(note) =>
+                act(
+                  () => regwatchApi.acceptBaselineFromFinding(selected.id, note),
+                  "Baseline accepted. Future checks are measured against this snapshot, "
+                    + "and this finding is closed.",
+                )
+              }
+              onSetActionStatus={(actionId, status, reason) =>
+                act(
+                  () => regwatchApi.setActionStatus(actionId, status, reason),
+                  `Action marked ${status}. Nothing was carried out by Consiva.`,
+                )
+              }
               onCompleteAction={(actionId, who, note) =>
                 act(
                   () => regwatchApi.completeAction(actionId, who, note),
@@ -237,23 +264,39 @@ export function RegWatchConsole() {
  */
 function CoverageBanner({ summary }: { summary: WatchSummary }) {
   const gap = summary.sources_not_currently_watched;
+  const overdue = summary.overdue_actions > 0 && (
+    <div className="banner banner-warn small">
+      {summary.overdue_actions} action(s) are past the date set for them.{" "}
+      {/* The qualifier is not optional. Read without it, "overdue" in a compliance
+          tool implies a missed legal obligation, which is not what this measures. */}
+      {summary.overdue_note}
+    </div>
+  );
+
   if (summary.sources === 0) {
     return (
-      <div className="banner banner-warn">
-        No regulatory sources are registered, so nothing is being monitored. Add a source on
-        the Sources tab.
-      </div>
+      <>
+        <div className="banner banner-warn">
+          No regulatory sources are registered, so nothing is being monitored. Add a source
+          on the Sources tab.
+        </div>
+        {overdue}
+      </>
     );
   }
   if (gap === 0) {
     return (
-      <div className="banner banner-ok small">
-        All {summary.sources} registered source(s) were collected successfully within their
-        check interval. {summary.coverage_note}
-      </div>
+      <>
+        <div className="banner banner-ok small">
+          All {summary.sources} registered source(s) were collected successfully within
+          their check interval. {summary.coverage_note}
+        </div>
+        {overdue}
+      </>
     );
   }
   return (
+    <>
     <div className="banner banner-error">
       <strong>
         {gap} of {summary.sources} source(s) are not currently being watched.
@@ -270,6 +313,8 @@ function CoverageBanner({ summary }: { summary: WatchSummary }) {
         not changed.
       </p>
     </div>
+    {overdue}
+    </>
   );
 }
 
@@ -292,12 +337,15 @@ function SourcesTab({
     name: "",
     url: "",
     jurisdiction: "India",
+    connector: "http",
     topic: "",
     authority: "",
     check_interval_minutes: 1440,
     credential_ref: "",
   });
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState({ id: "", name: "", content: "" });
+  const isManual = form.connector === "manual_upload";
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -307,6 +355,7 @@ function SourcesTab({
         name: form.name,
         url: form.url,
         jurisdiction: form.jurisdiction,
+        connector: form.connector,
         topic: form.topic || null,
         authority: form.authority || null,
         check_interval_minutes: Number(form.check_interval_minutes),
@@ -340,12 +389,24 @@ function SourcesTab({
             />
           </label>
           <label>
+            How it is read
+            <select
+              value={form.connector}
+              onChange={(e) => setForm({ ...form, connector: e.target.value })}
+            >
+              <option value="http">Web page (fetched on a schedule)</option>
+              <option value="rss">Feed (parsed as items, so a new entry is one line)</option>
+              <option value="manual_upload">Uploaded by hand (never fetched)</option>
+            </select>
+          </label>
+          <label>
             URL
             <input
-              required
+              required={!isManual}
+              disabled={isManual}
               value={form.url}
               onChange={(e) => setForm({ ...form, url: e.target.value })}
-              placeholder="https://www.meity.gov.in/..."
+              placeholder={isManual ? "not used — this source is never fetched" : "https://..."}
             />
           </label>
           <label>
@@ -444,13 +505,25 @@ function SourcesTab({
                   )}
                 </td>
                 <td>
-                  <button
-                    className="secondary small"
-                    disabled={busy || !s.health.enabled}
-                    onClick={() => onCollect(s.id)}
-                  >
-                    Collect now
-                  </button>
+                  {s.connector === "manual_upload" ? (
+                    // A manual source is never fetched, so offering "Collect now"
+                    // would be a button that cannot do what it says.
+                    <button
+                      className="secondary small"
+                      disabled={busy || !s.health.enabled}
+                      onClick={() => setUploading({ id: s.id, name: s.name, content: "" })}
+                    >
+                      Upload content
+                    </button>
+                  ) : (
+                    <button
+                      className="secondary small"
+                      disabled={busy || !s.health.enabled}
+                      onClick={() => onCollect(s.id)}
+                    >
+                      Collect now
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -458,6 +531,47 @@ function SourcesTab({
         </table>
         {sources.length === 0 && <p className="empty-note">No sources registered yet.</p>}
       </section>
+
+      {uploading.id && (
+        <section className="section dsr-actions">
+          <h3>Upload content for {uploading.name}</h3>
+          <p className="hint">
+            This source is never fetched, so its content is whatever was last pasted here.
+            It is compared against the baseline exactly like a fetched page, and the record
+            notes that it arrived by hand rather than from the source itself.
+          </p>
+          <label>
+            Content
+            <textarea
+              rows={10}
+              value={uploading.content}
+              onChange={(e) => setUploading({ ...uploading, content: e.target.value })}
+            />
+          </label>
+          <button
+            disabled={busy || !uploading.content.trim()}
+            onClick={() => {
+              void (async () => {
+                try {
+                  await regwatchApi.uploadManualContent(uploading.id, uploading.content);
+                  setUploading({ id: "", name: "", content: "" });
+                  onRefresh();
+                } catch (e) {
+                  onError(e instanceof Error ? e.message : String(e));
+                }
+              })();
+            }}
+          >
+            Upload
+          </button>
+          <button
+            className="secondary"
+            onClick={() => setUploading({ id: "", name: "", content: "" })}
+          >
+            Cancel
+          </button>
+        </section>
+      )}
     </>
   );
 }
@@ -466,6 +580,8 @@ function FindingDetail({
   finding,
   busy,
   onDecide,
+  onAcceptBaseline,
+  onSetActionStatus,
   onOpenActions,
   onCompleteAction,
   onClose,
@@ -473,6 +589,8 @@ function FindingDetail({
   finding: WatchFindingDetail;
   busy: boolean;
   onDecide: (decision: string, reason?: string) => void;
+  onAcceptBaseline: (note?: string) => void;
+  onSetActionStatus: (actionId: string, status: string, reason?: string) => void;
   onOpenActions: (
     actions: { title: string; rationale: string; expected_result: string }[],
   ) => void;
@@ -482,8 +600,13 @@ function FindingDetail({
   const [reason, setReason] = useState("");
   const [action, setAction] = useState({ title: "", rationale: "", expected_result: "" });
   const [attest, setAttest] = useState({ id: "", who: "", note: "" });
+  const [cancelling, setCancelling] = useState({ id: "", reason: "" });
 
   const decidable = finding.status === "review_required";
+  // A first capture is waiting on one thing: somebody adopting it as the reference
+  // point. Until they do, every re-check reports the same capture again.
+  const awaitingBaseline =
+    decidable && finding.change?.change_kind === "first_capture";
   const canRaiseActions = finding.status === "approved";
   const canClose = finding.status === "approved" || finding.status === "action_open";
 
@@ -603,6 +726,30 @@ function FindingDetail({
         </>
       )}
 
+      {awaitingBaseline && (
+        <div className="dsr-actions">
+          <h4>Adopt this snapshot as the baseline</h4>
+          <p className="small">
+            There was no baseline for this source, so nothing could be compared. Accepting
+            this capture makes it the reference point &mdash; from then on you are told what
+            changed against it. Until somebody accepts one, every check reports this same
+            first capture again.
+          </p>
+          <label>
+            Note (optional)
+            <input value={reason} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button disabled={busy} onClick={() => onAcceptBaseline(reason || undefined)}>
+            Accept as baseline
+          </button>
+          <p className="hint">
+            Recorded against your name, and this finding closes &mdash; adopting the
+            reference point is the work it was asking for. It is not a judgement that the
+            source matters or does not.
+          </p>
+        </div>
+      )}
+
       {decidable && (
         <div className="dsr-actions">
           <label>
@@ -689,18 +836,45 @@ function FindingDetail({
                     )}
                   </td>
                   <td className="nowrap">
-                    <span className={`badge ${a.status === "completed" ? "ok" : "warn"}`}>
+                    <span className={`badge ${ACTION_TONE[a.status] ?? "warn"}`}>
                       {a.status}
                     </span>
+                    {/* Never a bare "overdue": the qualifier goes with it, because
+                        this is the organisation's own date, not a legal one. */}
+                    {a.due.state !== "no_date" && a.due.state !== "settled" && (
+                      <div className="small">
+                        <span className={`badge ${DUE_TONE[a.due.state] ?? "neutral"}`}>
+                          {a.due.state.replace("_", " ")}
+                        </span>
+                        <span className="muted"> own target, not statutory</span>
+                      </div>
+                    )}
                   </td>
                   <td>
-                    {a.status !== "completed" && (
-                      <button
-                        className="secondary small"
-                        onClick={() => setAttest({ id: a.id, who: "", note: "" })}
-                      >
-                        Record completion
-                      </button>
+                    {a.status !== "completed" && a.status !== "cancelled" && (
+                      <>
+                        <button
+                          className="secondary small"
+                          onClick={() => setAttest({ id: a.id, who: "", note: "" })}
+                        >
+                          Record completion
+                        </button>
+                        {a.status !== "in_progress" && (
+                          <button
+                            className="secondary small"
+                            disabled={busy}
+                            onClick={() => onSetActionStatus(a.id, "in_progress")}
+                          >
+                            Start
+                          </button>
+                        )}
+                        <button
+                          className="secondary small"
+                          onClick={() => setCancelling({ id: a.id, reason: "" })}
+                        >
+                          Cancel
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
@@ -708,6 +882,34 @@ function FindingDetail({
             </tbody>
           </table>
         </>
+      )}
+
+      {cancelling.id && (
+        <div className="dsr-actions">
+          <h4>Cancel this action</h4>
+          <label>
+            Why it is not being done
+            <textarea
+              rows={2}
+              value={cancelling.reason}
+              onChange={(e) => setCancelling({ ...cancelling, reason: e.target.value })}
+            />
+          </label>
+          <button
+            disabled={busy || cancelling.reason.trim().length < 10}
+            onClick={() => {
+              onSetActionStatus(cancelling.id, "cancelled", cancelling.reason);
+              setCancelling({ id: "", reason: "" });
+            }}
+          >
+            Cancel action
+          </button>
+          <p className="hint">
+            A compliance action that was dropped with no record of why is a gap nobody
+            can explain later, so the reason is required. Cancelling does not mean the
+            work was done.
+          </p>
+        </div>
       )}
 
       {attest.id && (

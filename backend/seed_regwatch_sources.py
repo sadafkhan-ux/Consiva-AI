@@ -22,52 +22,57 @@ import asyncio
 import uuid
 
 from app.agents.regwatch.errors import InvalidSourceError
+from app.agents.regwatch.schemas import watch
 from app.agents.regwatch.services import collection_service, source_service
 from app.db.session import async_session_factory, set_org_scope
 
 ORG = uuid.UUID("8b2c939c-4993-4053-a7b5-a15fdb0b5310")
 
 SOURCES = [
-    dict(
-        name="MeitY — document and policy index",
-        url="https://www.meity.gov.in/sitemap.xml",
-        jurisdiction="India",
-        topic="rules policy notification",
-        authority="Ministry of Electronics and Information Technology",
-        check_interval_minutes=1440,
-    ),
-    dict(
-        name="PIB — government press releases",
-        url="https://www.pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3",
-        jurisdiction="India",
-        topic="notification press release",
-        authority="Press Information Bureau",
-        check_interval_minutes=1440,
-    ),
-    dict(
-        name="CERT-In — security advisories",
-        url="https://www.cert-in.org.in/s2cMainServlet?pageid=PUBADVLIST",
-        jurisdiction="India",
-        topic="security breach incident reasonable security",
-        authority="Indian Computer Emergency Response Team",
-        check_interval_minutes=1440,
-    ),
-    dict(
-        name="EDPB — news and guidance",
-        url="https://edpb.europa.eu/news/news_en",
-        jurisdiction="EU",
-        topic="consent rights transfer guidance",
-        authority="European Data Protection Board",
-        check_interval_minutes=1440,
-    ),
-    dict(
-        name="Irish DPC — latest news",
-        url="https://www.dataprotection.ie/en/news-media/latest-news",
-        jurisdiction="EU",
-        topic="rights enforcement access request",
-        authority="Data Protection Commission (Ireland)",
-        check_interval_minutes=1440,
-    ),
+    {
+        "name": "MeitY — document and policy index",
+        "url": "https://www.meity.gov.in/sitemap.xml",
+        "jurisdiction": "India",
+        "topic": "rules policy notification",
+        "authority": "Ministry of Electronics and Information Technology",
+        "check_interval_minutes": 1440,
+    },
+    {
+        "name": "PIB — government press releases",
+        "url": "https://www.pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3",
+        "jurisdiction": "India",
+        "topic": "notification press release",
+        "authority": "Press Information Bureau",
+        "check_interval_minutes": 1440,
+        # A feed, read as a feed. Flattened by the HTML stripper its twenty entries
+        # collapse into one 4,000-character line, so a single new press release
+        # produces a whole reflowed diff instead of one added line.
+        "connector": watch.CONNECTOR_RSS,
+    },
+    {
+        "name": "CERT-In — security advisories",
+        "url": "https://www.cert-in.org.in/s2cMainServlet?pageid=PUBADVLIST",
+        "jurisdiction": "India",
+        "topic": "security breach incident reasonable security",
+        "authority": "Indian Computer Emergency Response Team",
+        "check_interval_minutes": 1440,
+    },
+    {
+        "name": "EDPB — news and guidance",
+        "url": "https://edpb.europa.eu/news/news_en",
+        "jurisdiction": "EU",
+        "topic": "consent rights transfer guidance",
+        "authority": "European Data Protection Board",
+        "check_interval_minutes": 1440,
+    },
+    {
+        "name": "Irish DPC — latest news",
+        "url": "https://www.dataprotection.ie/en/news-media/latest-news",
+        "jurisdiction": "EU",
+        "topic": "rights enforcement access request",
+        "authority": "Data Protection Commission (Ireland)",
+        "check_interval_minutes": 1440,
+    },
 ]
 
 

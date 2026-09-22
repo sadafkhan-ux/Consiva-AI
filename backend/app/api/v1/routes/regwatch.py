@@ -32,6 +32,7 @@ from app.agents.regwatch.errors import (
 )
 from app.agents.regwatch.schemas import watch
 from app.agents.regwatch.services import (
+    action_sla_service,
     collection_service,
     review_service,
     source_service,
@@ -125,6 +126,34 @@ class ActionComplete(BaseModel):
     note: str = Field(min_length=10, max_length=5000)
 
 
+class ActionStatus(BaseModel):
+    status: str
+    reason: str | None = Field(default=None, max_length=5000)
+
+    @field_validator("status")
+    @classmethod
+    def _settable(cls, value: str) -> str:
+        if value not in watch.ACTION_STATUSES:
+            raise ValueError(f"status must be one of {sorted(watch.ACTION_STATUSES)}")
+        if value == watch.ACTION_COMPLETED:
+            raise ValueError(
+                "an action is completed through the completion endpoint, which requires "
+                "who did the work and a note describing it"
+            )
+        return value
+
+
+class BaselineFromFinding(BaseModel):
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ManualUpload(BaseModel):
+    """Content a person supplies for a source that is never fetched."""
+
+    content: str = Field(min_length=1, max_length=2_000_000)
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class OrgJurisdictions(BaseModel):
     jurisdictions: list[str] = Field(max_length=50)
 
@@ -198,6 +227,9 @@ def _finding_response(finding, *, impacts=None, actions=None, approvals=None) ->
                 # The platform did not do this work and does not claim to have
                 # verified it. Stated on every row rather than in a footnote.
                 "attested_not_verified": a.status == watch.ACTION_COMPLETED,
+                # Four-valued, not a boolean: "no date was set" and "on track" are
+                # different facts, and `overdue: false` would erase the first.
+                "due": action_sla_service.view(a),
             }
             for a in actions
         ]
@@ -344,6 +376,16 @@ async def collect_now(
     if not source.enabled:
         raise InvalidSourceError(
             f"source {source.name!r} is disabled; enable it before collecting"
+        )
+    if source.connector == watch.CONNECTOR_MANUAL:
+        # Queuing here would return 202 and then deliberately do nothing, which is a
+        # control that reports success for work it never intended to perform. The
+        # console hides the button for these sources; the API refuses regardless,
+        # because the console is not the only caller.
+        raise InvalidSourceError(
+            f"{source.name!r} is a manual-upload source and is never fetched. Queuing "
+            "a collection would report success for work that will not happen; upload "
+            "its content instead."
         )
     job = await queue.enqueue(
         db, org_id=source.org_id, job_type="regwatch_collect",
@@ -574,6 +616,122 @@ async def close_finding(
     return _finding_response(finding)
 
 
+@router.post("/findings/{finding_id}/accept-baseline", status_code=status.HTTP_201_CREATED)
+async def accept_baseline_from_finding(
+    finding_id: uuid.UUID,
+    payload: BaselineFromFinding,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Adopt the snapshot this finding was raised from as the source's baseline.
+
+    The decision nearly every `first_capture` finding is waiting for. Before this
+    existed the console could raise those findings and never resolve them, so each
+    re-check reported the same first capture again -- the loop the finding's own note
+    warns about.
+    """
+    org_id = uuid.UUID(user.org_id)
+    finding = await _finding_or_404(db, finding_id, org_id)
+    change = await repo.get_change(db, finding.change_id, org_id)
+    if change is None:
+        raise WatchNotReadyError("this finding has no change to accept")
+    collection = await repo.get_collection(db, change.to_collection_id, org_id)
+    if collection is None:
+        raise WatchNotReadyError("the collection this finding was raised from is missing")
+    source = await source_service.get_source_or_raise(db, finding.source_id, org_id)
+
+    baseline = await review_service.accept_baseline_from_finding(
+        db, finding, source, collection,
+        reviewer_user_id=uuid.UUID(user.user_id), note=payload.note,
+    )
+    await db.commit()
+    return {
+        "baseline": {
+            "id": str(baseline.id), "version": baseline.version,
+            "content_hash": baseline.content_hash,
+        },
+        "finding": _finding_response(finding),
+    }
+
+
+@router.patch("/actions/{action_id}")
+async def set_action_status(
+    action_id: uuid.UUID,
+    payload: ActionStatus,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Move an action between open, in progress, blocked and cancelled.
+
+    Cancelling matters more than it looks: a finding cannot be closed while any action
+    is still open, so an action that turned out to be unnecessary used to keep its
+    finding open with no way out.
+    """
+    org_id = uuid.UUID(user.org_id)
+    action = await repo.get_action(db, action_id, org_id)
+    if action is None:
+        raise FindingNotFoundError(f"action {action_id} not found")
+    await review_service.set_action_status(
+        db, action, status=payload.status,
+        actor_user_id=uuid.UUID(user.user_id), reason=payload.reason,
+    )
+    await db.commit()
+    return {
+        "id": str(action.id), "status": action.status,
+        "completion_note": action.completion_note,
+        # Nothing was carried out, whatever the status now says.
+        "work_performed": False,
+        **action_sla_service.view(action),
+    }
+
+
+@router.get("/actions/overdue")
+async def overdue_actions(
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Actions past the date this organisation set for them.
+
+    Its own target, never a statutory deadline -- every row says so, and so does this
+    response, because "overdue" read without that qualifier is alarming in a way the
+    data does not support.
+    """
+    org_id = uuid.UUID(user.org_id)
+    rows = await action_sla_service.overdue_for_org(db, org_id)
+    return {
+        "count": len(rows),
+        "actions": rows,
+        "note": action_sla_service.NOT_A_LEGAL_DEADLINE,
+    }
+
+
+@router.post("/sources/{source_id}/upload", status_code=status.HTTP_201_CREATED)
+async def upload_manual_content(
+    source_id: uuid.UUID,
+    payload: ManualUpload,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Supply content by hand for a source that is never fetched.
+
+    The other half of the manual-upload connector. Registering such a source was
+    already possible; without this there was no way to give it any content, so it sat
+    in the registry permanently uncollected.
+    """
+    org_id = uuid.UUID(user.org_id)
+    source = await source_service.get_source_or_raise(db, source_id, org_id)
+    collection, change, finding = await collection_service.accept_manual_content(
+        db, source, payload.content,
+        uploaded_by_user_id=uuid.UUID(user.user_id), note=payload.note,
+    )
+    await db.commit()
+    return {
+        "collection": _collection_response(collection),
+        "change_kind": change.change_kind,
+        "finding": _finding_response(finding) if finding else None,
+    }
+
+
 @router.get("/findings/{finding_id}/audit")
 async def finding_audit(
     finding_id: uuid.UUID,
@@ -626,6 +784,11 @@ async def summary(
         "findings_by_status": by_status,
         "awaiting_review": by_status.get(watch.REVIEW_REQUIRED, 0),
         "open_actions": by_status.get(watch.ACTION_OPEN, 0),
+        # Work this organisation set itself a date for and has passed. Not a statutory
+        # deadline; the note says so, and it travels with the number so no screen has
+        # to remember the caveat on its own.
+        "overdue_actions": len(await action_sla_service.overdue_for_org(db, org_id)),
+        "overdue_note": action_sla_service.NOT_A_LEGAL_DEADLINE,
         "coverage_note": (
             "Every figure here describes what this platform has collected. A source "
             "listed as not currently watched has unknown content -- it is not a "

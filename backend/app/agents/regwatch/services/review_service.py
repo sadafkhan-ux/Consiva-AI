@@ -237,6 +237,178 @@ async def open_actions(
     return rows
 
 
+async def accept_baseline_from_finding(
+    db: AsyncSession,
+    finding: RegWatchFinding,
+    source,
+    collection,
+    *,
+    reviewer_user_id: uuid.UUID,
+    note: str | None = None,
+):
+    """Accept the snapshot a finding was raised from as the source's new baseline.
+
+    This is the decision almost every `first_capture` finding is waiting for, and
+    before it existed the console could raise those findings but never resolve them.
+
+    It is ONE act with two consequences, so it is one call with one approval row
+    behind it: the baseline moves, and the finding closes. Splitting them across two
+    buttons would let a reviewer advance a baseline and leave the finding open, which
+    then reports the same first capture on every subsequent check -- the exact loop
+    the finding's own note warns about.
+
+    Closing rather than dismissing is deliberate. DISMISSED means "this does not apply
+    to us", which is a judgement nobody made here. CLOSED means the work this finding
+    called for is done, and for a first capture, accepting the baseline IS that work.
+    """
+    if reviewer_user_id is None:
+        raise ApprovalRequiredError(
+            "a baseline is advanced by a person, not by the agent; no reviewer was supplied"
+        )
+    lifecycle.assert_reviewable(finding.status)
+
+    # Imported here rather than at module scope: collection_service imports lifecycle
+    # and this module would otherwise close the cycle.
+    from app.agents.regwatch.services import collection_service
+
+    baseline = await collection_service.accept_as_baseline(
+        db, source, collection, approved_by_user_id=reviewer_user_id, note=note,
+    )
+
+    await repo.record_approval(
+        db,
+        org_id=finding.org_id,
+        finding_id=finding.id,
+        reviewer_user_id=reviewer_user_id,
+        # Not "finding": what was approved is the BASELINE. The subject column exists
+        # so the record says which, and a reader a year from now can tell the
+        # difference between "we agreed this matters" and "we adopted this as the
+        # reference point".
+        subject="baseline",
+        decision=watch.DECISION_APPROVE,
+        reason=note,
+    )
+
+    before = finding.status
+    finding.reviewed_by_user_id = reviewer_user_id
+    finding.reviewed_at = datetime.now(UTC)
+    lifecycle.assert_transition(finding.status, watch.APPROVED)
+    finding.status = watch.APPROVED
+    finding.requires_human_review = False
+    await db.flush()
+
+    lifecycle.assert_transition(finding.status, watch.CLOSED)
+    finding.status = watch.CLOSED
+    finding.closed_at = datetime.now(UTC)
+    finding.updated_at = datetime.now(UTC)
+    await db.flush()
+
+    await audit_service.record(
+        db, org_id=finding.org_id, actor_user_id=reviewer_user_id,
+        action=watch.AUDIT_CLOSED,
+        entity_type=watch.AUDIT_ENTITY, entity_id=finding.id,
+        before={"status": before},
+        after={
+            "status": watch.CLOSED,
+            "reason": "the collection this finding was raised from was accepted as "
+                      "the source's baseline",
+            "baseline_id": str(baseline.id),
+            "baseline_version": baseline.version,
+            "note": note,
+        },
+    )
+    return baseline
+
+
+# What an action may do next. `completed` is absent from every value here on purpose:
+# completion is not a status change, it is an attestation, and it goes through
+# `complete_action` so that a name and a description of the work are always required.
+_ACTION_TRANSITIONS: dict[str, frozenset[str]] = {
+    watch.ACTION_OPEN_STATUS: frozenset({watch.ACTION_IN_PROGRESS, watch.ACTION_BLOCKED,
+                                         watch.ACTION_CANCELLED}),
+    watch.ACTION_IN_PROGRESS: frozenset({watch.ACTION_BLOCKED, watch.ACTION_CANCELLED,
+                                         watch.ACTION_OPEN_STATUS}),
+    watch.ACTION_BLOCKED: frozenset({watch.ACTION_IN_PROGRESS, watch.ACTION_OPEN_STATUS,
+                                     watch.ACTION_CANCELLED}),
+    # Both terminal.
+    watch.ACTION_COMPLETED: frozenset(),
+    watch.ACTION_CANCELLED: frozenset(),
+}
+
+# Moving here without saying why leaves a record nobody can account for: "we decided
+# not to do this" and "we could not do this" are both things somebody has to explain.
+_ACTION_REASON_REQUIRED = frozenset({watch.ACTION_CANCELLED, watch.ACTION_BLOCKED})
+
+
+async def set_action_status(
+    db: AsyncSession,
+    action: RegWatchAction,
+    *,
+    status: str,
+    actor_user_id: uuid.UUID,
+    reason: str | None = None,
+) -> RegWatchAction:
+    """Move an action between open, in progress, blocked and cancelled.
+
+    None of these were reachable before: an action could only be raised and then
+    completed. That left two real situations with nowhere to go -- work that had
+    started but was not finished, and work that turned out to be unnecessary. The
+    second one mattered more than it looks, because `close_finding` refuses while any
+    action is still open, so an action that became moot kept its finding open forever
+    with no way to resolve it.
+    """
+    if status not in watch.ACTION_STATUSES:
+        raise InvalidWatchTransitionError(
+            f"{status!r} is not an action status; expected {sorted(watch.ACTION_STATUSES)}"
+        )
+    if status == watch.ACTION_COMPLETED:
+        raise InvalidWatchTransitionError(
+            "an action is completed by attesting to what was done, not by setting a "
+            "status; use the completion endpoint, which requires a name and a note"
+        )
+    current = action.status or watch.ACTION_OPEN_STATUS
+    if status == current:
+        raise InvalidWatchTransitionError(
+            f"the action is already {status!r}; setting it again would write a second "
+            "audit entry for something that did not happen"
+        )
+    if status not in _ACTION_TRANSITIONS.get(current, frozenset()):
+        raise InvalidWatchTransitionError(
+            f"cannot move an action from {current!r} to {status!r}; legal next states "
+            f"are {sorted(_ACTION_TRANSITIONS.get(current, frozenset()))}"
+        )
+
+    cleaned = (reason or "").strip()
+    if status in _ACTION_REASON_REQUIRED and len(cleaned) < _MIN_REASON_CHARS:
+        raise WatchNotReadyError(
+            f"marking an action {status!r} requires a reason of at least "
+            f"{_MIN_REASON_CHARS} characters; a compliance action that was dropped or "
+            "stalled, with no record of why, is a gap nobody can explain afterwards"
+        )
+
+    action.status = status
+    if status == watch.ACTION_CANCELLED:
+        # Reused deliberately rather than adding a column: the field already means
+        # "how this action ended", and a cancellation is an ending.
+        action.completion_note = cleaned
+        action.completed_at = datetime.now(UTC)
+    await db.flush()
+
+    await audit_service.record(
+        db, org_id=action.org_id, actor_user_id=actor_user_id,
+        action=watch.AUDIT_STATUS_CHANGED,
+        entity_type=watch.AUDIT_ENTITY, entity_id=action.finding_id,
+        before={"action_id": str(action.id), "status": current},
+        after={
+            "action_id": str(action.id), "status": status, "reason": cleaned or None,
+            # Says plainly that nothing was carried out, so a cancelled action is
+            # never mistaken for a completed one on a later read of the log.
+            "work_performed": False,
+        },
+    )
+    return action
+
+
 async def complete_action(
     db: AsyncSession,
     action: RegWatchAction,

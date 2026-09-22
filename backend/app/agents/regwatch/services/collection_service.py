@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.regwatch.connectors import http_source
+from app.agents.regwatch.connectors import feed_source, http_source
 from app.agents.regwatch.errors import (
     ContentUnusableError,
     RegWatchError,
@@ -100,6 +100,37 @@ async def collect(
         )
 
     moment = now or datetime.now(UTC)
+
+    if source.connector == watch.CONNECTOR_MANUAL:
+        # A manual-upload source has no URL to poll, and before this it was fetched
+        # anyway -- at an empty string, failing every sweep and raising a fresh
+        # "unreachable" finding each time. A source that a person feeds by hand is not
+        # unreachable; it is simply not due to be fetched.
+        #
+        # `skipped` rather than `collected`: it belongs to COLLECTION_NOT_CURRENT, so
+        # nothing downstream can read this as confirmation the content is current.
+        row = RegWatchCollection(
+            org_id=source.org_id, source_id=source.id,
+            status=watch.COLLECTION_SKIPPED, job_id=job_id,
+            error_code=watch.ERR_SOURCE_NOT_AUTHORIZED,
+            error_detail=(
+                f"{source.name!r} is a manual-upload source and is never fetched "
+                "automatically. Its content is whatever was last uploaded by a person; "
+                "this is not a report that it is unchanged."
+            ),
+        )
+        await repo.add_collection(db, source.org_id, row)
+        await audit_service.record(
+            db, org_id=source.org_id, actor_user_id=actor_user_id,
+            action=watch.AUDIT_COLLECTION_STARTED,
+            entity_type=watch.AUDIT_SOURCE_ENTITY, entity_id=source.id,
+            after={
+                "source": source.name, "status": watch.COLLECTION_SKIPPED,
+                "reason": "manual-upload sources are not polled",
+            },
+        )
+        return row
+
     await audit_service.record(
         db, org_id=source.org_id, actor_user_id=actor_user_id,
         action=watch.AUDIT_COLLECTION_STARTED,
@@ -146,9 +177,11 @@ async def collect(
         )
         return row
 
+    text, content_hash = _normalise_for(source, fetched)
+
     row.status = watch.COLLECTION_COLLECTED
-    row.content_hash = fetched.content_hash
-    row.content_text = fetched.text
+    row.content_hash = content_hash
+    row.content_text = text
     row.content_bytes = fetched.byte_count
     row.http_status = fetched.http_status
     row.retrieved_at = moment
@@ -164,6 +197,91 @@ async def collect(
         },
     )
     return row
+
+
+async def accept_manual_content(
+    db: AsyncSession,
+    source: RegWatchSource,
+    content: str,
+    *,
+    uploaded_by_user_id: uuid.UUID,
+    note: str | None = None,
+) -> tuple[RegWatchCollection, RegWatchChange, RegWatchFinding | None]:
+    """Record content a person supplied for a manual-upload source, and compare it.
+
+    The other half of the manual connector. Registering such a source was possible
+    from the start; giving it content was not, so it sat in the registry permanently
+    uncollected while every sweep logged a failure against it.
+
+    The upload is attributed. A collection that arrived through an automated fetch and
+    one somebody pasted in are different kinds of evidence, and a reviewer reading the
+    record later has to be able to tell which this was -- so the uploader's id goes in
+    the audit entry and the collection's own detail says how it got here.
+    """
+    if source.connector != watch.CONNECTOR_MANUAL:
+        raise SourceNotAuthorizedError(
+            f"{source.name!r} is a {source.connector!r} source and is collected "
+            "automatically; uploading content by hand would put unverified text "
+            "alongside fetched evidence with no way to tell them apart"
+        )
+    text = http_source.normalize(content)
+    if not text.strip():
+        raise ContentUnusableError("the uploaded content is empty once normalised")
+
+    row = RegWatchCollection(
+        org_id=source.org_id, source_id=source.id,
+        status=watch.COLLECTION_COLLECTED,
+        content_text=text,
+        content_hash=http_source.hash_content(text),
+        content_bytes=len(content.encode("utf-8")),
+        http_status=None,  # nothing was fetched; there is no status to report
+        retrieved_at=datetime.now(UTC),
+        error_detail=f"Uploaded by hand. {note}" if note else "Uploaded by hand.",
+    )
+    await repo.add_collection(db, source.org_id, row)
+    await source_service.record_check_outcome(db, source, succeeded=True)
+    await audit_service.record(
+        db, org_id=source.org_id, actor_user_id=uploaded_by_user_id,
+        action=watch.AUDIT_COLLECTION_SUCCEEDED,
+        entity_type=watch.AUDIT_SOURCE_ENTITY, entity_id=source.id,
+        after={
+            "collection_id": str(row.id),
+            "content_hash": row.content_hash,
+            "bytes": row.content_bytes,
+            "note": note,
+            # The distinction that matters on a later read of the log.
+            "fetched": False,
+            "uploaded_by_hand": True,
+        },
+    )
+    change, finding = await compare_and_record(
+        db, source, row, actor_user_id=uploaded_by_user_id
+    )
+    return row, change, finding
+
+
+def _normalise_for(source: RegWatchSource, fetched) -> tuple[str, str]:
+    """Reduce a fetched document the way its connector says it should be read.
+
+    A feed parsed as a feed is one line per entry, so a new advisory is a one-line
+    diff. The same document flattened by the HTML stripper is a single reflowed
+    paragraph in which that one fact is invisible.
+
+    Falls back to whatever the connector already produced whenever the feed parse
+    returns nothing: a feed we cannot read is still a document we can diff, and
+    degrading to a coarser comparison beats failing a collection that succeeded.
+    """
+    if source.connector != watch.CONNECTOR_RSS:
+        return fetched.text, fetched.content_hash
+
+    parsed = feed_source.normalize(fetched.raw or fetched.text)
+    if not parsed:
+        logger.info(
+            "Source %r is registered as a feed but could not be parsed as one; "
+            "comparing it as text instead", source.name,
+        )
+        return fetched.text, fetched.content_hash
+    return parsed, http_source.hash_content(parsed)
 
 
 async def compare_and_record(
