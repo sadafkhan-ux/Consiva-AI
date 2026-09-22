@@ -89,7 +89,10 @@ export interface WatchImpact {
   target_id: string | null;
   target_label: string;
   confidence: Confidence;
-  derived_from: string;
+  /** `rule` (a topic matched), `ropa_metadata` (the record's own payload carries
+   *  evidence, quoted in the rationale), or `manual` (a person asserted it). Shown,
+   *  because a link a reviewer entered and one a rule guessed are not the same claim. */
+  derived_from: "rule" | "ropa_metadata" | "model" | "manual";
   rationale: string | null;
 }
 
@@ -329,6 +332,26 @@ export const regwatchApi = {
       `/api/v1/regwatch/findings/${findingId}/accept-baseline`,
       { method: "POST", body: JSON.stringify({ note }) },
     ),
+
+  /** A link the rules could not find. The only place `confirmed` is available,
+   *  because here a named person is the one asserting it. */
+  addImpact: (
+    findingId: string,
+    body: {
+      target_kind: string;
+      target_label: string;
+      rationale: string;
+      confidence?: Confidence;
+    },
+  ) =>
+    request<{ id: string; target_kind: string; target_label: string; confidence: Confidence; derived_from: string }>(
+      `/api/v1/regwatch/findings/${findingId}/impacts`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  /** Only manual links. A derived one would reappear on the next assessment. */
+  removeImpact: (impactId: string) =>
+    request<void>(`/api/v1/regwatch/impacts/${impactId}`, { method: "DELETE" }),
 
   /** Content for a manual-upload source, which is never fetched. */
   uploadManualContent: (sourceId: string, content: string, note?: string) =>

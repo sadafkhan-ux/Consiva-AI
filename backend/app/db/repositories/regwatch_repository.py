@@ -368,6 +368,19 @@ async def add_impact(db: AsyncSession, row: RegWatchImpact) -> RegWatchImpact:
     return row
 
 
+async def get_impact(
+    db: AsyncSession, impact_id: uuid.UUID, org_id: uuid.UUID
+) -> RegWatchImpact | None:
+    """One impact row, org-scoped. A row in another org returns None, exactly as a
+    missing one does -- distinguishing them would confirm the id."""
+    result = await db.execute(
+        select(RegWatchImpact).where(
+            RegWatchImpact.id == impact_id, RegWatchImpact.org_id == org_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_impacts(
     db: AsyncSession, finding_id: uuid.UUID, org_id: uuid.UUID
 ) -> list[RegWatchImpact]:

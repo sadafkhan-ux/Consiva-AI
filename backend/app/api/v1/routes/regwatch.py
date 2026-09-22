@@ -34,6 +34,7 @@ from app.agents.regwatch.schemas import watch
 from app.agents.regwatch.services import (
     action_sla_service,
     collection_service,
+    impact_service,
     review_service,
     source_service,
 )
@@ -41,7 +42,7 @@ from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import regwatch_repository as repo
 from app.db.session import get_db
 from app.jobs import queue
-from app.services import regwatch_run_service
+from app.services import audit_service, regwatch_run_service
 
 router = APIRouter(prefix="/api/v1/regwatch", tags=["regwatch"])
 
@@ -145,6 +146,32 @@ class ActionStatus(BaseModel):
 
 class BaselineFromFinding(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
+
+
+class ManualImpact(BaseModel):
+    """A link a reviewer knows about and the rules could not find."""
+
+    target_kind: str
+    target_label: str = Field(min_length=1, max_length=500)
+    rationale: str = Field(min_length=20, max_length=5000)
+    target_id: uuid.UUID | None = None
+    confidence: str = watch.CONFIRMED
+
+    @field_validator("target_kind")
+    @classmethod
+    def _known_kind(cls, value: str) -> str:
+        if value not in watch.IMPACT_TARGET_KINDS:
+            raise ValueError(
+                f"target_kind must be one of {sorted(watch.IMPACT_TARGET_KINDS)}"
+            )
+        return value
+
+    @field_validator("confidence")
+    @classmethod
+    def _known_confidence(cls, value: str) -> str:
+        if value not in watch.CONFIDENCE_LEVELS:
+            raise ValueError(f"confidence must be one of {list(watch.CONFIDENCE_LEVELS)}")
+        return value
 
 
 class ManualUpload(BaseModel):
@@ -614,6 +641,78 @@ async def close_finding(
     )
     await db.commit()
     return _finding_response(finding)
+
+
+@router.post("/findings/{finding_id}/impacts", status_code=status.HTTP_201_CREATED)
+async def add_manual_impact(
+    finding_id: uuid.UUID,
+    payload: ManualImpact,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Record a link the rules could not find.
+
+    The rules only see what this platform holds; a compliance lead knows about the
+    offshore vendor contract that never became a ROPA entry. Without this the impact
+    map is capped at the platform's own knowledge and presents that cap as the whole
+    picture. This is also the only place `confirmed` is available, because here a
+    named person is the one asserting it.
+    """
+    org_id = uuid.UUID(user.org_id)
+    finding = await _finding_or_404(db, finding_id, org_id)
+    row = await impact_service.add_manual_impact(
+        db, finding,
+        target_kind=payload.target_kind,
+        target_label=payload.target_label,
+        rationale=payload.rationale,
+        reviewer_user_id=uuid.UUID(user.user_id),
+        target_id=payload.target_id,
+        confidence=payload.confidence,
+    )
+    await db.commit()
+    return {
+        "id": str(row.id), "target_kind": row.target_kind,
+        "target_label": row.target_label, "confidence": row.confidence,
+        "derived_from": row.derived_from, "rationale": row.rationale,
+        "asserted_by_a_person": True,
+    }
+
+
+@router.delete("/impacts/{impact_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_manual_impact(
+    impact_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Withdraw a manual link.
+
+    Only manual ones. A derived link deleted here would simply reappear on the next
+    assessment, so removing it would look like it worked and then silently undo
+    itself -- and a reviewer who disagrees with a derived link should be recording
+    that judgement on the finding, not quietly deleting the agent's reasoning.
+    """
+    org_id = uuid.UUID(user.org_id)
+    row = await repo.get_impact(db, impact_id, org_id)
+    if row is None:
+        raise FindingNotFoundError(f"impact {impact_id} not found")
+    if row.derived_from != watch.DERIVED_MANUAL:
+        raise WatchNotReadyError(
+            f"this link was derived by the agent ({row.derived_from}), not entered by a "
+            "person. Deleting it would not stick -- the next assessment re-derives it. "
+            "Record your disagreement as a decision on the finding instead."
+        )
+    await db.delete(row)
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action=watch.AUDIT_IMPACT_MAPPED,
+        entity_type=watch.AUDIT_ENTITY, entity_id=row.finding_id,
+        before={
+            "impact_id": str(row.id), "target_kind": row.target_kind,
+            "target_label": row.target_label, "confidence": row.confidence,
+        },
+        after={"removed": True, "removed_by_a_person": True},
+    )
+    await db.commit()
 
 
 @router.post("/findings/{finding_id}/accept-baseline", status_code=status.HTTP_201_CREATED)

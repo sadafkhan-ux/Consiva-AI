@@ -69,6 +69,37 @@ const DUE_TONE: Record<string, string> = {
   on_track: "ok",
 };
 
+/** How a link was arrived at. A rule's guess and a person's assertion are not the
+ *  same claim, so the list says which on every row. */
+const DERIVED_LABEL: Record<string, string> = {
+  rule: "topic rule",
+  ropa_metadata: "from your ROPA",
+  model: "model",
+  manual: "you added this",
+};
+
+const DERIVED_TONE: Record<string, string> = {
+  rule: "neutral",
+  ropa_metadata: "info",
+  model: "warn",
+  manual: "ok",
+};
+
+/** Mirrors the backend's IMPACT_TARGET_KINDS. `control` is here even though nothing
+ *  maps to it automatically -- there is no control register for a rule to read, but a
+ *  reviewer can still file one by hand. */
+const IMPACT_KINDS = [
+  "ropa_record",
+  "ropa_data_source",
+  "consent_website",
+  "consent_finding",
+  "dsr_configuration",
+  "incident_case",
+  "policy",
+  "control",
+  "other",
+];
+
 const RELEVANCE_TONE: Record<string, string> = {
   relevant: "warn",
   not_relevant: "neutral",
@@ -234,6 +265,15 @@ export function RegWatchConsole() {
                   "Baseline accepted. Future checks are measured against this snapshot, "
                     + "and this finding is closed.",
                 )
+              }
+              onAddImpact={(body) =>
+                act(
+                  () => regwatchApi.addImpact(selected.id, body),
+                  "Link recorded as your assertion. Re-assessment will not erase it.",
+                )
+              }
+              onRemoveImpact={(impactId) =>
+                act(() => regwatchApi.removeImpact(impactId), "Link withdrawn.")
               }
               onSetActionStatus={(actionId, status, reason) =>
                 act(
@@ -581,6 +621,8 @@ function FindingDetail({
   busy,
   onDecide,
   onAcceptBaseline,
+  onAddImpact,
+  onRemoveImpact,
   onSetActionStatus,
   onOpenActions,
   onCompleteAction,
@@ -590,6 +632,8 @@ function FindingDetail({
   busy: boolean;
   onDecide: (decision: string, reason?: string) => void;
   onAcceptBaseline: (note?: string) => void;
+  onAddImpact: (body: { target_kind: string; target_label: string; rationale: string }) => void;
+  onRemoveImpact: (impactId: string) => void;
   onSetActionStatus: (actionId: string, status: string, reason?: string) => void;
   onOpenActions: (
     actions: { title: string; rationale: string; expected_result: string }[],
@@ -601,6 +645,11 @@ function FindingDetail({
   const [action, setAction] = useState({ title: "", rationale: "", expected_result: "" });
   const [attest, setAttest] = useState({ id: "", who: "", note: "" });
   const [cancelling, setCancelling] = useState({ id: "", reason: "" });
+  const [manual, setManual] = useState({
+    target_kind: "other",
+    target_label: "",
+    rationale: "",
+  });
 
   const decidable = finding.status === "review_required";
   // A first capture is waiting on one thing: somebody adopting it as the reference
@@ -676,17 +725,94 @@ function FindingDetail({
             {(finding.impacts ?? []).map((i) => (
               <tr key={i.id}>
                 <td className="small mono nowrap">{i.target_kind}</td>
-                <td className="small">{i.target_label}</td>
+                <td className="small">
+                  {i.target_label}
+                  {/* The rationale carries the evidence for an evidenced link, and
+                      the reviewer's words for a manual one. Both are worth reading;
+                      a rule's boilerplate is not, so only the first two are shown. */}
+                  {i.derived_from !== "rule" && i.rationale && (
+                    <div className="small muted">{i.rationale}</div>
+                  )}
+                </td>
                 {/* Never dropped: each link is a place to look, not a finding that it
                     is affected. */}
-                <td>
+                <td className="nowrap">
                   <ConfidenceTag level={i.confidence} />
+                  <span className={`badge ${DERIVED_TONE[i.derived_from] ?? "neutral"}`}>
+                    {DERIVED_LABEL[i.derived_from] ?? i.derived_from}
+                  </span>
+                </td>
+                <td>
+                  {i.derived_from === "manual" && (
+                    <button
+                      className="secondary small"
+                      disabled={busy}
+                      onClick={() => onRemoveImpact(i.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+
+      <div className="dsr-actions">
+        <h4>Add something the rules could not see</h4>
+        <p className="hint">
+          The impact list above only covers what Consiva holds. A contract with an
+          offshore vendor that never became a ROPA entry, or a control that lives in a
+          runbook, is invisible to it &mdash; and the list would otherwise present that
+          limit as the whole picture.
+        </p>
+        <label>
+          What it touches
+          <select
+            value={manual.target_kind}
+            onChange={(e) => setManual({ ...manual, target_kind: e.target.value })}
+          >
+            {IMPACT_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {k.replace(/_/g, " ")}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Name it
+          <input
+            value={manual.target_label}
+            onChange={(e) => setManual({ ...manual, target_label: e.target.value })}
+            placeholder="e.g. Vendor agreement with Acme Ltd (US)"
+          />
+        </label>
+        <label>
+          Why this is affected
+          <textarea
+            rows={2}
+            value={manual.rationale}
+            onChange={(e) => setManual({ ...manual, rationale: e.target.value })}
+          />
+        </label>
+        <button
+          disabled={
+            busy || !manual.target_label.trim() || manual.rationale.trim().length < 20
+          }
+          onClick={() => {
+            onAddImpact(manual);
+            setManual({ ...manual, target_label: "", rationale: "" });
+          }}
+        >
+          Add link
+        </button>
+        <p className="hint">
+          Recorded as your assertion, at <strong>confirmed</strong> &mdash; the one
+          confidence no rule in this agent may reach, because here a person is the one
+          saying it. Re-running the assessment will not erase it.
+        </p>
+      </div>
 
       {finding.citations.length > 0 ? (
         <>
