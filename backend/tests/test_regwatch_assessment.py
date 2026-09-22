@@ -269,8 +269,13 @@ def test_assessment_always_ends_needing_a_person():
 
 
 def test_an_unreachable_source_is_never_sent_to_the_model():
+    """It is the FIRST branch, so there is no ordering in which a collection that
+    failed reaches _interpret: there is no document to interpret."""
     body = inspect.getsource(assessment_service.assess)
-    assert "change.change_kind != watch.CHANGE_UNREACHABLE" in body
+    interpretation = body.split("# ── 4. Interpretation")[1]
+    first_branch = interpretation.split("elif")[0]
+    assert "if change.change_kind == watch.CHANGE_UNREACHABLE:" in first_branch
+    assert "_interpret(" not in first_branch
 
 
 def test_org_jurisdictions_are_not_derived_from_the_registered_sources():
@@ -397,3 +402,29 @@ def test_the_retrieval_cutoff_is_the_platforms_not_this_modules():
     )
     # And it is loose enough to actually retain this corpus's distances.
     assert get_settings().rag_max_distance >= 0.7
+
+
+def test_every_route_out_of_the_interpretation_step_leaves_a_note():
+    """Zero citations with no note beside them reads as "there was nothing to say".
+    Four ways to reach zero -- unreachable source, interpretation not requested, the
+    model failed, the model cited nothing -- and each has to say which it was."""
+    body = inspect.getsource(assessment_service.assess)
+    assert "elif not use_llm:" in body
+    assert "No interpretation was attempted" in body
+    assert "no text to interpret" in body
+    # Nothing falls through the branch without appending something.
+    branch = body.split("if change.change_kind == watch.CHANGE_UNREACHABLE:")[1]
+    branch = branch.split("# Deduplicated")[0]
+    assert branch.count("questions.append") >= 3
+
+
+@pytest.mark.parametrize("use_llm", [True, False])
+def test_the_absence_of_citations_is_never_left_to_speak_for_itself(use_llm):
+    """The claim this file exists to protect, stated as a property: a reader can
+    always tell WHY there are no citations."""
+    body = inspect.getsource(assessment_service.assess)
+    if not use_llm:
+        assert "No interpretation was attempted" in body
+        assert "The absence of citations here is not a finding" in body
+    else:
+        assert "questions.append(note)" in body

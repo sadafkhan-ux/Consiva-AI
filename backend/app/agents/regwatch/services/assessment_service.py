@@ -218,7 +218,22 @@ async def assess(
     finding.grounded_facts = []
     finding.drafted_by_model = None
 
-    if use_llm and change.change_kind != watch.CHANGE_UNREACHABLE:
+    if change.change_kind == watch.CHANGE_UNREACHABLE:
+        # Checked first: there is no document, so there is nothing to interpret and
+        # nothing a model could be asked about.
+        questions.append(
+            "The source could not be collected, so there is no text to interpret. "
+            "What the page says now is unknown."
+        )
+    elif not use_llm:
+        # Said out loud. An empty citation list with no note beside it reads as
+        # "there was nothing to say", when the truth is that nobody asked.
+        questions.append(
+            "No interpretation was attempted for this change; it is described from "
+            "the source text only. The absence of citations here is not a finding "
+            "that the approved knowledge base has nothing on it."
+        )
+    else:
         interpreted, note = await _interpret(db, finding, source, change)
         if interpreted is None:
             # The deterministic assessment stands; the finding says what is missing.
@@ -245,11 +260,6 @@ async def assess(
                     "note": "prose only; no obligation was established by the model",
                 },
             )
-    elif change.change_kind == watch.CHANGE_UNREACHABLE:
-        questions.append(
-            "The source could not be collected, so there is no text to interpret. "
-            "What the page says now is unknown."
-        )
 
     # Deduplicated but order-preserving: the same gap can arrive from two topics.
     finding.open_questions = list(dict.fromkeys(q for q in questions if q))
