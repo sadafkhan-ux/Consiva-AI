@@ -133,6 +133,26 @@ export interface WatchCitation {
   section: string | null;
 }
 
+/** Who published the change. Spec section 8 requires the compliance view to show
+ *  "jurisdiction and source" on every row -- the finding itself carries only a UUID. */
+export interface WatchSourceIdentity {
+  id: string;
+  name: string;
+  authority: string | null;
+  url: string;
+  jurisdiction: string;
+  connector: string;
+}
+
+export interface WatchAuditEntry {
+  id: string;
+  action: string;
+  actor_user_id: string | null;
+  before: unknown;
+  after: unknown;
+  created_at: string | null;
+}
+
 export interface WatchFinding {
   id: string;
   reference: string;
@@ -152,6 +172,8 @@ export interface WatchFinding {
   error_code: string | null;
   error_detail: string | null;
   source_id: string;
+  /** Null only if the source row was removed after the finding was raised. */
+  source: WatchSourceIdentity | null;
   change_id: string;
   reviewed_at: string | null;
   closed_at: string | null;
@@ -367,7 +389,5 @@ export const regwatchApi = {
     }),
 
   audit: (id: string) =>
-    request<{ entries: { id: string; action: string; before: unknown; after: unknown; created_at: string | null }[] }>(
-      `/api/v1/regwatch/findings/${id}/audit`,
-    ),
+    request<{ entries: WatchAuditEntry[] }>(`/api/v1/regwatch/findings/${id}/audit`),
 };

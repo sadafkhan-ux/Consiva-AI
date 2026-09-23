@@ -207,7 +207,8 @@ def _source_response(source) -> dict:
     }
 
 
-def _finding_response(finding, *, impacts=None, actions=None, approvals=None) -> dict:
+def _finding_response(finding, *, impacts=None, actions=None, approvals=None,
+                      source=None) -> dict:
     body = {
         "id": str(finding.id),
         "reference": finding.reference,
@@ -227,6 +228,10 @@ def _finding_response(finding, *, impacts=None, actions=None, approvals=None) ->
         "error_code": finding.error_code,
         "error_detail": finding.error_detail,
         "source_id": str(finding.source_id),
+        # Spec section 8: the compliance view shows "jurisdiction and source" on every
+        # change. The row carries only a UUID, which tells a reviewer nothing, so the
+        # source's own identity travels with the finding.
+        "source": source,
         "change_id": str(finding.change_id),
         "reviewed_at": finding.reviewed_at.isoformat() if finding.reviewed_at else None,
         "closed_at": finding.closed_at.isoformat() if finding.closed_at else None,
@@ -513,11 +518,13 @@ async def list_findings(
 ) -> dict:
     if finding_status and finding_status not in watch.ALL_STATUSES:
         raise WatchNotReadyError(f"{finding_status!r} is not a finding status")
-    rows = await repo.list_findings(
-        db, uuid.UUID(user.org_id), status=finding_status, limit=min(limit, 200)
-    )
+    org_id = uuid.UUID(user.org_id)
+    rows = await repo.list_findings(db, org_id, status=finding_status, limit=min(limit, 200))
+    sources = await repo.source_identity_map(db, org_id)
     return {
-        "findings": [_finding_response(f) for f in rows],
+        "findings": [
+            _finding_response(f, source=sources.get(f.source_id)) for f in rows
+        ],
         "awaiting_review": sum(1 for f in rows if f.status == watch.REVIEW_REQUIRED),
     }
 
@@ -538,12 +545,14 @@ async def get_finding(
     org_id = uuid.UUID(user.org_id)
     finding = await _finding_or_404(db, finding_id, org_id)
     change = await repo.get_change(db, finding.change_id, org_id)
+    sources = await repo.source_identity_map(db, org_id)
     return {
         **_finding_response(
             finding,
             impacts=await repo.list_impacts(db, finding_id, org_id),
             actions=await repo.list_actions(db, finding_id, org_id),
             approvals=await repo.list_approvals(db, finding_id, org_id),
+            source=sources.get(finding.source_id),
         ),
         "change": None if change is None else {
             "id": str(change.id), "change_kind": change.change_kind,

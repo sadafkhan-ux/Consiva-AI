@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   regwatchApi,
   type Confidence,
+  type WatchAuditEntry,
   type WatchFinding,
   type WatchFindingDetail,
   type WatchSource,
@@ -100,6 +101,21 @@ const IMPACT_KINDS = [
   "other",
 ];
 
+/** The audit log stores machine actions; the timeline is read by compliance people. */
+const AUDIT_LABEL: Record<string, string> = {
+  "regwatch.finding_created": "Change detected and finding raised",
+  "regwatch.relevance_assessed": "Relevance and priority assessed",
+  "regwatch.impact_mapped": "Impact mapped to this organisation",
+  "regwatch.interpreted": "Plain-English interpretation drafted",
+  "regwatch.review_requested": "Sent for human review",
+  "regwatch.approved": "Approved by a reviewer",
+  "regwatch.dismissed": "Dismissed by a reviewer",
+  "regwatch.action_created": "Follow-up action raised",
+  "regwatch.action_completed": "Action attested as done",
+  "regwatch.closed": "Finding closed",
+  "regwatch.status_changed": "Status changed",
+};
+
 const RELEVANCE_TONE: Record<string, string> = {
   relevant: "warn",
   not_relevant: "neutral",
@@ -126,6 +142,10 @@ export function RegWatchConsole() {
   const [sources, setSources] = useState<WatchSource[]>([]);
   const [findings, setFindings] = useState<WatchFinding[]>([]);
   const [selected, setSelected] = useState<WatchFindingDetail | null>(null);
+  // Spec section 8 lists an audit timeline on the compliance view, and section 10
+  // asks that a reviewer can see when a change was first detected, when it was
+  // reviewed and what happened afterwards. The endpoint existed; nothing called it.
+  const [timeline, setTimeline] = useState<WatchAuditEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -152,7 +172,12 @@ export function RegWatchConsole() {
 
   async function openFinding(id: string) {
     try {
-      setSelected(await regwatchApi.getFinding(id));
+      const [detail, audit] = await Promise.all([
+        regwatchApi.getFinding(id),
+        regwatchApi.audit(id),
+      ]);
+      setSelected(detail);
+      setTimeline(audit.entries);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -241,6 +266,11 @@ export function RegWatchConsole() {
                     </span>
                   )}
                 </div>
+                {/* Which regulator said it. A reviewer triaging a queue needs the
+                    source and jurisdiction before the prose. */}
+                <div className="small muted">
+                  {f.source ? `${f.source.name} · ${f.source.jurisdiction}` : "source removed"}
+                </div>
                 <div className="small muted">{(f.summary ?? "").slice(0, 160)}</div>
               </button>
             ))}
@@ -249,6 +279,7 @@ export function RegWatchConsole() {
           {selected && (
             <FindingDetail
               finding={selected}
+              timeline={timeline}
               busy={busy}
               onDecide={(decision, reason) =>
                 act(
@@ -618,6 +649,7 @@ function SourcesTab({
 
 function FindingDetail({
   finding,
+  timeline,
   busy,
   onDecide,
   onAcceptBaseline,
@@ -629,6 +661,7 @@ function FindingDetail({
   onClose,
 }: {
   finding: WatchFindingDetail;
+  timeline: WatchAuditEntry[];
   busy: boolean;
   onDecide: (decision: string, reason?: string) => void;
   onAcceptBaseline: (note?: string) => void;
@@ -669,6 +702,19 @@ function FindingDetail({
           {finding.status}
         </span>
       </div>
+
+      {finding.source && (
+        <div className="key-value">
+          <span>Source</span>
+          <span>
+            {finding.source.name}
+            {finding.source.authority && (
+              <span className="muted"> — {finding.source.authority}</span>
+            )}{" "}
+            <span className="badge info">{finding.source.jurisdiction}</span>
+          </span>
+        </div>
+      )}
 
       {finding.error_code && (
         <div className="banner banner-error small">
@@ -1070,6 +1116,31 @@ function FindingDetail({
             cannot verify it.
           </p>
         </div>
+      )}
+
+      <h4>Audit timeline</h4>
+      {timeline.length === 0 ? (
+        <p className="empty-note">No audit entries recorded for this finding.</p>
+      ) : (
+        <table className="ropa-table">
+          <tbody>
+            {timeline.map((e) => (
+              <tr key={e.id}>
+                <td className="small mono nowrap">
+                  {e.created_at?.slice(0, 16).replace("T", " ") ?? "—"}
+                </td>
+                <td className="small">
+                  {AUDIT_LABEL[e.action] ?? e.action.replace("regwatch.", "").replace(/_/g, " ")}
+                </td>
+                <td className="small muted">
+                  {/* Whether a person did it, or the agent did. The audit log records
+                      an actor only for human acts; a sweep has none. */}
+                  {e.actor_user_id ? "a person" : "the agent"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
 
       {canClose && (

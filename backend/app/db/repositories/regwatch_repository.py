@@ -315,6 +315,34 @@ async def list_findings(
     return list(result.scalars().all())
 
 
+async def source_identity_map(
+    db: AsyncSession, org_id: uuid.UUID
+) -> dict[uuid.UUID, dict]:
+    """Which source each finding came from, by id.
+
+    Spec section 8 requires the compliance view to show "jurisdiction and source" on
+    every regulatory change. The finding row carries only `source_id` -- a UUID, which
+    tells a reviewer nothing -- so the name, authority and URL are resolved here.
+
+    One query for the whole org rather than a join on the findings query or a lookup
+    per row: a source list is small, findings reference it repeatedly, and this keeps
+    the finding query itself unchanged.
+    """
+    result = await db.execute(
+        select(
+            RegWatchSource.id, RegWatchSource.name, RegWatchSource.authority,
+            RegWatchSource.url, RegWatchSource.jurisdiction, RegWatchSource.connector,
+        ).where(RegWatchSource.org_id == org_id)
+    )
+    return {
+        row.id: {
+            "id": str(row.id), "name": row.name, "authority": row.authority,
+            "url": row.url, "jurisdiction": row.jurisdiction, "connector": row.connector,
+        }
+        for row in result
+    }
+
+
 async def list_open_findings_for_source(
     db: AsyncSession, source_id: uuid.UUID, org_id: uuid.UUID, *, statuses: tuple[str, ...]
 ) -> list[RegWatchFinding]:

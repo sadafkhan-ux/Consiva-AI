@@ -199,6 +199,13 @@ async def assess(
     ))
     questions.extend(gaps)
 
+    # "Previous Reviews" is a listed input to this agent (spec section 3). Read at
+    # assessment time so a reviewer sees their own earlier reasoning beside the new
+    # change rather than having to go and look for it.
+    prior = await prior_decisions_note(db, finding)
+    if prior:
+        questions.append(prior)
+
     # ── 4. Interpretation, optional, grounded ──────────────────────────────────
     #
     # Everything the interpretation owns is RESET first and written only on success.
@@ -284,6 +291,58 @@ async def assess(
         },
     )
     return finding
+
+
+async def prior_decisions_note(
+    db: AsyncSession, finding: RegWatchFinding
+) -> str | None:
+    """What this organisation already decided about earlier changes from this source.
+
+    The spec lists "Previous Reviews -- human decisions, accepted/rejected findings,
+    action status, and historical impact assessments" as an INPUT to this agent, and
+    for a long time nothing read it. Every finding arrived as though the source had
+    never been seen before, which throws away the most useful context a reviewer has:
+    their own earlier reasoning.
+
+    The concrete failure this prevents: a compliance lead dismisses a change from a
+    regulator as out of scope, writing down why. Three weeks later the same source
+    changes again, and the queue presents it with no trace of that decision -- so the
+    same question gets worked from scratch, or worse, answered differently by someone
+    who never saw the first one.
+
+    Deterministic and deliberately modest. It reports what was decided and quotes the
+    reason; it does NOT pre-empt the new decision, suppress the finding, or carry the
+    old confidence forward. A previous dismissal is a thing to read, not a rule.
+    """
+    earlier = [
+        f for f in await repo.list_findings(db, finding.org_id, limit=200)
+        if f.source_id == finding.source_id and f.id != finding.id
+    ]
+    decided = [f for f in earlier if f.reviewed_at is not None]
+    if not decided:
+        return None
+
+    decided.sort(key=lambda f: f.reviewed_at, reverse=True)
+    latest = decided[0]
+    approval = await repo.latest_approval(db, latest.id, finding.org_id, subject="finding")
+
+    counts: dict[str, int] = {}
+    for f in decided:
+        counts[f.status] = counts.get(f.status, 0) + 1
+    tally = ", ".join(f"{n} {status}" for status, n in sorted(counts.items()))
+
+    note = (
+        f"This source has been reviewed before: {tally}. The most recent was "
+        f"{latest.reference} on {latest.reviewed_at.date().isoformat()}, ending "
+        f"{latest.status}"
+    )
+    if approval is not None and approval.reason:
+        # Quoted rather than summarised -- the reviewer's own words are the point.
+        note += f', because: "{approval.reason.strip()}"'
+    return (
+        note + ". Check whether that reasoning still holds for this change; it is "
+        "context, not a decision."
+    )
 
 
 async def org_jurisdictions(db: AsyncSession, org_id: uuid.UUID) -> tuple[str, ...]:
