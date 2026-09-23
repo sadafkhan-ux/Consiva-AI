@@ -19,10 +19,33 @@
 create extension if not exists pgcrypto;
 create extension if not exists vector;
 
+-- Reads a transaction-local GUC the application sets per request
+-- (app/db/session.py). This was `auth.jwt() ->> 'org_id'` until 23 Sep 2026, and that
+-- had two problems.
+--
+-- It never worked: this deployment connects directly to Postgres rather than through
+-- Supabase's PostgREST layer, so `auth.jwt()` was never populated and the function
+-- returned NULL for every request. Migration 0018 diagnosed that and replaced the
+-- definition with exactly the body below.
+--
+-- And it made a fresh install impossible. `auth` is a Supabase-provided schema; on
+-- vanilla Postgres this statement fails with `schema "auth" does not exist`, so the
+-- migration set could not build a database from empty -- which meant no CI could
+-- stand one up, and neither could a disaster recovery that had only the migrations.
+--
+-- Changing a historical migration is normally the wrong instinct. It is right here
+-- because 0018 already rewrites this function to the identical body a few files
+-- later: an existing database converges on the same definition whether or not this
+-- line ever ran, so the only behaviour this changes is a fresh install's ability to
+-- get past line 25.
+--
+-- `true` as the second argument to current_setting means "return NULL if unset"
+-- rather than raising. NULL is the safe answer: `org_id = NULL` is never true, so an
+-- unscoped connection sees nothing at all rather than everything.
 create or replace function current_org_id() returns uuid
 language sql stable
 as $$
-  select nullif(auth.jwt() ->> 'org_id', '')::uuid
+  select nullif(current_setting('app.org_id', true), '')::uuid
 $$;
 
 -- ── Websites ────────────────────────────────────────────────────────────────

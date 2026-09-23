@@ -114,19 +114,57 @@ live_only = pytest.mark.skipif(
 @pytest.mark.asyncio
 async def test_an_unscoped_connection_reads_nothing():
     """`org_id = NULL` is never true, so an unscoped connection sees nothing at all
-    rather than seeing everything. That is the whole design of current_org_id()."""
+    rather than seeing everything. That is the whole design of current_org_id().
+
+    Each table is proved non-empty FIRST, from a scoped connection. Without that this
+    test passes on an empty database while proving nothing -- "0 rows because the
+    policy hid them" and "0 rows because there are none" are indistinguishable from
+    the assertion alone, and CI runs against a database built fresh from migrations.
+    """
     import asyncpg
 
     conn = await asyncpg.connect(_LIVE.replace("postgresql+asyncpg://", "postgresql://"))
     try:
-        await conn.execute("select set_config('app.org_id', '', false)")
+        checked = 0
         for table in ("consent_scans", "ropa_records", "dsr_requests",
                       "incident_cases", "regwatch_findings"):
+            org = await _an_org_with_rows(conn, table)
+            if org is None:
+                continue  # nothing in this table to hide; it can prove nothing
+            await conn.execute(f"select set_config('app.org_id', '{org}', false)")
+            visible = await conn.fetchval(f"select count(*) from {table}")
+            assert visible > 0, f"scoped read of {table} saw nothing; the setup is wrong"
+
+            await conn.execute("select set_config('app.org_id', '', false)")
             assert await conn.fetchval(f"select count(*) from {table}") == 0, (
                 f"{table} returned rows on an unscoped connection"
             )
+            checked += 1
+        assert checked > 0, (
+            "no table held any rows, so this test proved nothing. Seed at least one "
+            "org's data before asserting that RLS hides it."
+        )
     finally:
         await conn.close()
+
+
+async def _an_org_with_rows(conn, table: str) -> str | None:
+    """An org_id that actually has rows in this table.
+
+    It cannot come from the table itself: reading `org_id` with scope off returns
+    nothing, precisely because RLS is working. So the candidates come from
+    `organizations`, which migration 0018 gives a SELECT-only bootstrap policy for
+    exactly the unscoped moment -- the same policy that lets anyone log in -- and each
+    candidate is then tried with scope ON.
+    """
+    await conn.execute("select set_config('app.org_id', '', false)")
+    orgs = [str(r["id"]) for r in await conn.fetch("select id from organizations limit 20")]
+    for org in orgs:
+        await conn.execute(f"select set_config('app.org_id', '{org}', false)")
+
+        if await conn.fetchval(f"select count(*) from {table}"):
+            return org
+    return None
 
 
 @live_only

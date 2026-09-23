@@ -1,0 +1,197 @@
+# Consiva CI.
+#
+# 1,377 tests existed before this file did, and nothing ran them unless somebody
+# remembered to. That was the top open finding in the platform audit once row-level
+# security was fixed: a test suite nobody runs automatically protects you on the days
+# you think to use it, which are not the days you need it.
+#
+# WHY THE BACKEND JOB STANDS UP A REAL DATABASE
+# ---------------------------------------------
+# The suite runs without one -- the live-database tests skip on a placeholder DSN, and
+# skipping quietly is exactly the failure mode this project keeps finding elsewhere.
+# The tests that need Postgres are the ones checking things no mock can answer: that
+# RLS is genuinely forced, that a foreign key really is violated by the wrong insert
+# order, that the migration set builds a schema from empty.
+#
+# That last one was not hypothetical. The migrations could NOT build an empty database
+# until 23 Sep 2026: 0001 called `auth.jwt()`, a Supabase-provided schema absent from
+# vanilla Postgres, so the set failed on its first statement. Nobody noticed because
+# every database in existence had grown migration by migration. This job is what keeps
+# that closed.
+#
+# WHAT IS DELIBERATELY NOT HERE
+# -----------------------------
+# No deployment step. No live LLM. The prompt-injection and RAG-quality probes make
+# real model calls and skip without an API key, which is correct for CI -- a pipeline
+# that fails because a third-party endpoint is slow teaches people to ignore it.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A new push supersedes an in-flight run on the same ref. Nobody needs the results
+  # for a commit that has already been replaced.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint backend
+        working-directory: backend
+        # The same invocation the project uses locally, so a green CI and a green
+        # terminal mean the same thing.
+        run: ruff check app/ tests/
+
+  frontend:
+    name: Frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+      - name: Typecheck and build
+        working-directory: frontend
+        # `npm run build` is `tsc -b && vite build` -- the typecheck is the point, the
+        # bundle proves the app still assembles. There are no frontend unit tests yet;
+        # that is a tracked gap, not an oversight in this file.
+        run: npm run build
+
+  backend:
+    name: Backend (migrations + tests)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # pgvector's own image rather than plain postgres: migration 0001 creates the
+        # `vector` extension, and the RAG tables carry embedding columns.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: consiva
+          POSTGRES_PASSWORD: consiva
+          POSTGRES_DB: consiva
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U consiva"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The owner connection. Migrations need DDL, and the suite's live-database tests
+      # read through it.
+      DATABASE_URL: postgresql+asyncpg://consiva:consiva@localhost:5432/consiva
+      # Settings has required fields that stand in for real secrets. No test reaches a
+      # live endpoint with these; the ones that would are skipped.
+      NVIDIA_API_KEY: ci-placeholder
+      NVIDIA_LLM_MODEL: ci-placeholder
+      NVIDIA_EMBED_MODEL: ci-placeholder
+      SUPABASE_URL: http://localhost
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder
+      SUPABASE_JWT_SECRET: ci-placeholder-jwt-secret-long-enough
+      APP_ENV: development
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build the schema from the migrations, on an empty database
+        working-directory: backend
+        # The check that could not pass before 23 Sep 2026. If a future migration
+        # depends on something only a grown database happens to have, this fails here
+        # rather than on somebody's first fresh deployment.
+        run: python migrate.py --database-url "$DATABASE_URL"
+
+      - name: Confirm the schema the migrations produced
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          import asyncio, os, asyncpg
+          async def main():
+              dsn = os.environ["DATABASE_URL"].replace("postgresql+asyncpg://", "postgresql://")
+              c = await asyncpg.connect(dsn)
+              tables = await c.fetchval(
+                  "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace "
+                  "where n.nspname='public' and c.relkind='r'")
+              forced = await c.fetchval(
+                  "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace "
+                  "where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity")
+              await c.close()
+              print(f"tables={tables} rls_forced={forced}")
+              # Guards against a migration silently dropping RLS from a table. The
+              # numbers are a floor, not an equality, so adding tables does not fail CI.
+              assert tables >= 64, f"expected at least 64 tables, built {tables}"
+              assert forced >= 61, f"expected RLS forced on at least 61 tables, got {forced}"
+          asyncio.run(main())
+          PY
+
+      - name: Run the test suite
+        working-directory: backend
+        run: python -m pytest -q --tb=short
+
+      - name: Score the ROPA classifier against its labelled benchmark
+        working-directory: backend
+        # The one measured accuracy figure this platform has (95.7% on 140 hand-labelled
+        # columns from a real production schema). Run on every push so a rule change
+        # that breaks classification is visible immediately rather than argued about.
+        run: python -m tools.classifier_benchmark
+
+      - name: Seed two organisations so the isolation check can prove something
+        working-directory: backend
+        # An RLS test against an empty database passes without proving anything: "0
+        # rows because the policy hid them" and "0 rows because there are none" are the
+        # same assertion. Two orgs, so the check can also prove A cannot see B.
+        run: python seed_ci_probe.py
+
+      - name: Complete the least-privilege cutover, as a deployment must
+        working-directory: backend
+        # Migrations run as the bootstrap role, which owns every table and on this
+        # image is also a superuser -- both bypass RLS. Checking policies on that
+        # connection reports success however broken they are, which is precisely how
+        # P0-1 stayed invisible here for weeks. CI runs the real cutover instead, and
+        # the next step tests the restricted role. See ci_cutover.py for the detail.
+        run: python ci_cutover.py
+
+      - name: Verify RLS actually enforces, not merely that it is declared
+        working-directory: backend
+        # Declared-but-inert RLS is precisely the bug this project shipped for weeks.
+        # Run against the RESTRICTED role -- running it against the owner is how the
+        # original bug stayed invisible.
+        env:
+          TEST_DATABASE_URL: ${{ env.RESTRICTED_DATABASE_URL }}
+        run: python -m pytest tests/test_rls_enforcement.py -q
