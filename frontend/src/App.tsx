@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getProfile, logout, type Profile } from "./api/auth";
+import { AUTH_BYPASSED, autoLogin, getProfile, logout, type Profile } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
 import { BreachConsole } from "./components/BreachConsole";
 import { ConsentAgentView } from "./ConsentAgentView";
@@ -17,6 +17,11 @@ type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch";
 export default function App() {
   const [profile, setProfile] = useState<Profile | null>(() => getProfile());
   const [agent, setAgent] = useState<Agent>("consent");
+  // Only meaningful while AUTH_BYPASSED is true. `null` means "not tried yet", which
+  // is different from "tried and failed" -- without that distinction the login screen
+  // flashes on every load before the token arrives.
+  const [autoLoginError, setAutoLoginError] = useState<string | null>(null);
+  const [autoLoginTried, setAutoLoginTried] = useState(false);
 
   useEffect(() => {
     // A 401 from any request means the token died mid-session; drop straight
@@ -25,7 +30,27 @@ export default function App() {
     return () => setUnauthorizedHandler(null);
   }, []);
 
-  if (!profile) return <LoginScreen onSignedIn={setProfile} />;
+  useEffect(() => {
+    // Development only. `AUTH_BYPASSED` is `import.meta.env.DEV`, which Vite replaces
+    // with a literal `false` in a production build -- so this whole effect is removed
+    // from the bundle rather than merely never running.
+    if (!AUTH_BYPASSED || profile || autoLoginTried) return;
+    setAutoLoginTried(true);
+    autoLogin()
+      .then(setProfile)
+      .catch((e) => setAutoLoginError(e instanceof Error ? e.message : String(e)));
+  }, [profile, autoLoginTried]);
+
+  if (!profile) {
+    // Still waiting on the dev token: show nothing rather than a login form that is
+    // about to be replaced.
+    if (AUTH_BYPASSED && !autoLoginError) {
+      return <div className="app" style={{ padding: 24 }}>Signing in…</div>;
+    }
+    // Auto-login failed (or this is a production build): the real form is the
+    // fallback, not something that was deleted.
+    return <LoginScreen onSignedIn={setProfile} signInHint={autoLoginError} />;
+  }
 
   function handleSignOut() {
     logout();
@@ -34,6 +59,18 @@ export default function App() {
 
   return (
     <div className="app">
+      {AUTH_BYPASSED && (
+        // Loud and permanent. A console that silently skips authentication looks
+        // exactly like one that authenticated, and the difference matters the moment
+        // anybody screenshots it or points it at something real.
+        <div className="banner banner-warn" style={{ margin: "8px 12px 0" }}>
+          <strong>Login bypassed — development build.</strong> Signed in as{" "}
+          <span className="mono">{profile.email}</span> with no password. The backend
+          only offers this when <span className="mono">APP_ENV=development</span>; a
+          production build contains no code that asks for it.
+        </div>
+      )}
+
       <header className="app-header shell-header">
         <div>
           <div className="brand">Consiva AI</div>

@@ -99,6 +99,57 @@ export async function login(email: string, password: string): Promise<Profile> {
   return profile;
 }
 
+/** Whether the login form is skipped. Vite replaces `import.meta.env.DEV` with a
+ *  literal at build time, so in a production bundle this is `false` and every branch
+ *  below it is removed by the minifier -- the request is not merely unreachable, the
+ *  code for it is not in the file. */
+export const AUTH_BYPASSED = import.meta.env.DEV;
+
+/** Sign in with no password, for local testing.
+ *
+ *  Deliberately NOT a second auth system. It asks the backend's development-only
+ *  endpoint for an ordinary access token issued to a real user, through the same
+ *  code path the real login uses. Everything downstream -- org scoping, row-level
+ *  security, audit attribution -- behaves as it does for a signed-in person, because
+ *  the token is the same shape. What is skipped is the form, not the mechanism.
+ *
+ *  The endpoint returns 404 unless the backend is running with APP_ENV=development,
+ *  so this fails cleanly against any other deployment and the caller falls back to
+ *  showing the login screen. */
+export async function autoLogin(): Promise<Profile> {
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}/api/v1/dev/auto-login`, { method: "POST" });
+  } catch {
+    throw new ApiError(0, `Could not reach the backend at ${BASE_URL}. Is it running?`);
+  }
+
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    const detail =
+      body && typeof body.detail === "string"
+        ? body.detail
+        : res.status === 404
+          ? "Auto-login is unavailable: the backend is not running in development mode."
+          : "Auto-login failed.";
+    throw new ApiError(res.status, detail);
+  }
+
+  const data = body as {
+    access_token: string;
+    user: { id: string; email: string; role: string; org_id: string };
+  };
+  const profile: Profile = {
+    user_id: data.user.id,
+    org_id: data.user.org_id,
+    role: data.user.role,
+    email: data.user.email,
+  };
+  writeStorage(TOKEN_KEY, data.access_token);
+  writeStorage(PROFILE_KEY, JSON.stringify(profile));
+  return profile;
+}
+
 export function logout(): void {
   writeStorage(TOKEN_KEY, null);
   writeStorage(PROFILE_KEY, null);

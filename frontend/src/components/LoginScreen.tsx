@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { login, type Profile } from "../api/auth";
 
-export function LoginScreen({ onSignedIn }: { onSignedIn: (profile: Profile) => void }) {
+export function LoginScreen({
+  onSignedIn,
+  signInHint,
+}: {
+  onSignedIn: (profile: Profile) => void;
+  /** Why the development auto-login did not work, when it was tried and failed.
+   *  Shown above the form so the reason is visible rather than leaving somebody
+   *  wondering why they are being asked for a password in a dev build. */
+  signInHint?: string | null;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +38,13 @@ export function LoginScreen({ onSignedIn }: { onSignedIn: (profile: Profile) => 
       <form className="login-card" onSubmit={handleSubmit}>
         <div className="brand">Consiva AI</div>
         <div className="login-sub">Sign in to the compliance console</div>
+
+        {signInHint && (
+          <div className="banner banner-warn small">
+            Development auto-login did not work, so the real sign-in form is shown
+            instead: {signInHint}
+          </div>
+        )}
 
         <label className="login-label" htmlFor="login-email">Email</label>
         <input
