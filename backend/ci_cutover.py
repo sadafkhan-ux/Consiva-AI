@@ -43,6 +43,28 @@ async def main() -> int:
         print("DATABASE_URL is not set", file=sys.stderr)
         return 1
 
+    # A Postgres ROLE is cluster-wide, not per-database. Rotating consiva_app's
+    # password here therefore changes it for every database in the cluster -- so
+    # running this against a scratch database on a developer machine silently
+    # invalidates the credential in backend/.env and the API starts failing to
+    # connect on its next pool checkout. That is not hypothetical; it is exactly
+    # what happened while rehearsing this pipeline locally, and the symptom
+    # (`password authentication failed for user "consiva_app"`) appears minutes
+    # later, nowhere near the cause.
+    #
+    # CI has a database per run and nothing else to break, so it is allowed. Anywhere
+    # else this refuses and points at the script that does the job properly --
+    # cutover_rls.py rotates the password AND rewrites .env to match.
+    if not os.getenv("GITHUB_ACTIONS") and os.getenv("ALLOW_LOCAL_ROLE_ROTATION") != "yes":
+        print(
+            "REFUSING: this rotates a CLUSTER-WIDE role password and does not update "
+            "backend/.env, so every other database on this server -- including your "
+            "development one -- would stop authenticating. Use cutover_rls.py locally; "
+            "it does both. Set ALLOW_LOCAL_ROLE_ROTATION=yes only if you are certain.",
+            file=sys.stderr,
+        )
+        return 1
+
     password = "".join(secrets.choice(ALPHABET) for _ in range(32))
     owner_dsn = raw.replace("postgresql+asyncpg://", "postgresql://")
 
