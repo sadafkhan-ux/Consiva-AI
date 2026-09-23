@@ -60,6 +60,10 @@ export interface ConsentScanState {
   audit: AuditLogResponse[];
   evidence: ScanEvidenceResponse | null;
   error: string | null;
+  /** Which pipeline stage failed, when one did. The status panel showed "—" for
+   *  "Current Stage" while the failing stage was known and displayed further down
+   *  the same page. */
+  failedStage: string | null;
   startedAt: number | null;
   completedAt: number | null;
   durationMs: number | null;
@@ -75,6 +79,7 @@ const INITIAL_STATE: ConsentScanState = {
   audit: [],
   evidence: null,
   error: null,
+  failedStage: null,
   startedAt: null,
   completedAt: null,
   durationMs: null,
@@ -88,13 +93,34 @@ export function useConsentScan() {
   const runIdRef = useRef(0);
 
   const refreshFindingsAuditEvidence = useCallback(async (scanId: string, myRunId: number) => {
+    // Each settles on its own. Previously `Promise.all` with only the evidence call
+    // guarded meant one failing request discarded the other two results as well --
+    // so a 500 on findings also blanked the evidence that had loaded fine.
     const [findings, audit, evidence] = await Promise.all([
-      api.getFindings(scanId),
-      api.getAudit(scanId),
+      api.getFindings(scanId).catch(() => null),
+      api.getAudit(scanId).catch(() => null),
       api.getEvidence(scanId).catch(() => null),
     ]);
     if (runIdRef.current !== myRunId) return;
-    setState((s) => ({ ...s, findings, audit, evidence: evidence ?? s.evidence }));
+    setState((s) => ({
+      ...s,
+      findings: findings ?? s.findings,
+      audit: audit ?? s.audit,
+      evidence: evidence ?? s.evidence,
+    }));
+  }, []);
+
+  /** Evidence only, for the failure paths.
+   *
+   *  The crawl and the analysis are separate things that fail separately. When
+   *  analysis dies, everything the crawl collected is still in the database, and a
+   *  report that renders "no trackers were detected" over 840 stored trackers is
+   *  worse than one that renders nothing at all -- it is a confident false negative
+   *  in a product whose whole job is to find what a site is doing. */
+  const loadEvidenceRegardless = useCallback(async (scanId: string, myRunId: number) => {
+    const evidence = await api.getEvidence(scanId).catch(() => null);
+    if (runIdRef.current !== myRunId || !evidence) return;
+    setState((s) => ({ ...s, evidence }));
   }, []);
 
   const pollStagesUntilAuditOrPending = useCallback(
@@ -164,6 +190,14 @@ export function useConsentScan() {
         if (runIdRef.current !== myRunId) return;
 
         if (finalScan.status === "failed") {
+          // Load whatever evidence the crawl DID persist before giving up. A failed
+          // scan still leaves real cookies, trackers, forms and pages behind, and
+          // without this the report renders every itemized section as "none
+          // detected" -- telling the customer their site is clean when the truth is
+          // that the pipeline broke. Measured on a real hubspot.com scan: 840
+          // trackers, 124 cookies, 50 forms and 175 policies were in the database
+          // while the report said none of them existed.
+          await loadEvidenceRegardless(scan.id, myRunId);
           setState((s) => ({ ...s, phase: "failed", error: finalScan.error, completedAt: Date.now() }));
           return;
         }
@@ -178,7 +212,18 @@ export function useConsentScan() {
         const byName = Object.fromEntries(finalStages.map((s) => [s.stage, s]));
         const failedStage = finalStages.find((s) => s.status === "failed");
         if (failedStage) {
-          setState((s) => ({ ...s, phase: "failed", error: `Analysis failed at stage "${failedStage.stage}": ${failedStage.error}`, completedAt: Date.now() }));
+          // Same reason as above, and this is the path that actually fires in
+          // practice: the crawl succeeds, llm_analysis times out, and the report
+          // then claims the site has no trackers at all. The evidence is already
+          // persisted and one GET away.
+          await loadEvidenceRegardless(scan.id, myRunId);
+          setState((s) => ({
+            ...s,
+            phase: "failed",
+            error: `Analysis failed at stage "${failedStage.stage}": ${failedStage.error}`,
+            failedStage: failedStage.stage,
+            completedAt: Date.now(),
+          }));
           return;
         }
 
@@ -198,7 +243,7 @@ export function useConsentScan() {
         setState((s) => ({ ...s, phase: "failed", error: message, completedAt: Date.now() }));
       }
     },
-    [pollStagesUntilAuditOrPending, refreshFindingsAuditEvidence]
+    [pollStagesUntilAuditOrPending, refreshFindingsAuditEvidence, loadEvidenceRegardless]
   );
 
   // After a human decision (approve/reject/edit), the LangGraph checkpointer resumes

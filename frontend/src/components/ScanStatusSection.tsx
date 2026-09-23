@@ -54,14 +54,46 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
 
       <div className="grid cols-5" style={{ marginBottom: 14 }}>
         <div className="stat"><div className="n scan-id" style={{ fontSize: 11 }}>{state.scanId?.slice(0, 8) ?? "—"}</div><div className="l">Scan ID</div></div>
-        <div className="stat"><div className="n" style={{ fontSize: 15 }}>{state.scan?.status ?? "—"}</div><div className="l">Backend Status</div></div>
+        {/* Relabelled. This field is the CRAWL's status, and showing it as "Backend
+            Status: completed" directly under a red "Failed" badge read as the page
+            contradicting itself -- when in fact the crawl completed and the analysis
+            afterwards did not. Naming what it measures removes the contradiction
+            without hiding either fact. */}
+        <div className="stat">
+          <div className="n" style={{ fontSize: 15 }}>{state.scan?.status ?? "—"}</div>
+          <div className="l">Crawl Status</div>
+        </div>
         <div className="stat"><div className="n" style={{ fontSize: 13 }}>{formatTimestamp(state.startedAt)}</div><div className="l">Started At</div></div>
         <div className="stat"><div className="n" style={{ fontSize: 13 }}>{formatTimestamp(state.completedAt)}</div><div className="l">Completed At</div></div>
-        <div className="stat"><div className="n">{formatMs(state.durationMs)}</div><div className="l">Duration</div></div>
+        {/* Fall back to the timestamps. `durationMs` is only set on the success
+            path, so a failed scan showed "—" for Duration while Started At and
+            Completed At were both populated a few pixels away. */}
+        <div className="stat">
+          <div className="n">
+            {formatMs(
+              state.durationMs ??
+                (state.startedAt && state.completedAt ? state.completedAt - state.startedAt : null),
+            )}
+          </div>
+          <div className="l">Duration</div>
+        </div>
       </div>
 
       <div className="grid cols-3" style={{ marginBottom: 14 }}>
-        <div className="stat"><div className="n" style={{ fontSize: 14 }}>{currentStage ? STAGE_LABELS[currentStage] : state.phase === "completed" || state.phase === "awaiting_review" ? "Done" : "—"}</div><div className="l">Current Stage</div></div>
+        {/* When a stage failed, name it. It was already known and displayed further
+            down the same page, while this field rendered "—". */}
+        <div className="stat">
+          <div className="n" style={{ fontSize: 14 }}>
+            {state.failedStage
+              ? `Failed at ${STAGE_LABELS[state.failedStage] ?? state.failedStage}`
+              : currentStage
+                ? STAGE_LABELS[currentStage]
+                : state.phase === "completed" || state.phase === "awaiting_review"
+                  ? "Done"
+                  : "—"}
+          </div>
+          <div className="l">Current Stage</div>
+        </div>
         <div className="stat"><div className="n">{state.scan?.evidence_counts.pages ?? "—"}</div><div className="l">Pages Scanned</div></div>
         <div className="stat"><div className="n">{state.error ? "Yes" : "No"}</div><div className="l">Errors / Warnings</div></div>
       </div>

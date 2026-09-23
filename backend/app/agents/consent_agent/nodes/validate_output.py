@@ -43,6 +43,16 @@ async def validate_output(state: AgentState) -> dict:
     async with track_stage(
         uuid.UUID(state.scan_id), "output_validation", agent_run_id=uuid.UUID(state.agent_run_id)
     ) as meta:
+        # Nothing to validate: the analysis node could not reach any provider and has
+        # already marked this run failed. Passing that status through unchanged is
+        # what routes the graph to the rule-derived fallback. Calling
+        # model_validate(None) here would raise instead, killing the run at the node
+        # immediately after the one that was supposed to have degraded gracefully.
+        if state.llm_output is None:
+            meta["skipped"] = True
+            meta["reason"] = state.error or "the analysis step produced no output"
+            return {"validation_status": "failed", "error": state.error}
+
         response = ConsentAnalysisResponse.model_validate(state.llm_output)
         valid_chunk_ids = {c["chunk_id"] for c in state.rag_chunks}
         ungrounded = sorted({

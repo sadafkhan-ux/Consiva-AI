@@ -16,6 +16,7 @@ from langgraph.graph import END, StateGraph
 from app.agents.consent_agent.nodes.audit import write_audit_log
 from app.agents.consent_agent.nodes.classify_rules import classify_rules
 from app.agents.consent_agent.nodes.create_findings import create_findings
+from app.agents.consent_agent.nodes.create_rule_findings import create_rule_findings
 from app.agents.consent_agent.nodes.human_review_gate import human_review_gate
 from app.agents.consent_agent.nodes.llm_reasoning import llm_reasoning
 from app.agents.consent_agent.nodes.normalize import normalize
@@ -24,7 +25,20 @@ from app.agents.consent_agent.nodes.validate_output import validate_output
 from app.agents.consent_agent.state import AgentState
 from app.config import get_settings
 
-_VALIDATION_ROUTES = {"valid": "create_findings", "retry": "llm_reasoning", "failed": "write_audit_log"}
+# `failed` used to go straight to write_audit_log, which skipped findings creation
+# entirely -- so an analysis timeout produced a scan with zero findings even when the
+# rules engine had already matched. Measured on a real hubspot.com scan: three rules
+# matched (including post-reject tracking, the finding this product exists to make),
+# the model timed out after nine minutes, and the customer saw nothing at all.
+#
+# It now routes to a node that persists the rule matches as findings without a
+# narrative, every one flagged for human review. Losing the model should cost the
+# explanation, not the finding.
+_VALIDATION_ROUTES = {
+    "valid": "create_findings",
+    "retry": "llm_reasoning",
+    "failed": "create_rule_findings",
+}
 
 
 def _route_after_validation(state: AgentState) -> str:
@@ -40,6 +54,7 @@ def build_graph() -> StateGraph:
     graph.add_node("llm_reasoning", llm_reasoning)
     graph.add_node("validate_output", validate_output)
     graph.add_node("create_findings", create_findings)
+    graph.add_node("create_rule_findings", create_rule_findings)
     graph.add_node("human_review_gate", human_review_gate)
     graph.add_node("write_audit_log", write_audit_log)
 
@@ -50,6 +65,9 @@ def build_graph() -> StateGraph:
     graph.add_edge("llm_reasoning", "validate_output")
     graph.add_conditional_edges("validate_output", _route_after_validation)
     graph.add_edge("create_findings", "human_review_gate")
+    # Through the SAME review gate as a normal finding. A rule-derived finding with no
+    # narrative needs a person more than an explained one does, not less.
+    graph.add_edge("create_rule_findings", "human_review_gate")
     graph.add_edge("human_review_gate", "write_audit_log")
     graph.add_edge("write_audit_log", END)
 

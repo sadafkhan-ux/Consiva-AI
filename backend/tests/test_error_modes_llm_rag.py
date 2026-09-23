@@ -165,12 +165,19 @@ async def test_generate_structured_propagates_after_nvidia_timeout(build_error):
 
 
 async def test_llm_reasoning_propagates_llm_output_validation_error(monkeypatch):
-    """generate_structured's own basic retry-then-raise behavior is already covered
-    by test_llm_client.py::test_generate_structured_raises_after_exhausting_retries.
-    This traces what happens *above* that: llm_reasoning.py has no try/except of its
-    own around generate_structured, so LLMOutputValidationError propagates straight
-    through it. track_stage still records the stage as failed (ok=False, error
-    captured) before re-raising -- the exception is never swallowed at this layer."""
+    """A model that cannot produce valid output degrades the run; it does not end it.
+
+    This test used to assert that LLMOutputValidationError propagated out of
+    llm_reasoning. It changed on 23 Sep 2026, deliberately: propagating killed the
+    whole graph AT this node, so validate_output never ran, its `failed` route never
+    fired, and the rule matches already in hand were never turned into findings.
+    Measured on a real hubspot.com scan -- three rules matched, both providers
+    failed, and the customer received zero findings.
+
+    What has NOT changed, and is still asserted below: track_stage records the stage
+    as failed with the real error. The failure is not hidden, it is routed. A model
+    returning unparseable JSON three times is the same outcome for the customer as a
+    timeout, and both now reach the rule-derived fallback."""
     calls: list[dict] = []
     monkeypatch.setattr(
         "app.agents.consent_agent.nodes.llm_reasoning.track_stage", _RecordingStage(calls)
@@ -182,9 +189,15 @@ async def test_llm_reasoning_propagates_llm_output_validation_error(monkeypatch)
         )),
     )
 
-    with pytest.raises(LLMOutputValidationError, match="bad json"):
-        await llm_reasoning(_state())
+    result = await llm_reasoning(_state())
 
+    # Routable, not raised: this is what lets the graph reach create_rule_findings.
+    assert result["validation_status"] == "failed"
+    assert result["llm_output"] is None
+    assert "bad json" in result["error"]
+
+    # And the stage is still recorded as a genuine failure, because the exception is
+    # raised INSIDE track_stage and only converted outside it.
     assert calls == [{"stage": "llm_analysis", "ok": False, "error": calls[0]["error"]}]
     assert "bad json" in calls[0]["error"]
 

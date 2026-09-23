@@ -68,4 +68,11 @@ async def test_validate_output_passes_with_no_citations_at_all():
 def test_route_after_validation_maps_every_status():
     assert _route_after_validation(_state(validation_status="valid")) == "create_findings"
     assert _route_after_validation(_state(validation_status="retry")) == "llm_reasoning"
-    assert _route_after_validation(_state(validation_status="failed")) == "write_audit_log"
+    # Changed deliberately on 23 Sep 2026. This used to route straight to
+    # write_audit_log, which skipped findings creation entirely -- so an analysis
+    # failure produced a scan with zero findings even when the rules engine had
+    # already matched. Measured on a real hubspot.com scan: three rules matched
+    # (including post-reject tracking), the model timed out, and the customer saw
+    # nothing. It now routes to the rule-derived fallback, which still reaches
+    # write_audit_log by way of the human review gate.
+    assert _route_after_validation(_state(validation_status="failed")) == "create_rule_findings"

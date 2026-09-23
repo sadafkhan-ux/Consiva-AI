@@ -143,16 +143,80 @@ def compact_scan_evidence(scan_summary: dict) -> dict:
     compacted: dict = {}
     for key, value in scan_summary.items():
         if key == "trackers":
-            compacted[key] = compact_trackers(value or [])
+            compacted[key] = _bounded(compact_trackers(value or []), key, compacted)
         elif isinstance(value, list):
             prefix = prefixes.get(key, key[:1])
-            compacted[key] = [
+            items = [
                 {"local_id": f"{prefix}{i}", **_strip_db_fields(item)} if isinstance(item, dict) else item
                 for i, item in enumerate(value, start=1)
             ]
+            compacted[key] = _bounded(items, key, compacted)
         else:
             compacted[key] = value
     return compacted
+
+
+# How many items of each kind the model may see. Grouping already collapses the bulk
+# of the repetition; this is the ceiling for what grouping cannot help with -- a site
+# that genuinely runs hundreds of distinct hosts.
+#
+# WHY THIS EXISTS, measured on a real hubspot.com scan:
+#
+#   840 trackers + 124 cookies + 175 policies + 50 forms + 91 services went into one
+#   prompt of 77,915 TOKENS. The self-hosted server (n_ctx 4096) rejected it outright,
+#   the NVIDIA fallback then ground through the entire 480-second deadline and timed
+#   out, and the customer received zero findings -- for a site where three rules had
+#   already matched, including tracking that continued after the visitor pressed
+#   Reject. An unbounded prompt is not a performance problem, it is the reason the
+#   product produced nothing at all.
+_ITEM_CAPS = {
+    "trackers": 80,
+    "cookies": 80,
+    "third_party_services": 40,
+    "policies": 15,
+    "forms": 15,
+    "pages": 15,
+    "consent_signals": 10,
+}
+
+# Evidence of a violation, ranked ahead of everything else when the cap bites. A
+# tracker that fired before consent or after Reject is the finding; one that fired
+# only after Accept is context.
+_STATE_PRIORITY = {"post_reject": 0, "pre_consent": 1, "post_accept": 2}
+
+
+def _violation_rank(item: object) -> int:
+    """Lower sorts first. Items with no consent-state information sort last, because
+    they cannot evidence a consent violation on their own."""
+    if not isinstance(item, dict):
+        return 99
+    states = item.get("consent_states") or item.get("consent_state") or []
+    if isinstance(states, str):
+        states = [states]
+    return min((_STATE_PRIORITY.get(str(s), 50) for s in states), default=90)
+
+
+def _bounded(items: list, key: str, compacted: dict) -> list:
+    """Cap one collection, keeping the items most likely to BE the finding.
+
+    Records what was left out rather than silently truncating: `<key>_omitted` and
+    `<key>_total` travel in the same prompt, so the model is told it is looking at a
+    sample, and the stage metadata carries the same numbers for the audit trail. A
+    prompt that quietly drops 760 trackers and says nothing invites a model to
+    conclude the site is cleaner than it is.
+    """
+    cap = _ITEM_CAPS.get(key)
+    if cap is None or len(items) <= cap:
+        return items
+    ordered = sorted(items, key=_violation_rank)
+    compacted[f"{key}_total"] = len(items)
+    compacted[f"{key}_omitted"] = len(items) - cap
+    compacted[f"{key}_note"] = (
+        f"Showing the {cap} most consent-relevant of {len(items)} {key} "
+        f"(items that fired before consent or after Reject are shown first). "
+        f"{len(items) - cap} are not listed; do not conclude they are absent."
+    )
+    return ordered[:cap]
 
 
 def build_analysis_prompt(*, scan_summary: dict, rule_findings: list[dict], rag_chunks: list[dict]) -> str:
