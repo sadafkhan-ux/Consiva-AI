@@ -7,7 +7,8 @@ from app.config import get_settings
 from app.db.models import AgentRun
 from app.db.session import async_session_factory
 from app.llm.client import generate_structured_with_fallback
-from app.llm.prompts import RETRY_SUFFIX, SYSTEM_PROMPT, build_analysis_prompt
+from app.llm.prompts import (RETRY_SUFFIX, SYSTEM_PROMPT, build_analysis_prompt,
+                             compact_scan_evidence, evidence_stats)
 from app.llm.schemas import ConsentAnalysisResponse
 from app.observability.stage_tracker import track_stage
 
@@ -43,6 +44,12 @@ async def _llm_reasoning_inner(state: AgentState) -> dict:
 
     async with track_stage(uuid.UUID(state.scan_id), "llm_analysis", agent_run_id=uuid.UUID(state.agent_run_id)) as meta:
         meta["prompt_chars"] = len(user_prompt)
+        # Recorded per scan so prompt growth is visible in the audit trail rather than
+        # only in a timeout months later. `evidence_stats` reports collected-vs-sent
+        # per collection, which is what distinguishes "this site really is bigger"
+        # from "a cap started biting".
+        meta["evidence_stats"] = evidence_stats(state.scan_evidence, compact_scan_evidence(state.scan_evidence))
+        meta["rag_chunks_used"] = len(state.rag_chunks or [])
         meta["is_retry"] = state.error is not None
         meta["deadline_seconds_remaining"] = round(deadline_epoch - time.time(), 1)
         usage_sink: dict = {}

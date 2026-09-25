@@ -72,6 +72,7 @@ from app.db.session import async_session_factory
 from app.jobs import queue
 from app.services import (
     analysis_service,
+    consent_api_chain_service,
     dsr_run_service,
     incident_run_service,
     monitoring_service,
@@ -103,6 +104,18 @@ async def _process_one(job: AgentJob) -> None:
         # change. Runs only after a SUCCESSFUL scan -- execute_scan_and_persist raises
         # on failure, which skips this line entirely, same as any other job failure.
         await monitoring_service.maybe_run_diff_after_scan(scan_id)
+    elif job.job_type == "consent_api_chain":
+        # One API-requested scan, end to end: crawl, analyse, notify. The console's
+        # two-step flow still uses the separate "scan" and "analyze" types above and is
+        # untouched -- see services/consent_api_chain_service for why an integrator
+        # needs the phases joined and a person does not.
+        await consent_api_chain_service.run(
+            uuid.UUID(job.payload["scan_id"]),
+            uuid.UUID(job.payload["org_id"]),
+            uuid.UUID(job.payload["user_id"]),
+        )
+    elif job.job_type == "consent_webhook":
+        await consent_api_chain_service.deliver_webhook(job.payload)
     elif job.job_type == "analyze":
         await analysis_service.run_analysis(
             uuid.UUID(job.payload["agent_run_id"]),

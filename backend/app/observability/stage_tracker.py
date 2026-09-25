@@ -44,7 +44,9 @@ async def _finish(stage_id: uuid.UUID | None, *, ok: bool, duration_ms: int, met
             if ok:
                 await stage_repository.complete_stage(db, stage_id, duration_ms=duration_ms, metadata=metadata)
             else:
-                await stage_repository.fail_stage(db, stage_id, duration_ms=duration_ms, error=error)
+                await stage_repository.fail_stage(
+                    db, stage_id, duration_ms=duration_ms, error=error, metadata=metadata
+                )
             await db.commit()
     except Exception:
         logger.warning("Could not record stage finish for stage_id=%s", stage_id, exc_info=True)

@@ -22,7 +22,11 @@ export function ConsentAgentView() {
   const [buildingReport, setBuildingReport] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
 
-  const busy = state.phase !== "idle" && state.phase !== "completed" && state.phase !== "failed" && state.phase !== "awaiting_review";
+  // Every terminal phase, not just the happy ones. Omitting "degraded" here left
+  // the Scan button disabled forever after a run that produced findings without a
+  // narrative -- a finished run that the page still treated as in flight.
+  const TERMINAL_PHASES = ["idle", "completed", "degraded", "failed", "awaiting_review"];
+  const busy = !TERMINAL_PHASES.includes(state.phase);
 
   function handleScan() {
     if (!url.trim()) return;
@@ -36,7 +40,10 @@ export function ConsentAgentView() {
   // the run closes out. Purely additive: it reads state the app already holds and
   // triggers no request, so the scan/review/audit workflow is untouched.
   const canDownloadReport =
-    (state.phase === "awaiting_review" || state.phase === "completed") && state.findings.length > 0;
+    (state.phase === "awaiting_review" || state.phase === "completed" ||
+     // Findings from rules, with no narrative. Still the only record of what the
+     // scan found, and the phase is only ever set when findings.length > 0.
+     state.phase === "degraded") && state.findings.length > 0;
   const reportIsProvisional = state.findings.some((f) => f.status === "pending");
 
   async function handleDownloadReport() {
@@ -80,6 +87,14 @@ export function ConsentAgentView() {
 
       {state.phase === "failed" && state.error && (
         <div className="error-box">{state.error}</div>
+      )}
+      {state.phase === "degraded" && (
+        <div className="info-box">
+          The findings below were produced by the deterministic rules from evidence the scan actually collected, so what
+          they report was measured. The step that writes the plain-English explanation and attaches regulatory citations
+          did not complete ({state.error}), so each finding carries its rule's own summary, cites nothing, and requires
+          human review. Re-running the analysis will add the explanations; the evidence does not need re-scanning.
+        </div>
       )}
       {state.phase === "awaiting_review" && (
         <div className="info-box">
@@ -133,12 +148,16 @@ export function ConsentAgentView() {
 
           <section className="section">
             <h2>8. Findings &amp; Compliance</h2>
-            <FindingsSection findings={state.findings} onDecision={afterReviewDecision} />
+            <FindingsSection
+              findings={state.findings}
+              onDecision={afterReviewDecision}
+              analysisFailed={state.failedStage !== null}
+            />
           </section>
 
           <section className="section">
             <h2>9. DPDP References</h2>
-            <DpdpReferencesSection findings={state.findings} />
+            <DpdpReferencesSection findings={state.findings} analysisFailed={state.failedStage !== null} />
           </section>
 
           <section className="section">

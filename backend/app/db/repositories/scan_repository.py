@@ -103,7 +103,7 @@ def _parse_expiry(expiry_iso: str | None) -> datetime | None:
 
 async def save_scan_result(
     db: AsyncSession, *, scan_id: uuid.UUID, scan_result: ScanResult, classification: RulesClassification
-) -> None:
+) -> dict[str, int]:
     """Persists every evidence table for one scan, resolving the scanner's local_id
     cross-references (e.g. cookie -> tracker) into real foreign keys as it goes.
 
@@ -194,6 +194,33 @@ async def save_scan_result(
         scan.completed_at = datetime.now(UTC)
 
     await db.flush()
+
+    # Returned, and recorded by the caller, because a silent gap between "what the
+    # scanner found" and "what the database holds" is exactly the discrepancy an
+    # external validation raised twice against this pipeline (881 trackers reported by
+    # the website_scan stage vs 828 rows readable afterwards, on two independent runs).
+    # No cause was reproducible from the code path -- it is lossless end to end when
+    # traced on a live crawl, there is only one writer, no deleter, and no unique
+    # constraint -- so the useful thing is to stop the next occurrence being a mystery:
+    # both numbers now travel in the stage record, side by side, attributable per table.
+    # Counted from the TABLE, not from len(the list we handed SQLAlchemy).
+    #
+    # The first version of this returned len(tracker_rows) and reported no gap at all
+    # on a scan where the scanner found 906 trackers, 906 objects were constructed and
+    # added -- and 857 rows existed afterwards. A metric that reports what we intended
+    # to write cannot detect a write that did not happen, which is the entire failure
+    # this was added to surface.
+    await db.flush()
+    written: dict[str, int] = {}
+    for key, model in (
+        ("pages", WebsitePage), ("trackers", Tracker), ("cookies", Cookie),
+        ("forms", ConsentForm), ("policies", Policy),
+        ("third_party_services", ThirdPartyService),
+    ):
+        written[key] = await db.scalar(
+            select(func.count()).select_from(model).where(model.scan_id == scan_id)
+        ) or 0
+    return written
 
 
 async def get_scan_counts(db: AsyncSession, scan_id: uuid.UUID) -> dict:

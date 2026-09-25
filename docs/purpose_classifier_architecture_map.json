@@ -1,0 +1,214 @@
+{
+  "audit": {
+    "scope": "read-only architecture discovery",
+    "date": "2026-09-25",
+    "repository": "consiva",
+    "code_modified": false,
+    "method": "every entry traced to a file, table or endpoint verified to exist in the repository or live database",
+    "headline_finding": "A purpose classifier already exists inside Agent 2 (ROPA): app/agents/ropa/rules/purpose_rules.py (136 lines, 10 business purposes), app/agents/ropa/services/purpose_service.py (80 lines), app/agents/ropa/services/processing_activity_service.py (127 lines), plus a purpose_taxonomy table with 4 rows. Agent 1 independently classifies purpose as trackers.category / cookies.category, whose values were verified to be a strict subset of purpose_taxonomy.code. The missing capability is comparison, not classification."
+  },
+
+  "existing_agents": [
+    {
+      "id": 1, "name": "Consent Agent", "package": "app/agents/consent_agent/",
+      "routers": ["app/api/v1/routes/consent_scans.py", "app/api/v1/routes/consent_findings.py", "app/api/v1/routes/consent_agent.py"],
+      "endpoint_count": 23,
+      "services": ["app/services/scan_service.py", "app/services/analysis_service.py", "app/services/consent_api_chain_service.py", "app/services/consent_agent_api_service.py"],
+      "job_types": ["scan", "analyze", "consent_api_chain", "consent_webhook"],
+      "tables": ["consent_scans", "consent_findings", "consent_forms", "consent_signals", "consent_recommendations", "cookies", "trackers", "third_party_services", "policies", "website_pages", "websites", "cookie_lookup", "scan_diffs", "scan_schedules"],
+      "uses_llm": true, "llm_entry": "app/agents/consent_agent/nodes/llm_reasoning.py",
+      "uses_rag": true, "rag_entry": "app/agents/consent_agent/nodes/retrieve_rag.py",
+      "orchestration": "LangGraph, checkpointed",
+      "connectors": ["playwright browser scanner (app/scanner/crawler.py)"],
+      "frontend": ["frontend/src/ConsentAgentView.tsx", "ScanStatusSection.tsx", "TrackersTable.tsx", "CookiesTable.tsx", "FindingsSection.tsx", "ThreeStateSection.tsx", "ConsentSummarySection.tsx", "FormsAndPoliciesSection.tsx", "DpdpAndRecommendations.tsx"],
+      "input": "website URL", "output": "findings + evidence",
+      "purpose_classifier_relevance": "Holds OBSERVED purpose (trackers.category, cookies.category) AND the consent state each item fired in. The only observed-usage evidence anywhere in the platform."
+    },
+    {
+      "id": 2, "name": "ROPA / Data Discovery", "package": "app/agents/ropa/",
+      "routers": ["app/api/v1/routes/ropa.py"], "endpoint_count": 13,
+      "services": ["app/services/ropa_run_service.py", "app/agents/ropa/services/discovery_service.py", "classification_service.py", "purpose_service.py", "processing_activity_service.py", "dataflow_service.py", "risk_service.py", "enrichment_service.py", "change_detection_service.py", "ropa_service.py"],
+      "job_types": ["ropa_discovery"],
+      "tables": ["ropa_data_sources", "ropa_discovery_runs", "ropa_records", "ropa_findings", "ropa_schema_baselines", "ropa_schema_changes", "ropa_integration_keys"],
+      "uses_llm": true, "llm_entry": "app/agents/ropa/services/enrichment_service.py",
+      "uses_rag": false,
+      "orchestration": "async service pipeline",
+      "connectors": ["postgres", "rest_api"],
+      "frontend": ["frontend/src/components/RopaDashboard.tsx"],
+      "input": "connector config or agentless evidence push", "output": "ROPA records + findings",
+      "purpose_classifier_relevance": "Holds DECLARED purpose and already implements purpose classification, purpose-to-activity grouping and data-flow mapping. Highest duplication risk."
+    },
+    {
+      "id": 3, "name": "DSR", "package": "app/agents/dsr/",
+      "routers": ["app/api/v1/routes/dsr.py"], "endpoint_count": 17,
+      "services": ["app/services/dsr_run_service.py", "app/agents/dsr/services/lifecycle.py", "case_service.py"],
+      "job_types": ["dsr_search", "dsr_execute"],
+      "tables": ["dsr_requests", "dsr_actions", "dsr_action_plans", "dsr_approvals", "dsr_evidence", "dsr_executions", "dsr_identity_verifications", "dsr_responses", "dsr_retention_rules", "dsr_search_runs", "dsr_source_authorizations"],
+      "uses_llm": false, "uses_rag": false,
+      "orchestration": "async service pipeline",
+      "connectors": ["postgres"],
+      "frontend": ["frontend/src/components/DsrEmailFirst.tsx", "DsrConsole.tsx", "DsrDashboard.tsx"],
+      "input": "email address", "output": "action plan + response",
+      "purpose_classifier_relevance": "dsr_retention_rules is the only retention policy model in the platform."
+    },
+    {
+      "id": 4, "name": "Breach / Incidents", "package": "app/agents/breach/",
+      "routers": ["app/api/v1/routes/incidents.py"], "endpoint_count": 24,
+      "services": ["app/services/incident_run_service.py", "app/agents/breach/services/incident_service.py", "investigation_service.py"],
+      "job_types": ["incident_analysis"],
+      "tables": ["incident_cases", "incident_actions", "incident_affected_data", "incident_affected_subjects", "incident_affected_systems", "incident_approvals", "incident_communications", "incident_evidence", "incident_executions", "incident_reports", "incident_risk_assessments", "incident_timeline"],
+      "uses_llm": false, "uses_rag": false,
+      "orchestration": "async service pipeline",
+      "connectors": [],
+      "frontend": ["frontend/src/components/BreachConsole.tsx"],
+      "input": "incident description", "output": "incident report",
+      "purpose_classifier_relevance": "None direct. incident_affected_data describes data categories involved in a breach."
+    },
+    {
+      "id": 5, "name": "Regulatory Watch", "package": "app/agents/regwatch/",
+      "routers": ["app/api/v1/routes/regwatch.py"], "endpoint_count": 20,
+      "services": ["app/services/regwatch_run_service.py", "app/agents/regwatch/services/assessment_service.py", "impact_service.py", "review_service.py", "action_sla_service.py"],
+      "job_types": ["regwatch_collect", "regwatch_assess"],
+      "tables": ["regwatch_sources", "regwatch_collections", "regwatch_baselines", "regwatch_changes", "regwatch_findings", "regwatch_impacts", "regwatch_actions", "regwatch_approvals"],
+      "uses_llm": true, "llm_entry": "app/agents/regwatch/services/assessment_service.py",
+      "uses_rag": true,
+      "orchestration": "async service pipeline",
+      "connectors": ["http", "rss", "manual_upload"],
+      "frontend": ["frontend/src/components/RegWatchConsole.tsx"],
+      "input": "source URL + jurisdiction", "output": "findings + actions",
+      "purpose_classifier_relevance": "regwatch_impacts already reads ROPA evidence to assess applicability — a precedent for cross-agent reads."
+    }
+  ],
+
+  "database_tables": {
+    "total": 69,
+    "directly_relevant": [
+      {"table": "purpose_taxonomy", "key_columns": ["code", "label", "description"], "rows": 4, "values": ["analytics", "marketing", "functional", "other"], "relationships": "none - no foreign keys reference it", "used_by": "seed data only", "relevance": "The controlled vocabulary already exists and is unused by ROPA."},
+      {"table": "ropa_records", "key_columns": ["processing_activity", "payload", "edited_payload", "confidence", "review_required", "status", "version", "supersedes_id"], "relationships": "-> ropa_discovery_runs", "used_by": "Agent 2", "relevance": "DECLARED purpose lives in payload. Versioned and human-editable."},
+      {"table": "trackers", "key_columns": ["script_src", "vendor", "category", "consent_states", "source"], "relationships": "-> consent_scans, -> website_pages", "used_by": "Agent 1", "relevance": "OBSERVED purpose + the consent state it fired in. Verified: category values are a subset of purpose_taxonomy.code."},
+      {"table": "cookies", "key_columns": ["name", "domain", "category", "vendor", "consent_states", "expiry"], "relationships": "-> consent_scans", "used_by": "Agent 1", "relevance": "Observed purpose plus a retention signal via expiry."},
+      {"table": "third_party_services", "key_columns": ["service_name", "category", "domains"], "relationships": "-> consent_scans", "used_by": "Agent 1", "relevance": "Vendor/processor mapping carrying a purpose category."},
+      {"table": "consent_signals", "key_columns": ["mechanism_type", "cmp_vendor", "evidence"], "relationships": "-> consent_scans", "used_by": "Agent 1", "relevance": "evidence.accept_interaction / reject_interaction establish whether consent was actually obtained - the lawful-basis half."},
+      {"table": "ropa_schema_baselines", "key_columns": ["baseline"], "relationships": "-> ropa_data_sources", "used_by": "Agent 2", "relevance": "Declared-vs-observed comparison ALREADY IMPLEMENTED for schema. Same pattern applies to purpose."},
+      {"table": "ropa_schema_changes", "key_columns": ["change_type", "detected_at"], "relationships": "-> baseline", "used_by": "Agent 2", "relevance": "The change-record half of that pattern."},
+      {"table": "dsr_retention_rules", "key_columns": ["retention config"], "relationships": "-> org", "used_by": "Agent 3", "relevance": "Only retention policy model in the platform."},
+      {"table": "policies", "key_columns": ["url", "policy_type"], "relationships": "-> consent_scans", "used_by": "Agent 1", "relevance": "Declared purpose source, BUT stores URL and type only - no extracted policy text exists in the database."},
+      {"table": "cookie_lookup", "key_columns": ["vendor", "category"], "relationships": "none", "used_by": "Agent 1", "relevance": "Pre-built purpose lookup (Open Cookie Database)."}
+    ],
+    "shared_infrastructure": [
+      {"table": "agent_jobs", "note": "job_type has an enumerated CHECK with 10 values; a new type requires a migration (see migrations/0023)."},
+      {"table": "agent_runs", "note": "run container"},
+      {"table": "agent_run_stages", "note": "stage has an enumerated CHECK; see migrations/0021"},
+      {"table": "approvals", "note": "human review, polymorphic"},
+      {"table": "actions", "note": "remediation tracking with a status machine"},
+      {"table": "audit_logs", "note": "append-only; records Consiva user actions, not customer data access"},
+      {"table": "organizations", "note": "tenant root; carries jurisdictions jsonb"},
+      {"table": "knowledge_chunks", "note": "279 rows, pgvector, used by RAG"},
+      {"table": "webhook_deliveries", "note": "outbound callback audit"}
+    ],
+    "verified_not_to_exist": ["purposes", "purpose_assignments", "processing_activities", "data_flows", "lineage", "access_logs", "usage_logs", "export_logs", "etl_metadata", "events"]
+  },
+
+  "connectors": [
+    {"connector": "postgres", "path": "app/agents/ropa/connectors/postgres.py", "read": true, "write": false, "auth": "credential_ref on ropa_data_sources", "tenant_scoping": "ropa_data_sources.org_id + RLS", "reusable": true},
+    {"connector": "rest_api", "path": "app/agents/ropa/connectors/api.py", "read": true, "write": false, "auth": "config", "tenant_scoping": "same", "reusable": true},
+    {"connector": "postgres (DSR)", "path": "app/agents/dsr/connectors/postgres.py", "read": true, "write": true, "auth": "dsr_source_authorizations", "tenant_scoping": "yes", "reusable": "with care - has write capability"},
+    {"connector": "http", "path": "app/agents/regwatch/connectors/", "read": true, "write": false, "auth": "optional token", "tenant_scoping": "regwatch_sources.org_id", "reusable": true},
+    {"connector": "rss", "path": "app/agents/regwatch/connectors/feed_source.py", "read": true, "write": false, "auth": "optional token", "tenant_scoping": "same", "reusable": true},
+    {"connector": "manual_upload", "path": "app/agents/regwatch/connectors/", "read": false, "write": false, "auth": "n/a", "tenant_scoping": "same", "reusable": true},
+    {"connector": "browser scanner", "path": "app/scanner/crawler.py", "read": true, "write": false, "auth": "authorization attestation + SSRF guard (app/scanner/url_safety.py)", "tenant_scoping": "consent_scans.org_id", "reusable": "situational"}
+  ],
+  "connectors_verified_absent": ["mysql", "sqlserver", "mongodb", "csv", "excel", "file_storage", "google_drive", "sharepoint", "s3", "object_storage", "crm"],
+  "connector_absence_evidence": "app/agents/ropa/connectors/factory.py:100 raises ConnectorError for anything other than 'postgres' or 'rest_api'.",
+
+  "apis": {
+    "total_endpoints": 103,
+    "by_area": {"incidents": 24, "regwatch": 20, "consent": 17, "dsr": 17, "ropa": 13, "consent-agent": 6, "auth": 3, "dev": 2},
+    "convention": "prefix /api/v1/<area>, declared on the APIRouter, registered in app/api/v1/router.py which applies Depends(bind_request_scope) once for RLS"
+  },
+
+  "workers": {
+    "mechanism": "database queue table + polling worker; no Celery, no Redis",
+    "queue": "app/jobs/queue.py",
+    "dispatcher": "app/jobs/worker.py",
+    "retry": "agent_jobs.attempts, max 3, linear backoff, reap_stale_jobs for dead workers",
+    "job_types": ["scan", "analyze", "consent_api_chain", "consent_webhook", "ropa_discovery", "dsr_search", "dsr_execute", "incident_analysis", "regwatch_collect", "regwatch_assess"],
+    "note": "job_type is constrained by an enumerated CHECK; adding one requires a migration"
+  },
+
+  "reusable_components": [
+    {"component": "purpose_rules.match_table()", "path": "app/agents/ropa/rules/purpose_rules.py", "reuse": "as-is", "note": "10 purposes, confidence 0.9 exact / 0.7 token, returns None rather than guessing"},
+    {"component": "purpose_service.map_purposes_and_subjects()", "path": "app/agents/ropa/services/purpose_service.py", "reuse": "as-is", "note": "pure function over DiscoveryEvidence"},
+    {"component": "processing_activity_service.build_activities()", "path": "app/agents/ropa/services/processing_activity_service.py", "reuse": "as-is", "note": "groups tables by purpose"},
+    {"component": "dataflow_service", "path": "app/agents/ropa/services/dataflow_service.py", "reuse": "as-is", "note": "source -> storage -> vendor, evidence-only"},
+    {"component": "connector factory", "path": "app/agents/ropa/connectors/factory.py", "reuse": "as-is"},
+    {"component": "job queue", "path": "app/jobs/queue.py", "reuse": "as-is + one new job_type via migration"},
+    {"component": "review_service", "path": "app/services/review_service.py", "reuse": "as-is"},
+    {"component": "action_service", "path": "app/services/action_service.py", "reuse": "as-is"},
+    {"component": "audit_service", "path": "app/services/audit_service.py", "reuse": "as-is"},
+    {"component": "stage_tracker", "path": "app/observability/stage_tracker.py", "reuse": "as-is"},
+    {"component": "LLM client", "path": "app/llm/client.py", "reuse": "for ambiguity only"},
+    {"component": "purpose_taxonomy", "path": "database table", "reuse": "as the single vocabulary"}
+  ],
+
+  "missing_components": [
+    {"component": "usage / lineage evidence", "status": "does not exist", "severity": "highest", "detail": "No access logs, query logs, export logs, column lineage, ETL metadata or event tracking exist in code or schema. Purpose is inferred from table NAMES only via match_table(table_name). The only observed-usage signal in the platform is Agent 1's consent_states."},
+    {"component": "declared vs observed comparison for purpose", "status": "does not exist", "severity": "high", "detail": "The pattern exists for schema (ropa_schema_baselines vs ropa_schema_changes) but nothing compares declared purpose to observed purpose."},
+    {"component": "cross-agent purpose reconciliation", "status": "does not exist", "severity": "high", "detail": "ROPA's 10 business purposes and Agent 1's 4 taxonomy codes are different vocabularies at different granularities. Nothing maps between them."},
+    {"component": "retention evaluation against purpose", "status": "partial", "severity": "medium", "detail": "dsr_retention_rules and cookies.expiry exist but are never compared to a purpose."},
+    {"component": "extracted privacy-policy text", "status": "does not exist", "severity": "medium", "detail": "policies stores url and policy_type only. extracted_text_ref is present on the record but excluded from prompts and dereferenced by nothing."},
+    {"component": "purpose assessment tables", "status": "does not exist", "severity": "low", "detail": "New migration required, including RLS enable/force/policy/grant and any enumerated CHECKs."}
+  ],
+
+  "integration_points": {
+    "backend_package": "app/agents/purpose/",
+    "router": "app/api/v1/routes/purpose.py, prefix /api/v1/purpose",
+    "run_service": "app/services/purpose_run_service.py",
+    "worker": "new elif branch in app/jobs/worker.py",
+    "job_type": "purpose_assessment (requires a CHECK-widening migration)",
+    "new_tables": ["purpose_assessments", "purpose_findings", "usage_evidence (phase 3 only)"],
+    "reused_tables": ["ropa_records", "ropa_data_sources", "trackers", "cookies", "third_party_services", "consent_signals", "purpose_taxonomy", "dsr_retention_rules", "approvals", "actions", "audit_logs", "agent_jobs", "agent_runs", "agent_run_stages"],
+    "frontend": "frontend/src/components/PurposeConsole.tsx, modelled on RopaDashboard.tsx",
+    "known_traps": [
+      "Enumerated CHECK constraints are invisible to Python. Migrations 0021, 0023 and 0024 exist solely to widen one. Guards: tests/test_job_types_match_schema.py, test_status_values_match_schema.py, test_stage_names_match_schema.py.",
+      "New tables must opt into RLS explicitly - migration 0018 forced it on existing tables only. See migrations/0022 for the enable/force/policy/grant pattern.",
+      "Background jobs bind no org scope and work only because the worker connects as the database owner. Any path that might run as consiva_app must call apply_org_scope (see app/services/webhook_service.py:_save)."
+    ]
+  },
+
+  "dependency_map": {
+    "chain": "Consent Agent -> Purpose Context -> Purpose Classifier -> Processing Activity -> ROPA",
+    "edges": [
+      {"from": "Agent 1 Consent", "to": "Purpose Context", "mechanism": "SHARED DATABASE MODEL", "rationale": "Read trackers, cookies, consent_signals. Agent 1 must not import purpose code; its evidence tables are already the contract."},
+      {"from": "Agent 2 ROPA", "to": "Purpose Context", "mechanism": "SERVICE CALL", "rationale": "purpose_service and processing_activity_service are pure functions over DiscoveryEvidence. Reuse without duplicating."},
+      {"from": "Purpose Classifier", "to": "Processing Activity", "mechanism": "SHARED DATA CONTRACT", "rationale": "Read declared purpose from ropa_records.payload. Do not write it."},
+      {"from": "Purpose Classifier", "to": "ROPA", "mechanism": "MUST NOT BE A DIRECT DEPENDENCY", "rationale": "Writing purpose back into ropa_records creates ROPA -> purpose -> ROPA. ROPA's next run would overwrite it and the two would disagree silently."},
+      {"from": "Purpose Classifier", "to": "findings", "mechanism": "NEW TABLE or ropa_findings.finding_type", "rationale": "Keeps the write direction one-way."},
+      {"from": "trigger", "to": "Purpose Classifier", "mechanism": "EVENT via agent_jobs", "rationale": "Already how every agent is triggered. No new mechanism."}
+    ],
+    "circular_dependency_risk": "Real. ROPA already computes purpose. The classifier must READ declared purpose and WRITE assessments to its own tables."
+  },
+
+  "purpose_classifier_requirements": {
+    "recommendation": "Build a reconciliation service, not a sixth agent-shaped classifier.",
+    "rationale": [
+      "Purpose classification already exists twice: purpose_rules.py (10 business purposes, table-name driven) and trackers/cookies.category (4 taxonomy codes, vendor-signature driven). A third classifier produces three disagreeing answers.",
+      "Nine of thirteen steps in the required conceptual flow already exist. The missing capability is comparison, not classification.",
+      "The declared-vs-observed pattern is already implemented for schema in ropa_schema_baselines vs ropa_schema_changes.",
+      "The highest-value finding needs no new ingestion: a tracker categorised 'marketing' whose consent_states include 'pre_consent' is observed processing without a lawful basis. Both halves are already in the database and nothing joins them."
+    ],
+    "proposed_modules": [
+      {"path": "app/agents/purpose/rules/reconciliation.py", "purpose": "map ROPA's 10 business purposes to purpose_taxonomy's 4 codes", "new": true},
+      {"path": "app/agents/purpose/services/declared_service.py", "purpose": "read ropa_records.payload", "new": true, "note": "no new classification logic"},
+      {"path": "app/agents/purpose/services/observed_service.py", "purpose": "read trackers, cookies, consent_signals", "new": true, "note": "no new classification logic"},
+      {"path": "app/agents/purpose/services/comparison_service.py", "purpose": "declared vs observed", "new": true, "note": "THE actual new intelligence"},
+      {"path": "app/agents/purpose/services/retention_service.py", "purpose": "purpose vs cookies.expiry and dsr_retention_rules", "new": true}
+    ],
+    "phasing": [
+      {"phase": 1, "title": "Reconcile existing data", "new_ingestion_required": false, "delivers": "declared-vs-observed findings including the pre-consent marketing case; proves the vocabulary mapping"},
+      {"phase": 2, "title": "Retention", "new_ingestion_required": false, "delivers": "cookies.expiry and dsr_retention_rules evaluated against purpose"},
+      {"phase": 3, "title": "Server-side usage evidence", "new_ingestion_required": true, "delivers": "new connector family, ingestion, storage and a defensible way to infer purpose from access patterns", "note": "the bulk of the effort; should not gate phases 1 and 2"}
+    ],
+    "accuracy_constraint": "purpose_rules.py returns None rather than guessing and the caller emits 'Unknown' with review_required=True. Any new comparison must inherit that discipline. This codebase has a documented false-positive incident (tests/test_consent_banner_false_positive.py) where keyword matching against a user's forum comment produced a high-priority finding about a consent banner that did not exist. A declared-vs-observed mismatch reported confidently, when the real cause is a vocabulary-mapping artefact, is worse than no finding."
+  }
+}

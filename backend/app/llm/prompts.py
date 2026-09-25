@@ -5,6 +5,7 @@ the pipeline. Callers (agents/consent_agent/nodes) serialize their own models.""
 
 import json
 from collections import defaultdict
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from app.llm.schemas import ConsentAnalysisResponse
@@ -69,65 +70,194 @@ def format_rag_context(chunks: list[dict]) -> str:
     )
 
 
+# Fields that carry no compliance signal and cost real tokens. Measured per-field on a
+# live hubspot.com scan (828 trackers / 124 cookies), model tokenizer, not estimates:
+#
+#   trackers.script_src + example_script_src  3,784 tok  (50.5% of all tracker tokens)
+#   cookies.expiry                            2,457 tok  (33.2% of all cookie tokens)
+#   policies.url query strings                  ~900 tok
+#   policies.extracted_text_ref                  397 tok
+#
+# The tracker URLs are the clearest case: `host` is already its own field, so the URL
+# repeats it and then adds a webpack bundle hash
+# ("/affiliates-landing-embed/ex/<hash>.js") that no compliance judgment can use.
+# `extracted_text_ref` is a database pointer the model cannot dereference at all.
+_NOISE_FIELDS = frozenset({
+    "script_src", "example_script_src",   # host is kept; the bundle path is noise
+    "extracted_text_ref",                 # a DB reference the model cannot follow
+    "path",                               # "/" on 90%+ of cookies
+    "source",                             # internal provenance of the classification
+    "scan_ts", "updated_at", "last_seen",
+})
+
+# Consent states, abbreviated. "pre_consent"/"post_accept"/"post_reject" appear on
+# nearly every tracker and cookie; at 80+80 items the long spellings cost ~2,100 tokens
+# to say the same three things. The prompt's evidence-format note defines these.
+_STATE_CODES = {"pre_consent": "pre", "post_accept": "acc", "post_reject": "rej"}
+
+
+def _codes(states) -> str:
+    """Consent states as a compact ordered string: "pre,rej"."""
+    if isinstance(states, str):
+        states = [states]
+    seen = [_STATE_CODES.get(str(s), str(s)) for s in (states or [])]
+    order = {"pre": 0, "acc": 1, "rej": 2}
+    return ",".join(sorted(set(seen), key=lambda c: order.get(c, 9)))
+
+
+def _ttl(expiry, now=None) -> str:
+    """Cookie lifetime as a duration bucket instead of an absolute timestamp.
+
+    "2026-09-24 04:56:11.076507+00:00" is ~30 tokens and microsecond precision is
+    meaningless here; what a DPDP-relevant judgment actually turns on is how long the
+    cookie persists. This is strictly MORE useful to the model than the timestamp was,
+    at roughly a sixth of the cost.
+    """
+    if expiry in (None, "", "session"):
+        return "session"
+    try:
+        when = expiry if isinstance(expiry, datetime) else datetime.fromisoformat(str(expiry))
+        reference = now or datetime.now(timezone.utc)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        days = (when - reference).days
+    except (TypeError, ValueError):
+        return "unknown"
+    if days < 1:
+        return "<1d"
+    if days <= 30:
+        return str(days) + "d"
+    if days <= 400:
+        return str(days // 30) + "mo"
+    return str(days // 365) + "y"
+
+
+def _clean_url(value, keep_query: bool = False) -> str:
+    """Drop the query string. On this scan every policy URL carried campaign
+    parameters ("?hubs_content=...&hubs_content-cta=...") that are analytics plumbing,
+    not part of the document's identity -- 84 tokens per policy URL, ~900 in total."""
+    text = str(value or "")
+    if keep_query or "?" not in text:
+        return text
+    return text.split("?", 1)[0]
+
+
+def _decode(value):
+    """Some scanner columns arrive as JSON *strings* rather than JSON values, so they
+    reach the prompt double-encoded, every backslash a token spent escaping an escape.
+    Decode so the value serializes exactly once."""
+    if isinstance(value, str) and value[:1] in "[{":
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
 def _strip_db_fields(record: dict) -> dict:
-    """Drop database bookkeeping and null-valued keys. A `null` vendor/category is not
-    information the model needs spelled out 142 times -- absence says the same thing,
-    and the explicit `unclassified` flag added by the tracker grouper says it once."""
+    """Drop database bookkeeping, noise fields, and null values. A `null` vendor/category
+    is not information the model needs spelled out 142 times -- absence says the same
+    thing, and the explicit `unclassified` flag added by the tracker grouper says it once."""
     return {
-        k: v for k, v in record.items()
-        if k not in _DB_ONLY_FIELDS and v is not None and v != []
+        k: _decode(v) for k, v in record.items()
+        if k not in _DB_ONLY_FIELDS and k not in _NOISE_FIELDS and v is not None and v != []
     }
 
 
 def compact_trackers(trackers: list[dict]) -> list[dict]:
     """Collapse per-script tracker rows into one row per (host, vendor, category,
-    consent_states) group, with a count and one representative URL.
+    consent_states) group, with a count.
 
-    Real measurement that motivated this (prepmyevent.com): 142 rows -> 14 groups,
-    13,738 -> 471 tokens, a 96.6% cut, because 83 of those rows were the same Razorpay
-    host differing only by webpack chunk hash. Prefill time scales linearly with prompt
-    tokens on the self-hosted server (~900 tok/s measured), so this is ~15s of latency
-    per analysis, not a cosmetic tidy-up.
+    Real measurement that motivated the grouping (prepmyevent.com): 142 rows -> 14
+    groups, 13,738 -> 471 tokens, because 83 of those rows were the same Razorpay host
+    differing only by webpack chunk hash. Prefill time scales linearly with prompt
+    tokens on the self-hosted server (~900 tok/s measured), so this is latency, not a
+    cosmetic tidy-up.
 
     Deliberately NOT lossy in any way that matters: host, classification, consent-state
-    and volume all survive; only the per-bundle filename is summarized to a single
-    example. The group's `local_id` is what findings cite via `evidence`."""
+    and volume all survive. The per-script URL does not -- see _NOISE_FIELDS; `host` is
+    the vendor signal and the rest of the path is a build artefact. The group's
+    `local_id` is what findings cite via `evidence`."""
     if not trackers:
         return []
 
-    groups: dict[tuple, dict] = defaultdict(lambda: {"count": 0, "example": None})
+    groups: dict[tuple, dict] = defaultdict(lambda: {"count": 0})
     for t in trackers:
         host = urlparse(str(t.get("script_src") or "")).netloc or "(inline/unknown)"
         states = tuple(sorted(t.get("consent_states") or []))
-        key = (host, t.get("vendor"), t.get("category"), states)
-        group = groups[key]
-        group["count"] += 1
-        if group["example"] is None:
-            group["example"] = str(t.get("script_src") or "")[:120]
+        groups[(host, t.get("vendor"), t.get("category"), states)]["count"] += 1
 
     compacted = []
     ordered = sorted(groups.items(), key=lambda kv: (-kv[1]["count"], kv[0][0]))
     for index, ((host, vendor, category, states), group) in enumerate(ordered, start=1):
-        record = {
-            "local_id": f"t{index}",
-            "host": host,
-            "script_count": group["count"],
-            "consent_states": list(states),
-        }
+        record = {"local_id": "t" + str(index), "host": host,
+                  "n": group["count"], "states": _codes(states)}
         if vendor:
             record["vendor"] = vendor
         if category:
-            record["category"] = category
+            record["cat"] = category
         else:
             # Say it once, explicitly, instead of repeating `"category":null` per row --
             # this is also precisely the subset the model's judgment is wanted on.
             record["unclassified"] = True
-        if group["count"] == 1 and group["example"]:
-            record["script_src"] = group["example"]
-        else:
-            record["example_script_src"] = group["example"]
         compacted.append(record)
     return compacted
+
+
+def _compact_cookie(item: dict) -> dict:
+    """One cookie, keeping only what a consent judgment turns on."""
+    out = {"name": item.get("name"), "domain": item.get("domain"),
+           "ttl": _ttl(item.get("expiry"))}
+    if item.get("category"):
+        out["cat"] = item["category"]
+    if item.get("vendor"):
+        out["vendor"] = item["vendor"]
+    if item.get("is_first_party") is False:
+        out["third_party"] = True   # first-party is the default; state only the exception
+    out["states"] = _codes(item.get("consent_states"))
+    return {k: v for k, v in out.items() if v not in (None, "", [])}
+
+
+def _compact_service(item: dict) -> dict:
+    domains = _decode(item.get("domains")) or []
+    name = item.get("service_name")
+    out = {"service": name}
+    # On this scan `service_name` was literally the domain ("bing.com" / ["bing.com"]),
+    # so emitting both said the same string twice.
+    listed = domains if isinstance(domains, list) else [domains]
+    extra = [d for d in listed if d != name]
+    if extra:
+        out["domains"] = extra
+    if item.get("category"):
+        out["cat"] = item["category"]
+    return out
+
+
+def _compact_policy(item: dict) -> dict:
+    return {"type": item.get("policy_type"), "url": _clean_url(item.get("url"))}
+
+
+def _compact_page(item: dict) -> dict:
+    out = {"url": _clean_url(item.get("url")), "title": item.get("title")}
+    # 200 is the overwhelming default; only a non-200 is worth a token.
+    if item.get("http_status") not in (200, None):
+        out["status"] = item["http_status"]
+    return {k: v for k, v in out.items() if v not in (None, "")}
+
+
+def _compact_form(item: dict) -> dict:
+    fields = _decode(item.get("fields")) or []
+    names = [f.get("name") for f in fields if isinstance(f, dict) and f.get("name")]
+    out = {"selector": item.get("selector"), "fields": names}
+    if item.get("purpose_guess") and item["purpose_guess"] != "unknown":
+        out["purpose"] = item["purpose_guess"]
+    return {k: v for k, v in out.items() if v not in (None, "", [])}
+
+
+_COMPACTORS = {
+    "cookies": _compact_cookie, "third_party_services": _compact_service,
+    "policies": _compact_policy, "pages": _compact_page, "forms": _compact_form,
+}
 
 
 def compact_scan_evidence(scan_summary: dict) -> dict:
@@ -146,10 +276,14 @@ def compact_scan_evidence(scan_summary: dict) -> dict:
             compacted[key] = _bounded(compact_trackers(value or []), key, compacted)
         elif isinstance(value, list):
             prefix = prefixes.get(key, key[:1])
-            items = [
-                {"local_id": f"{prefix}{i}", **_strip_db_fields(item)} if isinstance(item, dict) else item
-                for i, item in enumerate(value, start=1)
-            ]
+            shrink = _COMPACTORS.get(key)
+            items = []
+            for i, item in enumerate(value, start=1):
+                if not isinstance(item, dict):
+                    items.append(item)
+                    continue
+                body = shrink(item) if shrink else _strip_db_fields(item)
+                items.append({"local_id": prefix + str(i), **body})
             compacted[key] = _bounded(items, key, compacted)
         else:
             compacted[key] = value
@@ -169,20 +303,38 @@ def compact_scan_evidence(scan_summary: dict) -> dict:
 #   already matched, including tracking that continued after the visitor pressed
 #   Reject. An unbounded prompt is not a performance problem, it is the reason the
 #   product produced nothing at all.
+#
+# WHY THESE NUMBERS, and why they came DOWN from 80/80/40/15/15/15/10:
+#
+# The caps are not a token-saving device like the field trimming above -- they decide
+# how much of a large site the model is allowed to SEE, and lowering them is the one
+# change here that could genuinely lose information. So they were lowered only after
+# the per-item cost had already been cut (a tracker group went 94 -> ~16 tokens, a
+# cookie 92 -> ~20), and only as far as the evidence supports:
+#
+#   - Detection is deterministic. The rules engine reads ALL 828 trackers and 124
+#     cookies; its findings and their counts are in the prompt regardless of the cap.
+#     The model is never the thing that decides whether a violation happened.
+#   - The list is violation-ranked (_violation_rank), so what a cap drops is always
+#     post-accept-only material -- context, not evidence of a breach.
+#   - `<key>_total` / `_omitted` / `_note` travel with the sample, so a smaller cap
+#     never reads as a cleaner site.
 _ITEM_CAPS = {
-    "trackers": 80,
-    "cookies": 80,
-    "third_party_services": 40,
-    "policies": 15,
-    "forms": 15,
-    "pages": 15,
+    "trackers": 50,
+    "cookies": 40,
+    "third_party_services": 25,
+    "policies": 8,
+    "forms": 8,
+    "pages": 10,
     "consent_signals": 10,
 }
 
 # Evidence of a violation, ranked ahead of everything else when the cap bites. A
 # tracker that fired before consent or after Reject is the finding; one that fired
-# only after Accept is context.
-_STATE_PRIORITY = {"post_reject": 0, "pre_consent": 1, "post_accept": 2}
+# only after Accept is context. Both the long spellings and the abbreviations are
+# listed because this now runs over already-compacted items.
+_STATE_PRIORITY = {"post_reject": 0, "pre_consent": 1, "post_accept": 2,
+                   "rej": 0, "pre": 1, "acc": 2}
 
 
 def _violation_rank(item: object) -> int:
@@ -190,10 +342,77 @@ def _violation_rank(item: object) -> int:
     they cannot evidence a consent violation on their own."""
     if not isinstance(item, dict):
         return 99
-    states = item.get("consent_states") or item.get("consent_state") or []
+    states = item.get("states") or item.get("consent_states") or item.get("consent_state") or []
     if isinstance(states, str):
-        states = [states]
+        states = states.split(",")
     return min((_STATE_PRIORITY.get(str(s), 50) for s in states), default=90)
+
+
+# How many of a rule's matched evidence ids the model is shown. The rest are replaced
+# by a count.
+#
+# These are raw scan-row UUIDs, and the model has no way to use them: every item in the
+# evidence section is labelled with a SHORT `local_id` (t1, c2, pol1) and a UUID appears
+# nowhere in that section, so there is nothing for one to resolve against. They were
+# being sent purely because the rule object happened to carry them.
+#
+# Measured on a live hubspot.com scan: three rule findings carried 313 + 47 + 514 ids,
+# 34,960 characters of UUID -- two thirds of the ENTIRE prompt, and the reason a
+# carefully compacted 9,413-character evidence section still arrived as a 52,090-
+# character request that the primary refused outright (34,876 tokens against n_ctx
+# 4,096). UUIDs also tokenize badly, at roughly 1.5 characters per token against ~2.8
+# for ordinary text, so they cost close to double their length.
+#
+# The count is what carries the compliance meaning, and it is already stated in the
+# rule's own summary ("313 analytics/marketing cookie(s)/script(s) fired BEFORE any
+# consent interaction"). A few ids are kept so the shape is visible.
+#
+# This trims only the COPY handed to the model. `state.rule_findings` keeps every id,
+# which is what create_rule_findings persists as a finding's evidence when the analysis
+# fails -- that traceability is untouched.
+_RULE_EVIDENCE_SAMPLE = 5
+
+
+def compact_rule_findings(rule_findings: list[dict]) -> list[dict]:
+    """Rule findings as the model should see them: full text, sampled evidence ids."""
+    compacted = []
+    for finding in rule_findings or []:
+        if not isinstance(finding, dict):
+            compacted.append(finding)
+            continue
+        trimmed = dict(finding)
+        ids = trimmed.get("evidence_ids") or []
+        if len(ids) > _RULE_EVIDENCE_SAMPLE:
+            trimmed["evidence_ids"] = list(ids[:_RULE_EVIDENCE_SAMPLE])
+            trimmed["evidence_count"] = len(ids)
+        compacted.append(trimmed)
+    return compacted
+
+
+def evidence_stats(scan_summary: dict, compacted: dict) -> dict:
+    """What the compaction actually did, for the stage record.
+
+    Exists so a scan can be diagnosed from its own audit trail instead of by
+    re-deriving the prompt months later: for each collection, how many items the
+    scanner collected and how many the model was shown. A sudden gap between the two
+    is the signal that a cap is now biting on a site where it previously was not.
+    """
+    stats: dict = {}
+    for key, raw in scan_summary.items():
+        if not isinstance(raw, list):
+            continue
+        shown = compacted.get(key)
+        stats[key] = {
+            "collected": len(raw),
+            "sent": len(shown) if isinstance(shown, list) else 0,
+            "capped": bool(compacted.get(f"{key}_omitted")),
+        }
+    grouped = compacted.get("trackers")
+    if isinstance(grouped, list) and scan_summary.get("trackers"):
+        # Grouping happens before the cap, so "sent" alone cannot show how much of the
+        # reduction came from collapsing hosts rather than from truncating.
+        stats["trackers"]["host_groups"] = len(compact_trackers(scan_summary["trackers"]))
+    return stats
 
 
 def _bounded(items: list, key: str, compacted: dict) -> list:
@@ -209,14 +428,90 @@ def _bounded(items: list, key: str, compacted: dict) -> list:
     if cap is None or len(items) <= cap:
         return items
     ordered = sorted(items, key=_violation_rank)
-    compacted[f"{key}_total"] = len(items)
-    compacted[f"{key}_omitted"] = len(items) - cap
-    compacted[f"{key}_note"] = (
-        f"Showing the {cap} most consent-relevant of {len(items)} {key} "
-        f"(items that fired before consent or after Reject are shown first). "
-        f"{len(items) - cap} are not listed; do not conclude they are absent."
+    compacted[key + "_total"] = len(items)
+    compacted[key + "_omitted"] = len(items) - cap
+    compacted[key + "_note"] = (
+        "Showing the " + str(cap) + " most consent-relevant of " + str(len(items)) + " " + key
+        + " (items that fired before consent or after Reject are shown first). "
+        + str(len(items) - cap) + " are not listed; do not conclude they are absent."
     )
     return ordered[:cap]
+
+
+# Column layouts for the evidence tables. Order is fixed per collection so the header
+# line defines it once instead of every record repeating its own field names.
+#
+# WHY A TABLE AND NOT JSON. Measured on the hubspot scan after the field trimming
+# above had already landed: 40 cookies cost 1,795 tokens and 50 tracker groups 1,716,
+# of which roughly 600 and 750 respectively were the KEY NAMES -- `"local_id":`,
+# `"domain":`, `"states":` and the rest, re-serialized once per row. The values were
+# never the problem at this point; the envelope was. A header line plus pipe-delimited
+# rows says exactly the same thing with the field names stated once.
+#
+# consent_signals is deliberately NOT tabular: it is a handful of records whose nested
+# `evidence.accept_interaction` / `.reject_interaction` decide whether a consent state
+# was ever actually established, and flattening that into columns would either lose the
+# nesting or need a column per key. It stays JSON, and it is small (~80 tokens).
+_COLUMNS = {
+    "trackers": ("local_id", "host", "n", "states", "cat", "vendor", "unclassified"),
+    "cookies": ("local_id", "name", "domain", "ttl", "cat", "vendor", "third_party", "states"),
+    "third_party_services": ("local_id", "service", "domains", "cat"),
+    "policies": ("local_id", "type", "url"),
+    "pages": ("local_id", "url", "title", "status"),
+    "forms": ("local_id", "selector", "fields", "purpose"),
+}
+
+
+def _cell(value) -> str:
+    """One table cell. Pipes inside a value would break the column alignment the header
+    promises, so they are replaced rather than escaped -- an escape costs a token and
+    no scanner value legitimately contains one."""
+    if value is None or value is False:
+        return ""
+    if value is True:
+        return "yes"
+    if isinstance(value, (list, tuple)):
+        return ",".join(str(v) for v in value).replace("|", "/")
+    return str(value).replace("|", "/").replace("\n", " ")
+
+
+def render_evidence(compacted: dict) -> str:
+    """The compacted evidence as headed tables, with the notes that travel with them.
+
+    Keys ending in `_note` / `_total` / `_omitted` belong to the collection they are
+    named after and are printed with it, so a reader (and the model) sees "you are
+    looking at 50 of 187" attached to the sample rather than floating elsewhere in the
+    payload."""
+    out: list[str] = []
+    for key, value in compacted.items():
+        if key.endswith(("_note", "_total", "_omitted")):
+            continue
+        if not isinstance(value, list):
+            out.append(f"{key}: {json.dumps(value, separators=(',', ':'), default=str)}")
+            continue
+        if not value:
+            out.append(f"### {key}: none detected")
+            continue
+
+        total = compacted.get(f"{key}_total", len(value))
+        heading = f"### {key} ({len(value)} shown"
+        heading += f" of {total} collected)" if total != len(value) else ")"
+        out.append(heading)
+
+        columns = _COLUMNS.get(key)
+        if columns is None or not all(isinstance(i, dict) for i in value):
+            out.append(json.dumps(value, separators=(",", ":"), default=str))
+        else:
+            # Only the columns that any row actually populates -- a column that is
+            # empty for all 50 rows is 50 delimiters and a header for no information.
+            used = [c for c in columns if any(i.get(c) not in (None, "", [], False) for i in value)]
+            out.append("|".join(used))
+            out.extend("|".join(_cell(item.get(c)) for c in used) for item in value)
+
+        note = compacted.get(f"{key}_note")
+        if note:
+            out.append(note)
+    return "\n".join(out)
 
 
 def build_analysis_prompt(*, scan_summary: dict, rule_findings: list[dict], rag_chunks: list[dict]) -> str:
@@ -255,11 +550,22 @@ finding even when they seem obvious from context:
 {schema_json}
 
 ## Notes on the evidence format
-Tracker evidence is grouped by host: `script_count` is how many distinct scripts from \
-that host were observed, and `consent_states` lists which consent states they appeared \
-in (`pre_consent` means the script ran BEFORE any consent was given). \
-`unclassified: true` means the deterministic rules could not categorize that host — \
-those are where your judgment adds the most.
+Fields are abbreviated. `states` lists the consent states in which an item was \
+observed, using `pre` (BEFORE any consent was given), `acc` (during the Accept pass) \
+and `rej` (during the Reject pass). `n` is how many distinct scripts were seen from \
+that host. `cat` is the category assigned by the deterministic rules. `ttl` is a \
+cookie's lifetime (`session`, or an approximate duration such as `30d`, `6mo`, `2y`). \
+`third_party: true` marks a cookie whose domain is not the scanned site's; first-party \
+is the default and is not stated.
+
+Tracker evidence is grouped by host, so one entry can represent many scripts — `n` \
+says how many. `unclassified: true` means the deterministic rules could not categorize \
+that host; those are where your judgment adds the most. Per-script URLs are not \
+included because they are build artefacts (bundle hashes); judge by host.
+
+Counts in the deterministic rule findings are computed over ALL collected evidence, \
+not just the sample shown here. Where a `_total`/`_omitted` note appears, trust those \
+numbers over what you can count in the list.
 
 `post_accept` and `post_reject` mean the item was seen during the pass in which the \
 scanner ATTEMPTED to click Accept or Reject — not proof that the click worked. \
@@ -272,10 +578,10 @@ rejected. Report the automation failure if it matters; never assert a click that
 evidence does not show happening.
 
 ## Scan evidence
-{json.dumps(compacted_evidence, separators=(",", ":"), default=str)}
+{render_evidence(compacted_evidence)}
 
 ## Deterministic rule findings
-{json.dumps(rule_findings, separators=(",", ":"), default=str)}
+{json.dumps(compact_rule_findings(rule_findings), separators=(",", ":"), default=str)}
 
 ## Retrieved DPDP knowledge base excerpts
 {format_rag_context(rag_chunks)}

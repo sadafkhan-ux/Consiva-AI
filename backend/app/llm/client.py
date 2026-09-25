@@ -68,6 +68,15 @@ _NON_RETRYABLE_ERRORS = (
     ConflictError,
 )
 
+# Bounds on what a schema-repair attempt carries forward. A pydantic ValidationError
+# over a large schema can itself run to thousands of characters, and the failed
+# response is unbounded by definition when the failure IS that it ran too long -- so
+# both are excerpted. ~1,200 chars is roughly 300 tokens: enough of the previous
+# attempt to show its shape, small enough that three repairs cannot meaningfully move
+# the prompt against a 4k context.
+_REPAIR_EXCERPT_CHARS = 1_200
+_REPAIR_ERROR_CHARS = 600
+
 
 def _record_chat_retry(provider: str, retry_meta: dict | None, retry_state: RetryCallState) -> None:
     """tenacity before_sleep hook -- records each retried attempt of _chat's OWN
@@ -90,6 +99,39 @@ def _record_chat_retry(provider: str, retry_meta: dict | None, retry_state: Retr
             "error": f"{type(exc).__name__}: {exc}" if exc else None,
             "seconds_since_start": round(retry_state.seconds_since_start, 2),
         })
+
+
+def _strict_json_schema(schema: dict) -> dict:
+    """Add `additionalProperties: false` to every object in a JSON schema.
+
+    Required by the OpenAI strict structured-outputs spec, which Groq enforces and
+    llama.cpp does not. Sending the schema as pydantic emits it got:
+
+        400 invalid JSON schema for response_format 'ConsentAnalysisResponse':
+        /$defs/ConsentFindingLLM: `additionalProperties:false` must be set on every object
+
+    Applied here rather than as `extra="forbid"` on the models, because this changes
+    only what goes on the wire. Setting it on the pydantic models would also make them
+    REJECT a response carrying an unexpected field, turning something currently
+    harmless into a failed validation and an extra repair round trip.
+
+    Recursive over $defs, properties, items and the composition keywords, so nested
+    finding objects are covered too -- the error above is about a $def, not the root.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out = {k: v for k, v in schema.items()}
+    if out.get("type") == "object" or "properties" in out:
+        out.setdefault("additionalProperties", False)
+    for key in ("properties", "$defs", "definitions", "patternProperties"):
+        if isinstance(out.get(key), dict):
+            out[key] = {k: _strict_json_schema(v) for k, v in out[key].items()}
+    if isinstance(out.get("items"), dict):
+        out["items"] = _strict_json_schema(out["items"])
+    for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+        if isinstance(out.get(key), list):
+            out[key] = [_strict_json_schema(v) for v in out[key]]
+    return out
 
 
 class BaseLLMClient:
@@ -116,12 +158,15 @@ class BaseLLMClient:
         # The per-call ceiling _chat falls back to when no shared deadline_epoch is
         # given, and the upper bound it never exceeds even when one is (see _chat).
         self._call_timeout = timeout
-        # Reserved output budget. On a server with a small context this is NOT free:
-        # llama.cpp reserves prompt + max_tokens up front, so an over-provisioned value
-        # is context taken away from the prompt. Measured across 47 real llm_analysis
-        # attempts in this project's own history, the largest completion ever produced
-        # was 1,995 tokens -- so 4000 is roughly 2x headroom, and a context-constrained
-        # provider can safely lower it (see SelfHostedLLMClient).
+        # Ceiling on generated tokens. Measured across 47 real llm_analysis attempts in
+        # this project's own history, the largest completion ever produced was 1,995
+        # tokens -- so 4000 is roughly 2x headroom.
+        #
+        # This does NOT reserve context away from the prompt on the self-hosted server:
+        # that server's own refusal names the prompt alone against n_ctx (see
+        # SelfHostedLLMClient), so the prompt has to fit by itself and the output takes
+        # what is left. A context-constrained provider still lowers this, to stop a
+        # generation running on until the remaining context is exhausted.
         self._max_output_tokens = max_output_tokens
         # Grammar-constrained decoding (response_format=json_schema) makes
         # schema-invalid output structurally impossible, which removes entire
@@ -149,7 +194,11 @@ class BaseLLMClient:
         if schema is not None and self._supports_grammar:
             return {
                 "type": "json_schema",
-                "json_schema": {"name": schema.__name__, "schema": schema.model_json_schema(), "strict": True},
+                "json_schema": {
+                    "name": schema.__name__,
+                    "schema": _strict_json_schema(schema.model_json_schema()),
+                    "strict": True,
+                },
             }
         return {"type": "json_object"}
 
@@ -244,8 +293,33 @@ class BaseLLMClient:
             except (ValidationError, json.JSONDecodeError) as exc:
                 logger.warning("LLM output failed validation (attempt %d/%d): %s", attempt, max_attempts, exc)
                 last_error = exc
-                messages.append({"role": "assistant", "content": raw})
-                messages.append({"role": "user", "content": RETRY_SUFFIX.format(error=str(exc))})
+                # Rebuild the conversation instead of growing it.
+                #
+                # This used to append the failed response AND the correction to
+                # `messages` and carry both into every later attempt, so each repair
+                # made the prompt permanently bigger. On a context-constrained server
+                # that turns one recoverable failure into an unrecoverable one, and it
+                # was observed doing exactly that on a live projectflow scan: the first
+                # attempt came back as truncated JSON ("EOF while parsing at line 37"),
+                # the retry re-sent that truncated blob plus the error, and the request
+                # grew from ~3,300 to 4,204 tokens against an n_ctx of 4,096 --
+                # "exceeds the available context size", primary abandoned, 548 seconds
+                # spent failing over to a provider that then timed out.
+                #
+                # Truncation is the case that matters here: the response was too LONG
+                # to finish, so feeding it back in full is both the least useful
+                # context and the most expensive. Keeping a bounded excerpt preserves
+                # what the repair actually needs (the shape the model was producing)
+                # while making prompt growth constant rather than cumulative.
+                excerpt = raw[:_REPAIR_EXCERPT_CHARS]
+                if len(raw) > _REPAIR_EXCERPT_CHARS:
+                    excerpt += "\n... (truncated; your previous response did not finish)"
+                messages = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                    {"role": "assistant", "content": excerpt},
+                    {"role": "user", "content": RETRY_SUFFIX.format(error=str(exc)[:_REPAIR_ERROR_CHARS])},
+                ]
                 continue
             if usage_sink is not None:
                 usage_sink["attempts"] = attempt
@@ -329,6 +403,19 @@ class GroqLLMClient(BaseLLMClient):
             api_key=settings.groq_api_key,
             model=settings.groq_model,
             timeout=60.0,
+            # Verified live against openai/gpt-oss-120b on all three of this project's
+            # real analysis prompts (2,954 / 3,600 / 6,294 tokens): response_format
+            # json_schema is accepted and returned first-try-valid output every time,
+            # with zero ungrounded citations. That removes whole generate_structured
+            # repair attempts, each of which is a full extra round trip AND -- on a
+            # token-per-minute quota -- a second full charge for the same prompt.
+            #
+            # Checked rather than assumed: the SAME call against openai/gpt-oss-20b
+            # returned "400 Failed to validate JSON" on one of the three, so this is a
+            # property of the configured model, not of Groq. If GROQ_MODEL is changed,
+            # re-verify before trusting this flag -- an unsupported response_format is
+            # a 400, not a graceful degrade.
+            supports_grammar=True,
         )
 
     async def embed(self, texts: list[str], *, input_type: Literal["query", "passage"]) -> list[list[float]]:
@@ -376,16 +463,37 @@ class SelfHostedLLMClient(BaseLLMClient):
             model=settings.llm_primary_model,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             timeout=60.0,
-            # This server reports n_ctx=30208 across total_slots=4 (real /props and
-            # /slots responses), and that pool is SHARED: empirically probed live, a
-            # request that fits when the server is idle can still fail with
-            # "Context size has been exceeded" when other slots are busy (a 14k-token
-            # request failed while a 20k one succeeded minutes later -- non-monotonic,
-            # so it is contention, not a fixed per-request ceiling). Since llama.cpp
-            # reserves prompt + max_tokens up front, every output token not asked for
-            # is context handed back to the prompt. 3000 still leaves ~50% headroom
-            # over the largest completion this project has ever produced (1,995).
-            max_output_tokens=3000,
+            # The server has been RECONFIGURED since this was last set: it reported
+            # n_ctx=30208 across total_slots=4, and live /props today reports
+            # n_ctx=4096 across total_slots=8. Anything tuned to the old number is
+            # now wrong by 7x.
+            #
+            # Measured, because the obvious assumption is wrong: this server does NOT
+            # reject on prompt + max_tokens. Its refusal names the prompt alone
+            # ("request (6622 tokens) exceeds the available context size (4096)") for a
+            # prompt independently measured at 6,622 tokens with max_tokens=900. So
+            # lowering this does not buy prompt headroom -- what it buys is a generation
+            # that stops at a sane length instead of running until the context runs out.
+            # The prompt must fit in n_ctx on its own, and the output then takes
+            # whatever remains, which is why a 3,978-token prompt came back truncated
+            # at 168 tokens while a 3,282-token one completed cleanly in 375.
+            #
+            # 1800, measured rather than guessed. Live completions on the real schema
+            # with thinking disabled: 377 and 396 tokens for 2 findings, i.e. ~190
+            # tokens per finding, so 1800 covers roughly 9 findings. The largest
+            # completion in this project's history is 1,995, from a run that still had
+            # the model's reasoning phase enabled; `enable_thinking: False` below is
+            # what makes that no longer representative (the same prompt measured 816
+            # output tokens with thinking on and 396 with it off, and only the second
+            # produced valid JSON -- the first spent its whole budget thinking and was
+            # cut off mid-thought).
+            #
+            # None of this makes a large site fit. With n_ctx=4096 the prompt alone
+            # must clear the bar, so the real ceiling is ~3,700 prompt tokens if the
+            # output is to have room to finish. Raising the server's -c is the fix for
+            # heavy sites; this value is only the ceiling to raise if findings ever
+            # come back truncated on a site that otherwise fits.
+            max_output_tokens=1800,
             # Verified live against this server: response_format json_schema is
             # accepted and returns first-try-valid output (A/B tested against plain
             # json_object on the real ConsentAnalysisResponse schema).

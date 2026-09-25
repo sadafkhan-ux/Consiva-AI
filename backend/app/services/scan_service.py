@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 
 async def request_scan(
-    db: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, url: str, authorized: bool
+    db: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, url: str, authorized: bool,
+    enqueue_job: bool = True,
 ) -> ConsentScan:
     """Creates the scan record and enqueues the crawl job. `authorized` is a required,
     explicit self-attestation from the caller that they own/are permitted to scan this
@@ -79,9 +80,22 @@ async def request_scan(
             await validation_db.commit()
         raise
 
-    async with async_session_factory() as queue_db:
-        await queue.enqueue(queue_db, org_id=org_id, job_type="scan", payload={"scan_id": str(scan.id), "url": url})
-        await queue_db.commit()
+    # `enqueue_job=False` is for a caller that will queue its own job covering this
+    # scan -- specifically the integration API, whose `consent_api_chain` job runs the
+    # crawl AND the analysis as one unit.
+    #
+    # Without this the scan ran TWICE: request_scan queued a "scan" job and the chain
+    # job crawled again, which was not a theoretical risk -- it was measured on the
+    # first end-to-end call, which produced 2 crawls, 17 stages and 6 findings for a
+    # 3-finding site. Everything downstream was correct; it was just done twice, at
+    # double the browser time and double the LLM spend.
+    if enqueue_job:
+        async with async_session_factory() as queue_db:
+            await queue.enqueue(
+                queue_db, org_id=org_id, job_type="scan",
+                payload={"scan_id": str(scan.id), "url": url},
+            )
+            await queue_db.commit()
 
     return scan
 
@@ -130,6 +144,19 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
             ]
             meta["classified_items"] = len(sources)
             meta["by_source"] = {s: sources.count(s) for s in set(sources)}
+            # The third measurement point for the tracker-count discrepancy (see
+            # data_structuring's persistence_gap). website_scan records what the
+            # scanner returned and data_structuring records what the table holds;
+            # without this middle number a gap cannot be attributed to either
+            # classification or the write. classify_scan is 1:1 by construction and the
+            # ORM write was measured lossless at this volume, so the two should be
+            # identical -- and on a real hubspot scan they are not, which is precisely
+            # why the number needs to be recorded rather than assumed.
+            meta["trackers_in"] = len(scan_result.trackers)
+            meta["trackers_out"] = len(classification.trackers)
+            meta["cookies_out"] = len(classification.cookies)
+            if len(classification.trackers) != len(scan_result.trackers):
+                meta["classification_gap"] = len(scan_result.trackers) - len(classification.trackers)
     except Exception as exc:
         logger.exception("Scan failed for %s", url)
         async with async_session_factory() as db:
@@ -140,12 +167,36 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
     try:
         async with track_stage(scan_id, "data_structuring") as meta:
             async with async_session_factory() as db:
-                await scan_repository.save_scan_result(
+                written = await scan_repository.save_scan_result(
                     db, scan_id=scan_id, scan_result=scan_result, classification=classification
                 )
                 await db.commit()
             meta["policies_found"] = len(scan_result.policies)
             meta["third_party_services_found"] = len(classification.third_party_services)
+
+            # What the scanner found vs what the database now holds, per table.
+            #
+            # An external validation raised the same discrepancy twice -- the
+            # website_scan stage reporting 881 trackers while only 828 rows were
+            # readable afterwards, and 895 vs 840 the run before -- with nothing in the
+            # API able to explain where the rest went. Tracing a live crawl end to end
+            # found the path lossless, there is exactly one writer, no deleter and no
+            # unique constraint, so the cause is still unaccounted for. Recording both
+            # numbers here means the next occurrence identifies itself and names the
+            # table, instead of needing the same investigation from scratch.
+            found = {
+                "pages": len(scan_result.pages), "trackers": len(classification.trackers),
+                "cookies": len(classification.cookies), "forms": len(scan_result.forms),
+                "policies": len(scan_result.policies),
+                "third_party_services": len(classification.third_party_services),
+            }
+            meta["rows_written"] = written
+            gaps = {k: found[k] - written.get(k, 0) for k in found if found[k] != written.get(k, 0)}
+            if gaps:
+                meta["persistence_gap"] = gaps
+                logger.warning(
+                    "Scan %s: evidence found and evidence persisted disagree: %s", scan_id, gaps
+                )
     except Exception as exc:
         logger.exception("Failed to persist scan result for %s", url)
         async with async_session_factory() as db:

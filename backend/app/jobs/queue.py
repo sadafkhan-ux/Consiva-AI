@@ -110,3 +110,33 @@ async def reap_stale_jobs(db: AsyncSession) -> int:
             job.run_after = datetime.now(UTC)  # eligible immediately -- this wasn't a normal transient failure
     await db.flush()
     return len(stale_jobs)
+
+
+async def cancel_jobs_for_scan(db: AsyncSession, *, scan_id: uuid.UUID, org_id: uuid.UUID) -> int:
+    """Removes a scan's not-yet-started jobs. Returns how many were removed.
+
+    Only `queued` rows are touched. A job already `running` holds a browser subprocess
+    with its own time budget, and marking its row cancelled would not stop that process
+    -- it would just make the queue disagree with reality and leave the worker writing
+    results for a scan the API has called dead. The scan is marked cancelled by the
+    caller either way, and the worker checks that before doing anything further.
+
+    Scoped by org_id as well as scan_id: scan ids are unguessable, but a repository
+    function that can touch any tenant's queue rows given one id is the kind of thing
+    that becomes a cross-tenant bug the first time a caller forgets to check.
+    """
+    stmt = (
+        select(AgentJob)
+        .where(
+            AgentJob.org_id == org_id,
+            AgentJob.status == "queued",
+            AgentJob.payload["scan_id"].astext == str(scan_id),
+        )
+        .with_for_update(skip_locked=True)
+    )
+    jobs = (await db.execute(stmt)).scalars().all()
+    for job in jobs:
+        job.status = "cancelled"
+        job.error = "Cancelled via the Consent Agent API before execution"
+    await db.flush()
+    return len(jobs)

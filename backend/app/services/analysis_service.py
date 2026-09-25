@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 _NON_TERMINAL_AGENT_RUN_STATUSES = ("pending", "running", "paused")
 
 
-async def trigger_analysis(db: AsyncSession, *, scan_id: uuid.UUID, org_id: uuid.UUID, user_id: uuid.UUID) -> AgentRun:
+async def trigger_analysis(
+    db: AsyncSession, *, scan_id: uuid.UUID, org_id: uuid.UUID, user_id: uuid.UUID,
+    enqueue_job: bool = True,
+) -> AgentRun:
     scan = await scan_repository.get_scan(db, scan_id, org_id)
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
@@ -52,10 +55,19 @@ async def trigger_analysis(db: AsyncSession, *, scan_id: uuid.UUID, org_id: uuid
         db, org_id=scan.org_id, actor_user_id=user_id, action="agent_run.requested",
         entity_type="agent_run", entity_id=agent_run.id, agent_run_id=agent_run.id,
     )
-    await queue.enqueue(
-        db, org_id=scan.org_id, job_type="analyze",
-        payload={"agent_run_id": str(agent_run.id), "scan_id": str(scan_id), "org_id": str(scan.org_id)},
-    )
+    # `enqueue_job=False` is for a caller that will run the analysis itself in the
+    # same job -- the integration API's `consent_api_chain`, which has to run it inline
+    # so the completion webhook fires after the findings exist rather than before.
+    #
+    # Without this the analysis ran TWICE, measured on a live API call: rules_check,
+    # rag_retrieval, llm_analysis, output_validation and findings_generated each
+    # appeared x2, and one 3-finding site produced 6 findings. The same shape as the
+    # duplicate-crawl bug in request_scan, one layer down.
+    if enqueue_job:
+        await queue.enqueue(
+            db, org_id=scan.org_id, job_type="analyze",
+            payload={"agent_run_id": str(agent_run.id), "scan_id": str(scan_id), "org_id": str(scan.org_id)},
+        )
     await db.commit()
     return agent_run
 

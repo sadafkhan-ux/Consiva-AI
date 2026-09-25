@@ -21,6 +21,13 @@ export type ScanPhase =
   | "analyzing"
   | "awaiting_review"
   | "completed"
+  // Findings exist, but the analysis step that explains them did not finish. This
+  // is NOT "failed": on a real hubspot.com scan the rules produced three findings --
+  // including 54 marketing scripts still firing after the visitor pressed Reject --
+  // and the page reported "Failed" with an empty findings list, because a failed
+  // llm_analysis stage was treated as a failed scan. Nor is it "completed", which
+  // would imply the findings carry the narrative and citations they normally do.
+  | "degraded"
   | "failed";
 
 function sleep(ms: number) {
@@ -138,7 +145,17 @@ export function useConsentScan() {
             byName.audit_saved?.status === "completed" ||
             byName.audit_saved?.status === "failed" ||
             byName.findings_generated?.status === "completed" ||
-            stages.some((s) => s.status === "failed")
+            // The fallback's own terminal stage. A failed llm_analysis no longer
+            // ends the run -- the graph routes to create_rule_findings, which
+            // writes findings and then this stage.
+            byName.rule_findings_generated?.status === "completed" ||
+            // Deliberately NOT "any stage failed". That condition stopped polling
+            // the instant llm_analysis was marked failed, which is the moment
+            // BEFORE the fallback runs -- so the UI gave up a second early and
+            // never saw the findings that appeared right after. Only llm_analysis
+            // has a downstream recovery path; a failure anywhere else is terminal
+            // and should still stop the poll immediately.
+            stages.some((s) => s.status === "failed" && s.stage !== "llm_analysis")
           );
         },
         // 600s: the NVIDIA LLM analysis stage has been directly observed taking ~550s
@@ -212,17 +229,32 @@ export function useConsentScan() {
         const byName = Object.fromEntries(finalStages.map((s) => [s.stage, s]));
         const failedStage = finalStages.find((s) => s.status === "failed");
         if (failedStage) {
-          // Same reason as above, and this is the path that actually fires in
-          // practice: the crawl succeeds, llm_analysis times out, and the report
-          // then claims the site has no trackers at all. The evidence is already
-          // persisted and one GET away.
-          await loadEvidenceRegardless(scan.id, myRunId);
+          // Fetch findings too, not just evidence.
+          //
+          // This path used to call loadEvidenceRegardless (evidence ONLY) and
+          // return. On scan 63497fc6 the rules had already written three findings
+          // to the database -- 297 trackers firing before any consent interaction,
+          // 54 still firing after Reject -- and the report showed none of them,
+          // because nothing on this path ever asked for them. The crawl evidence
+          // appeared, the findings list stayed empty, and the banner said "Failed".
+          //
+          // A failed llm_analysis costs the narrative, not the findings; the page
+          // has to reflect that distinction rather than collapsing both into
+          // "Failed" and showing nothing.
+          await refreshFindingsAuditEvidence(scan.id, myRunId);
+          if (runIdRef.current !== myRunId) return;
+          const reason = `Analysis failed at stage "${failedStage.stage}": ${failedStage.error}`;
           setState((s) => ({
             ...s,
-            phase: "failed",
-            error: `Analysis failed at stage "${failedStage.stage}": ${failedStage.error}`,
+            // Degraded only when the fallback actually produced something. If it
+            // produced nothing there is genuinely nothing to show and "failed" is
+            // the honest label -- this must not dress an empty result up as a
+            // partial success.
+            phase: s.findings.length > 0 ? "degraded" : "failed",
+            error: reason,
             failedStage: failedStage.stage,
             completedAt: Date.now(),
+            durationMs: s.startedAt ? Date.now() - s.startedAt : null,
           }));
           return;
         }

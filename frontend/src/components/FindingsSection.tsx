@@ -9,9 +9,12 @@ type ReviewAction = "approve" | "reject" | "edit";
 export function FindingsSection({
   findings,
   onDecision,
+  analysisFailed = false,
 }: {
   findings: FindingResponse[];
   onDecision: () => Promise<void>;
+  /** The analysis stage failed for this scan. Changes what an empty list MEANS. */
+  analysisFailed?: boolean;
 }) {
   const [openReview, setOpenReview] = useState<{ id: string; action: ReviewAction } | null>(null);
   const [reason, setReason] = useState("");
@@ -20,7 +23,17 @@ export function FindingsSection({
   const [formError, setFormError] = useState<string | null>(null);
 
   if (findings.length === 0) {
-    return <p className="empty-note">No findings were generated for this scan — either nothing triggered a rule, or the analysis is still running.</p>;
+    // The old text guessed at two causes ("nothing triggered a rule, or the analysis
+    // is still running") and an external validation caught it stating both while
+    // neither was true: three rule-derived findings existed in the database for that
+    // scan, and the analysis had failed nine minutes earlier. Say only what is known.
+    return (
+      <p className="empty-note">
+        {analysisFailed
+          ? "No findings could be produced: the analysis stage failed and the deterministic rules matched nothing to fall back on. See Errors / Diagnostics below."
+          : "No findings for this scan — no compliance rule matched the collected evidence."}
+      </p>
+    );
   }
 
   function openForm(finding: FindingResponse, action: ReviewAction) {

@@ -142,6 +142,34 @@ class Settings(BaseSettings):
     # any custom endpoint that does the same; transitioning a notification action to
     # "done" performs a real HTTP POST here and only succeeds if that POST succeeds.
     notification_webhook_url: str | None = None
+    # Shared secret for signing outbound /consent-agent webhooks (HMAC-SHA256 over
+    # "<timestamp>.<body>", sent as X-Consiva-Signature). Optional so development works
+    # without one, but a delivery made without it is one the receiver cannot
+    # authenticate -- webhook_service logs a warning on every unsigned send rather than
+    # letting that pass silently. Set it before any external integration.
+    # Browser origins allowed to call this API, comma-separated:
+    #   CORS_ALLOWED_ORIGINS=https://consiva.ai,https://app.consiva.ai
+    #
+    # Production had NO CORS configuration at all -- the only middleware was gated to
+    # app_env=="development" -- so a browser on any real origin was blocked outright
+    # and the website team could not integrate without editing this file. Empty stays
+    # the default: an API with no browser client should not answer preflights, and a
+    # wildcard on a credentialed API is not an option.
+    cors_allowed_origins: str = ""
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+
+
+    webhook_signing_secret: str | None = None
+
+    # Scans per organisation per hour through the integration API, on top of the
+    # existing per-day ceiling. A browser crawl costs real CPU and a real LLM call, so
+    # an integrator looping on POST /scans is a cost-and-capacity problem well before
+    # the daily limit notices.
+    consent_api_scans_per_hour: int = 20
+
     notification_webhook_timeout_seconds: int = 10
 
     # App

@@ -161,6 +161,9 @@ button.small { padding: 6px 12px; font-size: 12px; }
 .status-banner.progress { background: rgba(251, 191, 36, 0.1); color: var(--amber); }
 .status-banner.ok { background: rgba(52, 211, 153, 0.1); color: var(--green); }
 .status-banner.bad { background: rgba(248, 113, 113, 0.1); color: var(--red); }
+/* Findings exist but nothing explained them. Amber, like .progress, but the
+   dot does not pulse -- the run is over, it just did not finish well. */
+.status-banner.warn { background: rgba(251, 191, 36, 0.1); color: var(--amber); }
 .status-banner .dot {
   width: 9px; height: 9px; border-radius: 50%; background: currentColor; flex: none;
 }

@@ -10,9 +10,22 @@ from app.rules.tracker_catalog import match_cmp
 from app.scanner.page_parser import ParsedScript
 from app.scanner.schemas import ConsentSignalRecord
 
-_ACCEPT_HINTS = ("accept all", "allow all", "agree", "accept cookies")
-_REJECT_HINTS = ("reject all", "decline all", "reject non-essential", "deny all")
-_GRANULAR_HINTS = ("manage preferences", "cookie settings", "customize", "preferences", "manage cookies")
+# Phrases that, on a clickable control, evidence a consent mechanism BY THEMSELVES.
+# Each names the consent action explicitly; none is ordinary page furniture.
+_ACCEPT_HINTS = ("accept all", "allow all", "accept cookies", "allow cookies", "agree and continue")
+_REJECT_HINTS = ("reject all", "decline all", "reject non-essential", "deny all",
+                 "reject cookies", "refuse all")
+_GRANULAR_HINTS = ("manage preferences", "cookie settings", "cookie preferences",
+                   "manage cookies", "privacy preferences")
+
+# Words that REFINE a consent mechanism once one is established, but cannot establish
+# one alone. "agree", "customize" and "preferences" are ordinary English that appear on
+# perfectly normal controls -- an account page's "Preferences" link, a "Customize" button
+# on a product configurator. Treating them as sufficient is what produced a fabricated
+# consent banner on news.ycombinator.com; they are still read, but only to fill in
+# has_granular_choices once a strong phrase has established the banner exists.
+_WEAK_GRANULAR_HINTS = ("customize", "preferences")
+_WEAK_ACCEPT_HINTS = ("agree", "got it", "ok")
 
 
 def detect_consent_signal(
@@ -20,6 +33,7 @@ def detect_consent_signal(
     scripts: list[ParsedScript],
     visible_text: str,
     detected_global_vars: list[str],
+    control_text: str | None = None,
 ) -> ConsentSignalRecord:
     """`evidence["confidence"]`/`evidence["detection_source"]` reflect how the
     mechanism was identified -- never a fabricated precision score, just an honest,
@@ -33,8 +47,19 @@ def detect_consent_signal(
                             banner-like UI, but the specific vendor is NOT claimed.
       none (0.0)          -- no consent mechanism detected at all.
     `cmp_vendor` is only ever set when match_cmp() actually identified one -- never
-    guessed from the generic keyword path."""
-    text = visible_text.lower()
+    guessed from the generic keyword path.
+
+    `control_text` is the text of clickable controls and consent-dialog containers
+    (page_parser.extract_control_text). The keyword paths read THAT, not the page's
+    prose. Reading prose reported a consent banner on news.ycombinator.com -- a site
+    with no consent UI at all and zero matches for cookie/consent/gdpr in its HTML --
+    because a user comment said "both parties agree on this", and the pipeline turned
+    that into a high-priority finding about a Reject control that does not exist.
+    A consent banner is a thing you click, so only clickable things are evidence of one.
+
+    Falls back to `visible_text` when `control_text` is not supplied, so existing
+    callers keep working; every caller in the scanner passes it."""
+    text = (control_text if control_text is not None else visible_text).lower()
 
     cmp_match = None
     detection_source = None
@@ -49,8 +74,16 @@ def detect_consent_signal(
             detection_source = "global_var"
 
     has_reject_all = any(h in text for h in _REJECT_HINTS)
-    has_granular = any(h in text for h in _GRANULAR_HINTS)
     has_accept = any(h in text for h in _ACCEPT_HINTS)
+    # A strong granular phrase stands alone; a weak one only counts once something
+    # else has already established that a consent mechanism is present.
+    has_strong_granular = any(h in text for h in _GRANULAR_HINTS)
+    established = has_reject_all or has_accept or has_strong_granular
+    has_granular = has_strong_granular or (
+        established and any(h in text for h in _WEAK_GRANULAR_HINTS)
+    )
+    if established:
+        has_accept = has_accept or any(h in text for h in _WEAK_ACCEPT_HINTS)
 
     if cmp_match:
         confidence = 0.95 if detection_source == "script_src" else 0.85
@@ -64,14 +97,23 @@ def detect_consent_signal(
                 "confidence": confidence, "detection_source": detection_source,
             },
         )
-    if has_accept or has_reject_all or has_granular:
+    if established:
         return ConsentSignalRecord(
             mechanism_type="banner",
             has_reject_all=has_reject_all,
             has_granular_choices=has_granular,
             evidence={
-                "matched_keywords": [h for h in _ACCEPT_HINTS + _REJECT_HINTS + _GRANULAR_HINTS if h in text],
-                "confidence": 0.5, "detection_source": "text_keywords",
+                "matched_keywords": [
+                    h for h in _ACCEPT_HINTS + _REJECT_HINTS + _GRANULAR_HINTS if h in text
+                ],
+                "confidence": 0.5, "detection_source": "control_text_keywords",
+                # Said plainly in the record, because a 0.5 signal was being read
+                # downstream as an established fact about the page.
+                "caveat": (
+                    "Matched consent wording on clickable controls; no CMP vendor "
+                    "signature was found. Treat as a POSSIBLE consent mechanism to be "
+                    "confirmed by a person, not as a confirmed banner."
+                ),
             },
         )
     return ConsentSignalRecord(

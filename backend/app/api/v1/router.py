@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from app.api.v1.routes import (
     actions,
     auth,
+    consent_agent,
     consent_findings,
     consent_scans,
     dev,
@@ -22,6 +23,10 @@ from app.core.security import bind_request_scope
 api_router = APIRouter(dependencies=[Depends(bind_request_scope)])
 api_router.include_router(auth.router)
 api_router.include_router(consent_scans.router)
+# The external integration API. Registered on the SAME router as everything
+# else, so bind_request_scope above applies to it too -- an integration
+# endpoint that skipped org binding would read with no RLS scope at all.
+api_router.include_router(consent_agent.router)
 api_router.include_router(consent_findings.router)
 api_router.include_router(websites.router)
 api_router.include_router(actions.router)

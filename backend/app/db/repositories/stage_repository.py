@@ -29,13 +29,27 @@ async def complete_stage(db: AsyncSession, stage_id: uuid.UUID, *, duration_ms: 
         await db.flush()
 
 
-async def fail_stage(db: AsyncSession, stage_id: uuid.UUID, *, duration_ms: int, error: str) -> None:
+async def fail_stage(
+    db: AsyncSession, stage_id: uuid.UUID, *, duration_ms: int, error: str,
+    metadata: dict | None = None,
+) -> None:
+    """Records the failure AND whatever the stage managed to observe before it failed.
+
+    `metadata` used to be dropped here: track_stage collected it, passed it down, and
+    only complete_stage ever wrote it -- so every diagnostic a stage recorded was
+    discarded on exactly the runs where it was needed. A real llm_analysis timeout
+    stored duration and "Request timed out." and nothing else, while
+    `provider_failure`, `degraded_to_rule_findings`, `prompt_chars`, `llm_usage` and
+    the evidence counts had all been set and were thrown away. Defaulted to None so
+    existing callers keep working unchanged."""
     row = await db.get(AgentRunStage, stage_id)
     if row:
         row.status = "failed"
         row.completed_at = datetime.now(UTC)
         row.duration_ms = duration_ms
         row.error = error
+        if metadata:
+            row.stage_metadata = metadata
         await db.flush()
 
 

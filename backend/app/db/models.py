@@ -58,6 +58,12 @@ class ConsentScan(Base):
     scanner_version: Mapped[str | None] = mapped_column(String, nullable=True)
     authorized_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Added by migration 0022 for the /consent-agent integration API. All three are
+    # nullable/defaulted and read by nothing that predates them, so the console flow
+    # is unchanged.
+    idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scan_options: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -274,6 +280,30 @@ class KnowledgeChunk(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBED_DIM), nullable=False)
     token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     chunk_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class WebhookDelivery(Base):
+    """One attempt to notify an external system that a scan finished.
+
+    Separate from audit_logs on purpose: that records what a PERSON did to a tenant's
+    data, and an HTTP POST to a customer's endpoint is neither. Retry scheduling stays
+    with the existing job queue (agent_jobs.attempts + run_after backoff); this is the
+    durable record of what was sent and what came back, which the queue row loses once
+    the job is done."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("consent_scans.id"), nullable=False, index=True)
+    event: Mapped[str] = mapped_column(String, nullable=False)
+    target_url: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AgentJob(Base):

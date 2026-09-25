@@ -9,6 +9,7 @@ const PHASE_LABELS: Record<string, string> = {
   analyzing: "Analyzing…",
   awaiting_review: "Completed — awaiting human review",
   completed: "Completed",
+  degraded: "Findings ready — explanations unavailable",
   failed: "Failed",
 };
 
@@ -18,20 +19,35 @@ const PHASE_TONE: Record<string, string> = {
   analyzing: "progress",
   awaiting_review: "ok",
   completed: "ok",
+  // Not "bad". The scan found real violations and is showing them; red would tell
+  // the reader to discard a result they should be acting on. Not "ok" either --
+  // the findings are unexplained and every one needs a person.
+  degraded: "warn",
   failed: "bad",
 };
 
 const STAGE_ORDER = [
   "url_validation", "website_scan", "data_structuring", "classification",
   "rules_check", "rag_retrieval", "llm_analysis", "output_validation",
-  "findings_generated", "audit_saved",
+  // Alternatives, not sequential steps: a run reaches findings_generated OR
+  // rule_findings_generated, never both. Listed adjacently so whichever one ran
+  // appears in the same position in the progress list.
+  "findings_generated", "rule_findings_generated", "audit_saved",
 ];
 const STAGE_LABELS: Record<string, string> = {
   url_validation: "URL Validation", website_scan: "Website Scan",
   data_structuring: "Data Structuring", classification: "Tracker/Cookie Classification",
   rules_check: "Rules Check", rag_retrieval: "RAG Retrieval",
-  llm_analysis: "NVIDIA LLM Analysis", output_validation: "Structured Output Validation",
-  findings_generated: "Findings Generated", audit_saved: "Audit Saved",
+  // Not "NVIDIA LLM Analysis". The provider is chosen at run time -- self-hosted
+  // first, NVIDIA only as fallback -- so this label named the wrong one on every
+  // run that never reached the fallback. Scan 63497fc6 failed on the SELF-HOSTED
+  // provider and the page reported "Failed at NVIDIA LLM Analysis", pointing the
+  // reader at the wrong system. The real provider is recorded per run and shown
+  // in the provider field; this label states the stage, not a guess at who served it.
+  llm_analysis: "LLM Analysis", output_validation: "Structured Output Validation",
+  findings_generated: "Findings Generated",
+  rule_findings_generated: "Findings From Rules (no narrative)",
+  audit_saved: "Audit Saved",
 };
 
 export function ScanStatusSection({ state }: { state: ConsentScanState }) {

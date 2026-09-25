@@ -6,9 +6,28 @@ import type { FindingResponse } from "../api/types";
 // on the frontend -- every source_doc/section/recommendation_text string is exactly
 // what the backend returned.
 
-export function DpdpReferencesSection({ findings }: { findings: FindingResponse[] }) {
+export function DpdpReferencesSection({
+  findings,
+  analysisFailed = false,
+}: {
+  findings: FindingResponse[];
+  analysisFailed?: boolean;
+}) {
   const all = findings.flatMap((f) => f.dpdp_reference.map((ref) => ({ ref, finding: f })));
-  if (all.length === 0) return <p className="empty-note">No DPDP references have been retrieved yet for this scan.</p>;
+  if (all.length === 0) {
+    // "have not been retrieved yet" was wrong in the case that actually happens:
+    // retrieval SUCCEEDS (rag_retrieval completes with real DPDP/IT Act chunks) and
+    // then the analysis step fails, so nothing cites them. Rule-derived findings carry
+    // no citations by design -- attaching the retrieved chunks anyway would present
+    // regulatory references as though something had applied them to a finding.
+    return (
+      <p className="empty-note">
+        {analysisFailed
+          ? "No citations are attached to these findings. The regulatory corpus was searched, but the step that applies citations to findings did not complete, and citations are never attached without it."
+          : "No findings cited a regulatory provision for this scan."}
+      </p>
+    );
+  }
   return (
     <div>
       {all.map(({ ref, finding }, i) => (

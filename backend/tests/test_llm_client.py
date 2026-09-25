@@ -237,13 +237,24 @@ def test_self_hosted_client_requires_base_url_and_model():
 
 
 def test_self_hosted_client_reserves_less_output_context():
-    """The self-hosted server's context pool (n_ctx=30208 shared across 4 slots, per
-    its own live /props and /slots) is small enough that reserved-but-unused output
-    tokens matter -- llama.cpp reserves prompt + max_tokens up front. 3000 keeps ~50%
-    headroom over the largest completion ever recorded in this project (1,995 across
-    47 real attempts) while handing ~1000 tokens back to the prompt."""
+    """The self-hosted server keeps a tighter output budget than the hosted providers.
+
+    Lowered 3000 -> 1800, and the reasoning changed along with the number. The old
+    value cited a server reporting n_ctx=30208 across 4 slots; live /props now reports
+    n_ctx=4096 across 8 slots, so anything tuned to the old figure is wrong by 7x.
+
+    The old docstring also justified it by "llama.cpp reserves prompt + max_tokens up
+    front", which live measurement contradicts: this server's refusal names the prompt
+    alone ("request (6622 tokens) exceeds the available context size (4096)") for a
+    prompt independently measured at 6,622 tokens while max_tokens was 900. So the
+    prompt must fit by itself and the output takes what remains -- lowering this does
+    not buy prompt headroom, it stops a generation running until the context is gone.
+
+    1800 is measured: live completions on the real schema with thinking disabled were
+    375 and 396 tokens for 2 findings (~190/finding), so this covers roughly 9.
+    """
     client = SelfHostedLLMClient(_settings(**_PRIMARY_SETTINGS))
-    assert client._max_output_tokens == 3000
+    assert client._max_output_tokens == 1800
 
     # The large-context hosted providers keep the original, roomier budget.
     assert NvidiaLLMClient(_settings())._max_output_tokens == 4000

@@ -136,6 +136,41 @@ _MAX_IFRAMES_FOR_SIGNAL_DETECTION = 5
 # same rationale as _MAX_IFRAMES_FOR_SIGNAL_DETECTION: this runs once per crawled
 # page). Without this, a shadow-DOM-hosted banner is invisible to classification even
 # though it is fully clickable -- a real, confirmed correctness gap, not theoretical.
+# The same shadow-DOM walk as _SHADOW_DOM_TEXT_JS, but collecting ONLY clickable
+# controls and consent-dialog containers -- the live counterpart to
+# page_parser.extract_control_text(), which can only see the serialized HTML.
+# Both are needed: a real banner (klaviyo.com/Transcend) lives in an open shadow root
+# that page.content() never serializes, so without this its Accept/Reject buttons are
+# invisible to detection even though consent_interactor can click them.
+_SHADOW_DOM_CONTROL_TEXT_JS = """() => {
+    const SEL = 'button, a, input, summary, label, [role=button], [role=dialog],' +
+                '[role=alertdialog], [aria-modal=true]';
+    const HINT = /(cookie|consent|gdpr|ccpa|cmp|privacy)/i;
+    function grab(root, out) {
+        for (const el of root.querySelectorAll(SEL)) {
+            out.push(el.innerText || el.textContent || '');
+            for (const a of ['value', 'aria-label', 'title']) {
+                const v = el.getAttribute && el.getAttribute(a);
+                if (v) out.push(v);
+            }
+        }
+        for (const el of root.querySelectorAll('[class], [id]')) {
+            const key = (el.className || '') + ' ' + (el.id || '');
+            if (HINT.test(key)) out.push(el.innerText || el.textContent || '');
+        }
+    }
+    function walk(root, depth, out) {
+        if (depth > 6) return;
+        for (const el of root.querySelectorAll('*')) {
+            if (el.shadowRoot) { grab(el.shadowRoot, out); walk(el.shadowRoot, depth + 1, out); }
+        }
+    }
+    const out = [];
+    grab(document, out);
+    walk(document, 0, out);
+    return out.join(' ');
+}"""
+
 _SHADOW_DOM_TEXT_JS = """() => {
     function collect(root, depth, out) {
         if (depth > 6) return;
@@ -305,7 +340,7 @@ async def _progressive_scroll(page: Page, request_count: Callable[[], int] | Non
     return steps_taken
 
 
-async def _collect_iframe_signal_evidence(page: Page) -> tuple[list[ParsedScript], str]:
+async def _collect_iframe_signal_evidence(page: Page) -> tuple[list[ParsedScript], str, str]:
     """Extends detect_consent_signal's inputs to also see same-page iframe content --
     page.content() (the crawler's only HTML source otherwise) returns ONLY the main
     frame's DOM, so a CMP banner whose markup lives entirely inside an iframe
@@ -315,6 +350,7 @@ async def _collect_iframe_signal_evidence(page: Page) -> tuple[list[ParsedScript
     fatal to the page fetch."""
     scripts: list[ParsedScript] = []
     text_parts: list[str] = []
+    control_parts: list[str] = []
     child_frames = [f for f in page.frames if f != page.main_frame][:_MAX_IFRAMES_FOR_SIGNAL_DETECTION]
     for frame in child_frames:
         try:
@@ -325,7 +361,10 @@ async def _collect_iframe_signal_evidence(page: Page) -> tuple[list[ParsedScript
         parsed = parse_page(html, frame.url or page.url)
         scripts.extend(parsed.scripts)
         text_parts.append(parsed.visible_text)
-    return scripts, " ".join(text_parts)
+        # An iframe-hosted CMP is the common case for several real vendors, so its
+        # buttons have to reach consent detection as controls, not just as prose.
+        control_parts.append(parsed.control_text)
+    return scripts, " ".join(text_parts), " ".join(control_parts)
 
 
 async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, settings: Settings) -> dict:
@@ -366,12 +405,14 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
             """(candidates) => candidates.filter(name => typeof window[name] !== 'undefined')""",
             _CMP_GLOBAL_VAR_CANDIDATES,
         )
-        iframe_scripts, iframe_text = await _collect_iframe_signal_evidence(browser_page)
+        iframe_scripts, iframe_text, iframe_control_text = await _collect_iframe_signal_evidence(browser_page)
         try:
             rendered_text = await browser_page.evaluate(_SHADOW_DOM_TEXT_JS)
+            rendered_control_text = await browser_page.evaluate(_SHADOW_DOM_CONTROL_TEXT_JS)
         except PlaywrightError as exc:
             logger.debug("Could not collect shadow-DOM text for %s: %s", url, exc)
             rendered_text = ""
+            rendered_control_text = ""
     except _SeedUnreachable:
         raise
     except Exception as exc:  # page loaded (or retries exhausted) but post-load processing failed
@@ -388,7 +429,9 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         "url": url, "status": "success", "attempts": attempts, "http_status": http_status, "title": parsed.title,
         "request_records": request_records, "parsed": parsed, "global_vars": set(global_vars_present),
         "scroll_steps": scroll_steps, "iframe_scripts": iframe_scripts, "iframe_text": iframe_text,
+        "iframe_control_text": iframe_control_text,
         "rendered_text": rendered_text,
+        "rendered_control_text": rendered_control_text,
     }
 
 
@@ -411,6 +454,7 @@ async def _crawl_full_site(
     all_links = []
     crawled_page_text = {}
     all_visible_text_parts = []
+    all_control_text_parts = []
     all_scripts_flat = []
     detected_global_vars: set[str] = set()
     diagnostics = {"pages_failed": 0, "pages_timeout": 0, "pages_blocked_robots": 0, "total_scroll_steps": 0}
@@ -481,6 +525,12 @@ async def _crawl_full_site(
             # THIS purpose -- used only for consent-signal keyword detection, not for
             # crawled_page_text/policy_detector above, which is unaffected.
             all_visible_text_parts.append(result["rendered_text"] or parsed.visible_text)
+            # Consent detection reads ONLY this -- see detect_consent_signal.
+            all_control_text_parts.append(
+                result.get("rendered_control_text") or parsed.control_text
+            )
+            if result.get("iframe_control_text"):
+                all_control_text_parts.append(result["iframe_control_text"])
             if result["iframe_text"]:
                 all_visible_text_parts.append(result["iframe_text"])
             all_scripts_flat.extend(parsed.scripts)
@@ -505,6 +555,7 @@ async def _crawl_full_site(
     consent_signal = detect_consent_signal(
         scripts=all_scripts_flat, visible_text=" ".join(all_visible_text_parts),
         detected_global_vars=sorted(detected_global_vars),
+        control_text=" ".join(all_control_text_parts),
     )
 
     cookies = [c.model_copy(update={"consent_states": ["pre_consent"]}) for c in cookies]

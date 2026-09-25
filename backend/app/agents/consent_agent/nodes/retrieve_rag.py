@@ -13,7 +13,25 @@ from app.rag.retriever import retrieve
 # to 6 documents (105->224 chunks), top_k=4 was directly observed to miss a genuinely
 # relevant, correctly-embedded chunk that ranked #2 at top_k=15 for a real query --
 # not a source gap, a recall issue. Restored to 6 on that evidence.
-_TOP_K = 6
+# Measured on the live corpus (279 chunks across the DPDP Act, DPDP Rules, IT Act and
+# the gazette updates): chunks average 314 tokens, so top_k=6 spent ~2,250 tokens --
+# 10% of the whole prompt -- on retrieval alone.
+#
+# Findings cite chunk_ids and a citation can only ground in a chunk that was actually
+# retrieved, so this number is a ceiling on how many distinct provisions the model can
+# ever reference -- which makes it the one RAG setting that can cost accuracy outright.
+# So it was measured rather than picked, live against the real corpus and a real scan
+# (projectflow.gignaati.com), self-hosted model, identical prompt otherwise:
+#
+#   top_k=4   in=3,282  out=585  3 findings, 3 with citations, 0 ungrounded
+#   top_k=3   in=2,904  out=568  3 findings, 3 with citations, 0 ungrounded
+#   top_k=2   in=2,517  out=404  2 findings  <- a finding is lost
+#
+# 3 is therefore the floor: it holds finding count and citation coverage exactly while
+# returning ~380 tokens, and those tokens are what let the response finish on a server
+# with n_ctx=4096 (a truncated response at top_k=4 is what started this measurement).
+# 2 is past the edge. Re-measure before changing it again.
+_TOP_K = 3
 
 
 def _build_query(rule_findings: list[dict]) -> str:
