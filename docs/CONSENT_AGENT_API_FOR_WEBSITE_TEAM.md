@@ -2,10 +2,11 @@
 
 Scan a website for DPDP consent compliance. Four endpoints.
 
-**Base URL:** `https://<host>/api/v1/consent-agent`
-**Interactive docs (Swagger):** `https://<host>/docs` — *confirm this loads before
-relying on it; on some deployments the reverse proxy serves the console app at that
-path instead. This document is the authoritative reference either way.*
+**Base URL:** `https://consiva-agent.gignati.com/api/v1/consent-agent`
+**Interactive docs (Swagger):** not reachable on this deployment. `/docs` and
+`/openapi.json` return the Consiva console app, because nginx serves the single-page
+frontend at every path it does not proxy to the backend (measured: both return
+`200 text/html`). **This document is the reference.**
 
 ---
 
@@ -32,13 +33,22 @@ Authorization: Bearer <access_token>
 ```
 
 ```bash
-curl -X POST https://<host>/api/v1/auth/login \
+curl -X POST https://consiva-agent.gignati.com/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"you@example.com","password":"..."}'
 ```
 
 The token identifies your organisation. You can only ever see your own scans — another
 organisation's `scan_id` returns 404.
+
+
+### CORS
+
+If you call this API directly from the browser, your origin must be listed in the
+server's `CORS_ALLOWED_ORIGINS` (comma-separated, e.g.
+`https://consiva.ai,https://app.consiva.ai`). It is empty by default and there is no
+wildcard: this API is credentialed, and browsers reject `*` on a credentialed request
+anyway. Ask whoever runs the deployment to add your origin before you start.
 
 ---
 
@@ -253,6 +263,10 @@ Every error uses one shape. **Branch on `code`**, not on `message`.
 | `RATE_LIMIT_EXCEEDED` | 429 | 20 scans/hour per organisation |
 | `SCAN_CONFLICT` | 409 | Operation clashes with the scan's state |
 | `SCAN_TIMEOUT` | 504 | Scan exceeded its maximum duration |
+| `INVALID_URL` | 422 | The URL parsed, but no domain could be read from it |
+| `SCAN_NOT_READY` | 409 | Asked for something that needs a finished scan |
+| `ANALYSIS_IN_PROGRESS` | 409 | Analysis is already running for this scan |
+| `ANALYSIS_FAILED` | 502 | The model's output failed validation after its retries |
 | `INTERNAL_ERROR` | 500 | Unexpected. Never contains a stack trace. |
 
 Private, internal and cloud-metadata addresses are rejected with `NOT_AUTHORIZED` —
@@ -277,7 +291,7 @@ Poll an existing scan rather than re-submitting — that's what `Idempotency-Key
 ## Complete frontend example
 
 ```js
-const API = "https://<host>/api/v1/consent-agent";
+const API = "https://consiva-agent.gignati.com/api/v1/consent-agent";
 const headers = {
   "Authorization": `Bearer ${token}`,
   "Content-Type": "application/json",
