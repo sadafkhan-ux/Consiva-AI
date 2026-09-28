@@ -129,6 +129,28 @@ services:
       # is easy, and the symptom is a 500 at login rather than anything obvious.
       # `:?` makes the stack refuse to start without it instead of failing later.
       CONSIVA_JWT_SECRET: ${CONSIVA_JWT_SECRET:?set CONSIVA_JWT_SECRET in /opt/consiva/.env}
+      # ---- Consent Agent integration API (/api/v1/consent-agent) --------------
+      #
+      # Passed explicitly for the reason CONSIVA_JWT_SECRET above is: /opt/consiva/.env
+      # is read by COMPOSE for ${...} interpolation and is NOT the file the container
+      # inherits (that is env_file: ./backend/.env). A value put in the wrong one is
+      # silently invisible, and the symptom is never "missing config" -- it is a
+      # browser CORS failure the website team cannot diagnose from their side.
+      #
+      # Browser origins allowed to call this API, comma-separated. Empty by default,
+      # which is correct for a server with no browser client; the website team's
+      # origin must be added here before their integration can work at all. Never "*":
+      # this API is credentialed and browsers reject a wildcard on a credentialed
+      # request anyway, so a wildcard would look permissive while being broken.
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-}"
+      # Signs outbound scan-completion webhooks (HMAC-SHA256, X-Consiva-Signature).
+      # Optional: unset means the API REFUSES a scan that asks for a webhook, with
+      # 501 WEBHOOK_NOT_CONFIGURED, rather than delivering something the receiver
+      # cannot authenticate. Polling needs no secret and is unaffected.
+      WEBHOOK_SIGNING_SECRET: "${WEBHOOK_SIGNING_SECRET:-}"
+      # Scans per organisation per hour through the integration API, on top of the
+      # existing per-day ceiling. A scan is a real browser crawl plus a model call.
+      CONSENT_API_SCANS_PER_HOUR: "${CONSENT_API_SCANS_PER_HOUR:-20}"
     volumes:
       # Source PDFs for the RAG knowledge base. Read-only, and deliberately a mount
       # rather than a COPY: they live at the repo root, outside this service's
@@ -193,6 +215,12 @@ services:
       # worker gets 10+5. With the backend's 5 that is 20 of 100.
       DB_POOL_SIZE: "${WORKER_DB_POOL_SIZE:-10}"
       DB_MAX_OVERFLOW: "${WORKER_DB_MAX_OVERFLOW:-5}"
+      # The worker is what actually DELIVERS the webhook (job_type consent_webhook),
+      # so it needs the same secret the API validated the request against. Setting it
+      # only on the backend produces the worst shape of this bug: the scan is accepted
+      # because the API sees a secret, and every delivery then goes out unsigned from
+      # a process that has none.
+      WEBHOOK_SIGNING_SECRET: "${WEBHOOK_SIGNING_SECRET:-}"
     networks:
       - consiva
     depends_on:
