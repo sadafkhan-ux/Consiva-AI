@@ -45,6 +45,10 @@ COPY migrate.py ./
 # user, which cannot be done through the API (creating a user requires an
 # authenticated admin, and none exists yet).
 COPY create_user.py ./
+# One-shot CLI: registers the default regulatory sources for an organization and
+# collects each once. Run after migrate.py:
+#   python seed_regwatch_sources.py --org-id <organization UUID>
+COPY seed_regwatch_sources.py ./
 
 # Non-root runtime. The browser cache must be readable (not writable) by this user;
 # /app stays root-owned and read-only to the app, which is correct — the application

@@ -17,16 +17,20 @@ and covers the announcement side.
 No baseline is accepted here. That is a decision a person makes, with their name on
 it, and the first collection raises a `first_capture` finding for exactly that
 purpose.
+
+Usage:
+    python seed_regwatch_sources.py --org-id <organization UUID>
 """
+import argparse
 import asyncio
+import sys
 import uuid
 
 from app.agents.regwatch.errors import InvalidSourceError
 from app.agents.regwatch.schemas import watch
 from app.agents.regwatch.services import collection_service, source_service
-from app.db.session import async_session_factory, set_org_scope
-
-ORG = uuid.UUID("8b2c939c-4993-4053-a7b5-a15fdb0b5310")
+from app.db.repositories import user_repository
+from app.db.session import async_session_factory, engine, set_org_scope
 
 SOURCES = [
     {
@@ -76,14 +80,30 @@ SOURCES = [
 ]
 
 
-async def main() -> None:
-    set_org_scope(ORG)
+async def run(org_id: uuid.UUID) -> int:
+    """Disposes the engine inside this same event loop -- see create_user.py's run()."""
+    try:
+        return await _run(org_id)
+    finally:
+        await engine.dispose()
+
+
+async def _run(org_id: uuid.UUID) -> int:
+    # Checked up front: a missing org would otherwise surface as a foreign-key error
+    # on the first insert, which reads like a broken source rather than a wrong id.
+    # Scoped first so the lookup itself passes RLS once the API runs as consiva_app.
+    set_org_scope(org_id)
+    async with async_session_factory() as db:
+        if await user_repository.get_organization(db, org_id) is None:
+            print(f"ERROR: organization {org_id} not found.", file=sys.stderr)
+            return 1
+
     registered = []
 
     async with async_session_factory() as db:
         for spec in SOURCES:
             try:
-                row = await source_service.register_source(db, org_id=ORG, **spec)
+                row = await source_service.register_source(db, org_id=org_id, **spec)
                 await db.commit()
                 registered.append(row)
                 print(f"registered  {row.name}")
@@ -94,7 +114,7 @@ async def main() -> None:
     print("\ncollecting each for the first time")
     for row in registered:
         async with async_session_factory() as db:
-            source = await source_service.get_source_or_raise(db, row.id, ORG)
+            source = await source_service.get_source_or_raise(db, row.id, org_id)
             collection = await collection_service.collect(db, source)
             change, finding = await collection_service.compare_and_record(db, source, collection)
             await db.commit()
@@ -106,5 +126,16 @@ async def main() -> None:
                 f"health={health['state']}"
             )
 
+    return 0
 
-asyncio.run(main())
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--org-id", required=True, type=uuid.UUID, help="organization UUID to register the sources under")
+    args = parser.parse_args()
+
+    return asyncio.run(run(args.org_id))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
