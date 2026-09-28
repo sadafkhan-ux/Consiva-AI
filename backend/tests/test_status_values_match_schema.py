@@ -42,9 +42,20 @@ def _allowed(table: str) -> set[str]:
     widened, so scanning forwards -- or taking a union across files -- would still look
     correct after a migration NARROWED the list.
     """
+    # The table being CREATED, not merely mentioned. The previous version matched
+    # `create table ... <anything> ... <table> ... check (status in ...)`, so a foreign
+    # key like `scan_id uuid references consent_scans(id)` inside SOME OTHER table's
+    # definition made that other table's status CHECK look like consent_scans'. That
+    # did not stay theoretical: migration 0025 creates purpose_runs with both a
+    # reference to consent_scans and a status CHECK of its own, and this function
+    # began reporting the purpose statuses as the scan statuses.
+    #
+    # Both patterns also stop at the statement boundary now, so a match cannot run past
+    # a semicolon into the next CREATE.
     patterns = (
-        re.compile(r"alter\s+table\s+" + table + r"\b.*?" + _CHECK_IN, re.S | re.I),
-        re.compile(r"create\s+table[^;]*?\b" + table + r"\b.*?" + _CHECK_IN, re.S | re.I),
+        re.compile(r"alter\s+table\s+" + table + r"\b[^;]*?" + _CHECK_IN, re.S | re.I),
+        re.compile(r"create\s+table\s+(?:if\s+not\s+exists\s+)?" + table
+                   + r"\s*\([^;]*?" + _CHECK_IN, re.S | re.I),
     )
     for path in sorted(MIGRATIONS.glob("*.sql"), reverse=True):
         text = path.read_text(encoding="utf-8")

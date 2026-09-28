@@ -5,10 +5,11 @@ import { BreachConsole } from "./components/BreachConsole";
 import { ConsentAgentView } from "./ConsentAgentView";
 import { DsrConsole } from "./components/DsrConsole";
 import { LoginScreen } from "./components/LoginScreen";
+import { PurposeConsole } from "./components/PurposeConsole";
 import { RegWatchConsole } from "./components/RegWatchConsole";
 import { RopaDashboard } from "./components/RopaDashboard";
 
-type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch";
+type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch" | "purpose";
 
 /**
  * Shell around the five agents. Agent 1's UI is unchanged -- it moved verbatim
@@ -108,6 +109,12 @@ export default function App() {
             >
               Regulatory Watch
             </button>
+            <button
+              className={agent === "purpose" ? "active" : ""}
+              onClick={() => setAgent("purpose")}
+            >
+              Purpose
+            </button>
           </nav>
           <span className="session-user">
             {profile.email}
@@ -122,6 +129,7 @@ export default function App() {
       {agent === "dsr" && <DsrConsole />}
       {agent === "breach" && <BreachConsole />}
       {agent === "regwatch" && <RegWatchConsole />}
+      {agent === "purpose" && <PurposeConsole />}
     </div>
   );
 }

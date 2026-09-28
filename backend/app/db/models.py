@@ -1402,3 +1402,90 @@ class RegWatchAction(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# -- Purpose Classifier (migration 0025) -----------------------------------------
+
+
+class PurposeRun(Base):
+    """One execution of the Purpose Classifier.
+
+    `error` is also used for a NOTE on a run that completed: most often that no
+    declared purposes were available, so every comparison came back undetermined for
+    a reason that has nothing to do with the data. A run that could not compare
+    anything looks identical to one where everything agreed unless it says so.
+    """
+
+    __tablename__ = "purpose_runs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    scan_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("consent_scans.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="queued")
+    assessments_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    findings_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PurposeAssessment(Base):
+    """One declared-vs-observed comparison.
+
+    `subject_ref` carries no foreign key on purpose: the tracker or table it names may
+    be re-scanned and replaced, and an assessment has to survive as the record of what
+    was true when it was made.
+    """
+
+    __tablename__ = "purpose_assessments"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    subject_type: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    declared_purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
+    declared_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observed_purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observed_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # aligned | mismatch | undetermined. `undetermined` is a real answer, never a
+    # degraded one -- see agents/purpose/rules/reconciliation.py.
+    alignment: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Numeric(3, 2), nullable=False, default=0)
+    retention_status: Mapped[str] = mapped_column(Text, nullable=False, default="not_evaluated")
+    retention_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_refs: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    scan_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("consent_scans.id"), nullable=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PurposeFinding(Base):
+    """The subset of assessments worth a person's attention.
+
+    `decided_by_user_id` is a plain UUID, not a ForeignKey: this branch's models carry
+    no `User` class, and an ORM relationship to a model that does not exist fails at
+    mapper-configuration time -- which breaks every unrelated query in the process.
+    """
+
+    __tablename__ = "purpose_findings"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("purpose_assessments.id"), nullable=False)
+    finding_type: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+

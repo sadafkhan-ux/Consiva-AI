@@ -95,14 +95,32 @@ def test_a_job_can_be_cancelled():
     """queue.cancel_jobs_for_scan writes status='cancelled', which the original CHECK
     did not permit. Distinct from 'failed' on purpose: a cancelled job is not an error
     and must not be counted as one."""
-    pattern = re.compile(r"check\s*\(\s*status\s+in\s*\((.*?)\)\s*\)", re.S | re.I)
+    # Anchored to agent_jobs. The first version of this searched for ANY
+    # `check (status in (...))` in any migration, newest file first, and assumed the
+    # first hit was this table's -- it never named agent_jobs at all. That held only
+    # while no later migration happened to define a status CHECK, and stopped holding
+    # the moment one did: 0025 creates purpose_findings with
+    # `status ... check (status in ('pending','approved','rejected','dismissed'))`,
+    # and this test began asserting things about the purpose findings table while
+    # reporting them as agent_jobs.
+    #
+    # `[^;]*?` keeps each match inside one statement, so a CHECK belonging to the next
+    # CREATE in the same file cannot be attributed to this one either.
+    check_in = r"check\s*\(\s*status\s+in\s*\((.*?)\)\s*\)"
+    patterns = (
+        re.compile(r"alter\s+table\s+agent_jobs\b[^;]*?" + check_in, re.S | re.I),
+        re.compile(r"create\s+table\s+(?:if\s+not\s+exists\s+)?agent_jobs\s*\([^;]*?"
+                   + check_in, re.S | re.I),
+    )
     for path in sorted(MIGRATIONS.glob("*.sql"), reverse=True):
-        match = pattern.search(path.read_text(encoding="utf-8"))
-        if match:
-            statuses = set(re.findall(r"'([a-z_]+)'", match.group(1)))
-            assert "cancelled" in statuses, f"agent_jobs.status cannot be 'cancelled': {sorted(statuses)}"
-            assert "failed" in statuses, "cancelled must be in ADDITION to failed, not instead of it"
-            return
+        text = path.read_text(encoding="utf-8")
+        for pattern in patterns:
+            match = pattern.search(text)
+            if match:
+                statuses = set(re.findall(r"'([a-z_]+)'", match.group(1)))
+                assert "cancelled" in statuses, f"agent_jobs.status cannot be 'cancelled': {sorted(statuses)}"
+                assert "failed" in statuses, "cancelled must be in ADDITION to failed, not instead of it"
+                return
     raise AssertionError("no migration defines a CHECK on agent_jobs.status")
 
 
