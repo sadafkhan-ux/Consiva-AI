@@ -18,10 +18,11 @@ uses (core/security.get_current_user), so tenancy behaves identically.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.ropa.connectors.base import registered_connectors
@@ -115,7 +116,38 @@ class EvidenceIngest(SourcePayload):
 
 class IntegrationKeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    expires_at: datetime | None = None
+    expires_at: datetime | None = Field(
+        default=None,
+        description="When the key stops working. Null means it does not expire -- "
+                    "which is the point of a service key, and why revoking one has to "
+                    "stay possible.",
+    )
+    scopes: list[str] | None = Field(
+        default=None,
+        description="What this key may do. Defaults to ['evidence:write'] (the ROPA "
+                    "adapter). Use ['consent:scan'] for a key that drives the Consent "
+                    "Agent's integration API.",
+    )
+
+    @field_validator("scopes")
+    @classmethod
+    def _known_scopes(cls, value: list[str] | None) -> list[str] | None:
+        """Refuse an unrecognised scope at mint time.
+
+        A typo'd scope is stored happily and then matches nothing, so the key fails
+        every request with a 403 that names a scope the operator believes they granted.
+        Failing here, once, with the valid list in hand, is the cheaper place to find
+        out.
+        """
+        if value is None:
+            return None
+        unknown = sorted(set(value) - set(integration_auth.KNOWN_SCOPES))
+        if unknown:
+            raise ValueError(
+                f"unknown scope(s) {unknown}; valid scopes are "
+                f"{list(integration_auth.KNOWN_SCOPES)}"
+            )
+        return value
 
 
 class IntegrationKeyCreated(BaseModel):
@@ -124,6 +156,32 @@ class IntegrationKeyCreated(BaseModel):
     key_prefix: str
     api_key: str = Field(description="Shown ONCE. Never retrievable again -- store it now.")
     scopes: list[str]
+
+
+class IntegrationKeySummary(BaseModel):
+    """A key as it can safely be shown afterwards.
+
+    Deliberately has no `api_key` field and never could: only a SHA-256 hash was
+    stored, so the key is unrecoverable by design rather than by omission. The prefix
+    distinguishes two keys without being usable as one.
+    """
+
+    id: uuid.UUID
+    name: str
+    key_prefix: str
+    scopes: list[str]
+    enabled: bool
+    created_at: datetime
+    last_used_at: datetime | None = Field(
+        default=None,
+        description="Null means this key has never authenticated a request -- which "
+                    "usually means an integration that was configured and then never "
+                    "finished, and a credential that can be revoked at no cost.",
+    )
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = Field(
+        default=None, description="Set means the key is permanently dead."
+    )
 
 
 class RunResponse(BaseModel):
@@ -229,7 +287,7 @@ async def create_integration_key(
     full_key, prefix, key_hash = integration_auth.generate_key()
     row = RopaIntegrationKey(
         org_id=uuid.UUID(user.org_id), name=payload.name, key_prefix=prefix, key_hash=key_hash,
-        scopes=["evidence:write"], expires_at=payload.expires_at,
+        scopes=list(payload.scopes or ["evidence:write"]), expires_at=payload.expires_at,
         created_by_user_id=uuid.UUID(user.user_id),
     )
     db.add(row)
@@ -242,6 +300,88 @@ async def create_integration_key(
     await db.commit()
     return IntegrationKeyCreated(
         id=row.id, name=row.name, key_prefix=prefix, api_key=full_key, scopes=list(row.scopes)
+    )
+
+
+@router.get("/integration-keys", response_model=list[IntegrationKeySummary])
+async def list_integration_keys(
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> list[IntegrationKeySummary]:
+    """Every service key issued for this organisation.
+
+    Exists because a key that does not expire has to be ACCOUNTABLE instead: somebody
+    must be able to answer "what credentials can reach our data, and is each one still
+    being used". Without this the only answer was a query against the database.
+
+    The key itself is not here and cannot be -- only its hash was ever stored. The
+    prefix is enough to tell two keys apart and is safe to display; `last_used_at` is
+    what tells you a key is dormant and can be revoked.
+    """
+    rows = (await db.execute(
+        select(RopaIntegrationKey)
+        .where(RopaIntegrationKey.org_id == uuid.UUID(user.org_id))
+        .order_by(RopaIntegrationKey.created_at.desc())
+    )).scalars().all()
+    return [
+        IntegrationKeySummary(
+            id=r.id, name=r.name, key_prefix=r.key_prefix, scopes=list(r.scopes or []),
+            enabled=r.enabled, created_at=r.created_at, last_used_at=r.last_used_at,
+            expires_at=r.expires_at, revoked_at=r.revoked_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post("/integration-keys/{key_id}/revoke", response_model=IntegrationKeySummary)
+async def revoke_integration_key(
+    key_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> IntegrationKeySummary:
+    """Stop a service key working, permanently.
+
+    THE REASON A NON-EXPIRING KEY IS ALLOWED TO EXIST AT ALL
+
+    A credential with no expiry is only acceptable while it can be withdrawn the moment
+    it is suspected. Until this endpoint existed, a key could be minted and never
+    turned off except by editing the database by hand -- which means in practice it
+    would not have been turned off.
+
+    Requires a human session, for the same reason minting does: a key must not be able
+    to revoke another key, or an attacker holding one could disable the monitoring that
+    would catch them.
+
+    Revoking is deliberately not deleting. The row stays, so the audit trail and
+    `last_used_at` still answer what that credential did and when it stopped.
+    """
+    row = (await db.execute(
+        select(RopaIntegrationKey).where(
+            RopaIntegrationKey.id == key_id,
+            RopaIntegrationKey.org_id == uuid.UUID(user.org_id),
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        # 404 rather than 403 for a key belonging to another organisation: the API does
+        # not confirm that an id it will not show you exists.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"Integration key {key_id} not found")
+
+    if row.revoked_at is None:
+        row.revoked_at = datetime.now(UTC)
+        row.enabled = False
+        await audit_repository.record(
+            db, org_id=uuid.UUID(user.org_id), actor_user_id=uuid.UUID(user.user_id),
+            action="ropa_integration_key.revoked", entity_type="ropa_integration_key",
+            entity_id=row.id, before={"enabled": True},
+            after={"name": row.name, "key_prefix": row.key_prefix, "enabled": False},
+        )
+        await db.commit()
+        await db.refresh(row)
+
+    return IntegrationKeySummary(
+        id=row.id, name=row.name, key_prefix=row.key_prefix, scopes=list(row.scopes or []),
+        enabled=row.enabled, created_at=row.created_at, last_used_at=row.last_used_at,
+        expires_at=row.expires_at, revoked_at=row.revoked_at,
     )
 
 

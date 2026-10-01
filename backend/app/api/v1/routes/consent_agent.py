@@ -35,7 +35,13 @@ from app.api.v1.schemas.consent_agent import (
 )
 from app.config import get_settings
 from app.core.exceptions import ConsivaError, NotFoundError, RateLimitExceededError
-from app.core.security import CurrentUser, get_current_user
+# `get_caller`, not `get_current_user`: these endpoints accept either a signed-in
+# person or a long-lived service key, because a website integration cannot re-enter a
+# password every twelve hours and a login token that never expired would be a password
+# nobody could rotate. Both paths produce the same CurrentUser, so nothing below reads
+# the caller differently. See core/integration_auth.get_caller.
+from app.core.integration_auth import get_caller
+from app.core.security import CurrentUser
 from app.db.session import get_db
 from app.jobs import queue
 from app.services import (
@@ -142,7 +148,7 @@ async def create_scan(
         description="Opaque caller-chosen string, unique per intended scan. Scoped to "
                     "your organisation.",
     ),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> CreateScanResponse:
     org_id = uuid.UUID(user.org_id)
@@ -252,7 +258,7 @@ async def list_scans(
         description="Filter by the SCAN's stored state (pending, running, completed, "
                     "failed, cancelled).",
     ),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> ScanListResponse:
     rows, total = await api_service.list_scans(
@@ -275,7 +281,7 @@ async def list_scans(
 )
 async def get_scan_status(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> ScanStatusResponse:
     scan = await _load_scan(db, scan_id, user)
@@ -294,7 +300,7 @@ async def get_scan_status(
 )
 async def get_scan_result(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> ScanResultResponse:
     scan = await _load_scan(db, scan_id, user)
@@ -314,7 +320,7 @@ async def get_scan_result(
 )
 async def get_scan_findings(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> FindingsResponse:
     scan = await _load_scan(db, scan_id, user)
@@ -334,7 +340,7 @@ async def get_scan_findings(
 )
 async def get_scan_summary(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> SummaryResponse:
     scan = await _load_scan(db, scan_id, user)
@@ -355,7 +361,7 @@ async def get_scan_summary(
 )
 async def cancel_scan(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> CancelResponse:
     scan = await _load_scan(db, scan_id, user)

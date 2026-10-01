@@ -51,6 +51,12 @@ class CurrentUser:
     # Present on Consiva-issued tokens; None for a legacy Supabase token, which
     # carries no role. Callers that gate on role must treat None as "not admin".
     role: str | None = None
+    # Set only when the caller authenticated with a SERVICE KEY rather than a login
+    # (see core/integration_auth.get_caller). `user_id` then names the person who
+    # minted that key, so attribution still points at a human; this says which
+    # integration acted on their behalf, which "a human did it" alone would lose.
+    # None means a person was really at the keyboard.
+    key_name: str | None = None
 
 
 def get_current_user(

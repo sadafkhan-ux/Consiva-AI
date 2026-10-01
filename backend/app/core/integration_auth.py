@@ -21,6 +21,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings, get_settings
+from app.core.security import CurrentUser, get_current_user
 from app.db.models import RopaIntegrationKey
 from app.db.session import apply_org_scope, get_db
 
@@ -136,3 +138,70 @@ def require_scope(principal: IntegrationPrincipal, scope: str) -> None:
             status.HTTP_403_FORBIDDEN,
             f"Integration key {principal.name!r} lacks the required scope {scope!r}",
         )
+
+
+# ── Accepting either a person or a service on the same endpoint ─────────────────
+
+#: Scope a service key needs to drive the Consent Agent's integration API.
+SCOPE_CONSENT_SCAN = "consent:scan"
+
+#: Every scope a key may be granted. Enumerated so a typo at mint time is refused
+#: rather than stored as a scope that can never match anything.
+KNOWN_SCOPES = ("evidence:write", SCOPE_CONSENT_SCAN)
+
+
+async def get_caller(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CurrentUser:
+    """Authenticate a request from EITHER a signed-in person or a service key.
+
+    WHY BOTH ON ONE ENDPOINT
+
+    A login token is a person's credential and expires in twelve hours by design. That
+    is correct for a console and useless for a website calling this API on a schedule:
+    the integration would break every night, and the obvious workaround -- a token that
+    never expires -- is a password that can never be rotated or revoked.
+
+    A service key is the answer the codebase already had, used until now only by the
+    ROPA adapter: long-lived, revocable, org-scoped, stored as a hash, and granted
+    named scopes. This lets the Consent Agent's endpoints take one too, without
+    changing their signatures or how they read the caller.
+
+    ATTRIBUTION
+
+    The returned `user_id` is the person who MINTED the key, not a synthetic identity.
+    They authorised the integration, so a scan it runs is genuinely attributable to
+    them, and the audit trail keeps pointing at a human. `key_name` carries which key
+    was used, so "which integration did this" stays answerable too.
+
+    A key is tried only when the credential looks like one (`csv_` namespace). A bearer
+    token that does not is passed to the normal user path, so nothing about existing
+    callers changes.
+    """
+    if credentials is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
+
+    presented = credentials.credentials
+    if parse_prefix(presented) is None:
+        # Not a service key. Verify it as a user token exactly as before -- including
+        # raising that module's 401, so a bad token gets one answer and not two.
+        return get_current_user(credentials=credentials, settings=settings)
+
+    principal = await resolve_integration_key(db, presented)
+    if principal is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or revoked integration key")
+    require_scope(principal, SCOPE_CONSENT_SCAN)
+
+    row = (await db.execute(
+        select(RopaIntegrationKey).where(RopaIntegrationKey.id == principal.key_id)
+    )).scalar_one()
+
+    await apply_org_scope(db, principal.org_id)
+    return CurrentUser(
+        user_id=str(row.created_by_user_id) if row.created_by_user_id else str(principal.key_id),
+        org_id=principal.org_id,
+        role=None,          # a key is never an admin; role-gated routes stay closed to it
+        key_name=principal.name,
+    )
