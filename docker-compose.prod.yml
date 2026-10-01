@@ -99,6 +99,9 @@ services:
       # mapping -- the document then fails to load entirely and `docker compose`
       # refuses every command, including the `down` you reach for to recover.
       APP_ENV: "${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}"
+      # true = no login screen: every visitor is signed in as the oldest user, with
+      # that user's full access. See Settings.open_access in backend/app/config.py.
+      OPEN_ACCESS: ${OPEN_ACCESS:-false}
       # Overrides whatever DATABASE_URL is in backend/.env (still the old Supabase URL,
       # kept there as a commented fallback) -- always point this deployment at the
       # local `db` service instead. See the `db` service comment above.
@@ -259,6 +262,9 @@ services:
         # the backend. Set this only if the API is published on a different public
         # origin than the frontend.
         VITE_API_BASE_URL: ${VITE_API_BASE_URL-}
+        # Must match the backend's OPEN_ACCESS: a bundle that auto-logs in against a
+        # backend without the endpoint just falls back to the login form.
+        VITE_OPEN_ACCESS: ${OPEN_ACCESS:-false}
     image: consiva-frontend:latest
     restart: unless-stopped
     ports:

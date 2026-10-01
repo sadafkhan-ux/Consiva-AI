@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AUTH_BYPASSED, autoLogin, getProfile, logout, type Profile } from "./api/auth";
+import { AUTH_BYPASSED, OPEN_ACCESS, autoLogin, getProfile, logout, type Profile } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
 import { BreachConsole } from "./components/BreachConsole";
 import { ConsentAgentView } from "./ConsentAgentView";
@@ -27,14 +27,20 @@ export default function App() {
   useEffect(() => {
     // A 401 from any request means the token died mid-session; drop straight
     // back to the login screen instead of leaving a broken console on screen.
-    setUnauthorizedHandler(() => setProfile(null));
+    // With auto-login on, clearing the attempt makes the effect below sign in again,
+    // so an expired token renews itself instead of showing a form.
+    setUnauthorizedHandler(() => {
+      logout();
+      setProfile(null);
+      setAutoLoginTried(false);
+    });
     return () => setUnauthorizedHandler(null);
   }, []);
 
   useEffect(() => {
-    // Development only. `AUTH_BYPASSED` is `import.meta.env.DEV`, which Vite replaces
-    // with a literal `false` in a production build -- so this whole effect is removed
-    // from the bundle rather than merely never running.
+    // Development, or a build made with VITE_OPEN_ACCESS=true. Vite replaces
+    // `AUTH_BYPASSED` with a literal, so in any other production build this whole
+    // effect is removed from the bundle rather than merely never running.
     if (!AUTH_BYPASSED || profile || autoLoginTried) return;
     setAutoLoginTried(true);
     autoLogin()
@@ -65,10 +71,21 @@ export default function App() {
         // exactly like one that authenticated, and the difference matters the moment
         // anybody screenshots it or points it at something real.
         <div className="banner banner-warn" style={{ margin: "8px 12px 0" }}>
-          <strong>Login bypassed — development build.</strong> Signed in as{" "}
-          <span className="mono">{profile.email}</span> with no password. The backend
-          only offers this when <span className="mono">APP_ENV=development</span>; a
-          production build contains no code that asks for it.
+          {OPEN_ACCESS ? (
+            <>
+              <strong>Login bypassed — open access.</strong> Everyone who opens this
+              site is signed in as <span className="mono">{profile.email}</span> with no
+              password (<span className="mono">OPEN_ACCESS=true</span>).
+            </>
+          ) : (
+            <>
+              <strong>Login bypassed — development build.</strong> Signed in as{" "}
+              <span className="mono">{profile.email}</span> with no password. The
+              backend only offers this when{" "}
+              <span className="mono">APP_ENV=development</span> or{" "}
+              <span className="mono">OPEN_ACCESS=true</span>.
+            </>
+          )}
         </div>
       )}
 
@@ -120,7 +137,10 @@ export default function App() {
             {profile.email}
             {profile.role === "admin" && <span className="pill pill-admin">admin</span>}
           </span>
-          <button className="secondary small" onClick={handleSignOut}>Sign out</button>
+          {/* Hidden under auto-login: signing out would only sign straight back in. */}
+          {!AUTH_BYPASSED && (
+            <button className="secondary small" onClick={handleSignOut}>Sign out</button>
+          )}
         </div>
       </header>
 

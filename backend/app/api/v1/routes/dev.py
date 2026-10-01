@@ -64,19 +64,21 @@ async def auto_login(db: AsyncSession = Depends(get_db)) -> dict:
     org scoping, RLS, audit attribution -- behaves exactly as it does for a signed-in
     person, because as far as the rest of the system is concerned, one is.
 
-    THREE THINGS KEEP THIS OUT OF PRODUCTION
-    ----------------------------------------
-    1. `api/v1/router.py` only registers this router when APP_ENV=development, so
-       outside development the path does not exist in the routing table at all.
+    WHEN IT IS AVAILABLE
+    --------------------
+    In development, and on a deployment that sets OPEN_ACCESS=true (a site that is
+    meant to have no login -- see Settings.open_access). Nowhere else:
+    1. `api/v1/router.py` only registers this router under that same condition, so
+       otherwise the path does not exist in the routing table at all.
     2. The check below, as defence in depth against that registration changing.
-    3. The frontend only calls it under Vite's DEV flag, so a production bundle has
-       no code path that reaches it.
+    3. The frontend only calls it in a Vite dev build or a build made with
+       VITE_OPEN_ACCESS=true; any other production bundle has no code that reaches it.
 
     404, not 403, for the same reason the demo-token route above uses 404: a 403
     confirms the endpoint is there.
     """
     settings = get_settings()
-    if settings.app_env != "development":
+    if not settings.auto_login_enabled:
         raise HTTPException(status_code=404)
 
     # A real row, so the token carries a real org and the console shows real data.
@@ -119,7 +121,7 @@ async def auto_login(db: AsyncSession = Depends(get_db)) -> dict:
         # shows is reading a fact rather than repeating an assumption.
         "auth_bypassed": True,
         "note": (
-            "Development auto-login: no password was checked. This endpoint does not "
-            "exist when APP_ENV is anything but development."
+            "Auto-login: no password was checked. This endpoint exists only when "
+            "APP_ENV=development or OPEN_ACCESS=true."
         ),
     }

@@ -99,11 +99,13 @@ export async function login(email: string, password: string): Promise<Profile> {
   return profile;
 }
 
-/** Whether the login form is skipped. Vite replaces `import.meta.env.DEV` with a
- *  literal at build time, so in a production bundle this is `false` and every branch
- *  below it is removed by the minifier -- the request is not merely unreachable, the
- *  code for it is not in the file. */
-export const AUTH_BYPASSED = import.meta.env.DEV;
+/** Whether this build signs in on its own instead of showing the login form.
+ *  Vite replaces both operands with literals at build time, so in a production bundle
+ *  built without VITE_OPEN_ACCESS=true this is `false` and every branch below it is
+ *  removed by the minifier -- the request is not merely unreachable, the code for it
+ *  is not in the file. */
+export const OPEN_ACCESS = import.meta.env.VITE_OPEN_ACCESS === "true";
+export const AUTH_BYPASSED = import.meta.env.DEV || OPEN_ACCESS;
 
 /** Sign in with no password, for local testing.
  *
@@ -113,9 +115,9 @@ export const AUTH_BYPASSED = import.meta.env.DEV;
  *  security, audit attribution -- behaves as it does for a signed-in person, because
  *  the token is the same shape. What is skipped is the form, not the mechanism.
  *
- *  The endpoint returns 404 unless the backend is running with APP_ENV=development,
- *  so this fails cleanly against any other deployment and the caller falls back to
- *  showing the login screen. */
+ *  The endpoint returns 404 unless the backend runs with APP_ENV=development or
+ *  OPEN_ACCESS=true, so this fails cleanly against any other deployment and the
+ *  caller falls back to showing the login screen. */
 export async function autoLogin(): Promise<Profile> {
   let res: Response;
   try {
@@ -130,7 +132,7 @@ export async function autoLogin(): Promise<Profile> {
       body && typeof body.detail === "string"
         ? body.detail
         : res.status === 404
-          ? "Auto-login is unavailable: the backend is not running in development mode."
+          ? "Auto-login is unavailable: the backend has neither APP_ENV=development nor OPEN_ACCESS=true."
           : "Auto-login failed.";
     throw new ApiError(res.status, detail);
   }

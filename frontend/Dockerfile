@@ -30,6 +30,11 @@ COPY . .
 ARG VITE_API_BASE_URL=""
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
+# "true" builds a bundle that signs every visitor in with no login screen (see
+# OPEN_ACCESS in backend/app/config.py). Anything else leaves that code out entirely.
+ARG VITE_OPEN_ACCESS="false"
+ENV VITE_OPEN_ACCESS=$VITE_OPEN_ACCESS
+
 # The project's real build script: "tsc -b && vite build" -> outputs to dist/
 RUN npm run build
 

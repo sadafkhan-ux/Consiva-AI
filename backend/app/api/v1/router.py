@@ -37,9 +37,10 @@ api_router.include_router(incidents.router)
 api_router.include_router(regwatch.router)
 api_router.include_router(purpose.router)
 
-# Registered ONLY in development -- outside it the route doesn't exist in FastAPI's
-# routing table at all (natural 404), rather than existing and relying solely on the
-# handler's own app_env check never having a bug. The handler-level check stays too,
-# as defense in depth for the development environment itself.
-if get_settings().app_env == "development":
+# Registered ONLY in development or with OPEN_ACCESS on (see Settings.open_access) --
+# otherwise the route doesn't exist in FastAPI's routing table at all (natural 404),
+# rather than existing and relying solely on the handlers' own checks never having a
+# bug. Those checks stay too: auto-login re-checks the same condition, and demo-token
+# stays development-only even when this router is registered for open access.
+if get_settings().auto_login_enabled:
     api_router.include_router(dev.router)

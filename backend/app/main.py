@@ -41,8 +41,11 @@ app.include_router(api_router)
 # requests from arbitrary localhost ports, so nothing here weakens it.
 _settings = get_settings()
 if _settings.app_env == "development":
+    # The explicit allow-list is honoured here too: a deployment running with
+    # APP_ENV=development would otherwise silently ignore CORS_ALLOWED_ORIGINS.
     app.add_middleware(
         CORSMiddleware,
+        allow_origins=_settings.cors_origin_list,
         allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
         allow_credentials=True,
         allow_methods=["*"],

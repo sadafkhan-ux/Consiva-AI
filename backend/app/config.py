@@ -179,6 +179,18 @@ class Settings(BaseSettings):
     app_env: str
     log_level: str = "INFO"
 
+    # OPEN ACCESS: no login screen, in any environment.
+    # When true, POST /api/v1/dev/auto-login signs every visitor in as the oldest user
+    # in the database, with no password. Anyone who can reach the URL gets that user's
+    # full access. Chosen deliberately for consiva-agent.gignati.com; leave it false on
+    # any deployment holding data that must not be public. The frontend reads the same
+    # switch at build time (VITE_OPEN_ACCESS, passed by docker-compose.prod.yml).
+    open_access: bool = False
+
+    @property
+    def auto_login_enabled(self) -> bool:
+        return self.app_env == "development" or self.open_access
+
     @property
     def psycopg_database_url(self) -> str:
         """`database_url` uses SQLAlchemy's `postgresql+asyncpg://` driver syntax —

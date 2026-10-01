@@ -26,11 +26,32 @@ function riskColor(level: string) {
   return RISK_COLORS[level.toLowerCase()] ?? MUTED;
 }
 
-/** jsPDF is imported dynamically so its ~150kB never enters the initial bundle -- the
- *  library is only fetched the first time someone actually asks for the PDF, which
- *  keeps the cost of this feature at zero for every scan that isn't downloaded. */
+/** jsPDF (~400kB) stays in its own chunk so it never delays the first render, but the
+ *  fetch starts as soon as this module loads instead of on the first click.
+ *
+ *  Waiting for the click broke the download after every redeploy: a tab opened before
+ *  it still ran the old bundle, which asked for a chunk hash the new build no longer
+ *  has, and nginx answered 404. Loaded up front, the library is already in memory by
+ *  then. A reload would also have fixed it, but it throws away the scan on screen --
+ *  nothing persists it -- which is the very thing being downloaded.
+ *
+ *  If this early fetch fails (offline, blocked), the click retries it once. */
+let jsPdfModule = import("jspdf");
+jsPdfModule.catch(() => {
+  // Handled at click time; this only stops an "unhandled rejection" in the console.
+});
+
+async function loadJsPdf() {
+  try {
+    return await jsPdfModule;
+  } catch {
+    jsPdfModule = import("jspdf");
+    return jsPdfModule;
+  }
+}
+
 export async function downloadReport(model: ReportModel): Promise<void> {
-  const { jsPDF } = await import("jspdf");
+  const { jsPDF } = await loadJsPdf();
   const doc = new jsPDF({ unit: "pt", format: "a4", compress: true });
   let y = M;
 
