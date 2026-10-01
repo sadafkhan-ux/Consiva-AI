@@ -17,7 +17,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.purpose.connectors import rest, structured
@@ -154,7 +154,8 @@ async def execute_job(payload: dict) -> None:
 
 async def execute_source(run_id: uuid.UUID, org_id: uuid.UUID, payload: dict) -> None:
     """Assess a structured data source: read its shape, classify, compare."""
-    await _mark_running(run_id)
+    if not await _mark_running(run_id):
+        return
     try:
         connector = payload["connector"]
         source_name = payload["source_name"]
@@ -240,13 +241,51 @@ def _with_retention(assessment, item):
     return assessment
 
 
-async def _mark_running(run_id: uuid.UUID) -> None:
+async def _mark_running(run_id: uuid.UUID) -> bool:
+    """Claim a run for execution. False means it has already been done -- do not re-run.
+
+    A queued job is retried up to three times (jobs/queue.py), and `reap_stale_jobs`
+    requeues one whose worker died. So a run CAN be handed to execution twice: once
+    after writing its assessments but before the status commit landed, and once again
+    on the retry. Nothing checked for that, and the result is silent duplication --
+    every assessment and every finding written a second time, with `assessments_count`
+    still reporting one pass.
+
+    It is not theoretical. Seeding demo data executed a job inline while the worker
+    also picked it up from the queue, and five runs came back with exactly twice the
+    rows their own count field claimed. In production a compliance reviewer would see
+    each finding twice and have no way to tell which was real.
+
+    So: a run that already COMPLETED is left alone, and a run that was mid-flight has
+    its partial output cleared before the retry writes again. Either way the run ends
+    with exactly one set of rows.
+    """
     async with async_session_factory() as db:
         run = await db.get(PurposeRun, run_id)
-        if run is not None:
-            run.status = "running"
-            run.started_at = datetime.now(UTC)
-            await db.commit()
+        if run is None:
+            return False
+        if run.status == "completed":
+            logger.info(
+                "purpose: run %s is already completed; not re-running it. The queued "
+                "job was delivered twice.", run_id,
+            )
+            return False
+
+        # A previous attempt may have written rows before failing. Findings go first:
+        # they reference assessments.
+        await db.execute(delete(PurposeFinding).where(
+            PurposeFinding.assessment_id.in_(
+                select(PurposeAssessment.id).where(PurposeAssessment.run_id == run_id)
+            )
+        ))
+        await db.execute(delete(PurposeAssessment).where(PurposeAssessment.run_id == run_id))
+
+        run.status = "running"
+        run.started_at = datetime.now(UTC)
+        run.assessments_count = 0
+        run.findings_count = 0
+        await db.commit()
+        return True
 
 
 async def _mark_failed(run_id: uuid.UUID, exc: Exception) -> None:
@@ -262,14 +301,11 @@ async def _mark_failed(run_id: uuid.UUID, exc: Exception) -> None:
 
 async def execute(run_id: uuid.UUID, org_id: uuid.UUID, scan_id: uuid.UUID) -> None:
     """Assess a consent scan's evidence."""
-    async with async_session_factory() as db:
-        run = await db.get(PurposeRun, run_id)
-        if run is None:
-            logger.warning("purpose run %s no longer exists; nothing to do", run_id)
-            return
-        run.status = "running"
-        run.started_at = datetime.now(UTC)
-        await db.commit()
+    # Claimed through the same helper as the source path. This used to open-code the
+    # status update, which meant it carried the identical double-execution gap and
+    # would have had to be fixed twice.
+    if not await _mark_running(run_id):
+        return
 
     try:
         async with async_session_factory() as db:

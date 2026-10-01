@@ -725,3 +725,62 @@ def test_over_inclusion_is_still_allowed_in_the_safe_direction():
 
 def test_a_table_of_codes_is_not_assessed_at_all():
     assert holds_personal_data(_table("currency_code", "rate", "updated_at")) == []
+
+
+# ── A run must execute exactly once ─────────────────────────────────────────────
+#
+# Queued jobs retry up to three times, and reap_stale_jobs requeues one whose worker
+# died. So a run CAN reach execution twice -- once after writing its assessments but
+# before the status commit landed, and again on the retry.
+#
+# Measured, not imagined: seeding demo data executed a job inline while the worker also
+# claimed it from the queue, and five runs ended with exactly twice the rows their own
+# assessments_count claimed. A reviewer would see every finding duplicated with no way
+# to tell which was real.
+
+def test_claiming_a_run_refuses_a_second_execution():
+    """`_mark_running` returns False for a run that already completed, and both entry
+    points return immediately on False rather than writing a second set of rows."""
+    import inspect
+
+    from app.services import purpose_run_service as svc
+
+    claim = inspect.getsource(svc._mark_running)
+    assert 'run.status == "completed"' in claim
+    assert "return False" in claim
+
+    for entry in (svc.execute_source, svc.execute):
+        body = inspect.getsource(entry)
+        assert "if not await _mark_running(run_id):" in body, entry.__name__
+        assert "return" in body
+
+
+def test_a_retried_run_clears_what_the_failed_attempt_wrote():
+    """A crash mid-write leaves partial rows. The retry must replace them, not add to
+    them -- otherwise the guard above only moves the duplication one state earlier."""
+    import inspect
+
+    claim = inspect.getsource(
+        __import__("app.services.purpose_run_service", fromlist=["x"])._mark_running
+    )
+    assert "delete(PurposeFinding)" in claim
+    assert "delete(PurposeAssessment)" in claim
+    # Findings reference assessments, so they have to go first.
+    assert claim.index("delete(PurposeFinding)") < claim.index("delete(PurposeAssessment)")
+    # And the counters are reset, or the run reports the old numbers over new rows.
+    assert "assessments_count = 0" in claim
+    assert "findings_count = 0" in claim
+
+
+def test_both_paths_claim_through_the_same_helper():
+    """The scan path used to open-code the status update, which meant it carried the
+    identical gap and would have had to be fixed twice."""
+    import inspect
+
+    from app.services import purpose_run_service as svc
+
+    body = inspect.getsource(svc.execute)
+    assert 'run.status = "running"' not in body, (
+        "the scan path is setting status itself again instead of claiming through "
+        "_mark_running -- the double-execution guard lives in the helper"
+    )
