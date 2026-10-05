@@ -95,10 +95,8 @@ class Settings(BaseSettings):
     # Scanner
     scanner_headless: bool = True
     # Pages FETCHED in the pre_consent crawl. Robots-disallowed and duplicate-spelling
-    # URLs do not spend it (crawler._crawl_full_site). 25 was the old default and the
-    # effective ceiling on every deployment that never overrode it; 100 matches what
-    # docker-compose deployments already ran with.
-    scanner_max_pages: int = 100
+    # URLs do not spend it (crawler._crawl_full_site).
+    scanner_max_pages: int = 25
     scanner_timeout_seconds: int = 30
     scanner_user_agent: str = "ConsivaConsentAgent/0.1"
     scanner_max_scans_per_org_per_day: int = 50
