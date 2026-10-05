@@ -28,6 +28,7 @@ ChangeType = Literal[
     "new_table",
     "new_field",
     "deleted_field",
+    "removed_table",
     "changed_field",
     "changed_data_type",
     "new_personal_data_category",

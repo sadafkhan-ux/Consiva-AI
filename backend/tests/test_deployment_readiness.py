@@ -141,20 +141,22 @@ def test_the_ssrf_check_runs_at_delivery_not_only_at_registration():
 
 # ── Authentication bypass ───────────────────────────────────────────────────────
 
-def test_the_auto_login_router_is_only_registered_in_development():
+def test_the_auto_login_router_is_only_registered_when_auto_login_is_enabled():
+    """Development, or a deployment that set OPEN_ACCESS=true -- see
+    Settings.auto_login_enabled."""
     from app.api.v1 import router as api_router_module
     body = inspect.getsource(api_router_module)
-    assert 'if get_settings().app_env == "development":' in body
+    assert "if get_settings().auto_login_enabled:" in body
     assert "api_router.include_router(dev.router)" in body
 
 
-def test_the_auto_login_handler_checks_the_environment_itself():
+def test_the_auto_login_handler_checks_the_condition_itself():
     """Defence in depth: if the registration above is ever loosened, this still
     refuses -- and answers 404 rather than 403, so the endpoint's existence is not
     confirmed."""
     from app.api.v1.routes import dev
     body = inspect.getsource(dev.auto_login)
-    assert 'settings.app_env != "development"' in body
+    assert "if not settings.auto_login_enabled:" in body
     assert "HTTPException(status_code=404)" in body
 
 

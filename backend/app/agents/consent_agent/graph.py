@@ -7,6 +7,7 @@ versions; confirm `AsyncPostgresSaver.from_conn_string()` + `.setup()` against t
 version pinned in pyproject.toml on first run (see docs/architecture §P).
 """
 
+import asyncio
 import logging
 from contextlib import AsyncExitStack
 
@@ -78,6 +79,23 @@ logger = logging.getLogger(__name__)
 
 _exit_stack: AsyncExitStack | None = None
 _compiled_graph = None
+# Serialises the first build. The worker runs several jobs concurrently and nothing
+# builds the graph at startup, so without this two analyze jobs starting together
+# both passed the `is not None` check, each opened a checkpointer pool, and the
+# second overwrote `_exit_stack` -- leaking the first pool for the process lifetime.
+# Created lazily and keyed to the running loop: an asyncio.Lock is bound to the loop
+# it is first contended on, and tests (and a restarted lifespan) use fresh loops.
+_build_lock: asyncio.Lock | None = None
+_build_lock_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _get_build_lock() -> asyncio.Lock:
+    global _build_lock, _build_lock_loop
+    loop = asyncio.get_running_loop()
+    if _build_lock is None or _build_lock_loop is not loop:
+        _build_lock = asyncio.Lock()
+        _build_lock_loop = loop
+    return _build_lock
 
 
 async def get_compiled_graph():
@@ -87,15 +105,30 @@ async def get_compiled_graph():
     if _compiled_graph is not None:
         return _compiled_graph
 
-    settings = get_settings()
-    _exit_stack = AsyncExitStack()
-    checkpointer = await _exit_stack.enter_async_context(
-        AsyncPostgresSaver.from_conn_string(settings.psycopg_database_url)
-    )
-    await _ensure_checkpoint_tables(checkpointer)
+    async with _get_build_lock():
+        # Re-checked under the lock: a caller that waited here finds the graph the
+        # first one built, rather than building its own.
+        if _compiled_graph is not None:
+            return _compiled_graph
 
-    _compiled_graph = build_graph().compile(checkpointer=checkpointer)
-    return _compiled_graph
+        settings = get_settings()
+        stack = AsyncExitStack()
+        try:
+            checkpointer = await stack.enter_async_context(
+                AsyncPostgresSaver.from_conn_string(settings.psycopg_database_url)
+            )
+            await _ensure_checkpoint_tables(checkpointer)
+            graph = build_graph().compile(checkpointer=checkpointer)
+        except BaseException:
+            # A failed build must not leave an open pool behind with nothing
+            # referencing it.
+            await stack.aclose()
+            raise
+
+        # Published only once complete, so no caller ever sees a half-built graph.
+        _exit_stack = stack
+        _compiled_graph = graph
+        return _compiled_graph
 
 
 async def _ensure_checkpoint_tables(checkpointer) -> None:

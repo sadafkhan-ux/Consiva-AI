@@ -26,11 +26,12 @@ per step found no site gaining a new third-party host after step 3 while a fixed
 """
 
 import asyncio
+import heapq
+import itertools
 import logging
 import subprocess
 import sys
 import time
-from collections import deque
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import urlparse
@@ -43,7 +44,7 @@ from app.config import Settings, get_settings
 from app.core.exceptions import ScanAuthorizationError, ScanTimeoutError
 from app.rules.tracker_catalog import CMP_CATALOG
 from app.scanner._domain import registered_domain as _registered_domain
-from app.scanner.consent_interactor import click_accept, click_reject
+from app.scanner.consent_interactor import click_accept, click_reject, confirm_interaction_completed
 from app.scanner.consent_signal_detector import detect_consent_signal
 from app.scanner.cookie_detector import detect_cookies
 from app.scanner.form_detector import detect_forms
@@ -58,7 +59,9 @@ from app.scanner.schemas import (
     ScanResult,
     TrackerRecord,
 )
+from app.scanner.sitemap import discover_sitemap_urls
 from app.scanner.tracker_detector import detect_trackers
+from app.scanner.url_normalize import normalize_url, priority
 from app.scanner.url_safety import assert_safe_url
 
 logger = logging.getLogger(__name__)
@@ -203,13 +206,16 @@ async def _guard_navigation(route: Route) -> None:
     await route.continue_()
 
 
-async def _fetch_robots_disallow(context: BrowserContext, root_url: str) -> set[str]:
-    """Best-effort robots.txt fetch for the '*' user-agent group. Not a full RFC-9309
-    parser (no wildcard/pattern matching, no per-agent groups beyond '*') — enough to
-    honor an explicit "don't crawl this path" without pulling in a new dependency."""
+async def _fetch_robots(context: BrowserContext, root_url: str) -> tuple[set[str], list[str]]:
+    """Best-effort robots.txt fetch: (Disallow prefixes for the '*' user-agent group,
+    Sitemap: URLs). Not a full RFC-9309 parser (no wildcard/pattern matching, no
+    per-agent groups beyond '*') — enough to honor an explicit "don't crawl this path"
+    without pulling in a new dependency. `Sitemap:` lines are not group-scoped, so they
+    are collected wherever they appear; sitemap.py re-checks each one's scope."""
     parsed = urlparse(root_url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
     disallowed: set[str] = set()
+    sitemaps: list[str] = []
     try:
         # `context.request` is a standalone API client, not the page-level network
         # stack -- it is NOT intercepted by `_guard_navigation` above, and follows
@@ -230,9 +236,21 @@ async def _fetch_robots_disallow(context: BrowserContext, root_url: str) -> set[
                     path = line.split(":", 1)[1].strip()
                     if path:
                         disallowed.add(path)
+                elif line.lower().startswith("sitemap:"):
+                    sitemap = line.split(":", 1)[1].strip()
+                    if sitemap and sitemap not in sitemaps:
+                        sitemaps.append(sitemap)
     except Exception as exc:  # noqa: BLE001 — robots.txt is best-effort, never fatal
         logger.info("Could not fetch robots.txt for %s: %s", root_url, exc)
-    return disallowed
+    return disallowed, sitemaps
+
+
+def _is_same_site(url: str, site_registered: str) -> bool:
+    """The crawl boundary, for followed links and sitemap entries alike: http(s) on the
+    seed's registered domain. A sitemap is the scanned site's own (untrusted) input,
+    so it gets no wider scope than a link on one of its pages would."""
+    parsed = urlparse(url)
+    return parsed.scheme in ("http", "https") and _registered_domain(parsed.netloc) == site_registered
 
 
 def _is_robots_disallowed(url: str, disallowed_prefixes: set[str]) -> bool:
@@ -436,14 +454,30 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
 
 
 async def _crawl_full_site(
-    context: BrowserContext, root_url: str, settings: Settings, disallowed_prefixes: set[str]
+    context: BrowserContext, root_url: str, settings: Settings, disallowed_prefixes: set[str],
+    sitemap_urls: list[str] | None = None,
 ) -> tuple[list[PageRecord], list[FormRecord], list[CookieRecord], list[TrackerRecord],
            list[PolicyRecord], ConsentSignalRecord, dict]:
     """Pass 1 (pre_consent): the full multi-page crawl and main evidence-gathering pass.
     Fetches up to settings.scanner_max_concurrent_pages pages at once (bounded, not
-    unbounded -- matches the BFS queue's own natural batching), rather than one page at
-    a time. Also returns a diagnostics dict (pages_failed/pages_timeout/scroll steps)
-    for scan-metadata reporting -- never silently dropped, never fabricated."""
+    unbounded -- matches the queue's own natural batching), rather than one page at
+    a time. Also returns a diagnostics dict for scan-metadata reporting -- never
+    silently dropped, never fabricated.
+
+    The page budget (settings.scanner_max_pages) is spent on NAVIGATIONS only:
+      - a robots-disallowed URL is recorded at discovery and never queued, so a
+        restrictive robots.txt no longer shrinks the real crawl;
+      - URLs are keyed on url_normalize.normalize_url, so `/about`, `/about/`,
+        `/about#team` and `/about?utm_source=x` are one entry, not four slots;
+      - the queue is ordered by url_normalize.priority (seed first, then privacy/
+        cookie/legal/form pages ahead of blog noise), FIFO within a priority.
+    `sitemap_urls` (from sitemap.discover_sitemap_urls) are queued alongside the seed
+    under the same same-site rule as a followed link, and recorded as "sitemap".
+
+    The diagnostics keep discovered / attempted / scanned apart: pages_discovered is
+    every distinct same-site URL seen, pages_attempted is what cost a navigation,
+    pages_scanned is what loaded, and pages_not_attempted_budget_exhausted is what was
+    still queued when the budget ran out."""
     site_domain = urlparse(root_url).netloc
     site_registered = _registered_domain(site_domain)
 
@@ -457,35 +491,69 @@ async def _crawl_full_site(
     all_control_text_parts = []
     all_scripts_flat = []
     detected_global_vars: set[str] = set()
-    diagnostics = {"pages_failed": 0, "pages_timeout": 0, "pages_blocked_robots": 0, "total_scroll_steps": 0}
+    budget = settings.scanner_max_pages
+    diagnostics = {
+        "page_limit": budget,
+        "pages_discovered": 0,
+        "pages_attempted": 0,
+        "pages_scanned": 0,
+        "pages_failed": 0,
+        "pages_timeout": 0,
+        "pages_blocked_robots": 0,
+        "pages_skipped_duplicate": 0,
+        "pages_from_sitemap": 0,
+        "pages_not_attempted_budget_exhausted": 0,
+        "total_scroll_steps": 0,
+    }
 
-    queue = deque([root_url])
-    seen_urls = {root_url}
-    page_index = 0
+    # (priority, insertion order, url as first spelled, discovered_via). The insertion
+    # counter keeps it FIFO within a priority and keeps the heap from comparing urls.
+    queue: list[tuple[int, int, str, str]] = []
+    order = itertools.count()
+    seen_keys: set[str] = set()
+    seen_spellings: set[str] = set()
+
+    def _discover(url: str, via: str) -> None:
+        if via != "seed" and not _is_same_site(url, site_registered):
+            return
+        key = normalize_url(url)
+        if key in seen_keys:
+            if url not in seen_spellings:
+                seen_spellings.add(url)
+                diagnostics["pages_skipped_duplicate"] += 1
+            return
+        seen_keys.add(key)
+        seen_spellings.add(url)
+        diagnostics["pages_discovered"] += 1
+        if _is_robots_disallowed(url, disallowed_prefixes):
+            logger.info("Skipping %s (robots.txt disallow)", url)
+            pages.append(PageRecord(
+                local_id=f"page-{len(pages)}", url=url, title=None,
+                http_status=None, discovered_via="robots_disallowed",
+            ))
+            diagnostics["pages_blocked_robots"] += 1
+            return
+        rank = -1 if via == "seed" else priority(url)
+        heapq.heappush(queue, (rank, next(order), url, via))
+        if via == "sitemap":
+            diagnostics["pages_from_sitemap"] += 1
+
+    _discover(root_url, "seed")
+    for url in sitemap_urls or ():
+        _discover(url, "sitemap")
+
     max_concurrent = settings.scanner_max_concurrent_pages
 
-    while queue and page_index < settings.scanner_max_pages:
-        # Build one round: drain robots-disallowed URLs immediately (cheap, synchronous,
-        # no reason to occupy a concurrency slot), collect the rest into a bounded batch.
-        batch: list[str] = []
-        while queue and len(batch) < max_concurrent and page_index + len(batch) < settings.scanner_max_pages:
-            url = queue.popleft()
-            if _is_robots_disallowed(url, disallowed_prefixes):
-                logger.info("Skipping %s (robots.txt disallow)", url)
-                pages.append(PageRecord(
-                    local_id=f"page-{page_index}", url=url, title=None,
-                    http_status=None, discovered_via="robots_disallowed",
-                ))
-                diagnostics["pages_blocked_robots"] += 1
-                page_index += 1
-                continue
-            batch.append(url)
-
-        if not batch:
-            continue
+    while queue and diagnostics["pages_attempted"] < budget:
+        batch: list[tuple[str, str]] = []
+        while queue and len(batch) < max_concurrent and diagnostics["pages_attempted"] + len(batch) < budget:
+            _rank, _n, url, via = heapq.heappop(queue)
+            batch.append((url, via))
 
         try:
-            results = await asyncio.gather(*(_fetch_one_page(context, url, root_url, settings) for url in batch))
+            results = await asyncio.gather(
+                *(_fetch_one_page(context, url, root_url, settings) for url, _via in batch)
+            )
         except _SeedUnreachable as exc:
             # A secondary page's own failure inside the same gather() is recorded as an
             # explicit failed/timeout PageRecord (never raised) rather than propagating
@@ -493,10 +561,10 @@ async def _crawl_full_site(
             raise RuntimeError(
                 f"Could not reach the site at all: {exc.url} after {exc.attempts} attempt(s) ({exc.cause})"
             ) from exc.cause
+        diagnostics["pages_attempted"] += len(batch)
 
-        for url, result in zip(batch, results, strict=True):
-            page_local_id = f"page-{page_index}"
-            page_index += 1
+        for (url, via), result in zip(batch, results, strict=True):
+            page_local_id = f"page-{len(pages)}"
 
             if result["status"] != "success":
                 # Never silently skip: a secondary page that failed after bounded
@@ -509,11 +577,12 @@ async def _crawl_full_site(
                 diagnostics["pages_timeout" if result["status"] == "timeout" else "pages_failed"] += 1
                 continue
 
+            diagnostics["pages_scanned"] += 1
             parsed = result["parsed"]
             detected_global_vars.update(result["global_vars"])
             pages.append(PageRecord(
                 local_id=page_local_id, url=url, title=result["title"], http_status=result["http_status"],
-                discovered_via="seed" if url == root_url else "link",
+                discovered_via=via,
             ))
             forms.extend(detect_forms(page_local_id, parsed.forms))
             scripts_by_page[page_local_id] = parsed.scripts + result["iframe_scripts"]
@@ -538,12 +607,9 @@ async def _crawl_full_site(
             diagnostics["total_scroll_steps"] += result["scroll_steps"]
 
             for link in parsed.links:
-                if (
-                    link.href not in seen_urls
-                    and _registered_domain(urlparse(link.href).netloc) == site_registered
-                ):
-                    seen_urls.add(link.href)
-                    queue.append(link.href)
+                _discover(link.href, "link")
+
+    diagnostics["pages_not_attempted_budget_exhausted"] = len(queue)
 
     raw_cookies = await context.cookies()
     cookies = detect_cookies(raw_cookies, site_domain)
@@ -571,13 +637,16 @@ async def _crawl_single_page_with_interaction(
     disallowed_prefixes: set[str],
     consent_state: str,
     click_fn: Callable[[Page], Awaitable[str]],
-) -> tuple[list[CookieRecord], list[TrackerRecord], str, int]:
+) -> tuple[list[CookieRecord], list[TrackerRecord], str, bool, int]:
     """Pass 2/3 (post_accept / post_reject): homepage only, in a fresh context --
     establish the state (click), collect baseline evidence (settle), scroll (bounded),
     then capture evidence again so trackers that only fire post-scroll are attributed
     to this consent state too, not missed entirely.
 
-    Returns (cookies, trackers, interaction_status, scroll_steps). interaction_status
+    Returns (cookies, trackers, interaction_status, confirmed, scroll_steps).
+    `confirmed` is True only when the click was dispatched AND the banner's control is
+    observably gone afterwards (consent_interactor.confirm_interaction_completed).
+    interaction_status
     is one of the RAW outcomes below -- run_scan() composes these (together with the
     pre_consent consent_signal's mechanism_type) into the final, more specific
     cmp_not_found/cmp_not_automatable distinction surfaced on the ScanResult:
@@ -601,6 +670,7 @@ async def _crawl_single_page_with_interaction(
 
     scripts: list = []
     interaction_status = "page_unreachable"
+    confirmed = False
     scroll_steps = 0
     try:
         _, nav_status, exc, attempts = await _navigate_with_retry(
@@ -618,6 +688,11 @@ async def _crawl_single_page_with_interaction(
                 await browser_page.wait_for_timeout(2000)  # let post-click network activity settle -- separate from
                 # _TRACKER_SETTLE_MS above: this one is conditional on an actual consent decision having just
                 # fired, giving *that* specific action's downstream tag-manager effects time to propagate
+                # "clicked" only means a click was dispatched without raising. Whether it
+                # took effect is a separate observation (consent_interactor's docstring).
+                confirmed = await confirm_interaction_completed(
+                    browser_page, accept=consent_state == "post_accept"
+                )
             scroll_steps = await _progressive_scroll(browser_page, request_count=lambda: len(request_records))
             html = await browser_page.content()
             scripts = parse_page(html, root_url).scripts
@@ -637,7 +712,7 @@ async def _crawl_single_page_with_interaction(
 
     cookies = [c.model_copy(update={"consent_states": [consent_state]}) for c in cookies]
     trackers = [t.model_copy(update={"consent_states": [consent_state]}) for t in trackers]
-    return cookies, trackers, interaction_status, scroll_steps
+    return cookies, trackers, interaction_status, confirmed, scroll_steps
 
 
 def _merge_cookie_pass(base: list[CookieRecord], new: list[CookieRecord]) -> list[CookieRecord]:
@@ -731,7 +806,7 @@ def _final_interaction_status(raw_status: str, mechanism_type: str) -> str:
 async def _run_interaction_pass(
     browser, root_url: str, settings: Settings, disallowed_prefixes: set[str],
     consent_state: str, click_fn: Callable[[Page], Awaitable[str]],
-) -> tuple[list[CookieRecord], list[TrackerRecord], str, int]:
+) -> tuple[list[CookieRecord], list[TrackerRecord], str, bool, int]:
     """Owns one interaction pass's whole context lifecycle (create, route-guard,
     close) so two of these can run concurrently via asyncio.gather() in run_scan()
     without sharing any state -- each gets its own fresh browser context, same as
@@ -758,10 +833,15 @@ async def run_scan(root_url: str, settings: Settings | None = None) -> ScanResul
         try:
             context = await browser.new_context(**_new_context_kwargs(settings))
             await context.route("**/*", _guard_navigation)
-            disallowed_prefixes = await _fetch_robots_disallow(context, root_url)
+            disallowed_prefixes, robots_sitemaps = await _fetch_robots(context, root_url)
+            site_registered = _registered_domain(urlparse(root_url).netloc)
             try:
+                sitemap_urls = await discover_sitemap_urls(
+                    context, root_url, robots_sitemaps,
+                    same_site=lambda url: _is_same_site(url, site_registered),
+                )
                 pages, forms, cookies, trackers, policies, consent_signal, pre_consent_diagnostics = await _crawl_full_site(
-                    context, root_url, settings, disallowed_prefixes
+                    context, root_url, settings, disallowed_prefixes, sitemap_urls=sitemap_urls
                 )
             finally:
                 await context.close()
@@ -772,8 +852,8 @@ async def run_scan(root_url: str, settings: Settings | None = None) -> ScanResul
             # instead of sequentially is a pure wall-clock win with no correctness
             # change: same navigations, same click attempts, same detection logic.
             (
-                (accept_cookies, accept_trackers, accept_status, accept_scroll_steps),
-                (reject_cookies, reject_trackers, reject_status, reject_scroll_steps),
+                (accept_cookies, accept_trackers, accept_status, accept_confirmed, accept_scroll_steps),
+                (reject_cookies, reject_trackers, reject_status, reject_confirmed, reject_scroll_steps),
             ) = await asyncio.gather(
                 _run_interaction_pass(browser, root_url, settings, disallowed_prefixes, "post_accept", click_accept),
                 _run_interaction_pass(browser, root_url, settings, disallowed_prefixes, "post_reject", click_reject),
@@ -790,6 +870,10 @@ async def run_scan(root_url: str, settings: Settings | None = None) -> ScanResul
         **consent_signal.evidence,
         "accept_interaction": _final_interaction_status(accept_status, consent_signal.mechanism_type),
         "reject_interaction": _final_interaction_status(reject_status, consent_signal.mechanism_type),
+        # Read by consent_rules (R-003/R-011) and the prompt: a dispatched click whose
+        # effect was never observed does not establish the consent state.
+        "accept_click_confirmed": accept_confirmed,
+        "reject_click_confirmed": reject_confirmed,
     }
 
     scan_diagnostics = {
@@ -820,8 +904,12 @@ def _scan_budget_seconds(settings: Settings | None) -> float:
     browser startup and the two consent-interaction passes. Previously this expression
     lived inline in the Windows subprocess call only, which is exactly how the Linux
     path ended up with no ceiling at all."""
-    max_pages = settings.scanner_max_pages if settings else 25
-    per_page = settings.scanner_timeout_seconds if settings else 30
+    # None means "the configured settings" -- exactly what run_scan() itself falls back
+    # to. A separate hardcoded default here once gave scan_service's run_scan_isolated(url)
+    # a 25-page budget for a crawl configured to fetch 100, aborting every large scan.
+    settings = settings or get_settings()
+    max_pages = settings.scanner_max_pages
+    per_page = settings.scanner_timeout_seconds
     return max_pages * per_page + 120
 
 

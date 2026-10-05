@@ -1,4 +1,4 @@
-"""Exercise all five Consiva agents against a running server.
+"""Exercise all six Consiva agents against a running server.
 
 Each agent gets its core workflow driven for real -- create, act, read back -- and the
 result is checked, not just the HTTP status. A 200 that returns an empty or wrong-shaped
@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -130,8 +131,10 @@ def agent_ropa(api, token):
     status, keyresp = call("POST", f"{api}/ropa/integration-keys", token,
                            body={"name": f"verify-{uuid.uuid4().hex[:8]}"})
     api_key = None
+    key_id = None
     if isinstance(keyresp, dict):
         api_key = keyresp.get("key") or keyresp.get("api_key") or keyresp.get("token")
+        key_id = keyresp.get("id")
     if not api_key:
         skip("integration key can be minted", f"-> {status} {str(keyresp)[:70]}")
     else:
@@ -183,6 +186,11 @@ def agent_ropa(api, token):
         rid = runs[0].get("id")
         status, _ = call("GET", f"{api}/ropa/runs/{rid}", token)
         check("an existing run is readable", status == 200, f"-> {status}")
+
+    # A live credential this script minted must not outlive the script.
+    if key_id:
+        status, _ = call("POST", f"{api}/ropa/integration-keys/{key_id}/revoke", token, body={})
+        check("the verification key is revoked afterwards", status == 200, f"-> {status}")
 
 
 # ── Agent 3: DSR ────────────────────────────────────────────────────────────────
@@ -304,12 +312,60 @@ def agent_regwatch(api, token):
         check("finding audit is retrievable", status == 200, f"-> {status}")
 
 
+# ── Agent 6: Purpose classifier ─────────────────────────────────────────────────
+
+def agent_purpose(api, token):
+    status, body = call("GET", f"{api}/purpose/assessments?limit=5", token)
+    if not check("run list responds", status == 200, f"-> {status}, {len(items(body))} runs"):
+        return
+
+    # The CSV connector reads only a header row, so this exercises the whole
+    # queue -> worker -> classify -> persist path with no external source to depend on.
+    status, run = call("POST", f"{api}/purpose/sources/assess", token, body={
+        "source_name": f"verify-{uuid.uuid4().hex[:8]}",
+        "connector": "csv",
+        "table_name": "customers",
+        "csv_content": "customer_id,email,phone_number,marketing_opt_in,created_at\n",
+    })
+    if not check("a source assessment can be queued", status == 202 and isinstance(run, dict),
+                 f"-> {status} {str(run)[:90] if status >= 400 else ''}"):
+        return
+    rid = run.get("id")
+
+    # Executed by the background worker, not the request, so wait for it to settle.
+    deadline = time.monotonic() + 120
+    while run.get("status") not in ("completed", "failed") and time.monotonic() < deadline:
+        time.sleep(2)
+        status, run = call("GET", f"{api}/purpose/assessments/{rid}", token)
+        if status != 200 or not isinstance(run, dict):
+            break
+    state = run.get("status") if isinstance(run, dict) else None
+    if not check("the worker completes the run", state == "completed",
+                 f"status={state}, note={run.get('note') if isinstance(run, dict) else run}"):
+        return
+    check("the run assessed the submitted columns", run.get("assessments_count", 0) > 0,
+          f"{run.get('assessments_count')} assessments, {run.get('findings_count')} findings")
+
+    status, results = call("GET", f"{api}/purpose/assessments/{rid}/results", token)
+    results = items(results)
+    check("results are retrievable", status == 200 and len(results) == run.get("assessments_count"),
+          f"-> {status}, {len(results)} rows")
+    alignments = {r.get("alignment") for r in results if isinstance(r, dict)}
+    check("every result carries a known alignment",
+          alignments <= {"aligned", "mismatch", "undetermined"} and bool(alignments),
+          f"{sorted(a for a in alignments if a)}")
+
+    status, _ = call("GET", f"{api}/purpose/findings", token)
+    check("findings list responds", status == 200, f"-> {status}")
+
+
 AGENTS = {
     "consent": ("Agent 1 - Consent", agent_consent),
     "ropa": ("Agent 2 - ROPA / Data Discovery", agent_ropa),
     "dsr": ("Agent 3 - DSR", agent_dsr),
     "incidents": ("Agent 4 - Breach / Incidents", agent_incidents),
     "regwatch": ("Agent 5 - Regulatory Watch", agent_regwatch),
+    "purpose": ("Agent 6 - Purpose Classifier", agent_purpose),
 }
 
 
@@ -332,7 +388,7 @@ def main() -> int:
             print(f"Could not authenticate (HTTP {status}). Pass --token.")
             return 1
 
-    print(f"\nVerifying five agents at {api}\n")
+    print(f"\nVerifying {len(AGENTS)} agents at {api}\n")
     for key, (label, fn) in AGENTS.items():
         if args.agent and key != args.agent:
             continue

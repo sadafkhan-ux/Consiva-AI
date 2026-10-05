@@ -81,14 +81,18 @@ def test_tracker_fired_before_consent_flagged_high_risk():
     assert r001.evidence_ids == ["t1"]
 
 
-def _signals_with_reject(outcome: str | None, mechanism_type: str = "cmp") -> list[dict]:
+def _signals_with_reject(
+    outcome: str | None, mechanism_type: str = "cmp", *, confirmed: bool = False
+) -> list[dict]:
     """A consent_signals entry carrying a specific reject_interaction outcome, the way
     crawler.py surfaces it. `None` omits the evidence dict entirely, which is what
-    scans predating the scanner-hardening audit look like."""
+    scans predating the scanner-hardening audit look like. `confirmed` is the
+    independent observation that the click took effect (test_reject_validation.py)."""
     signal = {"mechanism_type": mechanism_type, "cmp_vendor": "OneTrust",
               "has_reject_all": True, "has_granular_choices": True}
     if outcome is not None:
-        signal["evidence"] = {"accept_interaction": "clicked", "reject_interaction": outcome}
+        signal["evidence"] = {"accept_interaction": "clicked", "reject_interaction": outcome,
+                              "reject_click_confirmed": confirmed}
     return [signal]
 
 
@@ -104,10 +108,11 @@ _BOTH_POLICIES = [
 
 
 def test_tracker_fires_after_reject_flagged_high_risk():
-    """The Reject control was actually operated -- the one case R-003's wording is true of."""
+    """The Reject control was actually operated, and observably took effect -- the one
+    case R-003's wording is true of."""
     evidence = _evidence(
         cookies=_post_reject_cookie(),
-        consent_signals=_signals_with_reject("clicked"),
+        consent_signals=_signals_with_reject("clicked", confirmed=True),
         policies=_BOTH_POLICIES,
     )
     findings = evaluate_consent_rules(evidence)

@@ -267,8 +267,14 @@ def test_scan_budget_matches_the_configured_page_and_timeout_caps():
     silently make every large scan abort mid-way."""
     from types import SimpleNamespace
 
+    from app.config import get_settings
     from app.scanner.crawler import _scan_budget_seconds
 
-    assert _scan_budget_seconds(None) == 25 * 30 + 120
+    # None means the configured settings -- what run_scan() itself uses -- not a
+    # separate hardcoded page count that can disagree with the crawl it bounds.
+    configured = get_settings()
+    assert _scan_budget_seconds(None) == (
+        configured.scanner_max_pages * configured.scanner_timeout_seconds + 120
+    )
     settings = SimpleNamespace(scanner_max_pages=10, scanner_timeout_seconds=20)
     assert _scan_budget_seconds(settings) == 10 * 20 + 120

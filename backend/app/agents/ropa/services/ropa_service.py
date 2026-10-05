@@ -31,6 +31,7 @@ from app.agents.ropa.schemas.ropa import (
     RopaRecord,
     TransferInfo,
 )
+from app.agents.ropa.services.classification_service import is_personal_data, personal_data_only
 
 
 def build_ropa_records(
@@ -51,7 +52,7 @@ def build_ropa_records(
     records: list[RopaRecord] = []
     for activity in activities:
         activity_tables = _tables_for_activity(activity, elements)
-        activity_elements = [e for e in elements if e.table in activity_tables and e.classification != "Unknown"]
+        activity_elements = [e for e in elements if e.table in activity_tables and is_personal_data(e)]
 
         retentions = {retention_by_table[t].retention for t in activity_tables if t in retention_by_table}
         resolved_retention = _single_or_unknown(retentions)
@@ -253,7 +254,7 @@ def build_confidence_summary(
     *,
     low_confidence_threshold: float = 0.7,
 ) -> ConfidenceSummary:
-    scored = [e for e in elements if e.classification != "Unknown"]
+    scored = personal_data_only(elements)
     overall = round(sum(e.confidence for e in scored) / len(scored), 4) if scored else 0.0
     return ConfidenceSummary(
         overall_confidence=overall,
@@ -282,11 +283,8 @@ def build_output(
     *,
     changes: list[ChangeDetectionEntry] | None = None,
 ) -> RopaAgentOutput:
-    # Use the classifier's own definition of "is this personal data" rather than
-    # a string comparison -- the engine now returns explicit non-personal labels
-    # ("Not Personal Data (operational)"), which a != "Unknown" test let through.
-    from app.agents.ropa.services.classification_service import personal_data_only
-
+    # The classifier's own definition of "is this personal data" rather than a
+    # string comparison -- see classification_service.is_personal_data.
     classified = personal_data_only(elements)
     return RopaAgentOutput(
         discovery_summary=DiscoverySummary(

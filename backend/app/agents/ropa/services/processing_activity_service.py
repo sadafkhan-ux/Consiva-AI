@@ -18,6 +18,7 @@ from __future__ import annotations
 from app.agents.ropa.rules import purpose_rules
 from app.agents.ropa.schemas.evidence import DiscoveryEvidence
 from app.agents.ropa.schemas.ropa import PersonalDataElement, ProcessingActivity
+from app.agents.ropa.services.classification_service import is_personal_data
 
 
 def build_activities(
@@ -60,7 +61,7 @@ def build_activities(
         bucket["evidence"].extend([table.local_id, table.table_name])
         bucket["confidences"].append(match.confidence)
         for element in elements_by_table.get(table.table_name, []):
-            if element.classification != "Unknown":
+            if is_personal_data(element):
                 bucket["categories"].add(element.classification)
 
     activities: list[ProcessingActivity] = []
@@ -90,7 +91,7 @@ def build_activities(
 
     for table_name, source_name in sorted(unknown_tables):
         categories = sorted(
-            {e.classification for e in elements_by_table.get(table_name, []) if e.classification != "Unknown"}
+            {e.classification for e in elements_by_table.get(table_name, []) if is_personal_data(e)}
         )
         if not categories:
             # No personal data found and no recognizable purpose: nothing to

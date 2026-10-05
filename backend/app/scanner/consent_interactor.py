@@ -133,3 +133,44 @@ async def click_accept(page: Page) -> str:
 
 async def click_reject(page: Page) -> str:
     return await _search_all_frames(page, hints=_REJECT_HINTS, accept=False)
+
+
+async def confirm_interaction_completed(page: Page, *, accept: bool) -> bool:
+    """Whether a "clicked" Accept/Reject actually took effect, observed independently
+    of the click.
+
+    "clicked" only means Playwright dispatched a click that did not raise. A "Decline"
+    link in an unrelated modal satisfies that, and so does a CMP that answers Reject by
+    opening a preferences panel instead of recording a choice -- neither establishes
+    the consent state the post_accept/post_reject evidence is then filed under. A banner
+    that has recorded a decision dismisses itself, so the observation is: no control
+    for that side (catalogued CMP selector, or clickable text matching the same hints
+    the click used) is still visible in any frame.
+
+    Conservative in the safe direction: any frame that cannot be inspected makes this
+    False. "Unconfirmed" suppresses a post-reject finding; it never asserts one.
+    """
+    hints = _ACCEPT_HINTS if accept else _REJECT_HINTS
+    try:
+        for frame in _frames_to_search(page):
+            for cmp in CMP_CATALOG:
+                selector = cmp.accept_selector if accept else cmp.reject_selector
+                if not selector:
+                    continue
+                locator = frame.locator(selector)
+                if await locator.count() > 0 and await locator.first.is_visible():
+                    return False
+
+            candidates = frame.locator(_CLICKABLE_SELECTOR)
+            count = await candidates.count()
+            for i in range(min(count, _MAX_CANDIDATES)):
+                element = candidates.nth(i)
+                if not await element.is_visible():
+                    continue
+                text = (await element.inner_text(timeout=1000)).strip().lower()
+                if any(hint in text for hint in hints):
+                    return False
+    except PlaywrightError as exc:
+        logger.debug("Could not confirm the consent interaction took effect: %s", exc)
+        return False
+    return True

@@ -265,6 +265,26 @@ async def _search_one_source(
             "the result is incomplete and must be reviewed"
         )
 
+    # A source with no identity table configured reports one "distinct subject" for
+    # any number of matches, because it cannot tell -- the connector says so, and
+    # leaves it to this service to treat that as a review signal. Taking the 1 at
+    # face value made the multiple-subject guard inert on every default-configured
+    # source: records that may belong to two different people went straight to
+    # planning. getattr default True: a connector that does not expose the property
+    # makes no such disclaimer.
+    if evidence_rows and not getattr(connector, "has_identity_table", True):
+        summary.ambiguous = True
+        run.error_code = case.ERR_MULTIPLE_MATCHES
+        run.error_detail = (
+            "no identity table is configured for this source, so it cannot tell "
+            "whether the matched records belong to one person; a human must confirm"
+        )
+        summary.notes.append(
+            f"{data_source.name}: no identity_tables configured, so the number of "
+            "distinct subjects matched is unknown -- configure identity_tables on "
+            "this source's authorization to let a single-subject match proceed"
+        )
+
     await db.flush()
 
     summary.evidence_count += len(evidence_rows)

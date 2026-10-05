@@ -14,11 +14,12 @@ from __future__ import annotations
 
 from app.agents.ropa.schemas.evidence import DiscoveryEvidence
 from app.agents.ropa.schemas.ropa import ChangeDetectionEntry, PersonalDataElement
+from app.agents.ropa.services.classification_service import _NON_PERSONAL_LABELS
 
 # Changes that alter what personal data exists, or its meaning. These always
 # create a review item; the rest are recorded but don't demand attention.
 _MATERIAL_CHANGE_TYPES = frozenset({
-    "new_table", "deleted_field", "new_field", "changed_data_type",
+    "new_table", "removed_table", "deleted_field", "new_field", "changed_data_type",
     "new_personal_data_category", "changed_purpose",
 })
 
@@ -64,8 +65,7 @@ def detect_changes(baseline: dict, current: dict) -> list[ChangeDetectionEntry]:
     for table in sorted(current_tables - baseline_tables):
         changes.append(_entry("new_table", table, None, table))
     for table in sorted(baseline_tables - current_tables):
-        changes.append(_entry("deleted_field", table, table, None,
-                              override_type="removed_table"))
+        changes.append(_entry("removed_table", table, table, None))
 
     baseline_columns: dict[str, str] = baseline.get("columns", {})
     current_columns: dict[str, str] = current.get("columns", {})
@@ -94,13 +94,22 @@ def detect_changes(baseline: dict, current: dict) -> list[ChangeDetectionEntry]:
         if was == now:
             continue
         # A column becoming personal data is the single most important signal
-        # this whole module exists to catch.
-        if now != "Unknown" and (was is None or was == "Unknown"):
+        # this whole module exists to catch. "Not Unknown" is not the test for that:
+        # the classifier also records explicit non-personal labels, and a column
+        # resolving from Unknown to "Not Personal Data (operational)" is not new
+        # personal data.
+        if _is_personal(now) and not _is_personal(was):
             changes.append(_entry("new_personal_data_category", key, was, now))
-        elif was is not None and now != "Unknown":
+        elif _is_personal(was):
+            # Includes a personal column being reclassified as non-personal -- the
+            # ROPA loses an element, which a reviewer should see.
             changes.append(_entry("changed_purpose", key, was, now))
 
     return changes
+
+
+def _is_personal(classification: str | None) -> bool:
+    return classification is not None and classification not in _NON_PERSONAL_LABELS
 
 
 def _entry(
@@ -108,8 +117,6 @@ def _entry(
     target: str,
     previous: str | None,
     current: str | None,
-    *,
-    override_type: str | None = None,
 ) -> ChangeDetectionEntry:
     return ChangeDetectionEntry(
         change_type=change_type,
@@ -119,7 +126,8 @@ def _entry(
         evidence=[target],
         # A material change must be seen by a human before it becomes the new
         # normal; anything else is recorded without demanding attention.
-        review_required=(override_type or change_type) in _MATERIAL_CHANGE_TYPES,
+        # Same test as is_material(), on the same field, so the two cannot disagree.
+        review_required=change_type in _MATERIAL_CHANGE_TYPES,
     )
 
 

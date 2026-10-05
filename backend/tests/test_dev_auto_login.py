@@ -23,10 +23,18 @@ database connection reads zero rows from every table.
 
 import inspect
 import pathlib
+import uuid
+
+import jwt
+import pytest
+from fastapi.testclient import TestClient
 
 from app.api.v1 import router as api_router_module
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.api.v1.routes import dev
+from app.core import tokens
+from app.db.session import get_db
+from app.main import app
 
 FRONTEND = pathlib.Path(__file__).resolve().parents[2] / "frontend"
 
@@ -163,3 +171,100 @@ def test_the_console_shows_a_permanent_warning_while_bypassed():
     app = _read("src/App.tsx")
     assert "Login bypassed" in app
     assert "AUTH_BYPASSED && (" in app
+
+
+# ── Over HTTP ───────────────────────────────────────────────────────────────────
+#
+# The checks above read the source. These call the endpoint, so a refactor that keeps
+# the right strings but breaks the behaviour still fails. Plain `TestClient(app)`
+# rather than `with TestClient(app)`, matching test_api_validation.py: the `with`
+# form runs the lifespan, which needs a real database these tests do not have.
+
+_ORG_ID = uuid.uuid4()
+_USER_ID = uuid.uuid4()
+_SECRET = "test-secret-at-least-32-bytes-long!!"
+
+
+class _StubUser:
+    id = _USER_ID
+    org_id = _ORG_ID
+    email = "admin@example.com"
+    role = "admin"
+
+
+class _StubOrg:
+    name = "Example Org"
+
+
+@pytest.fixture
+def post_auto_login(monkeypatch):
+    """Posts to the endpoint with the database stubbed: the first query returns
+    `user`, the second the user's organisation."""
+
+    def _call(*, app_env: str = "development", open_access: bool = False, user=_StubUser()):
+        results = iter([user, _StubOrg()])
+
+        class _Result:
+            def __init__(self, value):
+                self._value = value
+
+            def scalar_one_or_none(self):
+                return self._value
+
+        class _StubSession:
+            async def execute(self, _stmt):
+                return _Result(next(results))
+
+        async def _fake_db():
+            yield _StubSession()
+
+        app.dependency_overrides[get_db] = _fake_db
+        settings = get_settings().model_copy(
+            update={
+                "app_env": app_env,
+                "open_access": open_access,
+                "consiva_jwt_secret": _SECRET,
+            }
+        )
+        monkeypatch.setattr(dev, "get_settings", lambda: settings)
+        return TestClient(app).post("/api/v1/dev/auto-login")
+
+    yield _call
+    app.dependency_overrides.clear()
+
+
+def test_http_404_outside_development_without_open_access(post_auto_login):
+    assert post_auto_login(app_env="production").status_code == 404
+
+
+def test_http_open_access_enables_it_in_production(post_auto_login):
+    assert post_auto_login(app_env="production", open_access=True).status_code == 200
+
+
+def test_http_issues_a_token_that_verifies_and_carries_the_org(post_auto_login):
+    response = post_auto_login()
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert body["expires_in"] > 0
+    assert body["auth_bypassed"] is True
+    assert body["user"]["org_id"] == str(_ORG_ID)
+
+    # The org must be in the token: app/db/session.py sets the RLS GUC from it, and
+    # without it every tenant table returns zero rows.
+    claims = jwt.decode(
+        body["access_token"],
+        _SECRET,
+        algorithms=[tokens.ALGORITHM],
+        audience=tokens.AUDIENCE,
+        issuer=tokens.ISSUER,
+    )
+    assert claims["sub"] == str(_USER_ID)
+    assert claims["org_id"] == str(_ORG_ID)
+    assert "exp" in claims, "a token with no expiry would never stop working"
+
+
+def test_http_empty_database_is_409_with_a_way_forward(post_auto_login):
+    response = post_auto_login(user=None)
+    assert response.status_code == 409
+    assert "create_user.py" in response.json()["detail"]

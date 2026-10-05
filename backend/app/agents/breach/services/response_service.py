@@ -283,13 +283,31 @@ async def add_action(
 
 # ── Approval (§22, §23) ─────────────────────────────────────────────────────────
 
+# Decisions that authorise a containment action. `edited` is an approval of the
+# edited action -- decide_action moves the action to "approved" for both -- so both
+# must authorise the work, expire, and be audited as an approval. Testing
+# `== DECISION_APPROVE` alone made an edited action impossible to carry out during a
+# live incident, and filed it as a rejection. Must equal Agent 3's
+# dsr.services.approval_service.APPROVING_DECISIONS.
+APPROVING_DECISIONS = frozenset({vocab.DECISION_APPROVE, vocab.DECISION_EDIT})
+
+# Exhaustive over vocab.DECISIONS, so no decision falls through to a default that
+# misdescribes it in the append-only audit log.
+_AUDIT_ACTION_FOR_DECISION = {
+    vocab.DECISION_APPROVE: vocab.AUDIT_APPROVED,
+    vocab.DECISION_EDIT: vocab.AUDIT_APPROVED,
+    vocab.DECISION_REJECT: vocab.AUDIT_REJECTED,
+    vocab.DECISION_ESCALATE: vocab.AUDIT_ESCALATED,
+    vocab.DECISION_MORE_INFO: vocab.AUDIT_REVIEW_REQUESTED,
+}
+
 def is_approval_current(approval, *, now: datetime | None = None) -> bool:
     """Whether this approval still authorises work right now.
 
     Re-read immediately before acting. An approval that is rejected, superseded or
     past its expiry authorises nothing.
     """
-    if approval is None or approval.decision != vocab.DECISION_APPROVE:
+    if approval is None or approval.decision not in APPROVING_DECISIONS:
         return False
     if approval.expires_at is None:
         return True
@@ -324,7 +342,7 @@ async def decide_action(
     # Approving a high-risk containment without a recorded rationale is what the audit
     # trail exists to prevent. Disabling the wrong account during an incident is its
     # own incident.
-    if decision == vocab.DECISION_APPROVE and action.risk == "high" and not (reason and reason.strip()):
+    if decision in APPROVING_DECISIONS and action.risk == "high" and not (reason and reason.strip()):
         raise IncidentNotReadyError(
             "approving a high-risk containment action requires a reason for the audit trail"
         )
@@ -333,7 +351,7 @@ async def decide_action(
     approval = await incident_repository.record_approval(
         db, org_id=case.org_id, incident_id=case.id, reviewer_user_id=reviewer_user_id,
         subject="action", decision=decision, action_id=action.id, reason=reason,
-        expires_at=moment + APPROVAL_TTL if decision == vocab.DECISION_APPROVE else None,
+        expires_at=moment + APPROVAL_TTL if decision in APPROVING_DECISIONS else None,
     )
 
     before = action.status
@@ -348,7 +366,7 @@ async def decide_action(
 
     await audit_service.record(
         db, org_id=case.org_id, actor_user_id=reviewer_user_id,
-        action=vocab.AUDIT_APPROVED if decision == vocab.DECISION_APPROVE else vocab.AUDIT_REJECTED,
+        action=_AUDIT_ACTION_FOR_DECISION[decision],
         entity_type=vocab.AUDIT_ENTITY, entity_id=case.id,
         before={"action_id": str(action.id), "status": before},
         after={

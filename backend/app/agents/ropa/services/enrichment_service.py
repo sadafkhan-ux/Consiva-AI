@@ -86,6 +86,8 @@ def ambiguous_elements(elements: list[PersonalDataElement]) -> list[PersonalData
 def apply_suggestions(
     elements: list[PersonalDataElement],
     response: EnrichmentResponse,
+    *,
+    requested: list[PersonalDataElement] | None = None,
 ) -> list[PersonalDataElement]:
     """Merge LLM suggestions into the inventory, defensively.
 
@@ -93,8 +95,14 @@ def apply_suggestions(
     category must be one of the allowed values, and the result always stays
     review_required -- so a hallucinated column or category simply cannot enter
     the ROPA.
+
+    `requested` is what was sent. It defaults to ambiguous_elements(elements), the
+    same capped list enrich_elements sends; matching against every Unknown column
+    instead let a guessed name land on one beyond MAX_AMBIGUOUS_COLUMNS.
     """
-    by_key = {(e.table, e.column): e for e in elements if e.classification == "Unknown"}
+    if requested is None:
+        requested = ambiguous_elements(elements)
+    by_key = {(e.table, e.column): e for e in requested if e.classification == "Unknown"}
     updated: dict[tuple[str | None, str], PersonalDataElement] = {}
 
     for suggestion in response.suggestions:
@@ -146,7 +154,7 @@ async def enrich_elements(elements: list[PersonalDataElement]) -> list[PersonalD
         logger.warning("ROPA LLM enrichment unavailable, continuing with rules only: %s", exc)
         return elements
 
-    return apply_suggestions(elements, response)
+    return apply_suggestions(elements, response, requested=ambiguous)
 
 
 async def regulatory_context(query: str, *, db, llm_client, top_k: int = 3) -> list[dict]:

@@ -96,6 +96,34 @@ def test_column_becoming_personal_data_is_flagged():
     assert changes[0].review_required
 
 
+def _reclassified(was: str, now: str):
+    evidence = _evidence({"notes": "text"})
+
+    def element(label):
+        return PersonalDataElement(source="s", table="attendees", column="notes",
+                                   classification=label, confidence=0.9, evidence=["column-1"])
+
+    return cds.detect_changes(cds.build_snapshot(evidence, [element(was)]),
+                              cds.build_snapshot(evidence, [element(now)]))
+
+
+def test_a_column_resolving_to_non_personal_is_not_new_personal_data():
+    """Unknown -> "Not Personal Data (operational)" settles an ambiguity; it is not a
+    column starting to hold personal data, and must not be reported as one."""
+    assert _reclassified("Unknown", "Not Personal Data (operational)") == []
+
+
+def test_non_personal_to_personal_is_new_personal_data():
+    changes = _reclassified("Not Personal Data (operational)", "Contact Data")
+    assert [c.change_type for c in changes] == ["new_personal_data_category"]
+
+
+def test_a_personal_column_reclassified_as_non_personal_is_still_reported():
+    """The ROPA loses an element; a reviewer should see that, not have it vanish."""
+    changes = _reclassified("Contact Data", "Not Personal Data (operational)")
+    assert [c.change_type for c in changes] == ["changed_purpose"]
+
+
 def test_snapshot_contains_no_row_values():
     evidence = _evidence({"email": "text"})
     snapshot = cds.build_snapshot(evidence)

@@ -49,6 +49,24 @@ DECISIONS = frozenset({
     DECISION_APPROVED, DECISION_REJECTED, DECISION_MORE_INFO, DECISION_EDITED, DECISION_ESCALATED,
 })
 
+# Decisions that authorize the action to run. `edited` is an approval of the edited
+# payload -- decide_action moves the action to "approved" for both -- so both must
+# authorize execution, expire, be refused on a blocked action, and be audited as an
+# approval. Testing `== DECISION_APPROVED` alone made an edited action unexecutable
+# and filed it in the audit log as a rejection. Agent 4 shares this set; see
+# breach.services.response_service.APPROVING_DECISIONS.
+APPROVING_DECISIONS = frozenset({DECISION_APPROVED, DECISION_EDITED})
+
+# The audit action each decision is recorded under. Exhaustive over DECISIONS, so a
+# new decision cannot fall through to a default that misdescribes it.
+_AUDIT_ACTION_FOR_DECISION = {
+    DECISION_APPROVED: case.AUDIT_APPROVED,
+    DECISION_EDITED: case.AUDIT_APPROVED,
+    DECISION_REJECTED: case.AUDIT_REJECTED,
+    DECISION_ESCALATED: case.AUDIT_ESCALATED,
+    DECISION_MORE_INFO: case.AUDIT_REVIEW_REQUESTED,
+}
+
 # Decisions that must carry a reason. Approving a high-risk action or rejecting one
 # without recorded rationale is exactly what the audit trail exists to prevent --
 # the same rule Agent 1 applies to a high-risk finding.
@@ -61,7 +79,7 @@ def is_approval_current(approval: DsrApproval | None, *, now: datetime | None = 
     Used by execution_service immediately before a write. An approval that is
     rejected, superseded, or past its expiry authorizes nothing.
     """
-    if approval is None or approval.decision != DECISION_APPROVED:
+    if approval is None or approval.decision not in APPROVING_DECISIONS:
         return False
     if approval.expires_at is None:
         return True
@@ -98,7 +116,7 @@ async def decide_action(
             f"action {action_id} is already {action.status}; a decision cannot be "
             "recorded against work that has started"
         )
-    if action.status == "blocked" and decision == DECISION_APPROVED:
+    if action.status == "blocked" and decision in APPROVING_DECISIONS:
         # A constraint blocked this action. A reviewer may escalate or reject it,
         # but "approve" cannot override a retention rule or a missing authorization.
         raise CaseNotReadyError(
@@ -111,7 +129,7 @@ async def decide_action(
     # serious action through with no recorded rationale is what the audit trail
     # exists to prevent.
     high_risk_approval = (
-        decision == DECISION_APPROVED and action.requires_approval and action.risk == "high"
+        decision in APPROVING_DECISIONS and action.requires_approval and action.risk == "high"
     )
     if high_risk_approval and not (reason and reason.strip()):
         raise CaseNotReadyError(
@@ -128,7 +146,7 @@ async def decide_action(
         decision=decision,
         reason=reason,
         edited_payload=edited_payload,
-        expires_at=moment + APPROVAL_TTL if decision == DECISION_APPROVED else None,
+        expires_at=moment + APPROVAL_TTL if decision in APPROVING_DECISIONS else None,
     )
 
     before_status = action.status
@@ -147,7 +165,7 @@ async def decide_action(
         db,
         org_id=request.org_id,
         actor_user_id=reviewer_user_id,
-        action=case.AUDIT_APPROVED if decision == DECISION_APPROVED else case.AUDIT_REJECTED,
+        action=_AUDIT_ACTION_FOR_DECISION[decision],
         entity_type=case.AUDIT_ENTITY,
         entity_id=request.id,
         before={"action_id": str(action.id), "status": before_status},

@@ -108,6 +108,9 @@ _STATUS_LABELS = {
 }
 
 
+_NON_PERSONAL_LABELS = frozenset(_STATUS_LABELS.values())
+
+
 def _label_for(status: str) -> str:
     return _STATUS_LABELS.get(status, "Unknown")
 
@@ -124,9 +127,17 @@ def _reason(result, threshold: float) -> str:
             f"(matched by {result.method}).")
 
 
+def is_personal_data(element: PersonalDataElement) -> bool:
+    """Whether this element classified as personal data.
+
+    Not `classification != "Unknown"`: the engine also records explicit non-personal
+    labels ("Not Personal Data (operational)"), and that string test let them through
+    into activity categories, ROPA data elements and the confidence summary."""
+    return element.classification not in _NON_PERSONAL_LABELS
+
+
 def personal_data_only(elements: list[PersonalDataElement]) -> list[PersonalDataElement]:
     """The subset that actually classified as personal data -- excluding the
     Unknown and explicitly non-personal rows, which are review candidates and
     documented exclusions rather than confirmed findings."""
-    excluded = set(_STATUS_LABELS.values())
-    return [e for e in elements if e.classification not in excluded]
+    return [e for e in elements if is_personal_data(e)]

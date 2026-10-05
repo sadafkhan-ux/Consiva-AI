@@ -570,12 +570,14 @@ numbers over what you can count in the list.
 `post_accept` and `post_reject` mean the item was seen during the pass in which the \
 scanner ATTEMPTED to click Accept or Reject — not proof that the click worked. \
 `consent_signals[].evidence.accept_interaction` / `.reject_interaction` say whether it \
-did: only `clicked` means the control was actually operated. On any other value \
-(`click_failed`, `cmp_not_automatable`, `cmp_not_found`, `page_unreachable`, or absent) \
-that pass never established the consent state it is named after, so its observations \
-do NOT support a finding that tracking continued after the visitor accepted or \
-rejected. Report the automation failure if it matters; never assert a click that the \
-evidence does not show happening.
+did: only `clicked` means the control was actually operated, and even then only \
+`accept_click_confirmed` / `reject_click_confirmed` = true means the banner observably \
+recorded the choice. On any other value (`click_failed`, `cmp_not_automatable`, \
+`cmp_not_found`, `page_unreachable`, absent, or `clicked` without confirmation) that \
+pass never established the consent state it is named after, so its observations do NOT \
+support a finding that tracking continued after the visitor accepted or rejected. \
+Report the automation failure if it matters (e.g. "the reject state could not be \
+reliably tested"); never assert a click that the evidence does not show taking effect.
 
 ## Scan evidence
 {render_evidence(compacted_evidence)}

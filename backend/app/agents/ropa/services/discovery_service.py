@@ -103,7 +103,7 @@ def _analyze(
         evidence.discovery_run_id,
         len(evidence.tables),
         len(evidence.columns),
-        sum(1 for e in elements if e.classification != "Unknown"),
+        len(classification_service.personal_data_only(elements)),
         len(activities),
         len(records),
         len(review_items),

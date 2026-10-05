@@ -152,6 +152,10 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     interaction_evidence = (signals or {}).get("evidence", {}) or {}
     accept_outcome = interaction_evidence.get("accept_interaction")
     reject_outcome = interaction_evidence.get("reject_interaction")
+    # "clicked" only says a click was dispatched; this says it observably took effect
+    # (consent_interactor.confirm_interaction_completed). Absent -- scans and fixtures
+    # predating the flag -- reads as unconfirmed, never as "assume it worked".
+    reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
 
     # R-001 / R-003 depend on the three-pass consent-state scan (crawler.py). Both stay
     # silent (not "no violation found") until an item is actually observed in that state —
@@ -194,7 +198,11 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     #
     # Suppressing the other outcomes leaves no silent gap -- each already has its own
     # honest rule, which is why this is a gate and not a downgrade:
-    #   clicked             R-003, the only outcome its wording is true of
+    #   clicked+confirmed   R-003, the only outcome its wording is true of
+    #   clicked, unconfirmed R-011, a click was dispatched but never observably took
+    #                       effect -- so R-009 ("could not be automated") is not true
+    #                       either, and the post_reject evidence was gathered in a
+    #                       state that was never established
     #   click_failed        R-009, Reject control could not be automated
     #   cmp_not_automatable R-009, same
     #   page_unreachable    R-010, state untested and evidence incomplete
@@ -202,7 +210,7 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     #   absent              silent, the same treatment R-009/R-010 already give a
     #                       missing evidence dict rather than guessing
     post_reject_hits = [e for e in non_essential if "post_reject" in e.get("consent_states", [])]
-    if post_reject_hits and reject_outcome == "clicked":
+    if post_reject_hits and reject_outcome == "clicked" and reject_confirmed:
         findings.append(RuleFinding(
             rule_id="R-003",
             category="other",
@@ -283,6 +291,20 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
                 "either a non-standard/bespoke banner, or Reject is genuinely harder to reach than Accept."
             ),
             confidence="low",  # a scanner automation limitation, not confirmed non-compliance -- routes to human review
+        ))
+
+    if reject_outcome == "clicked" and not reject_confirmed:
+        findings.append(RuleFinding(
+            rule_id="R-011",
+            category="other",
+            risk_level="medium",
+            summary=(
+                "Reject state could not be reliably tested: a Reject control was clicked, but "
+                "the consent banner did not observably record the choice (it stayed on screen, "
+                "or could not be inspected). Post-reject observations from this scan do not "
+                "show what happens after a visitor rejects consent."
+            ),
+            confidence="low",  # an automation limit, not confirmed non-compliance -- routes to human review
         ))
 
     untested_states = [

@@ -179,7 +179,17 @@ def _compose(request: DsrRequest, evidence, runs, executions, actions) -> str:
         lines.append("")
         lines.append("The data held in those records is attached to this response.")
 
-    verified = [e for e in executions if e.verification_status == "passed"]
+    # Only a verified MUTATING action changed anything. A disclose is executed and
+    # verified like any other action, with rows_affected=0, so selecting on
+    # verification alone told an access requester we had "updated 0 record(s)" and
+    # "confirmed the change". An execution whose action is not in the current plan
+    # (a superseded plan's work) is kept: its change really happened.
+    operation_of = {a.id: a.operation for a in actions}
+    verified = [
+        e for e in executions
+        if e.verification_status == "passed"
+        and operation_of.get(e.action_id, case.OP_DELETE_RECORD) in case.MUTATING_OPERATIONS
+    ]
     failed_exec = [e for e in executions if e.status == "failed"]
     blocked = [a for a in actions if a.status == "blocked"]
 

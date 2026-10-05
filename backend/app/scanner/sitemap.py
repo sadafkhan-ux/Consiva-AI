@@ -7,7 +7,7 @@ invisible no matter how high the page budget went. A sitemap is the site's own
 published list of its pages, so it widens discovery without guessing at URLs --
 schemas.PageRecord already reserved "sitemap" as a `discovered_via` value for this.
 
-Security posture matches _fetch_robots_disallow in crawler.py, for the same reasons:
+Security posture matches _fetch_robots in crawler.py, for the same reasons:
 fetched through `context.request` with `max_redirects=0` so a hostile site cannot 30x
 a backend-issued request at an internal/metadata address, every extracted URL is
 re-checked against the same-registered-domain rule before it can be queued, and the

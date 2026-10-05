@@ -35,6 +35,37 @@ def _unverified_narrative_citations(text: str, chunk_pool_text: str) -> list[str
     return unverified
 
 
+# A finding asserting tracking carried on after the visitor rejected consent: a
+# reject-word preceded within a few words by after/despite/following. Matches "after
+# the visitor clicked Reject", "despite the user declining", "following rejection";
+# leaves alone prose that only describes the automation limit ("the Reject control
+# could not be automated", "no 'reject all' option was found"), which carries no
+# temporal claim about what happened once a rejection was made.
+_POST_REJECT_CLAIM_RE = re.compile(
+    r"\b(?:after|despite|following|post)\W+(?:\w+\W+){0,4}?"
+    r"(?:reject\w*|declin\w*|refus\w*|den(?:y|ied|ying)|opt(?:ed|ing)?[- ]?out)",
+    re.IGNORECASE,
+)
+
+
+def _claims_tracking_after_reject(text: str) -> bool:
+    return bool(_POST_REJECT_CLAIM_RE.search(text or ""))
+
+
+def _reject_was_confirmed(scan_evidence: dict | None) -> bool:
+    """True only when the scanner both clicked Reject AND observed it take effect --
+    the same two halves consent_rules requires before R-003 may fire. Anything weaker,
+    including a missing flag, is unconfirmed."""
+    signals = (scan_evidence or {}).get("consent_signals") or []
+    if not signals:
+        return False
+    evidence = (signals[0] or {}).get("evidence") or {}
+    return (
+        evidence.get("reject_interaction") == "clicked"
+        and evidence.get("reject_click_confirmed") is True
+    )
+
+
 async def validate_output(state: AgentState) -> dict:
     """Step 9 — Pydantic schema validity is already guaranteed by llm/client.py's own
     retry loop; what's checked here is domain-specific: every dpdp_reference must be a
@@ -112,6 +143,22 @@ async def validate_output(state: AgentState) -> dict:
                     finding.requires_human_review = True
                     high_risk_forced_review += 1
             meta["high_risk_forced_review"] = high_risk_forced_review
+
+            # Fourth backstop: the model is handed the post_reject evidence whether or
+            # not the rejection was ever established, and the prompt telling it so is
+            # not a control. A claim that tracking continued after a rejection, on a
+            # scan that cannot show a rejection took effect, goes to a human --
+            # whatever risk level the model filed it under.
+            unconfirmed_reject_forced_review = 0
+            if not _reject_was_confirmed(state.scan_evidence):
+                for finding in response.findings:
+                    if (
+                        _claims_tracking_after_reject(f"{finding.finding} {finding.recommendation}")
+                        and not finding.requires_human_review
+                    ):
+                        finding.requires_human_review = True
+                        unconfirmed_reject_forced_review += 1
+            meta["unconfirmed_reject_forced_review"] = unconfirmed_reject_forced_review
 
             meta["outcome"] = "valid"
             return {"validation_status": "valid", "error": None, "llm_output": response.model_dump()}
