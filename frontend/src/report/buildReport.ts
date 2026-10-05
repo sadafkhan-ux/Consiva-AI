@@ -1,4 +1,5 @@
-import type { FindingResponse, ScanStatusResponse, WebsiteScanMetadata } from "../api/types";
+import type { EvidenceCookieItem, FindingResponse, ScanStatusResponse, WebsiteScanMetadata } from "../api/types";
+import { buildCookieInventory, type CookieInventory } from "./cookieInventory";
 
 /** Risk ordering, worst first -- used both to pick the overall band and to decide which
  *  findings earn a place on a deliberately one-page summary. */
@@ -24,6 +25,8 @@ export interface ReportModel {
   actions: string[];
   totalFindings: number;
   shownFindings: number;
+  /** The complete cookie inventory, appended after the one-page summary. */
+  cookies: CookieInventory;
 }
 
 /** Everything the one-page PDF needs, derived from data the app already has in state.
@@ -33,6 +36,7 @@ export function buildReportModel(
   scan: ScanStatusResponse | null,
   findings: FindingResponse[],
   meta: WebsiteScanMetadata | null,
+  cookies: EvidenceCookieItem[] = [],
 ): ReportModel {
   const sorted = [...findings].sort((a, b) => riskRank(a.risk_level) - riskRank(b.risk_level));
   const overallRisk = sorted.length ? sorted[0].risk_level : "none";
@@ -125,5 +129,6 @@ export function buildReportModel(
     actions: actions.slice(0, MAX_ACTIONS),
     totalFindings: findings.length,
     shownFindings: Math.min(sorted.length, MAX_PROBLEMS),
+    cookies: buildCookieInventory(cookies),
   };
 }

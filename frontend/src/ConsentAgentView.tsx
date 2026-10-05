@@ -50,7 +50,9 @@ export function ConsentAgentView() {
     setReportError(null);
     setBuildingReport(true);
     try {
-      await downloadReport(buildReportModel(state.scan, state.findings, state.websiteScanMeta));
+      await downloadReport(
+        buildReportModel(state.scan, state.findings, state.websiteScanMeta, state.evidence?.cookies ?? []),
+      );
     } catch (err) {
       // Surface it rather than failing silently -- the PDF library is fetched on
       // demand, so an offline/blocked load is a real possibility worth reporting.

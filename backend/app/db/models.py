@@ -110,6 +110,12 @@ class Cookie(Base):
     # Which of the three scan passes this cookie was observed in — a set, not a
     # single value, since the same cookie can persist across states.
     consent_states: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
+    # As the browser reported them; NULL on scans made before migration 0027 recorded them.
+    secure: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    http_only: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    same_site: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Where/when each pass first saw it -- scanner/schemas.py CookieObservation.
+    observations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
 
 class Tracker(Base):

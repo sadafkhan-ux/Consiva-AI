@@ -33,6 +33,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -46,7 +47,12 @@ from app.rules.tracker_catalog import CMP_CATALOG
 from app.scanner._domain import registered_domain as _registered_domain
 from app.scanner.consent_interactor import click_accept, click_reject, confirm_interaction_completed
 from app.scanner.consent_signal_detector import detect_consent_signal
-from app.scanner.cookie_detector import detect_cookies
+from app.scanner.cookie_detector import (
+    attribute_new_cookies,
+    cookie_key,
+    detect_cookies,
+    parse_set_cookie_headers,
+)
 from app.scanner.form_detector import detect_forms
 from app.scanner.page_parser import ParsedScript, parse_page
 from app.scanner.policy_detector import detect_policies
@@ -270,6 +276,50 @@ class _SeedUnreachable(Exception):
         self.attempts = attempts
 
 
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+# Upper bound on waiting for Set-Cookie header reads before a page closes. Reading a
+# response's full headers is a separate round trip to the browser; a read that has not
+# come back by then is dropped, which only costs that cookie its header attribution
+# (it is still found by the jar read and attributed from there).
+_SET_COOKIE_DRAIN_SECONDS = 5
+
+
+def _watch_set_cookies(browser_page: Page, page_url: str) -> tuple[list[dict], list[asyncio.Task]]:
+    """Records every cookie a Set-Cookie response header sets while `browser_page` is
+    open, as {"name", "domain", "path", "page_url", "request_url", "observed_at"} --
+    evidence of which page set it, for cookie_detector.attribute_new_cookies.
+    Observation only: nothing about how the page loads changes. Await the returned
+    tasks (via _drain_set_cookie_reads) before closing the page."""
+    events: list[dict] = []
+    pending: list[asyncio.Task] = []
+
+    async def _read(response) -> None:
+        observed_at = _now_iso()
+        try:
+            values = await response.header_values("set-cookie")
+        except Exception:  # noqa: BLE001 -- page or response gone; attribution falls back to the jar read
+            return
+        for name, domain, path in parse_set_cookie_headers(values, response.url):
+            events.append({
+                "name": name, "domain": domain, "path": path, "page_url": page_url,
+                "request_url": response.url, "observed_at": observed_at,
+            })
+
+    browser_page.on("response", lambda response: pending.append(asyncio.ensure_future(_read(response))))
+    return events, pending
+
+
+async def _drain_set_cookie_reads(pending: list[asyncio.Task]) -> None:
+    if not pending:
+        return
+    _done, not_done = await asyncio.wait(pending, timeout=_SET_COOKIE_DRAIN_SECONDS)
+    for task in not_done:
+        task.cancel()
+
+
 async def _navigate_with_retry(browser_page: Page, url: str, timeout_ms: int) -> tuple[object | None, str, Exception | None, int]:
     """Attempts browser_page.goto() up to _NAV_MAX_ATTEMPTS times with backoff, for ANY
     transient failure (network error or timeout) -- never retries forever, and never
@@ -402,6 +452,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
     browser_page.on(
         "request", lambda req, _r=request_records: _r.append((req.url, req.resource_type))
     )
+    set_cookie_events, set_cookie_reads = _watch_set_cookies(browser_page, url)
 
     try:
         response, status, exc, attempts = await _navigate_with_retry(
@@ -439,6 +490,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
             raise _SeedUnreachable(url, exc, attempts=1) from exc
         return {"url": url, "status": "failed", "attempts": 1, "error": str(exc)}
     finally:
+        await _drain_set_cookie_reads(set_cookie_reads)
         if not browser_page.is_closed():
             await browser_page.close()
 
@@ -450,6 +502,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         "iframe_control_text": iframe_control_text,
         "rendered_text": rendered_text,
         "rendered_control_text": rendered_control_text,
+        "set_cookie_events": set_cookie_events,
     }
 
 
@@ -543,6 +596,10 @@ async def _crawl_full_site(
         _discover(url, "sitemap")
 
     max_concurrent = settings.scanner_max_concurrent_pages
+    # Where each cookie was first seen, filled after every batch -- see
+    # cookie_detector.attribute_new_cookies. Read-only bookkeeping: the cookie LIST
+    # still comes from the single jar read after the crawl, exactly as before.
+    cookie_observations: dict = {}
 
     while queue and diagnostics["pages_attempted"] < budget:
         batch: list[tuple[str, str]] = []
@@ -562,6 +619,19 @@ async def _crawl_full_site(
                 f"Could not reach the site at all: {exc.url} after {exc.attempts} attempt(s) ({exc.cause})"
             ) from exc.cause
         diagnostics["pages_attempted"] += len(batch)
+
+        try:
+            jar = await context.cookies()
+        except PlaywrightError as exc:
+            logger.debug("Could not read cookies after a batch for %s: %s", root_url, exc)
+        else:
+            cookie_observations.update(attribute_new_cookies(
+                jar, set(cookie_observations),
+                batch_page_urls=[u for (u, _v), r in zip(batch, results, strict=True) if r["status"] == "success"]
+                or [u for u, _v in batch],
+                header_events=[e for r in results for e in r.get("set_cookie_events", [])],
+                observed_at=_now_iso(), consent_state="pre_consent",
+            ))
 
         for (url, via), result in zip(batch, results, strict=True):
             page_local_id = f"page-{len(pages)}"
@@ -624,10 +694,21 @@ async def _crawl_full_site(
         control_text=" ".join(all_control_text_parts),
     )
 
-    cookies = [c.model_copy(update={"consent_states": ["pre_consent"]}) for c in cookies]
+    cookies = [
+        c.model_copy(update={
+            "consent_states": ["pre_consent"],
+            "observations": _observation_for(c, cookie_observations),
+        })
+        for c in cookies
+    ]
     trackers = [t.model_copy(update={"consent_states": ["pre_consent"]}) for t in trackers]
 
     return pages, forms, cookies, trackers, policies, consent_signal, diagnostics
+
+
+def _observation_for(cookie: CookieRecord, observations: dict) -> list:
+    found = observations.get(cookie_key(cookie.name, cookie.domain, cookie.path))
+    return [found] if found else []
 
 
 async def _crawl_single_page_with_interaction(
@@ -667,6 +748,7 @@ async def _crawl_single_page_with_interaction(
     browser_page.on(
         "request", lambda req, _r=request_records: _r.append((req.url, req.resource_type))
     )
+    set_cookie_events, set_cookie_reads = _watch_set_cookies(browser_page, root_url)
 
     scripts: list = []
     interaction_status = "page_unreachable"
@@ -699,11 +781,18 @@ async def _crawl_single_page_with_interaction(
     except Exception as exc:  # noqa: BLE001 — this pass is best-effort; failure is recorded, not fatal
         logger.warning("Failed %s interaction pass for %s: %s", consent_state, root_url, exc)
     finally:
+        await _drain_set_cookie_reads(set_cookie_reads)
         if not browser_page.is_closed():
             await browser_page.close()
 
     raw_cookies = await context.cookies()
     cookies = detect_cookies(raw_cookies, site_domain)
+    # A fresh context that loaded only the homepage, so every cookie here came from it.
+    cookie_observations = attribute_new_cookies(
+        raw_cookies, set(), batch_page_urls=[root_url], header_events=set_cookie_events,
+        observed_at=_now_iso(), consent_state=consent_state,
+    )
+    cookies = [c.model_copy(update={"observations": _observation_for(c, cookie_observations)}) for c in cookies]
     trackers = detect_trackers(
         site_domain=site_domain,
         scripts_by_page={"page-0": scripts},
@@ -716,14 +805,19 @@ async def _crawl_single_page_with_interaction(
 
 
 def _merge_cookie_pass(base: list[CookieRecord], new: list[CookieRecord]) -> list[CookieRecord]:
-    by_key = {(c.name, c.domain): i for i, c in enumerate(base)}
+    # cookie_key(), not the raw fields -- name+domain alone can collide (the same name
+    # and domain with two different paths are two distinct cookies in the browser).
+    by_key = {cookie_key(c.name, c.domain, c.path): i for i, c in enumerate(base)}
     for cookie in new:
-        key = (cookie.name, cookie.domain)
+        key = cookie_key(cookie.name, cookie.domain, cookie.path)
         if key in by_key:
             idx = by_key[key]
             existing = base[idx]
             merged = existing.consent_states + [s for s in cookie.consent_states if s not in existing.consent_states]
-            base[idx] = existing.model_copy(update={"consent_states": merged})
+            base[idx] = existing.model_copy(update={
+                "consent_states": merged,
+                "observations": existing.observations + cookie.observations,
+            })
         else:
             record = cookie.model_copy(update={"local_id": f"cookie-{len(base)}"})
             base.append(record)

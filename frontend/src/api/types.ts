@@ -125,6 +125,26 @@ export interface EvidenceCookieItem {
   is_first_party: boolean | null;
   source: string | null;
   consent_states: string[];
+  // Absent or null means the scan did not record it (scans made before these fields
+  // existed) -- shown as "Not available", never defaulted.
+  path?: string | null;
+  expiry?: string | null;
+  secure?: boolean | null;
+  http_only?: boolean | null;
+  same_site?: string | null;
+  observations?: CookieObservation[];
+}
+
+/** Where and when one consent-state pass first saw a cookie (backend
+ *  scanner/schemas.py CookieObservation). `page_url` is null when the scan could not
+ *  name the page exactly; `candidate_page_urls` then lists the pages it came from. */
+export interface CookieObservation {
+  consent_state: string;
+  page_url: string | null;
+  observed_at: string | null;
+  method: "set_cookie_header" | "single_page_load" | "concurrent_batch" | string;
+  source_request_url: string | null;
+  candidate_page_urls: string[];
 }
 
 export interface EvidenceTrackerItem {

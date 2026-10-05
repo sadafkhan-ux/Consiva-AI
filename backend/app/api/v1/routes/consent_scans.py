@@ -117,6 +117,15 @@ class EvidenceFormItem(BaseModel):
     purpose_guess: str | None
 
 
+class EvidenceCookieObservation(BaseModel):
+    consent_state: str
+    page_url: str | None = None
+    observed_at: str | None = None
+    method: str
+    source_request_url: str | None = None
+    candidate_page_urls: list[str] = []
+
+
 class EvidenceCookieItem(BaseModel):
     id: str
     name: str
@@ -126,6 +135,13 @@ class EvidenceCookieItem(BaseModel):
     is_first_party: bool | None
     source: str | None
     consent_states: list[str]
+    # NULL means "not recorded" (a scan from before these were captured), never a default.
+    path: str | None = None
+    expiry: str | None = None
+    secure: bool | None = None
+    http_only: bool | None = None
+    same_site: str | None = None
+    observations: list[EvidenceCookieObservation] = []
 
 
 class EvidenceTrackerItem(BaseModel):
@@ -256,7 +272,9 @@ async def get_scan_evidence(
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
-    evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id)
+    # With the cookie audit columns (expiry, flags, where/when seen) the agent's own
+    # copy leaves out -- see scan_repository._cookie_detail.
+    evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)
     return ScanEvidenceResponse(**evidence)
 
 

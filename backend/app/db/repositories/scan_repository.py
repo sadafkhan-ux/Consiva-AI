@@ -158,6 +158,8 @@ async def save_scan_result(
             expiry=_parse_expiry(cookie.expiry), is_first_party=cookie.is_first_party,
             category=cookie.category, vendor=cookie.vendor,
             source=cookie.source or "rule", consent_states=cookie.consent_states,
+            secure=cookie.secure, http_only=cookie.http_only, same_site=cookie.same_site,
+            observations=[o.model_dump() for o in cookie.observations],
             set_by_tracker_id=tracker_id_by_local.get(cookie.set_by_tracker_local_id)
             if cookie.set_by_tracker_local_id else None,
         ))
@@ -237,8 +239,20 @@ async def get_scan_counts(db: AsyncSession, scan_id: uuid.UUID) -> dict:
     return counts
 
 
+def _cookie_detail(c) -> dict:
+    """The audit columns of a cookie, for the evidence API's cookie inventory only.
+    Kept out of the agent's evidence dict on purpose: prompts.py's cookie compactor
+    reads `expiry`, so adding these there would change what the model is shown."""
+    return {
+        "path": c.path, "expiry": c.expiry.isoformat() if c.expiry else None,
+        "secure": c.secure, "http_only": c.http_only, "same_site": c.same_site,
+        "observations": c.observations or [],
+    }
+
+
 def _serialize_evidence(
-    pages: list, forms: list, cookies: list, trackers: list, services: list, policies: list, signals: list
+    pages: list, forms: list, cookies: list, trackers: list, services: list, policies: list, signals: list,
+    *, include_cookie_detail: bool = False,
 ) -> dict:
     return {
         "pages": [{"id": str(p.id), "url": p.url, "title": p.title} for p in pages],
@@ -248,7 +262,8 @@ def _serialize_evidence(
         ],
         "cookies": [
             {"id": str(c.id), "name": c.name, "domain": c.domain, "category": c.category, "vendor": c.vendor,
-             "is_first_party": c.is_first_party, "source": c.source, "consent_states": c.consent_states}
+             "is_first_party": c.is_first_party, "source": c.source, "consent_states": c.consent_states,
+             **(_cookie_detail(c) if include_cookie_detail else {})}
             for c in cookies
         ],
         "trackers": [
@@ -274,7 +289,7 @@ def _serialize_evidence(
     }
 
 
-async def get_scan_evidence_summary_concurrent(scan_id: uuid.UUID) -> dict:
+async def get_scan_evidence_summary_concurrent(scan_id: uuid.UUID, *, include_cookie_detail: bool = False) -> dict:
     """Same output as get_scan_evidence_summary(), but fetches all 7 evidence tables
     concurrently on their own short-lived sessions instead of sequentially on one --
     live-measured at ~2.5s sequential vs ~1 round-trip's worth concurrent for the
@@ -294,7 +309,10 @@ async def get_scan_evidence_summary_concurrent(scan_id: uuid.UUID) -> dict:
     pages, forms, cookies, trackers, services, policies, signals = await asyncio.gather(
         *(_rows(model) for model in models)
     )
-    return _serialize_evidence(pages, forms, cookies, trackers, services, policies, signals)
+    return _serialize_evidence(
+        pages, forms, cookies, trackers, services, policies, signals,
+        include_cookie_detail=include_cookie_detail,
+    )
 
 
 async def get_scan_evidence_summary(db: AsyncSession, scan_id: uuid.UUID) -> dict:

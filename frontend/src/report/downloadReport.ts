@@ -1,4 +1,6 @@
+import type { jsPDF as JsPdf } from "jspdf";
 import type { ReportModel } from "./buildReport";
+import { NOT_AVAILABLE, type GroupCount } from "./cookieInventory";
 
 // A4 portrait in points. Everything below is laid out against these bounds so the
 // output is genuinely ONE page -- text is drawn with jsPDF's own text API rather than
@@ -222,7 +224,208 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     PAGE_H - 33,
   );
 
+  drawCookieInventory(doc, model);
+
   const host = model.siteUrl.replace(/^https?:\/\//, "").replace(/[^a-zA-Z0-9.-]/g, "-").replace(/-+$/, "");
   const stamp = new Date().toISOString().slice(0, 10);
   doc.save(`consiva-consent-summary-${host || "report"}-${stamp}.pdf`);
+}
+
+// ---------- cookie inventory (pages 2+) ----------
+//
+// The summary above stays one page by design; the inventory is the opposite -- it is
+// complete, every cookie and every field, so it flows over as many landscape pages as
+// it needs. Same derivation as the Cookies section on screen (cookieInventory.ts).
+
+const L_W = PAGE_H; // landscape A4: the portrait height is the width
+const L_H = PAGE_W;
+const L_CONTENT_W = L_W - M * 2;
+const L_BOTTOM = L_H - 40;
+
+function drawCookieInventory(doc: JsPdf, model: ReportModel): void {
+  const inv = model.cookies;
+  let y = M;
+  let page = 0;
+
+  const setColor = (c: { r: number; g: number; b: number }) => doc.setTextColor(c.r, c.g, c.b);
+
+  const newPage = () => {
+    doc.addPage("a4", "landscape");
+    page += 1;
+    y = M;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(page === 1 ? 15 : 11);
+    setColor(INK);
+    doc.text(page === 1 ? "Cookie inventory" : "Cookie inventory (continued)", M, y);
+    y += page === 1 ? 14 : 10;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    setColor(MUTED);
+    doc.text(`${model.siteUrl} · every cookie the scan detected`, M, y);
+    y += 16;
+    // footer
+    doc.setDrawColor(RULE.r, RULE.g, RULE.b);
+    doc.setLineWidth(0.6);
+    doc.line(M, L_H - 30, M + L_CONTENT_W, L_H - 30);
+    doc.setFontSize(7.5);
+    doc.text(
+      `"${NOT_AVAILABLE}" = not recorded by the scan; no value is inferred. Times are UTC. Cookie inventory page ${page}.`,
+      M, L_H - 19,
+    );
+    setColor(INK);
+  };
+
+  const ensure = (space: number) => {
+    if (y + space > L_BOTTOM) newPage();
+  };
+
+  /** Wrapped text at x within width w; breaks onto a new page line by line. */
+  const write = (text: string, x: number, w: number, size: number, gap: number) => {
+    doc.setFontSize(size);
+    for (const line of doc.splitTextToSize(text, w) as string[]) {
+      ensure(gap);
+      doc.text(line, x, y);
+      y += gap;
+    }
+  };
+
+  const heading = (label: string) => {
+    ensure(30);
+    y += 6;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    setColor(MUTED);
+    doc.text(label.toUpperCase(), M, y);
+    y += 5;
+    doc.setDrawColor(RULE.r, RULE.g, RULE.b);
+    doc.setLineWidth(0.6);
+    doc.line(M, y, M + L_CONTENT_W, y);
+    y += 12;
+    doc.setFont("helvetica", "normal");
+    setColor(INK);
+  };
+
+  const groupLine = (label: string, groups: GroupCount[]) => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    ensure(12);
+    doc.text(label, M, y);
+    doc.setFont("helvetica", "normal");
+    const text = groups.length ? groups.map((g) => `${g.label}: ${g.count}`).join("   ·   ") : "None";
+    const startY = y;
+    write(text, M + 130, L_CONTENT_W - 130, 9, 11.5);
+    if (y === startY) y += 11.5;
+    y += 3;
+  };
+
+  newPage();
+
+  // ---------- totals and groupings ----------
+  heading("Summary");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Total unique cookies", M, y);
+  doc.setFont("helvetica", "normal");
+  doc.text(String(inv.total), M + 130, y);
+  y += 14;
+  groupLine("By consent state", inv.byState);
+  groupLine("By purpose / category", inv.byCategory);
+  groupLine("By domain", inv.byDomain);
+  doc.setFontSize(8);
+  setColor(MUTED);
+  write(
+    "A cookie seen in more than one consent state is counted once in the total and once in each state it was seen in.",
+    M, L_CONTENT_W, 8, 10,
+  );
+  setColor(INK);
+
+  if (inv.rows.length === 0) {
+    heading("Cookies");
+    write("No cookies were detected on this scan.", M, L_CONTENT_W, 9.5, 12);
+    return;
+  }
+
+  // ---------- one block per cookie ----------
+  heading(`Cookies (${inv.rows.length})`);
+  const COLS = 4;
+  const colW = L_CONTENT_W / COLS;
+
+  inv.rows.forEach((r, i) => {
+    ensure(70); // keep a cookie's header with at least its first lines
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    setColor(INK);
+    doc.text(`${i + 1}. ${r.name}`, M, y);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    setColor(MUTED);
+    doc.text(`Evidence ID ${r.id}`, M + L_CONTENT_W, y, { align: "right" });
+    setColor(INK);
+    y += 13;
+
+    const fields: [string, string][] = [
+      ["Domain", r.domain],
+      ["First- / third-party", r.party],
+      ["Category / purpose", r.category],
+      ["Vendor / service", r.vendor],
+      ["Expiry", r.expiry],
+      ["Secure", r.secure],
+      ["HttpOnly", r.httpOnly],
+      ["SameSite", r.sameSite],
+    ];
+    for (let start = 0; start < fields.length; start += COLS) {
+      const rowFields = fields.slice(start, start + COLS);
+      // Lay the row out first so it can be kept on one page.
+      const wrapped = rowFields.map(([, v]) => doc.setFontSize(8.5).splitTextToSize(v, colW - 10) as string[]);
+      const height = 10 + Math.max(...wrapped.map((w) => w.length)) * 10;
+      ensure(height + 2);
+      rowFields.forEach(([label], c) => {
+        const x = M + colW * c;
+        doc.setFontSize(7);
+        setColor(MUTED);
+        doc.text(label.toUpperCase(), x, y);
+        doc.setFontSize(8.5);
+        setColor(wrapped[c][0] === NOT_AVAILABLE ? MUTED : INK);
+        wrapped[c].forEach((line, li) => doc.text(line, x, y + 10 + li * 10));
+      });
+      setColor(INK);
+      y += height + 4;
+    }
+
+    doc.setFontSize(7);
+    setColor(MUTED);
+    ensure(10);
+    doc.text("CONSENT STATE · EXACT PAGE · WHEN DETECTED · SOURCE", M, y);
+    y += 10;
+    setColor(INK);
+    for (const s of r.sightings) {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8.5);
+      ensure(11);
+      doc.text(s.stateLabel, M, y);
+      doc.setFont("helvetica", "normal");
+      const lineX = M + 70;
+      const lineW = L_CONTENT_W - 70;
+      write(`Page: ${s.page}`, lineX, lineW, 8.5, 10);
+      if (s.candidatePages.length) {
+        setColor(MUTED);
+        write(`First appeared while these pages loaded together: ${s.candidatePages.join(", ")}`, lineX, lineW, 8, 10);
+        setColor(INK);
+      }
+      write(`Detected: ${s.detectedAt}`, lineX, lineW, 8.5, 10);
+      setColor(MUTED);
+      write(`Source: ${s.how}${s.sourceRequest ? ` (${s.sourceRequest})` : ""}`, lineX, lineW, 8, 10);
+      setColor(INK);
+      y += 3;
+    }
+
+    y += 4;
+    if (i < inv.rows.length - 1) {
+      ensure(8);
+      doc.setDrawColor(RULE.r, RULE.g, RULE.b);
+      doc.setLineWidth(0.4);
+      doc.line(M, y - 4, M + L_CONTENT_W, y - 4);
+      y += 6;
+    }
+  });
 }

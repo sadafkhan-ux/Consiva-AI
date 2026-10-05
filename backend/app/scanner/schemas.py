@@ -38,6 +38,28 @@ class FormRecord(BaseModel):
     purpose_guess: str | None = None  # set by form_detector heuristics, not the LLM
 
 
+class CookieObservation(BaseModel):
+    """Where and when one consent-state pass first saw a cookie.
+
+    `page_url` is only set when the scan can name the page exactly; it is None rather
+    than a guess otherwise. `method` says how the attribution was made:
+      "set_cookie_header" -- a Set-Cookie response header loaded by that page set it;
+                             `source_request_url` is the response that carried it
+      "single_page_load"  -- it first appeared after a step that loaded only that page
+      "concurrent_batch"  -- it first appeared after several pages loaded at once and
+                             no header names the one that set it (script-set cookies);
+                             `candidate_page_urls` lists those pages, `page_url` is None
+    `observed_at` is when the scanner saw it: the response time for a header, otherwise
+    the time of the cookie-jar read that first contained it."""
+
+    consent_state: str
+    page_url: str | None = None
+    observed_at: str | None = None
+    method: Literal["set_cookie_header", "single_page_load", "concurrent_batch"]
+    source_request_url: str | None = None
+    candidate_page_urls: list[str] = Field(default_factory=list)
+
+
 class CookieRecord(BaseModel):
     local_id: str
     name: str
@@ -45,6 +67,13 @@ class CookieRecord(BaseModel):
     path: str | None = None
     expiry: str | None = None  # ISO timestamp or None (session cookie)
     is_first_party: bool | None = None
+    # Attributes exactly as the browser reports them (Playwright cookies()); None when
+    # the browser gave no value, never defaulted here.
+    secure: bool | None = None
+    http_only: bool | None = None
+    same_site: str | None = None
+    # One entry per consent-state pass that saw this cookie -- see CookieObservation.
+    observations: list[CookieObservation] = Field(default_factory=list)
     set_by_tracker_local_id: str | None = None
     # category/vendor/source are filled in later by rules/consent_rules.py, not the scanner
     category: str | None = None
