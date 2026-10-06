@@ -145,17 +145,28 @@ def require_scope(principal: IntegrationPrincipal, scope: str) -> None:
 #: Scope a service key needs to drive the Consent Agent's integration API.
 SCOPE_CONSENT_SCAN = "consent:scan"
 
+#: Scope a service key needs to read ROPA results (runs/records/findings/changes)
+#: and promote a baseline -- separate from "evidence:write" so a push-only adapter
+#: isn't implicitly handed read access, and an integrator asking for read access
+#: doesn't have to be granted write too.
+SCOPE_EVIDENCE_READ = "evidence:read"
+
 #: Every scope a key may be granted. Enumerated so a typo at mint time is refused
 #: rather than stored as a scope that can never match anything.
-KNOWN_SCOPES = ("evidence:write", SCOPE_CONSENT_SCAN)
+KNOWN_SCOPES = ("evidence:write", SCOPE_CONSENT_SCAN, SCOPE_EVIDENCE_READ)
 
 
-async def get_caller(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
+async def _authenticate_with_scope(
+    *,
+    required_scope: str,
+    credentials: HTTPAuthorizationCredentials | None,
+    db: AsyncSession,
+    settings: Settings,
 ) -> CurrentUser:
-    """Authenticate a request from EITHER a signed-in person or a service key.
+    """Authenticate a request from EITHER a signed-in person or a service key
+    holding `required_scope`. Shared by every dependency below -- the two
+    existing callers (`get_caller`, `get_ropa_reader`) differ only in which
+    scope they require.
 
     WHY BOTH ON ONE ENDPOINT
 
@@ -166,13 +177,12 @@ async def get_caller(
 
     A service key is the answer the codebase already had, used until now only by the
     ROPA adapter: long-lived, revocable, org-scoped, stored as a hash, and granted
-    named scopes. This lets the Consent Agent's endpoints take one too, without
-    changing their signatures or how they read the caller.
+    named scopes.
 
     ATTRIBUTION
 
     The returned `user_id` is the person who MINTED the key, not a synthetic identity.
-    They authorised the integration, so a scan it runs is genuinely attributable to
+    They authorised the integration, so an action it takes is genuinely attributable to
     them, and the audit trail keeps pointing at a human. `key_name` carries which key
     was used, so "which integration did this" stays answerable too.
 
@@ -192,7 +202,7 @@ async def get_caller(
     principal = await resolve_integration_key(db, presented)
     if principal is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or revoked integration key")
-    require_scope(principal, SCOPE_CONSENT_SCAN)
+    require_scope(principal, required_scope)
 
     row = (await db.execute(
         select(RopaIntegrationKey).where(RopaIntegrationKey.id == principal.key_id)
@@ -204,4 +214,34 @@ async def get_caller(
         org_id=principal.org_id,
         role=None,          # a key is never an admin; role-gated routes stay closed to it
         key_name=principal.name,
+    )
+
+
+async def get_caller(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CurrentUser:
+    """Authenticate a request from either a signed-in person or a service key
+    holding `consent:scan` -- the Consent Agent's integration API."""
+    return await _authenticate_with_scope(
+        required_scope=SCOPE_CONSENT_SCAN, credentials=credentials, db=db, settings=settings,
+    )
+
+
+async def get_ropa_reader(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CurrentUser:
+    """Authenticate a request from either a signed-in person or a service key
+    holding `evidence:read` -- ROPA's read endpoints (runs/records/findings/
+    changes) and baseline promotion.
+
+    A key that only ever pushed evidence (`evidence:write`) cannot read its own
+    results back through this dependency; it needs `evidence:read` granted
+    explicitly, same as any other scope.
+    """
+    return await _authenticate_with_scope(
+        required_scope=SCOPE_EVIDENCE_READ, credentials=credentials, db=db, settings=settings,
     )

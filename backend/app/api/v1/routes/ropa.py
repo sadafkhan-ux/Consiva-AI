@@ -13,8 +13,18 @@ Two ways evidence can reach the agent:
    orchestrator -> agent" architecture actually needs, and it is preferred for
    third-party production systems.
 
-Every route is authenticated and org-scoped through the SAME dependency Agent 1
-uses (core/security.get_current_user), so tenancy behaves identically.
+Source management (`/sources`, `/sources/{id}/discover`, `/integration-keys`,
+baseline promotion) stays human-only, through the SAME dependency Agent 1 uses
+(core/security.get_current_user) -- these mint credentials or make the "a person
+saw this" decision baseline promotion exists to require.
+
+The read endpoints (`/runs`, `/runs/{id}`, `/records`, `/findings`, `/changes`)
+accept EITHER that same human session OR a service key holding the
+`evidence:read` scope (core/integration_auth.get_ropa_reader), so an adapter that
+pushed evidence via `/evidence` can read its own results back without a user
+session. Either way the connection is scoped to the caller's own organisation
+before any row is read (migration 0018), so a key can only ever see what it
+already organisation-scoped a write to.
 """
 
 import uuid
