@@ -224,12 +224,3 @@ def _compose(request: DsrRequest, evidence, runs, executions, actions) -> str:
         )
 
     return "\n".join(lines)
-
-
-def response_is_grounded(response: DsrResponse) -> bool:
-    """Whether every claim in this response traces to a row.
-
-    A response with prose but no facts is ungrounded by definition -- except the
-    genuine no-data case, where the search runs themselves are the grounding.
-    """
-    return bool(response.grounded_facts)

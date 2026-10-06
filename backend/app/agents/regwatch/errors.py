@@ -70,19 +70,6 @@ class ContentUnusableError(RegWatchError):
     code = watch.ERR_CONTENT_UNUSABLE
 
 
-class NoBaselineError(RegWatchError):
-    """A comparison was asked for against a baseline that does not exist yet. The
-    first successful collection produces a `first_capture` change instead."""
-
-    status_code = 409
-    code = watch.ERR_NO_BASELINE
-
-
-class AssessmentFailedError(RegWatchError):
-    status_code = 502
-    code = watch.ERR_ASSESSMENT_FAILED
-
-
 class ApprovalRequiredError(RegWatchError):
     """Something that needs a recorded human decision was attempted without one --
     advancing a baseline, or acting on a finding nobody has approved."""

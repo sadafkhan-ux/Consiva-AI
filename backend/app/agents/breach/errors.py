@@ -42,36 +42,9 @@ class IncidentNotFoundError(IncidentError):
     status_code = 404
 
 
-class UnauthorizedIncidentAccessError(IncidentError):
-    """Incident evidence can contain security-sensitive detail -- account names,
-    attack paths, sometimes credentials. Access is a separate question from being
-    signed in."""
-
-    status_code = 403
-    code = incident.ERR_UNAUTHORIZED_ACCESS
-
-
 class EvidenceUnavailableError(IncidentError):
     status_code = 409
     code = incident.ERR_EVIDENCE_UNAVAILABLE
-
-
-class InvestigationFailedError(IncidentError):
-    status_code = 502
-    code = incident.ERR_INVESTIGATION_FAILED
-
-
-class ImpactUnknownError(IncidentError):
-    """Impact could not be established from available evidence. Not a crash -- a real
-    outcome that must be visible rather than rounded to zero."""
-
-    status_code = 409
-    code = incident.ERR_IMPACT_UNKNOWN
-
-
-class RiskAssessmentFailedError(IncidentError):
-    status_code = 502
-    code = incident.ERR_RISK_ASSESSMENT_FAILED
 
 
 class ApprovalRequiredError(IncidentError):
@@ -98,11 +71,6 @@ class VerificationFailedError(IncidentError):
 
     status_code = 502
     code = incident.ERR_VERIFICATION_FAILED
-
-
-class NotificationFailedError(IncidentError):
-    status_code = 502
-    code = incident.ERR_NOTIFICATION_FAILED
 
 
 class InvalidIncidentTransitionError(IncidentError):

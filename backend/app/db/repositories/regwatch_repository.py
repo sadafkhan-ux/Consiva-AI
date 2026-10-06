@@ -156,22 +156,6 @@ async def list_collections(
     return list(result.scalars().all())
 
 
-async def last_successful_collection(
-    db: AsyncSession, source_id: uuid.UUID, org_id: uuid.UUID
-) -> RegWatchCollection | None:
-    result = await db.execute(
-        select(RegWatchCollection)
-        .where(
-            RegWatchCollection.source_id == source_id,
-            RegWatchCollection.org_id == org_id,
-            RegWatchCollection.status == "collected",
-        )
-        .order_by(RegWatchCollection.created_at.desc())
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
-
-
 # ── Baselines ────────────────────────────────────────────────────────────────────
 
 
@@ -233,17 +217,6 @@ async def create_baseline(db: AsyncSession, row: RegWatchBaseline) -> RegWatchBa
     return row
 
 
-async def list_baselines(
-    db: AsyncSession, source_id: uuid.UUID, org_id: uuid.UUID
-) -> list[RegWatchBaseline]:
-    result = await db.execute(
-        select(RegWatchBaseline)
-        .where(RegWatchBaseline.source_id == source_id, RegWatchBaseline.org_id == org_id)
-        .order_by(RegWatchBaseline.version.desc())
-    )
-    return list(result.scalars().all())
-
-
 # ── Changes ──────────────────────────────────────────────────────────────────────
 
 
@@ -262,18 +235,6 @@ async def get_change(
         )
     )
     return result.scalar_one_or_none()
-
-
-async def list_changes(
-    db: AsyncSession, source_id: uuid.UUID, org_id: uuid.UUID, *, limit: int = 50
-) -> list[RegWatchChange]:
-    result = await db.execute(
-        select(RegWatchChange)
-        .where(RegWatchChange.source_id == source_id, RegWatchChange.org_id == org_id)
-        .order_by(RegWatchChange.detected_at.desc())
-        .limit(limit)
-    )
-    return list(result.scalars().all())
 
 
 # ── Findings ─────────────────────────────────────────────────────────────────────

@@ -454,21 +454,6 @@ async def latest_approval_for_action(
     return result.scalar_one_or_none()
 
 
-async def latest_approval_for_communication(
-    db: AsyncSession, communication_id: uuid.UUID, org_id: uuid.UUID
-) -> IncidentApproval | None:
-    result = await db.execute(
-        select(IncidentApproval)
-        .where(
-            IncidentApproval.communication_id == communication_id,
-            IncidentApproval.org_id == org_id,
-        )
-        .order_by(IncidentApproval.created_at.desc())
-        .limit(1)
-    )
-    return result.scalar_one_or_none()
-
-
 async def list_approvals(
     db: AsyncSession, incident_id: uuid.UUID, org_id: uuid.UUID
 ) -> list[IncidentApproval]:

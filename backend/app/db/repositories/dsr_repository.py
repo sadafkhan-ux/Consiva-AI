@@ -269,13 +269,6 @@ async def create_plan(
     return row
 
 
-async def get_plan(db: AsyncSession, plan_id: uuid.UUID, org_id: uuid.UUID) -> DsrActionPlan | None:
-    result = await db.execute(
-        select(DsrActionPlan).where(DsrActionPlan.id == plan_id, DsrActionPlan.org_id == org_id)
-    )
-    return result.scalar_one_or_none()
-
-
 async def get_current_plan(db: AsyncSession, request_id: uuid.UUID, org_id: uuid.UUID) -> DsrActionPlan | None:
     """The highest-versioned plan that has not been superseded."""
     result = await db.execute(

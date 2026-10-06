@@ -95,8 +95,6 @@ class PostgresDsrConfig:
 class PostgresDsrConnector:
     """DSR connector for one authorized PostgreSQL source."""
 
-    connector_name = "postgres"
-
     def __init__(self, *, config: PostgresDsrConfig, grant: SourceGrant):
         self._config = config
         self._grant = grant
@@ -156,13 +154,6 @@ class PostgresDsrConnector:
             f"SET statement_timeout = {int(self._config.statement_timeout_seconds * 1000)}"
         )
         return conn
-
-    async def test_connection(self) -> bool:
-        conn = await self._connect(write=False)
-        try:
-            return await conn.fetchval("SELECT 1") == 1
-        finally:
-            await conn.close()
 
     # ── Search (§17) ─────────────────────────────────────────────────────────────
 
@@ -471,6 +462,3 @@ def _jsonable(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
-
-
-base.register(PostgresDsrConnector.connector_name, PostgresDsrConnector)

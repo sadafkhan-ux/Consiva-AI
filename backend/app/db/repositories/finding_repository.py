@@ -75,19 +75,11 @@ async def list_pending_review_for_agent_run(
     return list(result.scalars().all())
 
 
-async def list_recommendations_for_finding(db: AsyncSession, finding_id: uuid.UUID) -> list[ConsentRecommendation]:
-    result = await db.execute(
-        select(ConsentRecommendation).where(ConsentRecommendation.finding_id == finding_id)
-    )
-    return list(result.scalars().all())
-
-
 async def list_recommendations_for_findings(
     db: AsyncSession, finding_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, list[ConsentRecommendation]]:
-    """Batched variant of list_recommendations_for_finding — one query for N findings
-    instead of N, grouped by finding_id in Python. Use this for any listing endpoint;
-    reserve the singular version for genuinely single-finding lookups."""
+    """Batched variant: one query for N findings instead of N, grouped by
+    finding_id in Python. Use this for any listing endpoint."""
     if not finding_ids:
         return {}
     result = await db.execute(

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from app.agents.dsr.errors import SourceNotAuthorizedError
 
@@ -113,56 +113,3 @@ class ExecutionOutcome:
     verified: bool
     verification_detail: dict[str, Any]
     raw_response: dict[str, Any] = field(default_factory=dict)
-
-
-@runtime_checkable
-class DsrConnector(Protocol):
-    """One authorized source, for DSR purposes.
-
-    Implementations are constructed with an authorization record and a credential
-    that has ALREADY been resolved from the secret store -- a connector never reads
-    the environment, never logs its credential, and never receives one that the
-    authorization did not call for.
-    """
-
-    connector_name: str
-
-    async def test_connection(self) -> bool: ...
-
-    async def search_subject(
-        self, *, identifiers: dict[str, str], limit: int = MAX_ROWS_PER_TABLE
-    ) -> SearchOutcome:
-        """Find records belonging to the subject, using the configured identifier
-        columns only. `identifiers` maps an identifier kind ('email', 'phone',
-        'reference') to the requester's value; the value is always bound as a
-        parameter, never interpolated."""
-        ...
-
-    async def execute_action(
-        self, *, table_name: str, record_reference: dict[str, Any], operation: str,
-        payload: dict[str, Any],
-    ) -> ExecutionOutcome:
-        """Perform ONE approved operation against ONE record, then verify it by
-        reading the record back. Raises rather than reporting a partial success."""
-        ...
-
-
-_REGISTRY: dict[str, type] = {}
-
-
-def register(connector_name: str, connector_cls: type) -> None:
-    _REGISTRY[connector_name] = connector_cls
-
-
-def get_connector_class(connector_name: str) -> type:
-    try:
-        return _REGISTRY[connector_name]
-    except KeyError:
-        raise SourceNotAuthorizedError(
-            f"no DSR connector registered for {connector_name!r}; "
-            f"registered: {sorted(_REGISTRY)}"
-        ) from None
-
-
-def registered_connectors() -> list[str]:
-    return sorted(_REGISTRY)

@@ -63,15 +63,3 @@ class SourcePayload(BaseModel):
         if (reference - now).total_seconds() > 86_400:
             raise ValueError("generated_at is more than 24h in the future; check the sender's clock")
         return value
-
-
-class PayloadAccepted(BaseModel):
-    """What the sender gets back -- enough to correlate and to poll."""
-
-    run_id: str
-    correlation_id: str
-    schema_version: str
-    status: str
-    tables_received: int
-    columns_received: int
-    personal_data_elements: int

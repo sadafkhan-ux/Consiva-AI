@@ -73,22 +73,7 @@ class SearchFailedError(DsrError):
     code = case.ERR_SEARCH_FAILED
 
 
-class MultipleMatchesError(DsrError):
-    """More than one distinct subject matched. Deliberately an error rather than a
-    "pick the best one": handing one person another person's record is the single
-    worst outcome a DSR system can produce, so this always stops for a human (§42
-    scenario 5)."""
-
-    status_code = 409
-    code = case.ERR_MULTIPLE_MATCHES
-
-
 # ── Policy and approval (§20, §22, §23) ──────────────────────────────────────────
-
-class PolicyReviewRequiredError(DsrError):
-    status_code = 409
-    code = case.ERR_POLICY_REVIEW_REQUIRED
-
 
 class ApprovalRequiredError(DsrError):
     """Execution was attempted without a current, unexpired approval. The one guard
@@ -108,11 +93,6 @@ class ActionBlockedError(DsrError):
 class ActionFailedError(DsrError):
     status_code = 502
     code = case.ERR_ACTION_FAILED
-
-
-class ActionPartialError(DsrError):
-    status_code = 502
-    code = case.ERR_ACTION_PARTIAL
 
 
 class VerificationFailedError(DsrError):

@@ -562,9 +562,3 @@ def is_personal_category(category: str | None) -> bool:
     like "Not Personal Data (operational)", which must not be mistaken for a category.
     """
     return bool(category) and category in PERSONAL_CATEGORIES
-
-
-def is_operational(column_name: str, data_type: str | None = None, *, table_name: str | None = None) -> bool:
-    """Kept for callers that only need the boolean. Context-aware now: `title` in
-    a person table is NOT operational, which the old global blocklist got wrong."""
-    return classify_column(column_name, data_type, table_name=table_name).status == OPERATIONAL
