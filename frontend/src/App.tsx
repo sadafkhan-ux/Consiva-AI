@@ -52,7 +52,7 @@ export default function App() {
     // Still waiting on the dev token: show nothing rather than a login form that is
     // about to be replaced.
     if (AUTH_BYPASSED && !autoLoginError) {
-      return <div className="app" style={{ padding: 24 }}>Signing in…</div>;
+      return <div className="login-wrap"><span className="muted">Signing in…</span></div>;
     }
     // Auto-login failed (or this is a production build): the real form is the
     // fallback, not something that was deleted.
@@ -64,75 +64,37 @@ export default function App() {
     setProfile(null);
   }
 
-  return (
-    <div className="app">
-      {AUTH_BYPASSED && (
-        // Loud and permanent. A console that silently skips authentication looks
-        // exactly like one that authenticated, and the difference matters the moment
-        // anybody screenshots it or points it at something real.
-        <div className="banner banner-warn" style={{ margin: "8px 12px 0" }}>
-          {OPEN_ACCESS ? (
-            <>
-              <strong>Login bypassed — open access.</strong> Everyone who opens this
-              site is signed in as <span className="mono">{profile.email}</span> with no
-              password (<span className="mono">OPEN_ACCESS=true</span>).
-            </>
-          ) : (
-            <>
-              <strong>Login bypassed — development build.</strong> Signed in as{" "}
-              <span className="mono">{profile.email}</span> with no password. The
-              backend only offers this when{" "}
-              <span className="mono">APP_ENV=development</span> or{" "}
-              <span className="mono">OPEN_ACCESS=true</span>.
-            </>
-          )}
-        </div>
-      )}
+  const AGENTS: { id: Agent; label: string }[] = [
+    { id: "consent", label: "Consent" },
+    { id: "ropa", label: "ROPA" },
+    { id: "dsr", label: "DSR" },
+    { id: "breach", label: "Breach" },
+    { id: "regwatch", label: "Regulatory Watch" },
+    { id: "purpose", label: "Purpose" },
+  ];
 
-      <header className="app-header shell-header">
-        <div>
-          <div className="brand">Consiva AI</div>
-          <div className="tagline">DPDP compliance console</div>
+  return (
+    <div className="shell">
+      <aside className="shell-sidebar">
+        <div className="shell-brand">
+          <span className="brand">Consiva</span>
+          <span className="tagline">DPDP compliance registry</span>
         </div>
+
+        <nav className="shell-nav">
+          {AGENTS.map(({ id, label }) => (
+            <button
+              key={id}
+              className={agent === id ? "active" : ""}
+              onClick={() => setAgent(id)}
+            >
+              <span className="dot" />
+              {label}
+            </button>
+          ))}
+        </nav>
+
         <div className="shell-session">
-          <nav className="agent-switch">
-            <button
-              className={agent === "consent" ? "active" : ""}
-              onClick={() => setAgent("consent")}
-            >
-              Consent Agent
-            </button>
-            <button
-              className={agent === "ropa" ? "active" : ""}
-              onClick={() => setAgent("ropa")}
-            >
-              ROPA Agent
-            </button>
-            <button
-              className={agent === "dsr" ? "active" : ""}
-              onClick={() => setAgent("dsr")}
-            >
-              DSR Agent
-            </button>
-            <button
-              className={agent === "breach" ? "active" : ""}
-              onClick={() => setAgent("breach")}
-            >
-              Breach Agent
-            </button>
-            <button
-              className={agent === "regwatch" ? "active" : ""}
-              onClick={() => setAgent("regwatch")}
-            >
-              Regulatory Watch
-            </button>
-            <button
-              className={agent === "purpose" ? "active" : ""}
-              onClick={() => setAgent("purpose")}
-            >
-              Purpose
-            </button>
-          </nav>
           <span className="session-user">
             {profile.email}
             {profile.role === "admin" && <span className="pill pill-admin">admin</span>}
@@ -142,14 +104,41 @@ export default function App() {
             <button className="secondary small" onClick={handleSignOut}>Sign out</button>
           )}
         </div>
-      </header>
+      </aside>
 
-      {agent === "consent" && <ConsentAgentView />}
-      {agent === "ropa" && <RopaDashboard />}
-      {agent === "dsr" && <DsrConsole />}
-      {agent === "breach" && <BreachConsole />}
-      {agent === "regwatch" && <RegWatchConsole />}
-      {agent === "purpose" && <PurposeConsole />}
+      <div className="shell-main">
+        {AUTH_BYPASSED && (
+          // Loud and permanent. A console that silently skips authentication looks
+          // exactly like one that authenticated, and the difference matters the moment
+          // anybody screenshots it or points it at something real.
+          <div className="banner banner-warn" style={{ margin: "12px 16px 0" }}>
+            {OPEN_ACCESS ? (
+              <>
+                <strong>Login bypassed — open access.</strong> Everyone who opens this
+                site is signed in as <span className="mono">{profile.email}</span> with no
+                password (<span className="mono">OPEN_ACCESS=true</span>).
+              </>
+            ) : (
+              <>
+                <strong>Login bypassed — development build.</strong> Signed in as{" "}
+                <span className="mono">{profile.email}</span> with no password. The
+                backend only offers this when{" "}
+                <span className="mono">APP_ENV=development</span> or{" "}
+                <span className="mono">OPEN_ACCESS=true</span>.
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="shell-content">
+          {agent === "consent" && <ConsentAgentView />}
+          {agent === "ropa" && <RopaDashboard />}
+          {agent === "dsr" && <DsrConsole />}
+          {agent === "breach" && <BreachConsole />}
+          {agent === "regwatch" && <RegWatchConsole />}
+          {agent === "purpose" && <PurposeConsole />}
+        </div>
+      </div>
     </div>
   );
 }
