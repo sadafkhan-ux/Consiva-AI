@@ -28,15 +28,22 @@ const PHASE_TONE: Record<string, string> = {
 
 const STAGE_ORDER = [
   "url_validation", "website_scan", "data_structuring", "classification",
+  // normalize_evidence is the analyze job's own first node -- it loads the scan
+  // evidence the rest of the graph reasons over, distinct from the scan job's
+  // "classification" above (tracker/cookie vendor tagging).
+  "normalize_evidence",
   "rules_check", "rag_retrieval", "llm_analysis", "output_validation",
   // Alternatives, not sequential steps: a run reaches findings_generated OR
   // rule_findings_generated, never both. Listed adjacently so whichever one ran
   // appears in the same position in the progress list.
-  "findings_generated", "rule_findings_generated", "audit_saved",
+  "findings_generated", "rule_findings_generated",
+  "human_review_gate",
+  "audit_saved",
 ];
 const STAGE_LABELS: Record<string, string> = {
   url_validation: "URL Validation", website_scan: "Website Scan",
   data_structuring: "Data Structuring", classification: "Tracker/Cookie Classification",
+  normalize_evidence: "Loading Scan Evidence",
   rules_check: "Rules Check", rag_retrieval: "RAG Retrieval",
   // Not "NVIDIA LLM Analysis". The provider is chosen at run time -- self-hosted
   // first, NVIDIA only as fallback -- so this label named the wrong one on every
@@ -47,6 +54,7 @@ const STAGE_LABELS: Record<string, string> = {
   llm_analysis: "LLM Analysis", output_validation: "Structured Output Validation",
   findings_generated: "Findings Generated",
   rule_findings_generated: "Findings From Rules (no narrative)",
+  human_review_gate: "Human Review Gate",
   audit_saved: "Audit Saved",
 };
 
