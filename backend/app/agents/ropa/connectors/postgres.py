@@ -15,12 +15,13 @@ connection that is always closed before returning.
 
 from __future__ import annotations
 
-import re
+import logging
 import uuid
 from dataclasses import dataclass
 
 import asyncpg
 
+from app.agents.ropa.connectors import _shape
 from app.agents.ropa.connectors.base import register
 from app.agents.ropa.schemas.evidence import (
     ColumnRecord,
@@ -29,6 +30,8 @@ from app.agents.ropa.schemas.evidence import (
     SourceRecord,
     TableRecord,
 )
+
+logger = logging.getLogger(__name__)
 
 # information_schema/pg_catalog schemas are never customer data.
 _SYSTEM_SCHEMAS = {"pg_catalog", "information_schema", "pg_toast"}
@@ -221,18 +224,6 @@ async def _read_columns(conn: asyncpg.Connection, schema_names: list[str]) -> li
     )
 
 
-def _sample_pattern(value: object) -> str | None:
-    """Reduce one sampled value to a shape-only pattern: digits become '#',
-    letters become 'x', everything else (punctuation, whitespace, symbols) is
-    kept as-is. This is the ONLY form a sample may ever take -- the caller
-    discards the raw value the instant this returns."""
-    if value is None:
-        return None
-    text = str(value)[:64]
-    text = re.sub(r"[0-9]", "#", text)
-    return re.sub(r"[A-Za-z]", "x", text)
-
-
 def _quote_ident(identifier: str) -> str:
     """Postgres identifier quoting. These names come from information_schema (the
     database's own catalog, not user input), but a table legitimately named
@@ -251,75 +242,72 @@ async def _read_sample_pattern(conn: asyncpg.Connection, schema: str, table: str
         # An unreadable column/table (permissions, exotic type) is not a
         # discovery failure -- just skip the sample for it.
         return None
-    return _sample_pattern(value)
+    return _shape.mask_sample(value)
 
 
 async def discover_metadata(conn: asyncpg.Connection, config: PostgresConnectionConfig) -> tuple[
     list[TableRecord], list[ColumnRecord], list[RelationshipRecord]
 ]:
     """Read permitted schema, table, column, and data-type metadata over an
-    already-connected, already-verified connection (step 2 of the flow)."""
+    already-connected, already-verified connection (step 2 of the flow).
+
+    Fetches this engine's own catalog rows, then hands them to
+    connectors/_shape.py -- the engine-agnostic half shared with every other
+    relational connector -- for local_id assignment, ceiling enforcement and
+    sample masking.
+    """
     source_local_id = "source-1"
     schema_names = await _read_schema_metadata(conn, config.schemas)
 
     table_rows = await _read_tables(conn, schema_names)
-    table_local_ids: dict[tuple[str, str], str] = {}
-    tables: list[TableRecord] = []
-    for i, row in enumerate(table_rows, start=1):
-        local_id = f"table-{i}"
-        table_local_ids[(row["table_schema"], row["table_name"])] = local_id
-        tables.append(
-            TableRecord(
-                local_id=local_id,
-                source_local_id=source_local_id,
-                schema_name=row["table_schema"],
-                table_name=row["table_name"],
-            )
-        )
+    raw_tables = [
+        _shape.RawTable(schema=row["table_schema"], table=row["table_name"])
+        for row in table_rows
+    ]
 
     column_rows = await _read_columns(conn, schema_names)
-    columns: list[ColumnRecord] = []
-    for i, row in enumerate(column_rows, start=1):
-        table_local_id = table_local_ids.get((row["table_schema"], row["table_name"]))
-        if table_local_id is None:
-            continue  # belongs to a view/foreign table outside table_type = 'BASE TABLE'
-
-        sample_pattern = None
-        if config.collect_sample_patterns:
-            sample_pattern = await _read_sample_pattern(
-                conn, row["table_schema"], row["table_name"], row["column_name"]
-            )
-
-        columns.append(
-            ColumnRecord(
-                local_id=f"column-{i}",
-                table_local_id=table_local_id,
-                column_name=row["column_name"],
-                data_type=row["data_type"],
-                nullable=row["is_nullable"] == "YES",
-                sample_pattern=sample_pattern,
-            )
+    raw_columns = [
+        _shape.RawColumn(
+            schema=row["table_schema"],
+            table=row["table_name"],
+            column=row["column_name"],
+            data_type=row["data_type"],
+            nullable=row["is_nullable"] == "YES",
         )
+        for row in column_rows
+    ]
 
     relationship_rows = await _read_relationships(conn, schema_names)
-    relationships: list[RelationshipRecord] = []
-    for i, row in enumerate(relationship_rows, start=1):
-        from_id = table_local_ids.get((row["from_schema"], row["from_table"]))
-        to_id = table_local_ids.get((row["to_schema"], row["to_table"]))
-        if from_id is None or to_id is None:
-            continue  # references a table outside the discovered scope
-        relationships.append(
-            RelationshipRecord(
-                local_id=f"rel-{i}",
-                from_table_local_id=from_id,
-                from_column=row["from_column"],
-                to_table_local_id=to_id,
-                to_column=row["to_column"],
-                constraint_name=row["constraint_name"],
-            )
+    raw_relationships = [
+        _shape.RawRelationship(
+            from_schema=row["from_schema"],
+            from_table=row["from_table"],
+            from_column=row["from_column"],
+            to_schema=row["to_schema"],
+            to_table=row["to_table"],
+            to_column=row["to_column"],
+            constraint_name=row["constraint_name"],
         )
+        for row in relationship_rows
+    ]
 
-    return tables, columns, relationships
+    async def _sample_for(raw: _shape.RawColumn) -> str | None:
+        return await _read_sample_pattern(conn, raw.schema, raw.table, raw.column)
+
+    assembled = await _shape.assemble(
+        source_local_id=source_local_id,
+        tables=raw_tables,
+        columns=raw_columns,
+        relationships=raw_relationships,
+        sample_pattern_for=_sample_for if config.collect_sample_patterns else None,
+    )
+    if assembled.truncated:
+        logger.warning(
+            "Discovery for %r truncated at %d tables / %d columns; raise "
+            "connectors/_shape.py's ceilings if this source is expected to exceed them",
+            config.dbname, _shape.MAX_TABLES, _shape.MAX_COLUMNS,
+        )
+    return assembled.tables, assembled.columns, assembled.relationships
 
 
 # ---------------------------------------------------------------------------
