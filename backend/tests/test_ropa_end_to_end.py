@@ -132,6 +132,25 @@ async def integration_headers(client, auth_headers):
 
 
 @pytest.fixture
+async def integration_headers_with_read(client, auth_headers):
+    """A service key with BOTH evidence:write and evidence:read -- what an
+    operator mints for an adapter that needs to push evidence AND read its own
+    results back without a user session."""
+    response = await client.post(
+        "/api/v1/ropa/integration-keys",
+        headers=auth_headers,
+        json={
+            "name": "prepmyevent-adapter-read-test",
+            "scopes": ["evidence:write", "evidence:read"],
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["api_key"].startswith("csv_")
+    return {"Authorization": f"Bearer {body['api_key']}"}
+
+
+@pytest.fixture
 def auth_headers():
     """Same real-JWT approach Agent 1's own API tests use (test_api_validation.py),
     so these routes are exercised through the production auth dependency."""
@@ -234,6 +253,66 @@ async def test_idempotency_key_returns_same_run(client, auth_headers, integratio
     first = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=body)).json()
     second = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=body)).json()
     assert first["id"] == second["id"], "same idempotency key must not start a second run"
+
+
+@_live_db_only
+async def test_evidence_read_key_can_read_its_own_runs_and_promote_baseline(
+    client, integration_headers_with_read
+):
+    """Regression test for the bug where an adapter's key got 201 from /evidence
+    but 401 on every read: these routes must accept the SAME key (holding
+    evidence:read) the push used, with no human session involved anywhere in
+    this test (see integration_auth.get_ropa_reader)."""
+    push = await client.post(
+        "/api/v1/ropa/evidence", headers=integration_headers_with_read, json=_payload(),
+    )
+    assert push.status_code == 201, push.text
+    run_id = push.json()["id"]
+
+    runs = await client.get("/api/v1/ropa/runs", headers=integration_headers_with_read)
+    assert runs.status_code == 200, runs.text
+    assert any(r["id"] == run_id for r in runs.json())
+
+    assert (
+        await client.get(f"/api/v1/ropa/runs/{run_id}", headers=integration_headers_with_read)
+    ).status_code == 200
+
+    assert (
+        await client.get(
+            f"/api/v1/ropa/runs/{run_id}/records", headers=integration_headers_with_read
+        )
+    ).status_code == 200
+
+    assert (
+        await client.get(
+            f"/api/v1/ropa/runs/{run_id}/findings", headers=integration_headers_with_read
+        )
+    ).status_code == 200
+
+    assert (
+        await client.get(
+            f"/api/v1/ropa/runs/{run_id}/changes", headers=integration_headers_with_read
+        )
+    ).status_code == 200
+
+    promote = await client.post(
+        f"/api/v1/ropa/runs/{run_id}/promote-baseline", headers=integration_headers_with_read,
+    )
+    assert promote.status_code == 200, promote.text
+    assert promote.json()["is_current"] is True
+
+
+@_live_db_only
+async def test_write_only_key_cannot_read_runs(client, integration_headers):
+    """A key minted with only evidence:write (the default) must still be refused
+    on the read endpoints: evidence:read is a separate grant, never implied by
+    push access."""
+    push = await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=_payload())
+    assert push.status_code == 201, push.text
+    run_id = push.json()["id"]
+
+    response = await client.get(f"/api/v1/ropa/runs/{run_id}", headers=integration_headers)
+    assert response.status_code == 403
 
 
 @_read_only_db

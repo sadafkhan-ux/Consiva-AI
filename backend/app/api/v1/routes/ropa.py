@@ -13,18 +13,19 @@ Two ways evidence can reach the agent:
    orchestrator -> agent" architecture actually needs, and it is preferred for
    third-party production systems.
 
-Source management (`/sources`, `/sources/{id}/discover`, `/integration-keys`,
-baseline promotion) stays human-only, through the SAME dependency Agent 1 uses
-(core/security.get_current_user) -- these mint credentials or make the "a person
-saw this" decision baseline promotion exists to require.
+Source management (`/sources`, `/sources/{id}/discover`, `/integration-keys`)
+stays human-only, through the SAME dependency Agent 1 uses
+(core/security.get_current_user) -- these mint or spend credentials, which must
+stay a person's decision.
 
 The read endpoints (`/runs`, `/runs/{id}`, `/records`, `/findings`, `/changes`)
-accept EITHER that same human session OR a service key holding the
-`evidence:read` scope (core/integration_auth.get_ropa_reader), so an adapter that
-pushed evidence via `/evidence` can read its own results back without a user
+and baseline promotion (`/runs/{id}/promote-baseline`) accept EITHER a human
+session OR a service key holding the `evidence:read` scope
+(core/integration_auth.get_ropa_reader), so an adapter that pushed evidence via
+`/evidence` can read its own results back -- and promote them -- without a user
 session. Either way the connection is scoped to the caller's own organisation
-before any row is read (migration 0018), so a key can only ever see what it
-already organisation-scoped a write to.
+before any row is read or written (migration 0018), so a key can only ever
+touch what it already organisation-scoped a write to.
 """
 
 import uuid
@@ -427,7 +428,7 @@ async def ingest_evidence(
 async def list_runs(
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_ropa_reader),
 ) -> list[RunResponse]:
     """Recent discovery runs for the caller's org, newest first."""
     rows = await ropa_repository.list_runs(db, uuid.UUID(user.org_id), limit=min(limit, 200))
@@ -438,7 +439,7 @@ async def list_runs(
 async def get_run(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_ropa_reader),
 ) -> RunResponse:
     run = await ropa_repository.get_run(db, run_id, uuid.UUID(user.org_id))
     if run is None:
@@ -450,7 +451,7 @@ async def get_run(
 async def list_records(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_ropa_reader),
 ) -> list[dict]:
     org_id = uuid.UUID(user.org_id)
     if await ropa_repository.get_run(db, run_id, org_id) is None:
@@ -472,7 +473,7 @@ async def list_records(
 async def list_findings(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_ropa_reader),
 ) -> list[dict]:
     org_id = uuid.UUID(user.org_id)
     if await ropa_repository.get_run(db, run_id, org_id) is None:
@@ -492,7 +493,7 @@ async def list_findings(
 async def list_changes(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_ropa_reader),
 ) -> list[dict]:
     org_id = uuid.UUID(user.org_id)
     if await ropa_repository.get_run(db, run_id, org_id) is None:
@@ -512,12 +513,21 @@ async def list_changes(
 async def promote_baseline(
     run_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_ropa_reader),
 ) -> dict:
     """Make this run's schema the new comparison baseline.
 
-    Requires a HUMAN session on purpose: an automatic promotion would silently
-    absorb a change nobody reviewed, which defeats the point of monitoring.
+    Accepts either a human session or a service key holding `evidence:read` --
+    same as the other read endpoints (core/integration_auth.get_ropa_reader).
+    An adapter that pushed a run via /evidence can promote its own result
+    without a console login, the same way it can already read it back.
+
+    This is deliberately NOT gated behind a separate, stronger scope: the
+    "a person saw this" check this endpoint used to enforce by requiring a
+    console session is still made before any row changes -- it has just moved
+    upstream, to whoever decided the integration key was allowed to promote at
+    all (minting a key with `evidence:read` is itself a human, org-scoped
+    decision, same as minting one with `evidence:write`).
     """
     org_id = uuid.UUID(user.org_id)
     run = await ropa_repository.get_run(db, run_id, org_id)
