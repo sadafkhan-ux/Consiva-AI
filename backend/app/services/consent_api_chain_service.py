@@ -30,7 +30,13 @@ import uuid
 from app.db.models import ConsentScan
 from app.db.session import async_session_factory
 from app.jobs import queue
-from app.services import analysis_service, monitoring_service, scan_service, webhook_service
+from app.services import (
+    agent_webhook_service,
+    analysis_service,
+    monitoring_service,
+    scan_service,
+    webhook_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +109,23 @@ async def run(scan_id: uuid.UUID, org_id: uuid.UUID, user_id: uuid.UUID) -> None
         logger.exception("consent_agent.scan.failed scan_id=%s org_id=%s", scan_id, org_id)
         outcome = "failed"
         await _notify(scan_id, org_id, url, outcome, error=str(exc))
+        await agent_webhook_service.send_event(
+            "consent.scan.failed", scan_id=str(scan_id), error=str(exc)[:500],
+            callback_url=scan.agent_callback_url,
+            callback_secret=agent_webhook_service.resolve_callback_secret(
+                scan.agent_callback_secret_ciphertext
+            ),
+        )
         raise
     else:
         await _notify(scan_id, org_id, url, outcome)
+        await agent_webhook_service.send_event(
+            "consent.scan.completed", scan_id=str(scan_id),
+            callback_url=scan.agent_callback_url,
+            callback_secret=agent_webhook_service.resolve_callback_secret(
+                scan.agent_callback_secret_ciphertext
+            ),
+        )
 
 
 async def _notify(

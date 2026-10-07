@@ -177,6 +177,17 @@ class Settings(BaseSettings):
 
     webhook_signing_secret: str | None = None
 
+    # Fixed external-partner notification channel (ROPA run + Consent Agent API
+    # scan completion/failure). Distinct from webhook_signing_secret above: that
+    # one signs a CALLER-supplied per-scan webhook_url with Consiva's own scheme;
+    # this is ONE operator-configured destination per deployment (set
+    # differently in UAT vs production, same as cors_allowed_origins already
+    # is), signed with the partner's own scheme
+    # (X-Agent-Timestamp/X-Agent-Signature), not ours. Unset means these events
+    # are simply not sent -- no error, no retry.
+    agent_webhook_url: str | None = None
+    agent_webhook_secret: str | None = None
+
     # Scans per organisation per hour through the integration API, on top of the
     # existing per-day ceiling. A browser crawl costs real CPU and a real LLM call, so
     # an integrator looping on POST /scans is a cost-and-capacity problem well before

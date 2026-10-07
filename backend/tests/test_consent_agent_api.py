@@ -395,6 +395,83 @@ def test_cancellation_is_checked_between_phases():
     assert inspect.getsource(consent_api_chain_service.run).count("_is_cancelled") >= 2
 
 
+# ── Fixed external-partner webhook (agent_webhook_service) ──────────────────────
+
+def test_the_chain_fires_the_partner_webhook_on_both_outcomes():
+    """Separate from _notify (the per-customer webhook_url above): this is the
+    fixed, operator-configured partner channel, and it must fire on the same
+    two outcomes _notify does -- completed and failed -- not just one."""
+    import inspect
+
+    from app.services import consent_api_chain_service
+    body = inspect.getsource(consent_api_chain_service.run)
+    assert body.count("agent_webhook_service.send_event(") == 2
+    assert '"consent.scan.completed"' in body
+    assert '"consent.scan.failed"' in body
+
+
+async def test_the_partner_webhook_fires_on_a_real_failure_path_with_the_real_scan_id():
+    """Behavioral, not just structural: drives `run()` down its except branch
+    (execute_scan_and_persist raises) and confirms agent_webhook_service is
+    called with this scan's real id and the real error -- not just that the
+    source mentions the call somewhere."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.services import consent_api_chain_service
+
+    scan_id = uuid.uuid4()
+    org_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    fake_scan_row = type("FakeScan", (), {
+        "id": scan_id, "url": "https://example.test", "status": "running",
+        "agent_callback_url": None, "agent_callback_secret_ciphertext": None,
+    })()
+
+    with (
+        patch.object(consent_api_chain_service, "_scan_row", new=AsyncMock(return_value=fake_scan_row)),
+        patch.object(consent_api_chain_service, "_is_cancelled", new=AsyncMock(return_value=False)),
+        patch.object(
+            consent_api_chain_service.scan_service, "execute_scan_and_persist",
+            new=AsyncMock(side_effect=RuntimeError("crawl exploded")),
+        ),
+        patch.object(consent_api_chain_service, "_notify", new=AsyncMock()),
+        patch.object(consent_api_chain_service, "agent_webhook_service") as mock_webhook,
+    ):
+        mock_webhook.send_event = AsyncMock()
+        mock_webhook.resolve_callback_secret = lambda ciphertext: ciphertext
+        with pytest.raises(RuntimeError):
+            await consent_api_chain_service.run(scan_id, org_id, user_id)
+
+    mock_webhook.send_event.assert_awaited_once_with(
+        "consent.scan.failed", scan_id=str(scan_id), error="crawl exploded",
+        callback_url=None, callback_secret=None,
+    )
+
+
+def test_create_scan_request_accepts_the_agent_callback_fields():
+    req = CreateScanRequest(
+        website_url="https://example.test", authorized=True,
+        callback_url="https://partner.example/hook", callback_secret="s3cr3t",
+    )
+    assert req.callback_url == "https://partner.example/hook"
+    assert req.callback_secret == "s3cr3t"
+
+
+def test_create_scan_validates_and_stores_the_agent_callback_override():
+    """POST /scans must validate callback_url/callback_secret the same way it
+    already validates webhook_url, and persist them on the scan row -- the
+    Consent-side half of the shared-agent-instance fix. (ROPA's half is
+    proven end-to-end, through a real database, in
+    test_ropa_end_to_end.py::test_discover_source_accepts_a_per_run_callback_override
+    -- this route shares the exact same prepare_callback_override/
+    resolve_callback_secret functions that test already exercises for real.)"""
+    import inspect
+    body = inspect.getsource(route.create_scan)
+    assert "agent_webhook_service.prepare_callback_override" in body
+    assert "scan.agent_callback_url = callback_url" in body
+    assert "scan.agent_callback_secret_ciphertext = callback_secret_ciphertext" in body
+
+
 # ── Error envelope ──────────────────────────────────────────────────────────────
 
 def test_every_error_code_maps_to_a_real_exception_class():

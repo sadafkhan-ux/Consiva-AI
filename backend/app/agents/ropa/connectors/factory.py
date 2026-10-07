@@ -69,8 +69,20 @@ def _fernet() -> Fernet:
 def encrypt_credential(secret: str) -> str:
     """For POST /sources/{id}/credential. Returns the ciphertext to store;
     the plaintext `secret` is never retained by this function's caller after
-    this call -- see the route, which does not log or echo it."""
+    this call -- see the route, which does not log or echo it.
+
+    Also reused by app/services/agent_webhook_service.py for a per-run/per-scan
+    callback secret override (migration 0032): one Fernet master key per
+    deployment for anything sensitive at rest is simpler than a key per use
+    case, and the threat model is identical -- a secret a caller hands us that
+    must never be readable from a database dump."""
     return _fernet().encrypt(secret.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_credential(ciphertext: str) -> str:
+    """Public form of `_decrypt_credential` for callers outside this module
+    (see `encrypt_credential`'s docstring for why they share one key)."""
+    return _decrypt_credential(ciphertext)
 
 
 def _decrypt_credential(ciphertext: str) -> str:

@@ -34,7 +34,8 @@ from app.api.v1.schemas.consent_agent import (
     SummaryResponse,
 )
 from app.config import get_settings
-from app.core.exceptions import ConsivaError, NotFoundError, RateLimitExceededError
+from app.core.exceptions import ConsivaError, InvalidUrlError, NotFoundError, RateLimitExceededError
+
 # `get_caller`, not `get_current_user`: these endpoints accept either a signed-in
 # person or a long-lived service key, because a website integration cannot re-enter a
 # password every twelve hours and a login token that never expired would be a password
@@ -45,10 +46,13 @@ from app.core.security import CurrentUser
 from app.db.session import get_db
 from app.jobs import queue
 from app.services import (
+    agent_webhook_service,
     audit_service,
-    consent_agent_api_service as api_service,
     scan_service,
     webhook_service,
+)
+from app.services import (
+    consent_agent_api_service as api_service,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,6 +205,13 @@ async def create_scan(
         except ValueError as exc:
             raise ConsivaError(str(exc)) from exc
 
+    try:
+        callback_url, callback_secret_ciphertext = await agent_webhook_service.prepare_callback_override(
+            body.callback_url, body.callback_secret
+        )
+    except ValueError as exc:
+        raise InvalidUrlError(str(exc)) from exc
+
     options = _clamp_options(body)
 
     # The existing service. It owns the authorization attestation, the per-day rate
@@ -217,6 +228,8 @@ async def create_scan(
 
     scan.idempotency_key = idempotency_key
     scan.webhook_url = body.webhook_url
+    scan.agent_callback_url = callback_url
+    scan.agent_callback_secret_ciphertext = callback_secret_ciphertext
     scan.scan_options = options
     # `auto_analyze` is what makes this one call instead of two: the worker reads it
     # after a successful crawl and enqueues the analysis itself. The console flow does

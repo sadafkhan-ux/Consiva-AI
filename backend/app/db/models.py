@@ -64,6 +64,12 @@ class ConsentScan(Base):
     idempotency_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     scan_options: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Added by migration 0032: a per-scan override for the FIXED external-partner
+    # webhook (app/services/agent_webhook_service.py), for a shared agent instance
+    # serving more than one environment -- see that migration's header. Distinct
+    # from webhook_url above, which is Consiva's own older signing scheme.
+    agent_callback_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_callback_secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -515,6 +521,11 @@ class RopaDiscoveryRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Added by migration 0032: see ConsentScan's identical pair for why -- a
+    # per-run override for the fixed external-partner webhook, for a shared
+    # agent instance serving more than one environment.
+    agent_callback_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    agent_callback_secret_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

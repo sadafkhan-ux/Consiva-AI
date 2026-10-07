@@ -127,11 +127,14 @@ async def create_run(
     ingest_mode: str = "connector",
     requested_by_user_id: uuid.UUID | None = None,
     idempotency_key: str | None = None,
+    callback_url: str | None = None,
+    callback_secret_ciphertext: str | None = None,
 ) -> RopaDiscoveryRun:
     row = RopaDiscoveryRun(
         org_id=org_id, source_name=source_name, data_source_id=data_source_id,
         ingest_mode=ingest_mode, status="pending",
         requested_by_user_id=requested_by_user_id, idempotency_key=idempotency_key,
+        agent_callback_url=callback_url, agent_callback_secret_ciphertext=callback_secret_ciphertext,
         started_at=datetime.now(UTC),
     )
     db.add(row)

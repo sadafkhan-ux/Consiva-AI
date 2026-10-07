@@ -22,6 +22,7 @@ from app.core.exceptions import DiscoveryAlreadyInProgressError
 from app.db.models import RopaDiscoveryRun, RopaFinding, RopaRecordRow
 from app.db.repositories import audit_repository, ropa_repository
 from app.jobs import queue
+from app.services import agent_webhook_service
 
 _DECISIONS = ("approved", "rejected", "edited")
 
@@ -33,6 +34,8 @@ async def run_discovery_for_source(
     source_id: uuid.UUID,
     user_id: uuid.UUID | None,
     idempotency_key: str | None = None,
+    callback_url: str | None = None,
+    callback_secret_ciphertext: str | None = None,
 ) -> RopaDiscoveryRun:
     """VALIDATE -> QUEUE for one configured source.
 
@@ -80,6 +83,7 @@ async def run_discovery_for_source(
     run = await ropa_repository.create_run(
         db, org_id=org_id, source_name=source.name, data_source_id=source.id,
         ingest_mode="connector", requested_by_user_id=user_id, idempotency_key=idempotency_key,
+        callback_url=callback_url, callback_secret_ciphertext=callback_secret_ciphertext,
     )
     await audit_repository.record(
         db, org_id=org_id, actor_user_id=user_id, action="ropa_discovery.requested",
@@ -104,7 +108,9 @@ async def ingest_pushed_evidence(
     integration_key_name: str | None = None,
     correlation_id: str | None = None,
     schema_version: str | None = None,
-) -> RopaDiscoveryRun:
+    callback_url: str | None = None,
+    callback_secret_ciphertext: str | None = None,
+) -> tuple[RopaDiscoveryRun, bool]:
     """Analyze evidence collected by an EXTERNAL integration.
 
     This is the safer integration boundary for a third party like PrepMyEvent:
@@ -112,15 +118,21 @@ async def ingest_pushed_evidence(
     Consiva never holds their production credentials at all. The evidence has
     already been validated against the DiscoveryEvidence schema by FastAPI before
     reaching here.
+
+    Returns (run, is_new): `is_new` is False for an idempotency-key replay that
+    short-circuited to an already-completed run -- the caller uses this to
+    decide whether a fresh "ropa.run.completed" notification is warranted, so a
+    retried POST doesn't re-announce a run that already announced itself once.
     """
     if idempotency_key:
         existing = await ropa_repository.find_run_by_idempotency_key(db, org_id, idempotency_key)
         if existing is not None:
-            return existing
+            return existing, False
 
     run = await ropa_repository.create_run(
         db, org_id=org_id, source_name=source_name, ingest_mode="evidence_push",
         requested_by_user_id=user_id, idempotency_key=idempotency_key,
+        callback_url=callback_url, callback_secret_ciphertext=callback_secret_ciphertext,
     )
     await audit_repository.record(
         db, org_id=org_id, actor_user_id=user_id, action="ropa_evidence.ingested",
@@ -147,7 +159,7 @@ async def ingest_pushed_evidence(
     await ropa_repository.persist_changes(
         db, run, output.change_detection, source_name=source_name
     )
-    return run
+    return run, True
 
 
 async def execute_queued_discovery(run_id: uuid.UUID, org_id: uuid.UUID) -> None:
@@ -188,12 +200,24 @@ async def execute_queued_discovery(run_id: uuid.UUID, org_id: uuid.UUID) -> None
                 entity_type="ropa_discovery_run", entity_id=run.id, after={"error": str(exc)},
             )
             await db.commit()
+            await agent_webhook_service.send_event(
+                "ropa.run.failed", run_id=str(run.id), error=f"{type(exc).__name__}: {exc}"[:500],
+                callback_url=run.agent_callback_url,
+                callback_secret=agent_webhook_service.resolve_callback_secret(
+                    run.agent_callback_secret_ciphertext
+                ),
+            )
             raise
 
         await ropa_repository.mark_source_verified(db, source)
         await _persist_and_audit(db, run, output, org_id=org_id, user_id=None)
         await ropa_repository.persist_changes(db, run, output.change_detection, source_name=source.name)
         await db.commit()
+        await agent_webhook_service.send_event(
+            "ropa.run.completed", run_id=str(run.id),
+            callback_url=run.agent_callback_url,
+            callback_secret=agent_webhook_service.resolve_callback_secret(run.agent_callback_secret_ciphertext),
+        )
 
 
 async def _persist_and_audit(

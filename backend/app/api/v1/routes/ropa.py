@@ -47,7 +47,7 @@ from app.core.security import CurrentUser, get_current_user
 from app.db.models import RopaIntegrationKey
 from app.db.repositories import audit_repository, ropa_repository
 from app.db.session import get_db
-from app.services import ropa_run_service
+from app.services import agent_webhook_service, ropa_run_service
 
 router = APIRouter(prefix="/api/v1/ropa", tags=["ropa"])
 
@@ -146,6 +146,14 @@ class EvidenceIngest(SourcePayload):
     Inherits schema_version / correlation_id / generated_at validation from
     SourcePayload so the contract lives in exactly one place.
     """
+
+    # Route-level only -- deliberately NOT on SourcePayload, which the external
+    # adapter SDK (ropa_integration/) also builds against. This pair is for
+    # Consiva's own first-party caller (the one that knows which environment
+    # started this run) to override the fixed agent webhook destination for
+    # this run only; see DiscoverRequest's docstring above.
+    callback_url: str | None = Field(default=None, max_length=2000)
+    callback_secret: str | None = Field(default=None, max_length=500)
 
     @field_validator("evidence")
     @classmethod
@@ -425,10 +433,24 @@ async def set_source_enabled(
     )
 
 
+class DiscoverRequest(BaseModel):
+    """Optional body for POST /sources/{id}/discover. Both fields are only
+    needed when this agent instance is shared across more than one
+    environment (see agent_webhook_service.py's module docstring) -- the
+    caller that knows which environment started this run supplies its own
+    callback destination, overriding the fixed AGENT_WEBHOOK_URL/
+    AGENT_WEBHOOK_SECRET for this run's completion/failure notification only.
+    """
+
+    callback_url: str | None = Field(default=None, max_length=2000)
+    callback_secret: str | None = Field(default=None, max_length=500)
+
+
 @router.post("/sources/{source_id}/discover", response_model=RunResponse)
 async def discover_source(
     source_id: uuid.UUID,
     idempotency_key: str | None = None,
+    payload: DiscoverRequest | None = None,
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> RunResponse:
@@ -438,9 +460,17 @@ async def discover_source(
     "completed"/"failed"; a large customer database can take a while, and this
     endpoint never blocks on that."""
     try:
+        callback_url, callback_secret_ciphertext = await agent_webhook_service.prepare_callback_override(
+            payload.callback_url if payload else None, payload.callback_secret if payload else None
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    try:
         run = await ropa_run_service.run_discovery_for_source(
             db, org_id=uuid.UUID(user.org_id), source_id=source_id,
             user_id=uuid.UUID(user.user_id), idempotency_key=idempotency_key,
+            callback_url=callback_url, callback_secret_ciphertext=callback_secret_ciphertext,
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
@@ -573,15 +603,29 @@ async def ingest_evidence(
     credentials on this path -- only the curated metadata they choose to send.
     """
     integration_auth.require_scope(principal, "evidence:write")
-    run = await ropa_run_service.ingest_pushed_evidence(
+    try:
+        callback_url, callback_secret_ciphertext = await agent_webhook_service.prepare_callback_override(
+            payload.callback_url, payload.callback_secret
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    run, is_new = await ropa_run_service.ingest_pushed_evidence(
         db, org_id=uuid.UUID(principal.org_id), source_name=payload.source_name,
         evidence=payload.evidence, user_id=None,
         idempotency_key=payload.idempotency_key,
         integration_key_name=principal.name,
         correlation_id=payload.correlation_id,
         schema_version=payload.schema_version,
+        callback_url=callback_url, callback_secret_ciphertext=callback_secret_ciphertext,
     )
     await db.commit()
+    if is_new:
+        await agent_webhook_service.send_event(
+            "ropa.run.completed", run_id=str(run.id),
+            callback_url=run.agent_callback_url,
+            callback_secret=agent_webhook_service.resolve_callback_secret(run.agent_callback_secret_ciphertext),
+        )
     return _run_response(run)
 
 

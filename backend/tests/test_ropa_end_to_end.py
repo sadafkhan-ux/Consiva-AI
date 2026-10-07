@@ -5,6 +5,8 @@ ROPA agent -> discovery -> classification -> subject -> purpose -> activity ->
 data flow -> risk -> ROPA record -> persistence -> human review -> audit.
 """
 
+import hashlib
+import hmac
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -516,6 +518,338 @@ async def test_disabling_a_source_blocks_discovery_until_re_enabled(client, auth
 
     allowed = await client.post(f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers)
     assert allowed.status_code == 200, allowed.text
+
+
+class _FakeConnector:
+    """Satisfies connectors/base.py's SourceConnector protocol without any
+    real network call, so these tests exercise execute_queued_discovery's
+    real DB read/write path end to end (run status, persistence, audit) while
+    controlling exactly how discovery succeeds or fails."""
+
+    connector_name = "fake"
+    source_type = "database"
+
+    def __init__(self, *, evidence=None, error: Exception | None = None):
+        self._evidence = evidence
+        self._error = error
+
+    async def discover(self, *, org_id: str, source_name: str):
+        if self._error is not None:
+            raise self._error
+        return self._evidence
+
+    async def test_connection(self) -> None:
+        return None
+
+
+@pytest.fixture
+async def worker_session_factory(monkeypatch):
+    """execute_queued_discovery is the WORKER's entry point: it opens its own
+    session via `app.db.session.async_session_factory` (it has no request to
+    inherit a `db` from), which is bound to the app's configured DATABASE_URL
+    -- not whatever DSN the `client` fixture's dependency override points at.
+    Calling it directly from a test (rather than through the HTTP layer, the
+    way every other test in this file does) needs this patched to the same
+    throwaway database, or it reads/writes a different one entirely."""
+    engine = create_async_engine(_FIXTURE_DSN, pool_size=2, max_overflow=0)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr("app.db.session.async_session_factory", session_factory)
+    yield session_factory
+    await engine.dispose()
+
+
+@_live_db_only
+async def test_connector_pull_discovery_fires_the_partner_webhook_on_completion(
+    client, auth_headers, monkeypatch, worker_session_factory
+):
+    """The fixed external-partner channel (agent_webhook_service, distinct
+    from the per-customer webhook_url) must see "ropa.run.completed" with this
+    run's real id once execute_queued_discovery -- the worker's own entry
+    point -- finishes successfully."""
+    from unittest.mock import AsyncMock
+
+    from app.agents.ropa.schemas.evidence import DiscoveryEvidence
+    from app.services import ropa_run_service
+
+    token = auth_headers["Authorization"].split(" ", 1)[1]
+    org_id = jwt.decode(
+        token, os.environ["SUPABASE_JWT_SECRET"], algorithms=["HS256"], audience="authenticated",
+    )["org_id"]
+
+    evidence = DiscoveryEvidence.model_validate(_attendee_evidence())
+    monkeypatch.setattr(
+        ropa_run_service, "build_connector", lambda **kwargs: _FakeConnector(evidence=evidence)
+    )
+    mock_send_event = AsyncMock()
+    monkeypatch.setattr(ropa_run_service.agent_webhook_service, "send_event", mock_send_event)
+
+    source = await client.post(
+        "/api/v1/ropa/sources", headers=auth_headers,
+        json={
+            "name": "webhook-completion-test", "connector": "postgres", "source_type": "database",
+            "config": {"host": "db.example.com", "port": 5432, "dbname": "x", "user": "ro"},
+            "credential_ref": "TEST_UNUSED_CREDENTIAL_REF",
+        },
+    )
+    assert source.status_code == 201, source.text
+    source_id = source.json()["id"]
+
+    queued = await client.post(f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers)
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["id"]
+
+    await ropa_run_service.execute_queued_discovery(uuid.UUID(run_id), uuid.UUID(org_id))
+
+    mock_send_event.assert_awaited_once_with(
+        "ropa.run.completed", run_id=run_id, callback_url=None, callback_secret=None,
+    )
+
+    run = (await client.get(f"/api/v1/ropa/runs/{run_id}", headers=auth_headers)).json()
+    assert run["status"] == "completed"
+
+
+@_live_db_only
+async def test_connector_pull_discovery_fires_the_partner_webhook_on_failure(
+    client, auth_headers, monkeypatch, worker_session_factory
+):
+    """Same channel, the failure branch: a connector error during discovery
+    must still reach the partner, with this run's id and the real error, and
+    the run itself must land in status="failed" (the regression this whole
+    file's postgres-connector test guards: a failure that never reaches
+    fail_run leaves a run stuck at "discovering" forever)."""
+    from unittest.mock import AsyncMock
+
+    from app.agents.ropa.connectors.base import ConnectorError
+    from app.services import ropa_run_service
+
+    token = auth_headers["Authorization"].split(" ", 1)[1]
+    org_id = jwt.decode(
+        token, os.environ["SUPABASE_JWT_SECRET"], algorithms=["HS256"], audience="authenticated",
+    )["org_id"]
+
+    monkeypatch.setattr(
+        ropa_run_service, "build_connector",
+        lambda **kwargs: _FakeConnector(error=ConnectorError("synthetic connector failure")),
+    )
+    mock_send_event = AsyncMock()
+    monkeypatch.setattr(ropa_run_service.agent_webhook_service, "send_event", mock_send_event)
+
+    source = await client.post(
+        "/api/v1/ropa/sources", headers=auth_headers,
+        json={
+            "name": "webhook-failure-test", "connector": "postgres", "source_type": "database",
+            "config": {"host": "db.example.com", "port": 5432, "dbname": "x", "user": "ro"},
+            "credential_ref": "TEST_UNUSED_CREDENTIAL_REF",
+        },
+    )
+    assert source.status_code == 201, source.text
+    source_id = source.json()["id"]
+
+    queued = await client.post(f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers)
+    assert queued.status_code == 200, queued.text
+    run_id = queued.json()["id"]
+
+    with pytest.raises(ConnectorError):
+        await ropa_run_service.execute_queued_discovery(uuid.UUID(run_id), uuid.UUID(org_id))
+
+    mock_send_event.assert_awaited_once()
+    call_args = mock_send_event.await_args
+    assert call_args.args[0] == "ropa.run.failed"
+    assert call_args.kwargs["run_id"] == run_id
+    assert "synthetic connector failure" in call_args.kwargs["error"]
+
+    run = (await client.get(f"/api/v1/ropa/runs/{run_id}", headers=auth_headers)).json()
+    assert run["status"] == "failed"
+
+
+@_live_db_only
+async def test_evidence_push_fires_the_partner_webhook_exactly_once_for_an_idempotent_replay(
+    client, auth_headers, integration_headers, monkeypatch
+):
+    """A retried POST /evidence with the same idempotency_key must not
+    re-announce a run that already announced itself once -- the
+    ingest_pushed_evidence `is_new` guard this test is really checking."""
+    from unittest.mock import AsyncMock
+
+    from app.api.v1.routes import ropa as ropa_routes
+
+    mock_send_event = AsyncMock()
+    monkeypatch.setattr(ropa_routes.agent_webhook_service, "send_event", mock_send_event)
+
+    payload = _payload(idempotency_key="replay-webhook-test")
+    first = await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)
+    second = await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["id"] == second.json()["id"], "same idempotency_key must return the same run"
+
+    mock_send_event.assert_awaited_once_with(
+        "ropa.run.completed", run_id=first.json()["id"], callback_url=None, callback_secret=None,
+    )
+
+
+@_live_db_only
+async def test_discover_source_accepts_a_per_run_callback_override(
+    client, auth_headers, monkeypatch, worker_session_factory
+):
+    """Genuine end-to-end proof of the shared-agent-instance fix: a caller
+    that knows which environment started this run can override the fixed
+    AGENT_WEBHOOK_URL/AGENT_WEBHOOK_SECRET for this run's own notification --
+    encrypted at rest (migration 0032), decrypted and used instead of the
+    fixed config at delivery, never the other way round."""
+    import os
+    from unittest.mock import AsyncMock
+
+    from cryptography.fernet import Fernet
+
+    from app.agents.ropa.schemas.evidence import DiscoveryEvidence
+    from app.config import get_settings
+    from app.services import ropa_run_service
+
+    old_key = os.environ.get("ROPA_CREDENTIAL_ENCRYPTION_KEY")
+    os.environ["ROPA_CREDENTIAL_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+    get_settings.cache_clear()
+    try:
+        token = auth_headers["Authorization"].split(" ", 1)[1]
+        org_id = jwt.decode(
+            token, os.environ["SUPABASE_JWT_SECRET"], algorithms=["HS256"], audience="authenticated",
+        )["org_id"]
+
+        evidence = DiscoveryEvidence.model_validate(_attendee_evidence())
+        monkeypatch.setattr(
+            ropa_run_service, "build_connector", lambda **kwargs: _FakeConnector(evidence=evidence)
+        )
+        # The FIXED config, deliberately different from the override below --
+        # if delivery ever used this instead, the assertions on the captured
+        # request would fail.
+        monkeypatch.setattr(
+            ropa_run_service.agent_webhook_service, "get_settings",
+            lambda: type("S", (), {
+                "agent_webhook_url": "https://fixed.example/webhook",
+                "agent_webhook_secret": "fixed-secret",
+            })(),
+        )
+        monkeypatch.setattr(
+            ropa_run_service.agent_webhook_service, "assert_safe_url", AsyncMock(return_value=[])
+        )
+        captured = {}
+
+        # Patching httpx.AsyncClient.post globally also intercepts the test
+        # `client` fixture's own calls into the FastAPI app (it's an
+        # httpx.AsyncClient too, over ASGITransport) -- so this only captures
+        # calls aimed at the fake webhook destinations below and otherwise
+        # delegates to the real implementation.
+        import httpx as httpx_module
+
+        _real_post = httpx_module.AsyncClient.post
+        _webhook_targets = {"https://override.example/webhook", "https://fixed.example/webhook"}
+
+        async def _fake_post(self, url, *args, **kwargs):
+            if str(url) in _webhook_targets:
+                captured["url"] = str(url)
+                captured["headers"] = kwargs.get("headers", {})
+                return type("R", (), {"status_code": 200})()
+            return await _real_post(self, url, *args, **kwargs)
+
+        monkeypatch.setattr("httpx.AsyncClient.post", _fake_post)
+
+        source = await client.post(
+            "/api/v1/ropa/sources", headers=auth_headers,
+            json={
+                "name": "webhook-override-test", "connector": "postgres", "source_type": "database",
+                "config": {"host": "db.example.com", "port": 5432, "dbname": "x", "user": "ro"},
+                "credential_ref": "TEST_UNUSED_CREDENTIAL_REF",
+            },
+        )
+        assert source.status_code == 201, source.text
+        source_id = source.json()["id"]
+
+        queued = await client.post(
+            f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers,
+            json={
+                "callback_url": "https://override.example/webhook",
+                "callback_secret": "override-secret",
+            },
+        )
+        assert queued.status_code == 200, queued.text
+        run_id = queued.json()["id"]
+
+        await ropa_run_service.execute_queued_discovery(uuid.UUID(run_id), uuid.UUID(org_id))
+
+        assert captured["url"] == "https://override.example/webhook"
+        # A signature computed with the FIXED secret must not match what was
+        # actually sent -- same assurance test_agent_webhook_service.py's unit
+        # test gives, now proven through a real DB round trip (store
+        # ciphertext -> decrypt -> sign -> post).
+        wrong_mac = hmac.new(
+            b"fixed-secret", f"{captured['headers']['X-Agent-Timestamp']}.".encode(), hashlib.sha256
+        ).hexdigest()
+        assert captured["headers"]["X-Agent-Signature"] != f"sha256={wrong_mac}"
+        assert captured["headers"]["X-Agent-Signature"].startswith("sha256=")
+    finally:
+        if old_key is None:
+            os.environ.pop("ROPA_CREDENTIAL_ENCRYPTION_KEY", None)
+        else:
+            os.environ["ROPA_CREDENTIAL_ENCRYPTION_KEY"] = old_key
+        get_settings.cache_clear()
+
+
+@_live_db_only
+async def test_discover_source_rejects_a_callback_url_without_a_secret(client, auth_headers):
+    source = await client.post(
+        "/api/v1/ropa/sources", headers=auth_headers,
+        json={
+            "name": "webhook-partial-override-test", "connector": "postgres", "source_type": "database",
+            "config": {"host": "db.example.com", "port": 5432, "dbname": "x", "user": "ro"},
+            "credential_ref": "TEST_UNUSED_CREDENTIAL_REF",
+        },
+    )
+    assert source.status_code == 201, source.text
+    source_id = source.json()["id"]
+
+    response = await client.post(
+        f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers,
+        json={"callback_url": "https://override.example/webhook"},
+    )
+    assert response.status_code == 422, response.text
+    assert "together" in response.text
+
+
+@_live_db_only
+async def test_discover_source_rejects_a_callback_secret_when_encryption_is_not_configured(
+    client, auth_headers,
+):
+    import os
+
+    from app.config import get_settings
+
+    old_key = os.environ.pop("ROPA_CREDENTIAL_ENCRYPTION_KEY", None)
+    get_settings.cache_clear()
+    try:
+        source = await client.post(
+            "/api/v1/ropa/sources", headers=auth_headers,
+            json={
+                "name": "webhook-no-encryption-key-test", "connector": "postgres",
+                "source_type": "database",
+                "config": {"host": "db.example.com", "port": 5432, "dbname": "x", "user": "ro"},
+                "credential_ref": "TEST_UNUSED_CREDENTIAL_REF",
+            },
+        )
+        assert source.status_code == 201, source.text
+        source_id = source.json()["id"]
+
+        response = await client.post(
+            f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers,
+            # A real, resolvable domain -- the point of this test is reaching the
+            # encryption step, not the earlier SSRF/DNS check.
+            json={"callback_url": "https://example.com/webhook", "callback_secret": "s"},
+        )
+        assert response.status_code == 422, response.text
+        assert "ROPA_CREDENTIAL_ENCRYPTION_KEY" in response.text
+    finally:
+        if old_key is not None:
+            os.environ["ROPA_CREDENTIAL_ENCRYPTION_KEY"] = old_key
+        get_settings.cache_clear()
 
 
 @_live_db_only

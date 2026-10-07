@@ -46,6 +46,16 @@ class CreateScanRequest(BaseModel):
         description="Optional https endpoint POSTed when the scan reaches a terminal "
                     "state. Validated against the same SSRF rules as the scan target.",
     )
+    callback_url: str | None = Field(
+        default=None, max_length=2000,
+        description="Overrides the fixed AGENT_WEBHOOK_URL destination for this scan's "
+                    "completion/failure notification only -- for a caller that knows "
+                    "which environment (UAT/production) started this scan when this "
+                    "agent instance is shared across more than one. Must be supplied "
+                    "together with callback_secret, or not at all. Distinct from "
+                    "webhook_url above, which uses Consiva's own signing scheme.",
+    )
+    callback_secret: str | None = Field(default=None, max_length=500)
     authorized: bool = Field(
         default=False,
         description="Explicit attestation that you own or are permitted to scan this "
