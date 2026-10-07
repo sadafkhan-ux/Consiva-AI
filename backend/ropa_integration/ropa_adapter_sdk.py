@@ -45,7 +45,12 @@ DEFAULT_MAX_RETRIES = 3
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
-SCHEMA_VERSION = "1.0"
+# Tracks app/agents/ropa/schemas/payload.py's CURRENT_SCHEMA_VERSION -- kept in
+# sync even when this adapter doesn't populate every optional field the
+# version advertises (e.g. 1.1's RoleRecord.table_local_ids), since the
+# version declares what the BACKEND accepts, not what this sender happens to
+# use yet.
+SCHEMA_VERSION = "1.1"
 ADAPTER_VERSION = "1.0.0"
 
 

@@ -3,8 +3,10 @@
 Two ways evidence can reach the agent:
 
 1. `POST /sources` + `POST /sources/{id}/discover` -- Consiva connects to the
-   customer's source itself using a least-privilege credential resolved from the
-   environment.
+   customer's source itself using a least-privilege credential, resolved either
+   from the environment (`credential_ref`) or from an encrypted value set via
+   `POST /sources/{id}/credential` (migration 0031, for self-service onboarding
+   without an operator editing the environment).
 
 2. `POST /evidence` -- an EXTERNAL integration (a customer's own adapter, e.g. on
    PrepMyEvent's side) collects metadata in their environment and posts already-
@@ -13,13 +15,13 @@ Two ways evidence can reach the agent:
    orchestrator -> agent" architecture actually needs, and it is preferred for
    third-party production systems.
 
-Source management (`/sources`, `/sources/{id}/discover`, `/integration-keys`)
-stays human-only, through the SAME dependency Agent 1 uses
+Source management (`/sources`, `/sources/test-connection`, `/sources/{id}/discover`,
+`/sources/{id}/credential`, `/integration-keys`) stays human-only, through the SAME dependency Agent 1 uses
 (core/security.get_current_user) -- these mint or spend credentials, which must
 stay a person's decision.
 
-The read endpoints (`/runs`, `/runs/{id}`, `/records`, `/findings`, `/changes`)
-and baseline promotion (`/runs/{id}/promote-baseline`) accept EITHER a human
+The read endpoints (`/runs`, `/runs/{id}`, `/records`, `/findings`, `/changes`,
+`/classifications`) and baseline promotion (`/runs/{id}/promote-baseline`) accept EITHER a human
 session OR a service key holding the `evidence:read` scope
 (core/integration_auth.get_ropa_reader), so an adapter that pushed evidence via
 `/evidence` can read its own results back -- and promote them -- without a user
@@ -36,7 +38,8 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.ropa.connectors.base import registered_connectors
+from app.agents.ropa.connectors import factory as connector_factory
+from app.agents.ropa.connectors.base import ConnectorError, registered_connectors
 from app.agents.ropa.schemas.evidence import DiscoveryEvidence
 from app.agents.ropa.schemas.payload import SourcePayload
 from app.core import integration_auth
@@ -51,6 +54,24 @@ router = APIRouter(prefix="/api/v1/ropa", tags=["ropa"])
 # Keys that must never be accepted in a source's non-secret `config` blob --
 # a secret belongs in the environment entry named by credential_ref, never here.
 _FORBIDDEN_CONFIG_KEYS = {"password", "api_key", "secret", "token", "credential", "dsn", "connection_string"}
+_KNOWN_SOURCE_TYPES = {"database", "api", "file", "application"}
+
+
+def _check_known_connector(value: str) -> str:
+    if value not in registered_connectors():
+        raise ValueError(f"unknown connector {value!r}; available: {registered_connectors()}")
+    return value
+
+
+def _check_no_inline_secrets(value: dict) -> dict:
+    leaked = _FORBIDDEN_CONFIG_KEYS & {k.lower() for k in value}
+    if leaked:
+        raise ValueError(
+            f"config must not contain secrets {sorted(leaked)}; "
+            "put the secret in the environment and reference it with credential_ref, "
+            "or (for a connection test only) in the separate `secret` field"
+        )
+    return value
 
 
 class DataSourceCreate(BaseModel):
@@ -63,31 +84,38 @@ class DataSourceCreate(BaseModel):
         description="NAME of the environment entry holding the secret -- never the secret itself",
     )
 
-    @field_validator("connector")
-    @classmethod
-    def _known_connector(cls, value: str) -> str:
-        if value not in registered_connectors():
-            raise ValueError(f"unknown connector {value!r}; available: {registered_connectors()}")
-        return value
+    _check_connector = field_validator("connector")(_check_known_connector)
+    _check_secrets = field_validator("config")(_check_no_inline_secrets)
 
     @field_validator("source_type")
     @classmethod
     def _known_source_type(cls, value: str) -> str:
-        allowed = {"database", "api", "file", "application"}
-        if value not in allowed:
-            raise ValueError(f"source_type must be one of {sorted(allowed)}")
+        if value not in _KNOWN_SOURCE_TYPES:
+            raise ValueError(f"source_type must be one of {sorted(_KNOWN_SOURCE_TYPES)}")
         return value
 
-    @field_validator("config")
-    @classmethod
-    def _no_inline_secrets(cls, value: dict) -> dict:
-        leaked = _FORBIDDEN_CONFIG_KEYS & {k.lower() for k in value}
-        if leaked:
-            raise ValueError(
-                f"config must not contain secrets {sorted(leaked)}; "
-                "put the secret in the environment and reference it with credential_ref"
-            )
-        return value
+
+class TestConnectionRequest(BaseModel):
+    """Tests a configuration BEFORE it is saved -- connector/config/credential
+    need not correspond to any stored RopaDataSource row. `secret` is used
+    exactly once, to attempt a connection, and is never persisted or logged
+    (see connectors/factory.py's raw_secret precedence)."""
+
+    connector: str
+    config: dict = Field(default_factory=dict)
+    credential_ref: str | None = None
+    secret: str | None = Field(
+        default=None, max_length=10_000,
+        description="Raw credential value, used once to test the connection. Never stored.",
+    )
+
+    _check_connector = field_validator("connector")(_check_known_connector)
+    _check_secrets = field_validator("config")(_check_no_inline_secrets)
+
+
+class TestConnectionResponse(BaseModel):
+    ok: bool
+    message: str
 
 
 class DataSourceResponse(BaseModel):
@@ -97,6 +125,10 @@ class DataSourceResponse(BaseModel):
     source_type: str
     config: dict
     credential_ref: str | None
+    # Never the ciphertext itself -- just whether one has been set, so a
+    # console can show "credential configured" without ever being able to
+    # leak or re-derive it.
+    has_stored_credential: bool = False
     enabled: bool
     last_verified_at: str | None = None
 
@@ -197,6 +229,7 @@ class IntegrationKeySummary(BaseModel):
 
 class RunResponse(BaseModel):
     id: uuid.UUID
+    data_source_id: uuid.UUID | None
     source_name: str
     ingest_mode: str
     status: str
@@ -206,6 +239,9 @@ class RunResponse(BaseModel):
     overall_confidence: float | None
     summary: dict
     error: str | None
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
 
 
 class DecisionRequest(BaseModel):
@@ -223,17 +259,48 @@ class DecisionRequest(BaseModel):
 
 def _run_response(run) -> RunResponse:
     return RunResponse(
-        id=run.id, source_name=run.source_name, ingest_mode=run.ingest_mode, status=run.status,
+        id=run.id, data_source_id=run.data_source_id, source_name=run.source_name,
+        ingest_mode=run.ingest_mode, status=run.status,
         tables_scanned=run.tables_scanned, columns_scanned=run.columns_scanned,
         personal_data_elements=run.personal_data_elements,
         overall_confidence=float(run.overall_confidence) if run.overall_confidence is not None else None,
         summary=run.summary, error=run.error,
+        created_at=run.created_at.isoformat(),
+        started_at=run.started_at.isoformat() if run.started_at else None,
+        completed_at=run.completed_at.isoformat() if run.completed_at else None,
     )
 
 
 @router.get("/connectors")
 async def list_connectors(user: CurrentUser = Depends(get_current_user)) -> dict:
     return {"connectors": registered_connectors()}
+
+
+@router.post("/sources/test-connection", response_model=TestConnectionResponse)
+async def test_connection(
+    payload: TestConnectionRequest,
+    user: CurrentUser = Depends(get_current_user),
+) -> TestConnectionResponse:
+    """Tests BEFORE saving -- builds a connector from exactly what the form
+    holds (never persisted) and attempts `test_connection()`: connect,
+    verify least-privilege, lock read-only, then stop -- no schema read.
+
+    Returns 200 with `ok: false` for a configuration/connection failure
+    (wrong password, unreachable host, over-privileged role, ...), since that
+    is an expected, actionable outcome for this endpoint, not a server error.
+    A 4xx/5xx here is reserved for something actually wrong with the request
+    or the server, which is exactly what FastAPI's default handling already
+    gives for an unregistered connector or a malformed body.
+    """
+    try:
+        connector = connector_factory.build_connector(
+            connector=payload.connector, config=payload.config,
+            credential_ref=payload.credential_ref, raw_secret=payload.secret,
+        )
+        await connector.test_connection()
+    except ConnectorError as exc:
+        return TestConnectionResponse(ok=False, message=str(exc))
+    return TestConnectionResponse(ok=True, message="Connection succeeded.")
 
 
 @router.post("/sources", response_model=DataSourceResponse, status_code=status.HTTP_201_CREATED)
@@ -246,10 +313,21 @@ async def create_source(
         db, org_id=uuid.UUID(user.org_id), name=payload.name, connector=payload.connector,
         source_type=payload.source_type, config=payload.config, credential_ref=payload.credential_ref,
     )
+    await audit_repository.record(
+        db, org_id=uuid.UUID(user.org_id), actor_user_id=uuid.UUID(user.user_id),
+        action="ropa_data_source.created", entity_type="ropa_data_source", entity_id=source.id,
+        # Non-secret config only -- credential_ref is a NAME, never the secret (see
+        # DataSourceCreate's own validator and migration 0007's header).
+        after={
+            "name": source.name, "connector": source.connector, "source_type": source.source_type,
+            "credential_ref": source.credential_ref,
+        },
+    )
     await db.commit()
     return DataSourceResponse(
         id=source.id, name=source.name, connector=source.connector, source_type=source.source_type,
-        config=source.config, credential_ref=source.credential_ref, enabled=source.enabled,
+        config=source.config, credential_ref=source.credential_ref,
+        has_stored_credential=source.credential_ciphertext is not None, enabled=source.enabled,
     )
 
 
@@ -262,11 +340,89 @@ async def list_sources(
     return [
         DataSourceResponse(
             id=r.id, name=r.name, connector=r.connector, source_type=r.source_type, config=r.config,
-            credential_ref=r.credential_ref, enabled=r.enabled,
+            credential_ref=r.credential_ref, has_stored_credential=r.credential_ciphertext is not None,
+            enabled=r.enabled,
             last_verified_at=r.last_verified_at.isoformat() if r.last_verified_at else None,
         )
         for r in rows
     ]
+
+
+class SetSourceCredential(BaseModel):
+    secret: str = Field(min_length=1, max_length=10_000, description="The raw credential value. "
+                        "Encrypted immediately; never stored or logged in plaintext.")
+
+
+@router.post("/sources/{source_id}/credential", status_code=status.HTTP_204_NO_CONTENT)
+async def set_source_credential(
+    source_id: uuid.UUID,
+    payload: SetSourceCredential,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> None:
+    """Self-service alternative to a `credential_ref` env var: encrypts
+    `secret` (Fernet, ROPA_CREDENTIAL_ENCRYPTION_KEY) and stores only the
+    ciphertext. Requires a human session -- minting a usable credential is the
+    same class of action as minting an integration key, never a key's own job.
+
+    Calling this again for the same source ROTATES it: the previous
+    ciphertext is simply overwritten, same as changing an env var rotates the
+    credential_ref path.
+    """
+    org_id = uuid.UUID(user.org_id)
+    source = await ropa_repository.get_data_source(db, source_id, org_id)
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"data source {source_id} not found")
+
+    try:
+        ciphertext = connector_factory.encrypt_credential(payload.secret)
+    except connector_factory.CredentialEncryptionNotConfigured as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    await ropa_repository.set_source_credential(db, source, ciphertext)
+    await audit_repository.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="ropa_data_source.credential_set", entity_type="ropa_data_source", entity_id=source.id,
+        # The secret and its ciphertext are both deliberately absent -- this
+        # audit entry proves WHEN and BY WHOM, never what was set.
+        after={"name": source.name},
+    )
+    await db.commit()
+
+
+class SetSourceEnabled(BaseModel):
+    enabled: bool
+
+
+@router.post("/sources/{source_id}/enabled", response_model=DataSourceResponse)
+async def set_source_enabled(
+    source_id: uuid.UUID,
+    payload: SetSourceEnabled,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+) -> DataSourceResponse:
+    """Disable a source to stop future discovery runs against it without
+    deleting its history, or re-enable one. `run_discovery_for_source`
+    already refuses to enqueue a job for a disabled source -- this is the
+    only endpoint that flips the flag it checks."""
+    org_id = uuid.UUID(user.org_id)
+    source = await ropa_repository.get_data_source(db, source_id, org_id)
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"data source {source_id} not found")
+
+    await ropa_repository.set_source_enabled(db, source, payload.enabled)
+    await audit_repository.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="ropa_data_source.enabled_changed", entity_type="ropa_data_source", entity_id=source.id,
+        after={"name": source.name, "enabled": source.enabled},
+    )
+    await db.commit()
+    return DataSourceResponse(
+        id=source.id, name=source.name, connector=source.connector, source_type=source.source_type,
+        config=source.config, credential_ref=source.credential_ref,
+        has_stored_credential=source.credential_ciphertext is not None, enabled=source.enabled,
+        last_verified_at=source.last_verified_at.isoformat() if source.last_verified_at else None,
+    )
 
 
 @router.post("/sources/{source_id}/discover", response_model=RunResponse)
@@ -276,6 +432,11 @@ async def discover_source(
     db: AsyncSession = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ) -> RunResponse:
+    """Queues a discovery run and returns immediately with status="pending" --
+    it does not wait for the connector to actually read the source. Poll
+    `GET /runs/{id}` (or the other run endpoints) for status="discovering" ->
+    "completed"/"failed"; a large customer database can take a while, and this
+    endpoint never blocks on that."""
     try:
         run = await ropa_run_service.run_discovery_for_source(
             db, org_id=uuid.UUID(user.org_id), source_id=source_id,
@@ -459,8 +620,8 @@ async def list_records(
     rows = await ropa_repository.list_records_for_run(db, run_id, org_id)
     return [
         {
-            "id": str(r.id), "processing_activity": r.processing_activity, "version": r.version,
-            "status": r.status, "review_required": r.review_required,
+            "id": str(r.id), "source_name": r.source_name, "processing_activity": r.processing_activity,
+            "version": r.version, "status": r.status, "review_required": r.review_required,
             "confidence": float(r.confidence) if r.confidence is not None else None,
             "payload": r.edited_payload or r.payload,
             "supersedes_id": str(r.supersedes_id) if r.supersedes_id else None,
@@ -481,11 +642,39 @@ async def list_findings(
     rows = await ropa_repository.list_findings_for_run(db, run_id, org_id)
     return [
         {
-            "id": str(f.id), "finding": f.finding, "gap_status": f.gap_status, "severity": f.severity,
+            "id": str(f.id), "run_id": str(f.discovery_run_id), "finding": f.finding,
+            "category": f.category, "gap_status": f.gap_status, "severity": f.severity,
             "severity_factors": f.severity_factors, "confidence": float(f.confidence) if f.confidence else None,
             "recommendation": f.recommendation, "review_status": f.review_status,
+            "created_at": f.created_at.isoformat(),
         }
         for f in rows
+    ]
+
+
+@router.get("/runs/{run_id}/classifications")
+async def list_classifications(
+    run_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: CurrentUser = Depends(integration_auth.get_ropa_reader),
+) -> list[dict]:
+    """The per-column classification trail: category, confidence, which rule
+    matched, and why -- the answer to "why was this column classified this
+    way", which the grouped /records view cannot provide on its own (migration
+    0029)."""
+    org_id = uuid.UUID(user.org_id)
+    if await ropa_repository.get_run(db, run_id, org_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
+    rows = await ropa_repository.list_classifications_for_run(db, run_id, org_id)
+    return [
+        {
+            "id": str(c.id), "source": c.source_name, "schema": c.schema_name,
+            "table": c.table_name, "column": c.column_name,
+            "classification": c.classification, "data_subject": c.data_subject,
+            "confidence": float(c.confidence), "evidence": c.evidence,
+            "review_required": c.review_required, "review_reason": c.review_reason,
+        }
+        for c in rows
     ]
 
 

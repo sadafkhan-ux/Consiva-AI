@@ -26,7 +26,10 @@ from pydantic import BaseModel, Field, field_validator
 from app.agents.ropa.schemas.evidence import DiscoveryEvidence
 
 # Bump MINOR for additive/optional changes, MAJOR only for a breaking one.
-CURRENT_SCHEMA_VERSION = "1.0"
+# 1.1 added RoleRecord.table_local_ids (optional) -- a role declaring WHICH
+# tables it can reach, so access findings can stop treating "a role exists
+# somewhere" as "this table is mapped". See risk_service.build_access_findings.
+CURRENT_SCHEMA_VERSION = "1.1"
 SUPPORTED_MAJOR_VERSIONS = frozenset({"1"})
 
 

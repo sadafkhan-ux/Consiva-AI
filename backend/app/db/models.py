@@ -469,8 +469,14 @@ class RopaDataSource(Base):
     """An authorized external source this org may discover against.
 
     `credential_ref` is the NAME of an environment/secret-store entry, never the
-    secret itself -- see 0007's header for why. Nothing in this row is sensitive,
-    so it is safe to return from the API and safe in a database dump.
+    secret itself -- see 0007's header for why. `credential_ciphertext` (0031) is
+    the OPTIONAL alternative: a Fernet-encrypted secret, set via
+    POST /sources/{id}/credential, for a deployment that wants customer
+    self-service onboarding without an operator editing the environment.
+    connectors/factory.py tries it first and falls back to credential_ref.
+    Neither ever holds a secret in PLAINTEXT, so this row is still safe to
+    return from the API (minus the ciphertext itself, which is still never
+    returned -- see DataSourceResponse) and safe in a database dump.
     """
 
     __tablename__ = "ropa_data_sources"
@@ -482,6 +488,7 @@ class RopaDataSource(Base):
     source_type: Mapped[str] = mapped_column(String, nullable=False)
     config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     credential_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    credential_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
     credential_rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -524,10 +531,20 @@ class RopaRecordRow(Base):
     discovery_run_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("ropa_discovery_runs.id"), nullable=False, index=True
     )
+    # Denormalized from the owning run (migration 0030): a version chain must
+    # never span two different sources that happen to produce an activity
+    # with the same name -- see _latest_version's org_id+source_name+activity
+    # filter in ropa_repository.py.
+    source_name: Mapped[str] = mapped_column(String, nullable=False)
     processing_activity: Mapped[str] = mapped_column(String, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Fingerprint over the record's semantically meaningful fields (migration
+    # 0030) -- NOT over run-specific evidence ids, which legitimately differ
+    # every run even when nothing changed. Lets persist_output skip minting a
+    # no-op version when re-pushed evidence produced an identical record.
+    content_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     edited_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     confidence: Mapped[float | None] = mapped_column(Numeric, nullable=True)
     review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -580,6 +597,36 @@ class RopaSchemaChange(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class RopaClassification(Base):
+    """One column's classification result, as the rules engine actually produced
+    it for this run -- confidence, which stage/rule matched, the evidence trail.
+
+    Written alongside `ropa_records` (migration 0029), never instead of it:
+    `ropa_records` holds the grouped, processing-activity-level view a reviewer
+    approves; this table is the per-column trail a "why was this column
+    classified this way" question actually needs, which the grouped view
+    cannot answer on its own."""
+
+    __tablename__ = "ropa_classifications"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    discovery_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("ropa_discovery_runs.id"), nullable=False, index=True
+    )
+    source_name: Mapped[str] = mapped_column(String, nullable=False)
+    schema_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    table_name: Mapped[str] = mapped_column(String, nullable=False)
+    column_name: Mapped[str] = mapped_column(String, nullable=False)
+    classification: Mapped[str] = mapped_column(String, nullable=False)
+    data_subject: Mapped[str] = mapped_column(String, nullable=False, default="Unknown")
+    confidence: Mapped[float] = mapped_column(Numeric, nullable=False)
+    evidence: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class RopaIntegrationKey(Base):
     """Service credential for an external integration adapter. `key_hash` is a
     SHA-256 digest; the key itself exists only in the operator's hands (see
@@ -610,6 +657,10 @@ class RopaFinding(Base):
         ForeignKey("ropa_discovery_runs.id"), nullable=False, index=True
     )
     finding: Mapped[str] = mapped_column(Text, nullable=False)
+    # Machine-readable kind (e.g. "sensitive_category", "missing_retention") --
+    # see risk_service.detect_gaps' call sites for the fixed set. Nullable: a
+    # finding persisted before migration 0029 has none, and nothing requires it.
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
     gap_status: Mapped[str] = mapped_column(String, nullable=False)
     severity: Mapped[str] = mapped_column(String, nullable=False)
     severity_factors: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)

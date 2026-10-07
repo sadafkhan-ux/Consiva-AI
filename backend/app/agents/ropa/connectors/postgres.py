@@ -22,7 +22,7 @@ from dataclasses import dataclass
 import asyncpg
 
 from app.agents.ropa.connectors import _shape
-from app.agents.ropa.connectors.base import register
+from app.agents.ropa.connectors.base import ConnectorError, register
 from app.agents.ropa.schemas.evidence import (
     ColumnRecord,
     DiscoveryEvidence,
@@ -37,10 +37,24 @@ logger = logging.getLogger(__name__)
 _SYSTEM_SCHEMAS = {"pg_catalog", "information_schema", "pg_toast"}
 
 
-class PostgresConnectorError(Exception):
+class PostgresConnectorError(ConnectorError):
     """Raised for anything that stops discovery before evidence can be
     returned: bad credentials, an over-privileged role, unreachable host, or
-    a requested schema that doesn't exist."""
+    a requested schema that doesn't exist.
+
+    BUG FIXED HERE: this used to be a bare `Exception`, not a `ConnectorError`
+    subclass -- so `ropa_run_service.py`'s `except (ConnectorError, ValueError)`
+    around every real discovery call never actually caught a Postgres
+    connection failure. A wrong password, an unreachable host, or a
+    superuser credential used by mistake (exactly the safety-critical
+    failures `_verify_least_privilege` exists to catch) propagated
+    uncaught out of `execute_queued_discovery`, which meant
+    `ropa_repository.fail_run()` was never called: the job itself got
+    marked failed by the worker's generic exception handler, but the RUN
+    stayed at status="discovering" forever -- indistinguishable from one
+    still genuinely in progress, with no error message anywhere a user
+    could see. Found while adding test_connection()'s error handling,
+    which needed exactly this hierarchy to already be correct."""
 
 
 @dataclass(frozen=True)
@@ -324,7 +338,17 @@ async def discover(*, org_id: str, source_name: str, config: PostgresConnectionC
 
     conn = await connect_source(config)
     try:
-        tables, columns, relationships = await discover_metadata(conn, config)
+        try:
+            tables, columns, relationships = await discover_metadata(conn, config)
+        except (OSError, asyncpg.PostgresError) as exc:
+            # Same class of bug PostgresConnectorError's docstring describes,
+            # just at the schema-read step instead of connect time: a dropped
+            # connection or a Postgres error mid-discovery is not a
+            # ConnectorError subclass, so it would escape
+            # execute_queued_discovery's `except (ConnectorError, ValueError)`
+            # uncaught, leaving the run stuck at status="discovering" forever
+            # instead of being marked failed with a visible error.
+            raise PostgresConnectorError(f"discovery failed while reading schema metadata: {exc}") from exc
     finally:
         await conn.close()
 
@@ -358,6 +382,13 @@ class PostgresConnector:
 
     async def discover(self, *, org_id: str, source_name: str) -> DiscoveryEvidence:
         return await discover(org_id=org_id, source_name=source_name, config=self._config)
+
+    async def test_connection(self) -> None:
+        """Connect, verify least-privilege, lock read-only, then immediately
+        close -- the exact same validated path `discover()` takes before it
+        reads anything, with no schema read at all."""
+        conn = await connect_source(self._config)
+        await conn.close()
 
 
 register("postgres", PostgresConnector)

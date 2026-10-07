@@ -64,6 +64,17 @@ class Settings(BaseSettings):
     # without it, /api/v1/auth/login cannot issue tokens.
     consiva_jwt_secret: str | None = None
 
+    # ROPA (Agent 2) data-source credential encryption -- the smallest extension
+    # that lets a customer self-service a new data source's secret through the
+    # API, instead of an operator editing this process's environment and
+    # restarting it. A urlsafe-base64, 32-byte Fernet key (Fernet.generate_key()).
+    # Optional: the existing env-var `credential_ref` path (connectors/factory.py)
+    # is untouched and keeps working with no key set at all. Only
+    # POST /sources/{id}/credential requires this to be configured; everything
+    # else -- reading sources, running discovery against an env-var-backed
+    # source -- is unaffected by whether it's set.
+    ropa_credential_encryption_key: str | None = None
+
     # Supabase auth -- now OPTIONAL. Identity used to come from Supabase; local
     # auth replaces it. These stay so a deployment mid-transition keeps
     # accepting existing Supabase tokens (see core/security.py's dual mode), and

@@ -50,8 +50,14 @@ _read_only_db = pytest.mark.skipif(not read_only_dsn(), reason=READ_ONLY_SKIP_RE
 _FIXTURE_DSN = _REAL_DATABASE_URL or read_only_dsn()
 
 
-def _attendee_evidence() -> dict:
-    """PrepMyEvent-shaped metadata: what an external adapter would post."""
+def _attendee_evidence(*, retention_policy: str = "24 months") -> dict:
+    """PrepMyEvent-shaped metadata: what an external adapter would post.
+
+    `retention_policy` is the one knob the versioning tests vary -- it flows
+    straight into RopaRecord.retention, one of the fields the content
+    fingerprint hashes, so changing it is what makes two pushes genuinely
+    different rather than a no-op re-push.
+    """
     return {
         "org_id": "00000000-0000-0000-0000-000000000000",
         "discovery_run_id": str(uuid.uuid4()),
@@ -77,19 +83,21 @@ def _attendee_evidence() -> dict:
         }],
         "business_metadata": [{
             "local_id": "meta-1", "subject_local_id": "table-1",
-            "business_owner": "Events Team", "retention_policy": "24 months",
+            "business_owner": "Events Team", "retention_policy": retention_policy,
         }],
     }
 
 
-def _payload(idempotency_key: str | None = None) -> dict:
+def _payload(idempotency_key: str | None = None, *, retention_policy: str = "24 months") -> dict:
     """Build the wire payload with the SDK an external adapter would use, so
     this test fails if the adapter and the server contract ever drift."""
     config = AdapterConfig(
         source_name="prepmyevent.com", consiva_base_url="https://api.example.com",
         integration_key="csv_unused_here", allow_list=(),
     )
-    return build_payload(_attendee_evidence(), config, idempotency_key=idempotency_key)
+    return build_payload(
+        _attendee_evidence(retention_policy=retention_policy), config, idempotency_key=idempotency_key
+    )
 
 
 @pytest.fixture
@@ -205,10 +213,30 @@ async def test_full_flow_evidence_push_to_approved_ropa(client, auth_headers, in
     assert attendee["version"] >= 1
     assert attendee["status"] in ("draft", "in_review")
 
-    # 4. Risk findings were persisted.
+    # 3b. The data-flow chain (source -> storage -> Stripe, evidenced by the
+    # pushed vendor record) reaches the record, not just the transient output.
+    assert payload["data_flows"], "a vendor was supplied; the flow must reach the stored record"
+    assert any(step["to_node"] == "Stripe" for step in payload["data_flows"])
+
+    # 4. Risk findings were persisted, each with a machine-readable category,
+    # its run id, and when it was created.
     findings = (await client.get(f"/api/v1/ropa/runs/{run_id}/findings", headers=auth_headers)).json()
     assert findings
     assert all(f["severity_factors"] for f in findings), "risk scoring must be explainable"
+    assert all(f["category"] for f in findings)
+    assert all(f["run_id"] == run_id for f in findings)
+    assert all(f["created_at"] for f in findings)
+
+    # 4b. The per-column classification trail is queryable independently of the
+    # grouped record above -- "why was this column classified this way".
+    classifications = (
+        await client.get(f"/api/v1/ropa/runs/{run_id}/classifications", headers=auth_headers)
+    ).json()
+    assert classifications
+    email_col = next(c for c in classifications if c["column"] == "email")
+    assert email_col["classification"] == "Contact Data"
+    assert email_col["confidence"] > 0
+    assert email_col["evidence"]
 
     # 5. Human review: approve the record.
     decision = await client.post(
@@ -230,11 +258,21 @@ async def test_full_flow_evidence_push_to_approved_ropa(client, auth_headers, in
 
 
 @_live_db_only
-async def test_rerun_supersedes_previous_version(client, auth_headers, integration_headers):
-    """A second run must create version N+1, never overwrite the approved record."""
-    payload = _payload()
-    first = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)).json()
-    second = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)).json()
+async def test_rerun_with_changed_evidence_creates_new_version(client, auth_headers, integration_headers):
+    """A second run whose evidence actually differs (a new retention policy)
+    must create version N+1, never overwrite the approved record."""
+    first = (
+        await client.post(
+            "/api/v1/ropa/evidence", headers=integration_headers,
+            json=_payload(retention_policy="24 months"),
+        )
+    ).json()
+    second = (
+        await client.post(
+            "/api/v1/ropa/evidence", headers=integration_headers,
+            json=_payload(retention_policy="36 months"),
+        )
+    ).json()
 
     first_records = (await client.get(f"/api/v1/ropa/runs/{first['id']}/records", headers=auth_headers)).json()
     second_records = (await client.get(f"/api/v1/ropa/runs/{second['id']}/records", headers=auth_headers)).json()
@@ -244,6 +282,85 @@ async def test_rerun_supersedes_previous_version(client, auth_headers, integrati
 
     assert a2["version"] > a1["version"]
     assert a2["supersedes_id"] == a1["id"]
+    assert a2["payload"]["retention"] == "36 months"
+
+
+@_live_db_only
+async def test_rerun_with_unchanged_evidence_does_not_create_a_new_version(
+    client, auth_headers, integration_headers
+):
+    """Regression test: re-pushing evidence that produces the SAME record in
+    substance must not mint a no-op version, even though the run itself gets a
+    fresh discovery_run_id and fresh evidence local_ids every time.
+
+    /runs/{id}/records filters by discovery_run_id -- it deliberately lists
+    only the records a run CREATED a new version of, so a run that found
+    everything unchanged correctly lists none for that activity. The
+    regression is checked the other way around: the record run 1 created is
+    still the CURRENT, non-superseded version after run 2, at the same
+    version number -- i.e. run 2 recognizing it as unchanged did not fork it.
+    """
+    payload = _payload()
+    first = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)).json()
+    second = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)).json()
+    assert first["id"] != second["id"], "two distinct runs, not deduped by idempotency_key"
+
+    first_records = (await client.get(f"/api/v1/ropa/runs/{first['id']}/records", headers=auth_headers)).json()
+    second_records = (await client.get(f"/api/v1/ropa/runs/{second['id']}/records", headers=auth_headers)).json()
+
+    a1 = next(r for r in first_records if r["processing_activity"] == "Event Attendee Management")
+    assert not any(r["processing_activity"] == "Event Attendee Management" for r in second_records), (
+        "an unchanged re-push mints no new version, so run 2's own (created-by-it) "
+        "record list has none for this activity"
+    )
+
+    run = (await client.get(f"/api/v1/ropa/runs/{second['id']}", headers=auth_headers)).json()
+    assert run["status"] == "completed", "the re-push is still a real, fully audited run"
+    assert run["summary"]["unchanged_records"] >= 1
+
+    first_records_again = (
+        await client.get(f"/api/v1/ropa/runs/{first['id']}/records", headers=auth_headers)
+    ).json()
+    a1_again = next(r for r in first_records_again if r["processing_activity"] == "Event Attendee Management")
+    assert a1_again["id"] == a1["id"], "run 2 must not have superseded run 1's record with a new one"
+    assert a1_again["version"] == a1["version"]
+    assert a1_again["status"] != "superseded"
+
+
+@_live_db_only
+async def test_same_activity_name_across_sources_does_not_collide(
+    client, auth_headers, integration_headers
+):
+    """Regression test for the version-identity bug: two different sources
+    producing an activity with the SAME name must never share a version
+    chain -- a run against source B must not supersede source A's record."""
+    source_a = _payload()
+    source_a["source_name"] = "source-a.example.com"
+    source_b = _payload()
+    source_b["source_name"] = "source-b.example.com"
+
+    run_a = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=source_a)).json()
+    run_b = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=source_b)).json()
+
+    records_a = (await client.get(f"/api/v1/ropa/runs/{run_a['id']}/records", headers=auth_headers)).json()
+    records_b = (await client.get(f"/api/v1/ropa/runs/{run_b['id']}/records", headers=auth_headers)).json()
+
+    a = next(r for r in records_a if r["processing_activity"] == "Event Attendee Management")
+    b = next(r for r in records_b if r["processing_activity"] == "Event Attendee Management")
+
+    assert a["id"] != b["id"]
+    assert a["version"] == 1
+    assert b["version"] == 1, "source B's first run must be version 1, not a supersession of source A"
+    assert a["source_name"] == "source-a.example.com"
+    assert b["source_name"] == "source-b.example.com"
+
+    # source A's record must still be the current (non-superseded) one for its
+    # own source after source B's run.
+    records_a_again = (
+        await client.get(f"/api/v1/ropa/runs/{run_a['id']}/records", headers=auth_headers)
+    ).json()
+    a_again = next(r for r in records_a_again if r["processing_activity"] == "Event Attendee Management")
+    assert a_again["status"] != "superseded"
 
 
 @_live_db_only
@@ -315,6 +432,170 @@ async def test_write_only_key_cannot_read_runs(client, integration_headers):
     assert response.status_code == 403
 
 
+@_live_db_only
+async def test_discover_source_queues_a_job_instead_of_connecting_inline(
+    client, auth_headers, monkeypatch
+):
+    """Regression test: POST /sources/{id}/discover must create the run and
+    enqueue a 'ropa_discovery' job, returning immediately -- it must NOT
+    connect to the source itself from the request path. That connection only
+    happens in execute_queued_discovery, which the worker calls."""
+    from app.services import ropa_run_service
+
+    def _must_not_be_called(**kwargs):
+        raise AssertionError(
+            "build_connector was called from the request path -- discovery is "
+            "supposed to be queued, not run inline"
+        )
+
+    monkeypatch.setattr(ropa_run_service, "build_connector", _must_not_be_called)
+
+    source = await client.post(
+        "/api/v1/ropa/sources", headers=auth_headers,
+        json={
+            "name": "queued-discovery-test", "connector": "postgres", "source_type": "database",
+            "config": {"host": "db.example.com", "port": 5432, "dbname": "x", "user": "ro"},
+            "credential_ref": "TEST_UNUSED_CREDENTIAL_REF",
+        },
+    )
+    assert source.status_code == 201, source.text
+    source_id = source.json()["id"]
+
+    response = await client.post(f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    run = response.json()
+    assert run["status"] == "pending", (
+        "discover_source must return before the worker has touched this run; "
+        "anything other than 'pending' here means discovery ran inline again"
+    )
+
+    # A second request while the first is still queued must still be refused,
+    # same protection the old synchronous path had -- "pending" is one of the
+    # two non-terminal statuses find_active_run_for_source checks for.
+    second = await client.post(f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers)
+    assert second.status_code == 409, second.text
+
+
+@_live_db_only
+async def test_disabling_a_source_blocks_discovery_until_re_enabled(client, auth_headers):
+    """POST /sources/{id}/enabled must actually gate discovery -- a disabled
+    source must refuse to queue a new run, and re-enabling it must restore
+    that ability, rather than the flag being cosmetic."""
+    source = await client.post(
+        "/api/v1/ropa/sources", headers=auth_headers,
+        json={
+            "name": "enable-disable-test", "connector": "postgres", "source_type": "database",
+            "config": {"host": "db.example.com", "port": 5432, "dbname": "x", "user": "ro"},
+            "credential_ref": "TEST_UNUSED_CREDENTIAL_REF",
+        },
+    )
+    assert source.status_code == 201, source.text
+    source_id = source.json()["id"]
+    assert source.json()["enabled"] is True
+
+    disabled = await client.post(
+        f"/api/v1/ropa/sources/{source_id}/enabled", headers=auth_headers, json={"enabled": False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["enabled"] is False
+
+    listed = await client.get("/api/v1/ropa/sources", headers=auth_headers)
+    assert next(s for s in listed.json() if s["id"] == source_id)["enabled"] is False
+
+    # run_discovery_for_source raises ValueError for a disabled source, same
+    # as its not-found case -- the route maps that to 404, not 409 (409 is
+    # reserved for DiscoveryAlreadyInProgressError, a different condition).
+    refused = await client.post(f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers)
+    assert refused.status_code == 404, refused.text
+
+    enabled = await client.post(
+        f"/api/v1/ropa/sources/{source_id}/enabled", headers=auth_headers, json={"enabled": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["enabled"] is True
+
+    allowed = await client.post(f"/api/v1/ropa/sources/{source_id}/discover", headers=auth_headers)
+    assert allowed.status_code == 200, allowed.text
+
+
+@_live_db_only
+async def test_source_credential_is_encrypted_and_never_returned(client, auth_headers):
+    """POST /sources/{id}/credential (migration 0031): the secret must never
+    come back from any read, and the row's stored ciphertext must decrypt
+    back to exactly what was set when a connector is built from it."""
+    import os
+    import uuid as uuid_module
+
+    from cryptography.fernet import Fernet
+
+    from app.agents.ropa.connectors import factory as connector_factory
+    from app.config import get_settings
+    from app.db.repositories import ropa_repository
+
+    old_key = os.environ.get("ROPA_CREDENTIAL_ENCRYPTION_KEY")
+    os.environ["ROPA_CREDENTIAL_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
+    get_settings.cache_clear()
+    try:
+        source = await client.post(
+            "/api/v1/ropa/sources", headers=auth_headers,
+            json={
+                "name": "self-service-credential-test", "connector": "postgres",
+                "source_type": "database",
+                "config": {"host": "db.example.com", "port": 5432, "dbname": "x", "user": "ro"},
+            },
+        )
+        assert source.status_code == 201, source.text
+        source_id = source.json()["id"]
+        assert source.json()["has_stored_credential"] is False
+
+        set_response = await client.post(
+            f"/api/v1/ropa/sources/{source_id}/credential",
+            headers=auth_headers, json={"secret": "a-real-db-password"},
+        )
+        assert set_response.status_code == 204, set_response.text
+
+        # Every read of this source must show a credential is configured, and
+        # must never leak the secret or its ciphertext in any field.
+        listed = await client.get("/api/v1/ropa/sources", headers=auth_headers)
+        row = next(s for s in listed.json() if s["id"] == source_id)
+        assert row["has_stored_credential"] is True
+        assert "a-real-db-password" not in listed.text
+        assert "credential_ciphertext" not in listed.text
+
+        # The stored ciphertext must round-trip to exactly the secret that was
+        # set, and a connector built from the real row must see the plaintext.
+        token = auth_headers["Authorization"].split(" ", 1)[1]
+        org_id = jwt.decode(
+            token, os.environ["SUPABASE_JWT_SECRET"], algorithms=["HS256"], audience="authenticated",
+        )["org_id"]
+
+        engine = create_async_engine(_FIXTURE_DSN, pool_size=1, max_overflow=0)
+        try:
+            async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+                data_source = await ropa_repository.get_data_source(
+                    db, uuid_module.UUID(source_id), uuid_module.UUID(org_id)
+                )
+        finally:
+            await engine.dispose()
+
+        assert data_source is not None
+        assert data_source.credential_ciphertext is not None
+        assert "a-real-db-password" not in data_source.credential_ciphertext
+
+        connector = connector_factory.build_connector(
+            connector=data_source.connector, config=data_source.config,
+            credential_ref=data_source.credential_ref,
+            credential_ciphertext=data_source.credential_ciphertext,
+        )
+        assert connector._config.password == "a-real-db-password"
+    finally:
+        if old_key is None:
+            os.environ.pop("ROPA_CREDENTIAL_ENCRYPTION_KEY", None)
+        else:
+            os.environ["ROPA_CREDENTIAL_ENCRYPTION_KEY"] = old_key
+        get_settings.cache_clear()
+
+
 @_read_only_db
 async def test_source_config_rejects_inline_secrets(client, auth_headers):
     """A password must go in the environment, never into the stored config."""
@@ -335,6 +616,58 @@ async def test_routes_require_authentication(client):
     assert (await client.get("/api/v1/ropa/sources")).status_code in (401, 403)
     assert (await client.get("/api/v1/ropa/connectors")).status_code in (401, 403)
     assert (await client.post("/api/v1/ropa/evidence", json={})).status_code in (401, 403)
+
+
+@_read_only_db
+async def test_connection_test_against_an_unreachable_host_fails_cleanly(client, auth_headers):
+    """This route never touches the database (no Depends(get_db) at all), so
+    unlike every other test in this file it needs no live DB -- it genuinely
+    executes a real connection attempt against a host that cannot resolve,
+    and the real PostgresConnectorError it raises must come back as
+    ok: false, not an unhandled 500. This is also the regression test for the
+    PostgresConnectorError/ConnectorError hierarchy bug: before that fix, this
+    exact failure was NOT a ConnectorError, so the route's
+    `except ConnectorError` would have missed it and this call would 500."""
+    response = await client.post(
+        "/api/v1/ropa/sources/test-connection",
+        headers=auth_headers,
+        json={
+            "connector": "postgres",
+            "config": {"host": "this-host-does-not-resolve.invalid", "dbname": "x", "user": "ro"},
+            "secret": "whatever",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is False
+    assert body["message"]
+
+
+@_read_only_db
+async def test_connection_test_rejects_an_unregistered_connector(client, auth_headers):
+    response = await client.post(
+        "/api/v1/ropa/sources/test-connection",
+        headers=auth_headers,
+        json={"connector": "mysql", "config": {}},
+    )
+    assert response.status_code == 422, response.text
+    assert "unknown connector" in response.text
+
+
+@_read_only_db
+async def test_connection_test_rejects_an_inline_secret_in_config(client, auth_headers):
+    """The `secret` field exists exactly so a raw credential never has to go
+    into `config` -- the same inline-secret guard DataSourceCreate uses."""
+    response = await client.post(
+        "/api/v1/ropa/sources/test-connection",
+        headers=auth_headers,
+        json={
+            "connector": "postgres",
+            "config": {"host": "h", "dbname": "d", "user": "u", "password": "hunter2"},
+        },
+    )
+    assert response.status_code == 422, response.text
+    assert "credential_ref" in response.text
 
 
 # ── Enrichment safety (no live LLM needed) ──────────────────────────────────────

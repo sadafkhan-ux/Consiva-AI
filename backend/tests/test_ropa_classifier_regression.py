@@ -231,6 +231,37 @@ def test_conflicts_are_recorded_and_reduce_confidence():
         assert r.confidence < pdr.BASE_TOKEN + pdr.BONUS_TABLE_CONTEXT
 
 
+# ── Vendor/system field names that must not become personal data ───────────────
+# Stage 8 (generic token) used to also match a rule's *whole-name* `exact`
+# entries as if they were weak tokens, so any compound containing a bare word
+# like "name" (PD-002's own exact entry) read as Identity Data regardless of
+# what qualified it -- a vendor/provider/gateway field, not a person.
+
+@pytest.mark.parametrize("column", [
+    "API_ProviderName", "GATEWAYNAME", "BANKNAME", "bank_name", "payment_gateway_name",
+])
+def test_vendor_system_names_are_not_auto_personal_data(column):
+    r = classify(column, table="payments")
+    assert r.status != pdr.CLASSIFIED or r.category != pdr.CATEGORY_IDENTITY
+
+
+def test_event_title_short_name_is_not_personal_data():
+    r = classify("EventTitleShortName", table="events")
+    assert r.status != pdr.CLASSIFIED
+
+
+def test_last_email_sent_date_is_temporal_not_personal():
+    r = classify("LastEmailSentDate", "TIMESTAMP", table="leads")
+    assert r.status == pdr.OPERATIONAL
+
+
+def test_bare_uid_is_not_inferred_as_a_government_identifier():
+    """"uid" is commonly a generic surrogate-key abbreviation, not evidence of a
+    government ID -- it must not get the strongest-evidence exact-match tier."""
+    r = classify("uid", table="users")
+    assert r.category != pdr.CATEGORY_GOVERNMENT_ID
+
+
 def test_no_llm_is_invoked(monkeypatch):
     """The classifier must stay deterministic and offline."""
     def _explode(*_a, **_k):

@@ -111,9 +111,13 @@ RULES: tuple[PersonalDataRule, ...] = (
     ),
     PersonalDataRule(
         rule_id="PD-003", category=CATEGORY_GOVERNMENT_ID,
+        # "uid" is deliberately excluded: it is commonly a generic surrogate-key
+        # abbreviation ("unique ID"), not evidence of a government identifier.
+        # Treating a bare "uid" as exact-match government-ID evidence produced a
+        # confident (0.90) false positive on ordinary primary-key-style columns.
         exact=("aadhaar", "aadhar", "aadhaar_number", "pan", "pan_number", "passport",
                "passport_number", "ssn", "voter_id", "driving_licence", "driving_license",
-               "national_id", "tax_id", "gstin", "uid"),
+               "national_id", "tax_id", "gstin"),
         tokens=("aadhaar", "aadhar", "passport", "ssn", "gstin"),
     ),
     PersonalDataRule(
@@ -468,7 +472,14 @@ def _stage_token(shape: ctx.ColumnShape, context: str, where: tuple[str, ...]):
     """
     matches: list[tuple[PersonalDataRule, str]] = []
     for rule in RULES:
-        hit = shape.tokens & set(rule.exact) or shape.tokens & set(rule.tokens)
+        # Only `rule.tokens` -- the deliberately weak, curated vocabulary for
+        # this stage -- is eligible here. `rule.exact` entries are strong,
+        # whole-name evidence already consumed at stage 4; reusing them as
+        # generic tokens let a single bare word like "name" (PD-002's
+        # whole-name entry) match any compound containing it, so
+        # `API_ProviderName` / `bank_name` read as a person's identity even
+        # though "name" there qualifies a vendor/system field, not a person.
+        hit = shape.tokens & set(rule.tokens)
         if hit:
             matches.append((rule, min(hit)))
         elif shape.compact in rule.tokens:

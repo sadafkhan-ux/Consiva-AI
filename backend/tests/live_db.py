@@ -28,7 +28,10 @@ Two entry points, because these tests are not equally safe to aim at a deploymen
                    Only TEST_DATABASE_URL counts -- a variable nobody sets by accident.
 """
 
+import asyncio
 import os
+import threading
+from functools import lru_cache
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -42,8 +45,53 @@ _ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 PLACEHOLDER_DSN = "postgresql+asyncpg://user:pass@localhost/test"
 
 
+@lru_cache(maxsize=8)
+def _reachable(dsn: str, timeout: float = 3.0) -> bool:
+    """A real (auth-level) connection probe, cached per DSN.
+
+    A DSN being *configured* used to be the whole test, so a real-looking but
+    abandoned DATABASE_URL (the old Supabase project this deployment moved off
+    of -- see the module docstring) made every live-DB test ERROR deep inside a
+    connector call instead of SKIPping with a clear reason. "skip cleanly
+    without real infra" (README) requires actually checking that infra
+    answers. A plain TCP check is not enough here: Supabase's pooler accepts
+    the TCP connection and only then rejects it at the Postgres protocol level
+    ("tenant/user ... not found") once the backing project is gone -- so this
+    does a real `asyncpg.connect()` and treats any failure as unreachable.
+
+    Run in a dedicated thread with its own event loop rather than
+    `asyncio.run()` directly: `read_only_dsn()`/`writable_dsn()` are called
+    both at module/decoration time (no loop yet) and, once this cache is warm,
+    from inside already-running async test bodies -- `asyncio.run()` would
+    raise if the first real (uncached) call ever happened from the latter.
+    """
+    import asyncpg
+
+    plain = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+    async def _probe():
+        conn = await asyncpg.connect(plain, timeout=timeout)
+        await conn.close()
+
+    outcome: dict[str, bool] = {}
+
+    def _runner():
+        try:
+            asyncio.run(_probe())
+            outcome["ok"] = True
+        except Exception:  # noqa: BLE001 -- any failure (auth, DNS, timeout, dead tenant) means "treat as unreachable"
+            outcome["ok"] = False
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout + 2)
+    return outcome.get("ok", False)
+
+
 def _usable(dsn: str | None) -> str | None:
-    return None if not dsn or dsn == PLACEHOLDER_DSN else dsn
+    if not dsn or dsn == PLACEHOLDER_DSN:
+        return None
+    return dsn if _reachable(dsn) else None
 
 
 def read_only_dsn() -> str | None:

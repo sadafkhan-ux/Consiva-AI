@@ -21,6 +21,7 @@ from app.agents.ropa.services import change_detection_service, discovery_service
 from app.core.exceptions import DiscoveryAlreadyInProgressError
 from app.db.models import RopaDiscoveryRun, RopaFinding, RopaRecordRow
 from app.db.repositories import audit_repository, ropa_repository
+from app.jobs import queue
 
 _DECISIONS = ("approved", "rejected", "edited")
 
@@ -33,7 +34,23 @@ async def run_discovery_for_source(
     user_id: uuid.UUID | None,
     idempotency_key: str | None = None,
 ) -> RopaDiscoveryRun:
-    """CONNECT -> READ -> VALIDATE -> TRANSFORM -> PERSIST for one configured source."""
+    """VALIDATE -> QUEUE for one configured source.
+
+    Does NOT connect to the source or run discovery itself -- it creates the
+    run row (status="pending") and enqueues a `ropa_discovery` job on the
+    existing agent_jobs queue, then returns immediately. The actual
+    CONNECT -> READ -> TRANSFORM -> PERSIST work happens in
+    `execute_queued_discovery`, which the worker runs (app/jobs/worker.py).
+
+    This used to do that work inline, which held the HTTP request open for
+    however long a customer's database took to introspect -- a large schema
+    pinned a request thread (and a DB connection) for the whole scan. Moving
+    it to the worker is not a new mechanism: the dispatch branch for
+    'ropa_discovery' and execute_queued_discovery itself already existed and
+    were already correct (including passing the schema baseline for change
+    detection, which this inline path never did -- a second, smaller bug this
+    consolidation also fixes); nothing enqueued a job for either to run.
+    """
     if idempotency_key:
         existing = await ropa_repository.find_run_by_idempotency_key(db, org_id, idempotency_key)
         if existing is not None:
@@ -49,7 +66,10 @@ async def run_discovery_for_source(
     # supplies one; this covers the caller that does not, which is the common case --
     # a double-click, or a retry after a slow response. Without it, each attempt
     # opened another connection to the customer's production database and read their
-    # whole schema again, and Consiva is a guest on that system.
+    # whole schema again, and Consiva is a guest on that system. "pending" (this
+    # function's own output, before the worker ever picks it up) is one of the two
+    # statuses this checks for, so a second request queued while the first is still
+    # sitting in the queue is caught just as reliably as one already mid-discovery.
     in_flight = await ropa_repository.find_active_run_for_source(db, org_id, source.id)
     if in_flight is not None:
         raise DiscoveryAlreadyInProgressError(
@@ -66,28 +86,10 @@ async def run_discovery_for_source(
         entity_type="ropa_discovery_run", entity_id=run.id,
         after={"source": source.name, "connector": source.connector},
     )
-
-    try:
-        connector = build_connector(
-            connector=source.connector, config=source.config, credential_ref=source.credential_ref
-        )
-        run.status = "discovering"
-        await db.flush()
-
-        output = await discovery_service.discover_and_analyze(
-            connector, org_id=str(org_id), source_name=source.name
-        )
-    except (ConnectorError, ValueError) as exc:
-        # The message names the credential REF, never a secret value.
-        await ropa_repository.fail_run(db, run, f"{type(exc).__name__}: {exc}")
-        await audit_repository.record(
-            db, org_id=org_id, actor_user_id=user_id, action="ropa_discovery.failed",
-            entity_type="ropa_discovery_run", entity_id=run.id, after={"error": str(exc)},
-        )
-        return run
-
-    await ropa_repository.mark_source_verified(db, source)
-    await _persist_and_audit(db, run, output, org_id=org_id, user_id=user_id)
+    await queue.enqueue(
+        db, org_id=org_id, job_type="ropa_discovery",
+        payload={"run_id": str(run.id), "org_id": str(org_id)},
+    )
     return run
 
 
@@ -170,7 +172,8 @@ async def execute_queued_discovery(run_id: uuid.UUID, org_id: uuid.UUID) -> None
 
         try:
             connector = build_connector(
-                connector=source.connector, config=source.config, credential_ref=source.credential_ref
+                connector=source.connector, config=source.config, credential_ref=source.credential_ref,
+                credential_ciphertext=source.credential_ciphertext,
             )
             run.status = "discovering"
             await db.flush()

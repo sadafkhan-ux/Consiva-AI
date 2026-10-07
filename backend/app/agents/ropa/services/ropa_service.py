@@ -22,6 +22,7 @@ from app.agents.ropa.schemas.output import (
 from app.agents.ropa.schemas.ropa import (
     ChangeDetectionEntry,
     ConfidenceSummary,
+    DataFlowStep,
     DataSubjectMapping,
     HumanReviewItem,
     PersonalDataElement,
@@ -43,8 +44,14 @@ def build_ropa_records(
     access: list[AccessFinding],
 ) -> list[RopaRecord]:
     generated_at = datetime.now(UTC).isoformat()
-    retention_by_table = {r.target: r for r in retention}
-    access_by_table = {a.target: a for a in access}
+    # Keyed by table_local_id, not by the human-readable `target` name -- a
+    # table name is not unique within one discovery run (two schemas/sources
+    # can both have a "users" table), so a name-keyed lookup here would merge
+    # retention/access facts across unrelated tables. See
+    # PersonalDataElement.table_local_id's docstring for the same reasoning.
+    retention_by_table = {r.table_local_id: r for r in retention}
+    access_by_table = {a.table_local_id: a for a in access}
+    vendor_by_id = {v.local_id: v for v in evidence.vendors}
     flows_by_activity: dict[str, list[DataFlowMapping]] = {}
     for flow in data_flows:
         flows_by_activity.setdefault(flow.processing_activity, []).append(flow)
@@ -52,7 +59,9 @@ def build_ropa_records(
     records: list[RopaRecord] = []
     for activity in activities:
         activity_tables = _tables_for_activity(activity, elements)
-        activity_elements = [e for e in elements if e.table in activity_tables and is_personal_data(e)]
+        activity_elements = [
+            e for e in elements if e.table_local_id in activity_tables and is_personal_data(e)
+        ]
 
         retentions = {retention_by_table[t].retention for t in activity_tables if t in retention_by_table}
         resolved_retention = _single_or_unknown(retentions)
@@ -67,9 +76,15 @@ def build_ropa_records(
         flows = flows_by_activity.get(activity.name, [])
         storage_locations = sorted({node for flow in flows for node in flow.path[1:2]})
 
-        processors = [
-            v for v in _vendors_as_processors(evidence)
-        ]
+        # Only vendors this activity's own data flows actually reference --
+        # not every vendor evidenced anywhere in the run. Falling back to the
+        # whole evidence.vendors list here previously attributed an activity's
+        # vendor (e.g. a payment gateway used only by "Billing") to every other
+        # activity too, asserting transfer relationships no evidence supports.
+        activity_vendor_ids = {ref for flow in flows for ref in flow.evidence if ref in vendor_by_id}
+        processors = _vendors_as_processors(
+            [vendor_by_id[vid] for vid in sorted(activity_vendor_ids)]
+        )
 
         confidences = [e.confidence for e in activity_elements] or [activity.confidence]
         confidence = round(sum(confidences) / len(confidences), 4)
@@ -96,7 +111,7 @@ def build_ropa_records(
                 # Recipients are only asserted when a processor is evidenced; an
                 # empty list means "not established", not "none exist".
                 recipients=sorted({p.name for p in processors}),
-                data_flows=[],
+                data_flows=_data_flow_steps(flows),
                 retention=resolved_retention,
                 access_roles=access_roles,
                 business_owner=resolved_owner,
@@ -115,11 +130,30 @@ def build_ropa_records(
     return records
 
 
+def _data_flow_steps(flows: list[DataFlowMapping]) -> list[DataFlowStep]:
+    """Expand each flow's ordered node path into the record-level step shape.
+    Was previously computed (dataflow_service.build_data_flows) and then
+    dropped on the floor here -- every RopaRecord.data_flows was hardcoded
+    empty regardless of what evidence actually supported."""
+    return [
+        DataFlowStep(from_node=from_node, to_node=to_node, evidence=flow.evidence)
+        for flow in flows
+        for from_node, to_node in zip(flow.path, flow.path[1:])
+    ]
+
+
 def _tables_for_activity(activity: ProcessingActivity, elements: list[PersonalDataElement]) -> set[str]:
-    """Activity evidence carries table local_ids and table names; the element
-    rows carry names, so match on the names present in both."""
-    names = {e.table for e in elements if e.table}
-    return {ref for ref in activity.evidence if ref in names}
+    """Which table(s) (by local_id) this activity actually covers.
+
+    Activity evidence carries each table's local_id AND its bare table_name
+    (processing_activity_service.py) -- matching against table_name here used
+    to be the bug: two tables named identically across different
+    schemas/sources would both satisfy that match and get merged. Matching on
+    local_id only is unambiguous, since the evidence contract already
+    guarantees it's distinct per table within one discovery run.
+    """
+    local_ids = {e.table_local_id for e in elements if e.table_local_id}
+    return {ref for ref in activity.evidence if ref in local_ids}
 
 
 def _single_or_unknown(values: set[str]) -> str:
@@ -131,7 +165,7 @@ def _single_or_unknown(values: set[str]) -> str:
     return "Unknown"
 
 
-def _vendors_as_processors(evidence: DiscoveryEvidence):
+def _vendors_as_processors(vendors):
     from app.agents.ropa.schemas.ropa import VendorProcessor
 
     return [
@@ -144,7 +178,7 @@ def _vendors_as_processors(evidence: DiscoveryEvidence):
             dpa_status=v.dpa_status,
             evidence=[v.local_id],
         )
-        for v in evidence.vendors
+        for v in vendors
     ]
 
 
@@ -299,7 +333,7 @@ def build_output(
         purpose_mappings=purposes,
         processing_activities=activities,
         data_flows=data_flows,
-        processors_and_vendors=_vendors_as_processors(evidence),
+        processors_and_vendors=_vendors_as_processors(evidence.vendors),
         retention_findings=retention,
         access_findings=access,
         risk_and_gap_findings=findings,

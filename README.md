@@ -32,7 +32,7 @@ Website
 AGENT 2 — Data Discovery / ROPA
 Authorized source (Postgres, REST API, or a customer-side adapter)
   -> metadata only: tables, columns, types, foreign keys. Never row values.
-  -> deterministic classification (10 personal-data categories, with confidence)
+  -> deterministic classification (12 personal-data categories, with confidence)
   -> data subject + purpose mapping (never invented; Unknown -> review)
   -> processing activities -> data flows -> risk/gap findings
   -> versioned ROPA records -> human review -> audit
@@ -148,6 +148,8 @@ catalog.
 
 Both agents are implemented and deployed. Deliberately still out of scope: the ML
 classifier (`app/ml/` is an unused stub — there is no labelled training data yet, and
-the rules layer is the documented Phase 1), per-key rate limiting (needs Redis to work
-across worker processes), and queued execution for ROPA connector runs — the worker
-branch exists but nothing enqueues it, since the push path completes in-request.
+the rules layer is the documented Phase 1), and per-key rate limiting (needs Redis to
+work across worker processes). ROPA connector discovery runs ARE queued: a connector
+run creates a `pending` run, enqueues a `ropa_discovery` job, and returns immediately;
+`app/jobs/worker.py` dispatches it (`app/services/ropa_run_service.py`), so a large
+customer database never blocks the request path.

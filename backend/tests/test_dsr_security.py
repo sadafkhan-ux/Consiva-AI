@@ -233,7 +233,10 @@ def test_agent_2s_read_only_connector_contract_is_untouched():
     # Protocol members split across dir() (methods) and __annotations__ (attributes).
     members = {m for m in dir(SourceConnector) if not m.startswith("_")}
     members |= set(getattr(SourceConnector, "__annotations__", {}))
-    assert members == {"discover", "source_type", "connector_name"}, (
+    # `test_connection` was added deliberately (connect/authenticate only, no
+    # schema or data read -- see its docstring) to back the Sources UI's
+    # test-connection step; it's exactly as read-only as `discover`.
+    assert members == {"discover", "test_connection", "source_type", "connector_name"}, (
         f"Agent 2's connector protocol changed: {sorted(members)}"
     )
     # And the contract still says read-only in so many words.

@@ -82,6 +82,15 @@ class RoleRecord(BaseModel):
     name: str
     system_local_id: str | None = None
     access_level: str | None = None
+    # Which specific tables this role is confirmed to reach -- local_ids into
+    # this same evidence bundle's `tables`. Empty (the default, and what every
+    # sender emits today) means this role is known to exist at the SOURCE
+    # level but nothing establishes which tables it can actually read; that is
+    # evidence of a role, not evidence of access to any particular table, and
+    # risk_service.build_access_findings must not conflate the two (prompt
+    # §13: do not manufacture certainty). Added in schema 1.1 -- optional, so
+    # an older sender that has never populated this validates unchanged.
+    table_local_ids: list[str] = Field(default_factory=list)
 
 
 class VendorRecord(BaseModel):

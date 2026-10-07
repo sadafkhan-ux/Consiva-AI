@@ -20,13 +20,13 @@ connector reads one page, infers the field shape, and discards the payload.
 
 from __future__ import annotations
 
-import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
+from app.agents.ropa.connectors import _shape
 from app.agents.ropa.connectors.base import (
     ConnectorAuthError,
     ConnectorError,
@@ -72,13 +72,16 @@ class ApiConnectionConfig:
 
 
 def _redact(value: Any) -> str | None:
-    """Reduce a value to a shape-only pattern: digits -> '#', letters -> 'x'.
-    Identical policy to the Postgres connector's `_sample_pattern`."""
+    """Reduce a value to a shape-only pattern, via the SAME masking function
+    the Postgres connector uses (`_shape.mask_sample`) rather than a second
+    reimplementation -- the two had already drifted (this one dropped
+    dict/list/bool to None; `mask_sample` had no such guard). A nested
+    structure from a JSON API response is genuinely different from a scalar
+    DB column value, so that guard is kept here; everything past it is the
+    one shared masking policy."""
     if value is None or isinstance(value, (dict, list, bool)):
         return None
-    text = str(value)[:64]
-    text = re.sub(r"[0-9]", "#", text)
-    return re.sub(r"[A-Za-z]", "x", text)
+    return _shape.mask_sample(value)
 
 
 def _infer_type(value: Any) -> str:
@@ -202,6 +205,19 @@ class ApiConnector:
             columns=columns,
             api_endpoints=endpoints,
         )
+
+    async def test_connection(self) -> None:
+        """One GET against the FIRST configured endpoint -- confirms the
+        base_url/auth actually work without reading every endpoint or
+        building any evidence."""
+        config = self._config
+        if not config.endpoints:
+            raise ConnectorError("no endpoints configured to test")
+        async with httpx.AsyncClient(
+            base_url=config.base_url, headers=self._headers(),
+            timeout=config.timeout_seconds, verify=config.verify_tls, follow_redirects=True,
+        ) as client:
+            await self._fetch(client, config.endpoints[0])
 
     async def _fetch(self, client: httpx.AsyncClient, endpoint: ApiEndpointConfig) -> list[dict]:
         try:

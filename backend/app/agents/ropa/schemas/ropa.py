@@ -47,6 +47,14 @@ class PersonalDataElement(BaseModel):
 
     source: str
     table: str | None = None
+    # The table's own local_id from the supplied evidence (schema_name is
+    # folded in here, not onto a separate field, because it's the identity
+    # that's actually unique within one discovery run -- `table` alone is a
+    # display label and collides whenever two schemas/sources share a table
+    # name; see processing_activity_service.py and ropa_service.py, which key
+    # grouping/matching on this rather than on `table`).
+    table_local_id: str | None = None
+    schema_name: str | None = None
     column: str
     classification: str  # e.g. "Contact Data", "Online Identifier" -- or "Unknown"
     data_subject: str = "Unknown"
@@ -111,6 +119,10 @@ class RiskGapFinding(BaseModel):
     """An evidence-backed gap -- NOT a legal-violation claim (prompt §16-§17)."""
 
     finding: str
+    # Machine-readable kind -- one of the fixed set risk_service.detect_gaps
+    # actually produces (e.g. "sensitive_category", "missing_retention"), so a
+    # caller can group/filter without parsing `finding`'s free-text prose.
+    category: str
     status: GapStatus
     related_evidence: list[str] = Field(default_factory=list)
     severity: RiskSeverity

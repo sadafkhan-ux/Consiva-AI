@@ -45,6 +45,15 @@ class SourceConnector(Protocol):
 
     async def discover(self, *, org_id: str, source_name: str) -> DiscoveryEvidence: ...
 
+    async def test_connection(self) -> None:
+        """Confirm the configured credential actually reaches the source --
+        connect/authenticate and immediately stop, without reading schema or
+        data. Raises a ConnectorError subclass on failure; returns nothing on
+        success. Lighter than discover() on purpose: this is meant to answer
+        "is this configuration usable" in the time a form submit can wait on,
+        not to run a real scan."""
+        ...
+
 
 _REGISTRY: dict[str, type] = {}
 

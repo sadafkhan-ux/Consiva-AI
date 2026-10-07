@@ -124,11 +124,15 @@ async def _process_one(job: AgentJob) -> None:
             uuid.UUID(job.payload["org_id"]),
         )
     elif job.job_type == "ropa_discovery":
-        # Agent 2 (Data Discovery / ROPA) connector run. Only the connector path
-        # is queued: an evidence_push already arrives with its data in hand and
-        # completes inside the request, so queuing it would add latency for
-        # nothing. Uses this same agent_jobs queue rather than a second job
-        # framework.
+        # Agent 2 (Data Discovery / ROPA) connector run: connects to the
+        # customer's database and reads its schema, which can take as long as
+        # the slowest table -- exactly the kind of work that must not run
+        # inside a request (ropa_run_service.run_discovery_for_source creates
+        # the run and enqueues this; this is the only place that actually
+        # calls discover_and_analyze). evidence_push is NOT queued: it already
+        # arrives with its data in hand and has no external connection to
+        # wait on, so queuing it would add latency for nothing. Uses this same
+        # agent_jobs queue rather than a second job framework.
         await ropa_run_service.execute_queued_discovery(
             uuid.UUID(job.payload["run_id"]),
             uuid.UUID(job.payload["org_id"]),

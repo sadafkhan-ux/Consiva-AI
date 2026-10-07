@@ -1,0 +1,23 @@
+-- Optional encrypted-at-rest credential storage for ROPA data sources,
+-- alongside the existing env-var `credential_ref` path (0007's header) --
+-- not instead of it.
+--
+-- WHY THIS EXISTS
+-- ----------------
+-- `credential_ref` is a NAME of an environment entry, so onboarding a new
+-- customer source today means an operator edits the server's environment and
+-- restarts the process. That is the correct design for Consiva's OWN
+-- connectors (least-privilege, no secrets in the database, rotation is an
+-- env change) but it structurally blocks a customer self-servicing a NEW
+-- source through the API, since nothing short of a deploy can add a new env
+-- var.
+--
+-- `credential_ciphertext` is a Fernet-encrypted secret (app/config.py's
+-- ROPA_CREDENTIAL_ENCRYPTION_KEY is the master key, held only in the server's
+-- environment -- never in this database). connectors/factory.py tries this
+-- column FIRST and falls back to credential_ref's env lookup, so a source
+-- that has never used this column behaves identically to before.
+--
+-- Additive only; idempotent (IF NOT EXISTS).
+
+alter table ropa_data_sources add column if not exists credential_ciphertext text;

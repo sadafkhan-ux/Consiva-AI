@@ -24,28 +24,40 @@ _MATERIAL_CHANGE_TYPES = frozenset({
 })
 
 
+def _qualified_label(schema: str | None, table: str) -> str:
+    """Schema-qualified table label, stable across runs for the SAME real
+    table (unlike local_id, which is reassigned fresh every discovery run and
+    so can't be used to compare two runs against each other). Plain
+    `table_name` alone collides whenever two schemas in one source share a
+    table name -- "public.users" and "crm.users" would otherwise both become
+    the bare key "users" and corrupt each other's diff."""
+    return f"{schema}.{table}" if schema else table
+
+
 def build_snapshot(
     evidence: DiscoveryEvidence,
     elements: list[PersonalDataElement] | None = None,
 ) -> dict:
     """Reduce a run to a comparable fingerprint.
 
-    Metadata only: table names, `table.column -> data_type`, and the
-    classification each column resolved to. No row values ever enter a snapshot.
+    Metadata only: schema-qualified table labels, `table.column -> data_type`,
+    and the classification each column resolved to. No row values ever enter
+    a snapshot.
     """
-    table_names = {t.local_id: t.table_name for t in evidence.tables}
+    table_labels = {t.local_id: _qualified_label(t.schema_name, t.table_name) for t in evidence.tables}
     columns: dict[str, str] = {}
     for column in evidence.columns:
-        table = table_names.get(column.table_local_id, "unknown_table")
+        table = table_labels.get(column.table_local_id, "unknown_table")
         columns[f"{table}.{column.column_name}"] = column.data_type
 
     classifications: dict[str, str] = {}
     for element in elements or []:
         if element.table:
-            classifications[f"{element.table}.{element.column}"] = element.classification
+            label = _qualified_label(element.schema_name, element.table)
+            classifications[f"{label}.{element.column}"] = element.classification
 
     return {
-        "tables": sorted(table_names.values()),
+        "tables": sorted(table_labels.values()),
         "columns": columns,
         "classifications": classifications,
     }

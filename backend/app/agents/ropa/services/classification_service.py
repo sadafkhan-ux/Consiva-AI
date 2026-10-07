@@ -25,8 +25,9 @@ DEFAULT_REVIEW_THRESHOLD = 0.7
 def _lookup_maps(evidence: DiscoveryEvidence):
     sources = {s.local_id: s.name for s in evidence.sources}
     table_names = {t.local_id: t.table_name for t in evidence.tables}
+    table_schemas = {t.local_id: t.schema_name for t in evidence.tables}
     table_sources = {t.local_id: sources.get(t.source_local_id, "unknown_source") for t in evidence.tables}
-    return table_names, table_sources
+    return table_names, table_schemas, table_sources
 
 
 def _person_linked_tables(evidence: DiscoveryEvidence) -> set[str]:
@@ -52,12 +53,13 @@ def classify_evidence(
     *,
     review_threshold: float = DEFAULT_REVIEW_THRESHOLD,
 ) -> list[PersonalDataElement]:
-    table_names, table_sources = _lookup_maps(evidence)
+    table_names, table_schemas, table_sources = _lookup_maps(evidence)
     person_linked = _person_linked_tables(evidence)
     elements: list[PersonalDataElement] = []
 
     for column in evidence.columns:
         table_name = table_names.get(column.table_local_id, "unknown_table")
+        schema_name = table_schemas.get(column.table_local_id)
         source_name = table_sources.get(column.table_local_id, "unknown_source")
         dotted = f"{source_name}.{table_name}.{column.column_name}"
         base_evidence = [column.local_id, dotted]
@@ -66,14 +68,27 @@ def classify_evidence(
         data_subject = subject_match.data_subject if subject_match and subject_match.data_subject else "Unknown"
 
         # A human-approved classification is rule order #1 and is never
-        # recomputed -- the whole point of recording a decision.
+        # recomputed -- the whole point of recording a decision. Confidence=1.0
+        # here is about the CATEGORY, which really is certain (a human declared
+        # it); it does not mean the record is fully resolved. If the data
+        # subject couldn't be established from evidence either, this must still
+        # surface for review rather than read as "Subject: Unknown, Confidence:
+        # 1.00" -- a declared classification with an unresolved subject.
         if column.existing_classification:
+            resolved_subject = column.existing_data_subject or data_subject
+            subject_unresolved = resolved_subject == "Unknown"
             elements.append(PersonalDataElement(
-                source=source_name, table=table_name, column=column.column_name,
+                source=source_name, table=table_name, table_local_id=column.table_local_id,
+                schema_name=schema_name, column=column.column_name,
                 classification=column.existing_classification,
-                data_subject=column.existing_data_subject or data_subject,
+                data_subject=resolved_subject,
                 confidence=1.0, evidence=[*base_evidence, "source:declared_by_owner"],
-                review_required=False, review_reason=None,
+                review_required=subject_unresolved,
+                review_reason=(
+                    "Classification was declared by the data owner, but the data subject "
+                    "could not be established from evidence; confirm who this data is about."
+                    if subject_unresolved else None
+                ),
             ))
             continue
 
@@ -88,7 +103,8 @@ def classify_evidence(
             result.status == personal_data_rules.CLASSIFIED and result.confidence < review_threshold
         )
         elements.append(PersonalDataElement(
-            source=source_name, table=table_name, column=column.column_name,
+            source=source_name, table=table_name, table_local_id=column.table_local_id,
+            schema_name=schema_name, column=column.column_name,
             classification=result.category or _label_for(result.status),
             data_subject=data_subject if result.is_personal_data else "Unknown",
             confidence=result.confidence,

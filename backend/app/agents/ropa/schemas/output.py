@@ -39,6 +39,10 @@ class DataFlowMapping(BaseModel):
 
 
 class RetentionFinding(BaseModel):
+    # The table's local_id from the supplied evidence -- the stable identity
+    # ropa_service.py joins against (see PersonalDataElement.table_local_id's
+    # docstring for why `target`, a display name, can't be used for this).
+    table_local_id: str
     target: str
     retention: str = "Unknown"
     evidence: list[str] = Field(default_factory=list)
@@ -46,6 +50,7 @@ class RetentionFinding(BaseModel):
 
 
 class AccessFinding(BaseModel):
+    table_local_id: str
     target: str
     owner: str = "Unknown"
     access_roles: list[str] = Field(default_factory=list)

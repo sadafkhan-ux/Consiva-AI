@@ -9,6 +9,7 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 export interface RopaRun {
   id: string;
+  data_source_id: string | null;
   source_name: string;
   ingest_mode: string;
   status: string;
@@ -18,6 +19,69 @@ export interface RopaRun {
   overall_confidence: number | null;
   summary: Record<string, unknown>;
   error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+/** Statuses the backend still considers in-flight (migrations/0007's CHECK
+ * constraint on ropa_discovery_runs.status) -- a run in one of these is
+ * worth polling; one in any other status is done. */
+export const ACTIVE_RUN_STATUSES = new Set(["pending", "discovering", "analyzing"]);
+
+export interface RopaDataSource {
+  id: string;
+  name: string;
+  connector: string;
+  source_type: string;
+  config: Record<string, unknown>;
+  credential_ref: string | null;
+  has_stored_credential: boolean;
+  enabled: boolean;
+  last_verified_at: string | null;
+}
+
+export interface CreateSourceInput {
+  name: string;
+  connector: string;
+  source_type: string;
+  config: Record<string, unknown>;
+  credential_ref?: string | null;
+}
+
+export interface TestConnectionInput {
+  connector: string;
+  config: Record<string, unknown>;
+  credential_ref?: string | null;
+  secret?: string | null;
+}
+
+export interface TestConnectionResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface RopaDataFlowStep {
+  from_node: string;
+  to_node: string;
+  evidence: string[];
+}
+
+export interface RopaVendorProcessor {
+  name: string;
+  role: string | null;
+  purpose: string | null;
+  data_shared: string[];
+  location: string | null;
+  dpa_status: string;
+  evidence: string[];
+}
+
+export interface RopaTransferInfo {
+  is_international_transfer: boolean | null;
+  destination_country: string | null;
+  evidence: string[];
+  review_required: boolean;
 }
 
 export interface RopaRecord {
@@ -35,14 +99,47 @@ export interface RopaRecord {
     personal_data_categories: string[];
     data_elements: string[];
     source_systems: string[];
+    storage_locations: string[];
+    processors: RopaVendorProcessor[];
+    recipients: string[];
+    data_flows: RopaDataFlowStep[];
     retention: string;
     business_owner: string;
     access_roles: string[];
+    transfer_information: RopaTransferInfo | null;
     evidence: string[];
     confidence: number;
     review_required: boolean;
     version: number;
   };
+}
+
+/** The per-column classification trail (migration 0029): why one column got
+ * the category it did, not just the activity it rolled up into. */
+export interface RopaClassification {
+  id: string;
+  source: string;
+  schema: string | null;
+  table: string;
+  column: string;
+  classification: string;
+  data_subject: string;
+  confidence: number;
+  evidence: string[];
+  review_required: boolean;
+  review_reason: string | null;
+}
+
+export interface IntegrationKeySummary {
+  id: string;
+  name: string;
+  key_prefix: string;
+  scopes: string[];
+  enabled: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
 }
 
 export interface RopaFinding {
@@ -117,6 +214,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const ropaApi = {
+  listConnectors(): Promise<{ connectors: string[] }> {
+    return request("/api/v1/ropa/connectors");
+  },
+  listSources(): Promise<RopaDataSource[]> {
+    return request("/api/v1/ropa/sources");
+  },
+  createSource(input: CreateSourceInput): Promise<RopaDataSource> {
+    return request("/api/v1/ropa/sources", { method: "POST", body: JSON.stringify(input) });
+  },
+  testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
+    return request("/api/v1/ropa/sources/test-connection", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  setSourceCredential(sourceId: string, secret: string): Promise<void> {
+    return request(`/api/v1/ropa/sources/${sourceId}/credential`, {
+      method: "POST",
+      body: JSON.stringify({ secret }),
+    });
+  },
+  setSourceEnabled(sourceId: string, enabled: boolean): Promise<RopaDataSource> {
+    return request(`/api/v1/ropa/sources/${sourceId}/enabled`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
+  },
+  discoverSource(sourceId: string, idempotencyKey?: string): Promise<RopaRun> {
+    const query = idempotencyKey ? `?idempotency_key=${encodeURIComponent(idempotencyKey)}` : "";
+    return request(`/api/v1/ropa/sources/${sourceId}/discover${query}`, { method: "POST" });
+  },
   listRuns(): Promise<RopaRun[]> {
     return request("/api/v1/ropa/runs");
   },
@@ -131,6 +259,9 @@ export const ropaApi = {
   },
   getChanges(runId: string): Promise<RopaChange[]> {
     return request(`/api/v1/ropa/runs/${runId}/changes`);
+  },
+  getClassifications(runId: string): Promise<RopaClassification[]> {
+    return request(`/api/v1/ropa/runs/${runId}/classifications`);
   },
   decideRecord(recordId: string, decision: "approved" | "rejected", reason: string) {
     return request<{ id: string; status: string }>(`/api/v1/ropa/records/${recordId}/decision`, {
@@ -155,5 +286,11 @@ export const ropaApi = {
       method: "POST",
       body: JSON.stringify({ name }),
     });
+  },
+  listIntegrationKeys(): Promise<IntegrationKeySummary[]> {
+    return request("/api/v1/ropa/integration-keys");
+  },
+  revokeIntegrationKey(keyId: string): Promise<IntegrationKeySummary> {
+    return request(`/api/v1/ropa/integration-keys/${keyId}/revoke`, { method: "POST" });
   },
 };
