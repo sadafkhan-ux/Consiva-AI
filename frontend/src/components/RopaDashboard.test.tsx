@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { RopaRun } from "../api/ropa";
 import { RopaDashboard } from "./RopaDashboard";
 
 const BASE_URL = "http://127.0.0.1:8000";
@@ -22,7 +23,13 @@ function runFixture(overrides: Partial<typeof PENDING_RUN> = {}) {
   return { ...PENDING_RUN, ...overrides };
 }
 
-const PENDING_RUN = {
+// Typed explicitly as RopaRun (the real API contract, api/ropa.ts) rather than
+// left to inference: an inferred literal `null` for started_at/completed_at
+// narrows runFixture's `Partial<typeof PENDING_RUN>` overrides to `null |
+// undefined`, rejecting the real string timestamps the observability tests
+// below need to override them with (TS2322) -- even though RopaRun itself
+// already types both fields as `string | null`.
+const PENDING_RUN: RopaRun = {
   id: "run-1",
   data_source_id: "source-1",
   source_name: "prepmyevent-production",

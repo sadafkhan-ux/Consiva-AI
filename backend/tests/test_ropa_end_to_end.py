@@ -422,6 +422,41 @@ async def test_evidence_read_key_can_read_its_own_runs_and_promote_baseline(
 
 
 @_live_db_only
+async def test_evidence_read_key_cannot_read_another_orgs_run(client, integration_headers_with_read):
+    """Acceptance criterion from the integration bug report: a key gets 403 or
+    404 for another org's run -- evidence:read scopes a key to READ requests in
+    general, never to a specific run; org isolation still has to hold per call.
+    A second org's own evidence:read key must not be able to read the first
+    org's run, even though both keys hold the identical scope."""
+    push = await client.post(
+        "/api/v1/ropa/evidence", headers=integration_headers_with_read, json=_payload(),
+    )
+    assert push.status_code == 201, push.text
+    run_id = push.json()["id"]
+
+    other_org_token = jwt.encode(
+        {
+            "sub": str(uuid.uuid4()), "org_id": str(uuid.uuid4()), "aud": "authenticated",
+            "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        },
+        os.environ["SUPABASE_JWT_SECRET"], algorithm="HS256",
+    )
+    other_org_auth_headers = {"Authorization": f"Bearer {other_org_token}"}
+    other_key_response = await client.post(
+        "/api/v1/ropa/integration-keys", headers=other_org_auth_headers,
+        json={"name": "other-org-adapter-test", "scopes": ["evidence:write", "evidence:read"]},
+    )
+    assert other_key_response.status_code == 201, other_key_response.text
+    other_org_headers = {"Authorization": f"Bearer {other_key_response.json()['api_key']}"}
+
+    response = await client.get(f"/api/v1/ropa/runs/{run_id}", headers=other_org_headers)
+    assert response.status_code in (403, 404), response.text
+
+    records = await client.get(f"/api/v1/ropa/runs/{run_id}/records", headers=other_org_headers)
+    assert records.status_code in (403, 404), records.text
+
+
+@_live_db_only
 async def test_write_only_key_cannot_read_runs(client, integration_headers):
     """A key minted with only evidence:write (the default) must still be refused
     on the read endpoints: evidence:read is a separate grant, never implied by
