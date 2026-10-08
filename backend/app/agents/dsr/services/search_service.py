@@ -134,11 +134,16 @@ async def run_search(
             "register one before running a search"
         )
 
+    # Every authorization's source belongs to this same org, so one list call covers
+    # all of them -- looking each one up individually cost N+1 queries for no reason
+    # (same fix as the /config/sources route; see its docstring).
+    sources_by_id = {
+        s.id: s for s in await ropa_repository.list_data_sources(db, request.org_id)
+    }
+
     summary = SearchSummary()
     for authorization in authorizations:
-        data_source = await ropa_repository.get_data_source(
-            db, authorization.data_source_id, request.org_id
-        )
+        data_source = sources_by_id.get(authorization.data_source_id)
         if data_source is None or not data_source.enabled:
             # The authorization outlived the source it points at. Recorded, not
             # skipped silently.

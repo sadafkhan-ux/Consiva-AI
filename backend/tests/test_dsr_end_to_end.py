@@ -275,8 +275,12 @@ def _install(monkeypatch, w: World):
     async def get_data_source(db, source_id, org_id):
         return DATA_SOURCE
 
+    async def list_data_sources(db, org_id):
+        return [DATA_SOURCE]
+
     from app.db.repositories import ropa_repository
     monkeypatch.setattr(ropa_repository, "get_data_source", get_data_source)
+    monkeypatch.setattr(ropa_repository, "list_data_sources", list_data_sources)
 
     async def audit(db, **kw):
         w.audit.append(kw)
@@ -419,6 +423,27 @@ async def test_scenario_3_deletion(world, monkeypatch):
     execution = await execution_service.execute_action(FakeDB(), request, actions[0].id, now=NOW)
     assert execution.status == "verified"
     assert connector.executions == 1
+
+    # The audit trail covers request, approval, execution AND read-back verification --
+    # not just that each stage happened, but that each left its own durable record.
+    actions_audited = [entry["action"] for entry in world.audit]
+    assert case.AUDIT_CREATED in actions_audited, "no record of the request itself"
+    assert case.AUDIT_APPROVED in actions_audited, "no record of the approval"
+    # Execution and read-back verification are recorded as the SAME audited fact here
+    # (execution_service.py records AUDIT_ACTION_VERIFIED exactly when the read-back
+    # confirmed the write, AUDIT_ACTION_EXECUTED otherwise) -- so finding this one
+    # entry with verified=True in its payload is what proves both happened.
+    verified_entry = next(
+        entry for entry in world.audit if entry["action"] == case.AUDIT_ACTION_VERIFIED
+    )
+    assert verified_entry["after"]["verified"] is True
+    # Request must precede approval must precede execution -- an audit trail that
+    # recorded the right events out of order would not reconstruct what happened.
+    assert (
+        actions_audited.index(case.AUDIT_CREATED)
+        < actions_audited.index(case.AUDIT_APPROVED)
+        < actions_audited.index(case.AUDIT_ACTION_VERIFIED)
+    )
 
 
 # ── Scenario 4: NO MATCH ─────────────────────────────────────────────────────────
@@ -645,6 +670,61 @@ async def test_a_case_with_no_authorized_source_fails_explicitly(world, monkeypa
     await _verify(request)
     with pytest.raises(SourceNotAuthorizedError):
         await search_service.run_search(FakeDB(), request)
+
+
+@pytest.mark.asyncio
+async def test_a_search_covers_every_configured_authorized_source(world, monkeypatch):
+    """Two authorized sources must both be searched, not just the first one found --
+    and looking up their data sources must be one batched call, not one per
+    authorization (the N+1 pattern already fixed in the /config/sources route)."""
+    from app.agents.dsr.connectors import factory
+    from app.db.repositories import dsr_repository, ropa_repository
+
+    second_source_id = uuid.uuid4()
+    second_authorization = SimpleNamespace(
+        id=uuid.uuid4(), data_source_id=second_source_id, enabled=True,
+        searchable_tables=["accounts"], identity_tables=["accounts"],
+        identifier_columns={"accounts": {"email": "email"}},
+        returnable_columns={"accounts": ["name", "email"]},
+        erasable_columns={"accounts": ["name", "email"]},
+        allow_execution=True, write_credential_ref="SRC2_WRITE",
+    )
+    second_data_source = SimpleNamespace(
+        id=second_source_id, name="billing", enabled=True, connector="postgres",
+        config={"host": "h2", "dbname": "d2", "user": "u2"}, credential_ref="SRC2_READ",
+    )
+
+    async def list_source_auth(db, org_id):
+        return [AUTHORIZATION, second_authorization]
+
+    list_data_sources_calls = []
+
+    async def list_data_sources(db, org_id):
+        list_data_sources_calls.append(org_id)
+        return [DATA_SOURCE, second_data_source]
+
+    monkeypatch.setattr(dsr_repository, "list_source_authorizations", list_source_auth)
+    monkeypatch.setattr(ropa_repository, "list_data_sources", list_data_sources)
+
+    connectors_by_source = {
+        "crm": FakeConnector(matches=[match()]),
+        "billing": FakeConnector(matches=[match("accounts", 42)]),
+    }
+
+    def build_connector(*, data_source, authorization, for_execution=False):
+        return connectors_by_source[data_source.name]
+
+    monkeypatch.setattr(factory, "build_connector", build_connector)
+
+    request = await _open_case("Show me what personal information you hold about me.")
+    await _verify(request)
+    summary = await search_service.run_search(FakeDB(), request)
+
+    assert sorted(summary.sources_searched) == ["billing", "crm"]
+    assert summary.evidence_count == 2
+    # One batched lookup for the whole search, not one per authorization -- this is
+    # exactly the N+1 the fix removed; this test fails if it comes back.
+    assert len(list_data_sources_calls) == 1
 
 
 @pytest.mark.asyncio

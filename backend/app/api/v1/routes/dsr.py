@@ -740,12 +740,18 @@ async def list_source_authorizations(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """What each source is permitted to do. Never returns a credential -- the row holds
-    only the NAME of one, and even that is reported as a boolean."""
+    only the NAME of one, and even that is reported as a boolean.
+
+    Looks up every org's source once (list_data_sources), not once per
+    authorization row -- an org with N authorized sources previously cost N+1
+    queries here (one per row via get_data_source) for no reason, since every
+    row's source is necessarily in this same org's source list anyway."""
     org_id = uuid.UUID(user.org_id)
     rows = await dsr_repository.list_source_authorizations(db, org_id)
+    sources_by_id = {s.id: s for s in await ropa_repository.list_data_sources(db, org_id)}
     out = []
     for a in rows:
-        source = await ropa_repository.get_data_source(db, a.data_source_id, org_id)
+        source = sources_by_id.get(a.data_source_id)
         out.append({
             "id": str(a.id),
             "data_source_id": str(a.data_source_id),

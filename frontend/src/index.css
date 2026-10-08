@@ -421,9 +421,9 @@ button.small { padding: 6px 10px; font-size: 12px; }
   border-radius: 8px; display: flex; flex-direction: column; gap: 10px; max-width: 480px;
 }
 .source-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.source-form input, .source-form select {
+.source-form input, .source-form select, .source-form textarea {
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-  padding: 8px 10px; border-radius: 6px; font-size: 13px;
+  padding: 8px 10px; border-radius: 6px; font-size: 13px; resize: vertical;
 }
 .source-form .endpoints-fieldset {
   border: 1px solid var(--border); border-radius: 6px; padding: 10px; display: flex;
@@ -699,3 +699,29 @@ button.reject { background: var(--red); }
 
 /* Evidence detail can be long JSON; let it scroll rather than stretch the table. */
 .dsr .key-value { max-height: 200px; overflow: auto; white-space: pre-wrap; }
+
+/* ── Agent 3 case-list search/filter + the admin Configuration tab ──────────────
+   Scoped additions only, same reuse discipline as the block above: the list's
+   search/status row and the stacked reference+SLA row are new, everything else
+   (.card, .pill, .data, .source-form, .banner) is the existing vocabulary. */
+
+.dsr-list-filters { display: flex; gap: 6px; margin-bottom: 8px; }
+.dsr-list-filters input[type="search"] {
+  flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); padding: 6px 8px; font-size: 12px;
+}
+.dsr-list-filters select {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); padding: 6px 8px; font-size: 12px;
+}
+/* Reference+SLA on one row, status+type on the next -- the countdown is the
+   thing an operator scans for first, so it sits beside the reference, not
+   buried after the request type. */
+.dsr-list-row { display: flex; gap: 6px; align-items: center; justify-content: space-between; width: 100%; }
+
+.checkbox-row { flex-direction: row !important; align-items: center; gap: 8px; font-size: 13px !important; color: var(--text) !important; }
+.checkbox-row input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); }
+
+.dsr-config .source-form { max-width: 620px; }
+.dsr-config .sources-header { align-items: flex-start; }
+.dsr-config .sources-header select { margin-top: 2px; }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   dsrApi,
   type DsrAction,
@@ -12,16 +12,20 @@ import {
 } from "../api/dsr";
 
 /**
- * Agent 3 (DSR Fulfillment) testing UI.
+ * Agent 3 (DSR Fulfillment) operator console.
  *
- * Deliberately small -- this exists to drive the workflow end to end, not to be the
- * final product surface. It reuses the existing shell, styles and status-pill
- * classes rather than introducing a design of its own.
+ * Reuses the existing shell, styles and status-pill classes rather than
+ * introducing a design of its own -- consistency across the six agents
+ * matters more here than a bespoke look for this one.
  *
  * The one rule it holds to strictly (prompt §33/§34): it never shows progress the
  * backend did not report. Buttons are enabled from `allowed_transitions`, which the
  * backend computes from the same state machine it enforces, so the UI cannot offer
  * an action the server would refuse. Nothing here optimistically advances a status.
+ *
+ * The list defaults to sorting by SLA urgency, not creation time: a DSR case is a
+ * legal deadline before it's anything else, so the case closest to breach is what an
+ * operator should see first, every time they open this screen.
  */
 
 type Tab = "evidence" | "plan" | "executions" | "response" | "audit";
@@ -40,9 +44,43 @@ const STATUS_TONE: Record<string, string> = {
   cancelled: "muted",
 };
 
+// How often to re-poll the case list while one is still open/in-flight. Same
+// cadence as ROPA's run poll (RopaDashboard.tsx) -- fast enough to feel live,
+// slow enough not to hammer the API from an idle tab.
+const ACTIVE_CASE_POLL_MS = 4000;
+
+/** `sla.remaining_seconds` is the backend's own clock, never recomputed here
+ *  (see DsrSla's own comment in api/dsr.ts) -- this only formats it. */
+function formatSla(sla: DsrCase["sla"]): string {
+  if (sla.closed) return "closed";
+  if (sla.breached) return "breached";
+  const s = sla.remaining_seconds;
+  if (s <= 0) return "overdue";
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h left`;
+  if (hours > 0) return `${hours}h ${minutes}m left`;
+  return `${minutes}m left`;
+}
+
+function slaTone(sla: DsrCase["sla"]): string {
+  if (sla.closed) return "muted";
+  if (sla.breached || sla.overdue) return "bad";
+  if (sla.remaining_seconds < 24 * 3600) return "warn";
+  return "ok";
+}
+
 export function DsrDashboard() {
   const [cases, setCases] = useState<DsrCase[]>([]);
   const [selected, setSelected] = useState<DsrCase | null>(null);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  // Mirrors ROPA's selectedRef pattern: read inside the poll interval without
+  // putting `selected` in that effect's dependency list, so polling doesn't
+  // restart every time an operator clicks a different case.
+  const selectedRef = useRef<DsrCase | null>(null);
+  selectedRef.current = selected;
   const [searchRuns, setSearchRuns] = useState<DsrSearchRun[]>([]);
   const [evidence, setEvidence] = useState<DsrEvidence[]>([]);
   const [plan, setPlan] = useState<DsrPlan | null>(null);
@@ -60,7 +98,15 @@ export function DsrDashboard() {
 
   const loadCases = useCallback(async () => {
     try {
-      setCases(await dsrApi.listCases());
+      const rows = await dsrApi.listCases();
+      setCases(rows);
+      // If the case currently open just advanced (e.g. searching -> search_completed),
+      // refresh it so the detail pane reflects that without a manual click.
+      const current = selectedRef.current;
+      if (current) {
+        const updated = rows.find((c) => c.id === current.id);
+        if (updated && updated.status !== current.status) setSelected(updated);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load cases.");
     }
@@ -68,7 +114,46 @@ export function DsrDashboard() {
 
   useEffect(() => {
     void loadCases();
-  }, [loadCases]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Live status: while any case is still open, keep polling so SLA countdowns
+  // and in-flight status (searching, executing, ...) advance without the
+  // operator hitting Refresh themselves. Mirrors RopaDashboard's active-run poll.
+  useEffect(() => {
+    const hasOpenCase = cases.some((c) => !c.is_terminal);
+    if (!hasOpenCase) return;
+    const id = setInterval(() => void loadCases(), ACTIVE_CASE_POLL_MS);
+    return () => clearInterval(id);
+  }, [cases, loadCases]);
+
+  const filteredCases = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return cases
+      .filter((c) => statusFilter === "all" || c.status === statusFilter)
+      .filter(
+        (c) =>
+          !q ||
+          c.reference.toLowerCase().includes(q) ||
+          c.requester_email?.toLowerCase().includes(q) ||
+          c.raw_request.toLowerCase().includes(q) ||
+          c.request_type.toLowerCase().includes(q),
+      )
+      .sort((a, b) => {
+        // Open cases first, soonest-due first -- the case nearest breach is
+        // what an operator needs to see, not whichever was created last.
+        if (a.is_terminal !== b.is_terminal) return a.is_terminal ? 1 : -1;
+        if (!a.is_terminal && !b.is_terminal) {
+          return a.sla.remaining_seconds - b.sla.remaining_seconds;
+        }
+        return (b.closed_at ?? "").localeCompare(a.closed_at ?? "");
+      });
+  }, [cases, query, statusFilter]);
+
+  const statusOptions = useMemo(
+    () => [...new Set(cases.map((c) => c.status))].sort(),
+    [cases],
+  );
 
   const loadCase = useCallback(async (id: string) => {
     setBusy(true);
@@ -174,19 +259,45 @@ export function DsrDashboard() {
 
       <div className="dsr-layout">
         <aside className="card dsr-list">
-          <h3>Cases ({cases.length})</h3>
+          <h3>
+            Cases ({filteredCases.length}
+            {filteredCases.length !== cases.length ? ` of ${cases.length}` : ""})
+          </h3>
+          <div className="dsr-list-filters">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search reference, email, request…"
+            />
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="all">All statuses</option>
+              {statusOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
           {cases.length === 0 && <p className="muted">No DSR cases yet.</p>}
+          {cases.length > 0 && filteredCases.length === 0 && (
+            <p className="muted">No case matches this search.</p>
+          )}
           <ul>
-            {cases.map((c) => (
+            {filteredCases.map((c) => (
               <li key={c.id}>
                 <button
                   className={selected?.id === c.id ? "active" : ""}
                   onClick={() => void loadCase(c.id)}
                 >
-                  <strong>{c.reference}</strong>
-                  <span className={`pill pill-${STATUS_TONE[c.status] ?? "muted"}`}>{c.status}</span>
-                  <span className="muted small">{c.request_type}</span>
-                  {c.sla.breached && <span className="pill pill-bad">SLA</span>}
+                  <div className="dsr-list-row">
+                    <strong>{c.reference}</strong>
+                    <span className={`pill pill-${slaTone(c.sla)}`}>{formatSla(c.sla)}</span>
+                  </div>
+                  <div className="dsr-list-row">
+                    <span className={`pill pill-${STATUS_TONE[c.status] ?? "muted"}`}>{c.status}</span>
+                    <span className="muted small">{c.request_type}</span>
+                  </div>
                 </button>
               </li>
             ))}
@@ -208,7 +319,7 @@ export function DsrDashboard() {
                 <span className={`pill pill-${identityOk ? "ok" : "warn"}`}>
                   identity: {selected.identity_status ?? "pending"}
                 </span>
-                {selected.sla.overdue && <span className="pill pill-bad">overdue</span>}
+                <span className={`pill pill-${slaTone(selected.sla)}`}>{formatSla(selected.sla)}</span>
               </div>
             </header>
 

@@ -175,6 +175,23 @@ async def test_execution_without_approval_is_refused(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_correction_without_approval_is_refused_at_execution(monkeypatch):
+    """The deletion case above proves this for OP_DELETE_RECORD; a correction
+    (OP_UPDATE_FIELD) must be refused the same way -- approval is a property of the
+    action requiring it, not of which operation happens to be deleting something."""
+    request = make_request()
+    action = make_action(
+        request, operation=case.OP_UPDATE_FIELD, operation_payload={"phone": "+91-99999"},
+        requires_approval=True, risk="medium",
+    )
+    connector = RecordingConnector()
+    _wire(monkeypatch, action=action, approval=None, connector=connector)
+    with pytest.raises(ApprovalRequiredError):
+        await execution_service.execute_action(_DB(), request, action.id, now=NOW)
+    assert connector.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_execution_after_a_rejection_is_refused(monkeypatch):
     request = make_request()
     action = make_action(request)

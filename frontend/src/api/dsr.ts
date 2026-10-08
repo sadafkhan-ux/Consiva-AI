@@ -149,6 +149,56 @@ export interface DsrAuditEntry {
   created_at: string | null;
 }
 
+export interface DsrSourceAuthorization {
+  id: string;
+  data_source_id: string;
+  source_name: string | null;
+  searchable_tables: string[];
+  identity_tables: string[];
+  identifier_columns: Record<string, Record<string, string>>;
+  returnable_columns: Record<string, string[]>;
+  record_key_columns: Record<string, string[]>;
+  erasable_columns: Record<string, string[]>;
+  allow_execution: boolean;
+  write_credential_configured: boolean;
+  enabled: boolean;
+}
+
+export interface SourceAuthorizationInput {
+  data_source_id: string;
+  searchable_tables: string[];
+  identity_tables: string[];
+  identifier_columns: Record<string, Record<string, string>>;
+  returnable_columns: Record<string, string[]>;
+  record_key_columns: Record<string, string[]>;
+  erasable_columns: Record<string, string[]>;
+  allow_execution: boolean;
+  write_credential_ref?: string | null;
+}
+
+export interface DsrRetentionRule {
+  id: string;
+  table_name: string;
+  date_column: string;
+  retention_days: number;
+  authority: string;
+  applies_to_operations: string[];
+  data_source_id: string | null;
+  scope: "source" | "organisation";
+  notes: string | null;
+  enabled: boolean;
+}
+
+export interface RetentionRuleInput {
+  table_name: string;
+  date_column: string;
+  retention_days: number;
+  authority: string;
+  data_source_id?: string | null;
+  applies_to_operations: string[];
+  notes?: string | null;
+}
+
 export interface IdentityChallenge {
   verification_id: string;
   status: string;
@@ -280,5 +330,24 @@ export const dsrApi = {
   },
   getAudit(id: string): Promise<DsrAuditEntry[]> {
     return request(`/api/v1/dsr/requests/${id}/audit`);
+  },
+
+  // Config: view is open to any signed-in member; the PUT/DELETE below are
+  // rejected server-side (CaseNotReadyError) for anyone whose role isn't
+  // "admin" -- the UI mirrors that rather than inventing its own rule.
+  listSourceAuthorizations(): Promise<DsrSourceAuthorization[]> {
+    return request("/api/v1/dsr/config/sources");
+  },
+  putSourceAuthorization(payload: SourceAuthorizationInput): Promise<{ id: string }> {
+    return request("/api/v1/dsr/config/sources", { method: "PUT", body: JSON.stringify(payload) });
+  },
+  listRetentionRules(): Promise<DsrRetentionRule[]> {
+    return request("/api/v1/dsr/config/retention");
+  },
+  putRetentionRule(payload: RetentionRuleInput): Promise<{ id: string }> {
+    return request("/api/v1/dsr/config/retention", { method: "PUT", body: JSON.stringify(payload) });
+  },
+  disableRetentionRule(ruleId: string): Promise<{ id: string; enabled: boolean }> {
+    return request(`/api/v1/dsr/config/retention/${ruleId}`, { method: "DELETE" });
   },
 };

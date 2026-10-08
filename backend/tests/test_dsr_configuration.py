@@ -5,10 +5,12 @@ an organisation's retention rules, a source's DSR authorization, and the data
 category shown against a discovered record.
 """
 
+import os
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
@@ -99,6 +101,73 @@ CONFIG_PATHS = ["/api/v1/dsr/config/sources", "/api/v1/dsr/config/retention"]
 def test_configuration_requires_a_token(path):
     for method in ("GET", "PUT"):
         assert client.request(method, path, json={}).status_code == 401
+
+
+def _auth_headers(org_id: uuid.UUID) -> dict:
+    """Same real-JWT approach as test_ropa_end_to_end.py's auth_headers, so this route
+    is exercised through the production auth dependency rather than a stub."""
+    token = jwt.encode(
+        {
+            "sub": str(uuid.uuid4()),
+            "org_id": str(org_id),
+            "aud": "authenticated",
+            "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+        },
+        os.environ["SUPABASE_JWT_SECRET"],
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_sources_are_looked_up_once_not_once_per_authorization(monkeypatch):
+    """GET /config/sources must resolve every authorization's source from ONE
+    list_data_sources call, not one get_data_source call per row -- the N+1 this
+    route used to have (blueprint item 17)."""
+    from app.db.repositories import dsr_repository, ropa_repository
+
+    org_id = uuid.uuid4()
+    source_a = SimpleNamespace(id=uuid.uuid4(), name="crm")
+    source_b = SimpleNamespace(id=uuid.uuid4(), name="billing")
+
+    def auth_for(source, **kw):
+        return SimpleNamespace(
+            id=uuid.uuid4(), data_source_id=source.id, enabled=True,
+            searchable_tables=["t"], identity_tables=["t"],
+            identifier_columns={"t": {"email": "email"}},
+            returnable_columns={"t": ["name"]}, record_key_columns={"t": ["id"]},
+            erasable_columns={"t": []}, allow_execution=False,
+            write_credential_ref=None, **kw,
+        )
+
+    auth_a, auth_b = auth_for(source_a), auth_for(source_b)
+
+    async def list_source_authorizations(db, org):
+        assert org == org_id
+        return [auth_a, auth_b]
+
+    list_data_sources_calls = []
+
+    async def list_data_sources(db, org):
+        list_data_sources_calls.append(org)
+        return [source_a, source_b]
+
+    async def get_data_source(db, source_id, org):
+        raise AssertionError(
+            "must not be called per-authorization; this route batches via list_data_sources"
+        )
+
+    monkeypatch.setattr(dsr_repository, "list_source_authorizations", list_source_authorizations)
+    monkeypatch.setattr(ropa_repository, "list_data_sources", list_data_sources)
+    monkeypatch.setattr(ropa_repository, "get_data_source", get_data_source)
+
+    response = client.get("/api/v1/dsr/config/sources", headers=_auth_headers(org_id))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert {row["source_name"] for row in body} == {"crm", "billing"}
+    assert len(list_data_sources_calls) == 1, (
+        "one batched lookup for the whole route, not one per authorization"
+    )
 
 
 def test_a_retention_rule_must_name_its_authority():
