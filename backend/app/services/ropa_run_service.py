@@ -111,7 +111,7 @@ async def ingest_pushed_evidence(
     callback_url: str | None = None,
     callback_secret_ciphertext: str | None = None,
 ) -> tuple[RopaDiscoveryRun, bool]:
-    """Analyze evidence collected by an EXTERNAL integration.
+    """Accept evidence collected by an EXTERNAL integration, then VALIDATE -> QUEUE it.
 
     This is the safer integration boundary for a third party like PrepMyEvent:
     their adapter reads their own database and posts structured evidence, so
@@ -119,10 +119,25 @@ async def ingest_pushed_evidence(
     already been validated against the DiscoveryEvidence schema by FastAPI before
     reaching here.
 
+    Does NOT run the analysis pipeline itself -- it creates the run row
+    (status="pending") and enqueues a `ropa_evidence_analysis` job on the same
+    agent_jobs queue connector-based discovery uses, then returns immediately.
+    The actual CLASSIFY -> ENRICH -> ANALYZE -> PERSIST work happens in
+    execute_queued_evidence_analysis, which the worker runs.
+
+    This used to run inline, on the premise (run_pipeline's own docstring: "no
+    I/O, no network, no database") that evidence-push had nothing worth
+    queuing for. Wiring LLM enrichment into this path (a real network call
+    that can hang or retry for minutes against a slow/unavailable model, per
+    an observed incident) broke that premise without anyone moving this off
+    the request path to match -- exactly the bug run_discovery_for_source's
+    own docstring describes fixing for the connector flow, now the same fix
+    for the same reason here.
+
     Returns (run, is_new): `is_new` is False for an idempotency-key replay that
-    short-circuited to an already-completed run -- the caller uses this to
-    decide whether a fresh "ropa.run.completed" notification is warranted, so a
-    retried POST doesn't re-announce a run that already announced itself once.
+    short-circuited to an already-queued/completed run -- the caller uses this
+    to decide whether this POST should enqueue anything at all, so a retried
+    POST doesn't re-run (or re-announce) a push that already started once.
     """
     if idempotency_key:
         existing = await ropa_repository.find_run_by_idempotency_key(db, org_id, idempotency_key)
@@ -150,16 +165,73 @@ async def ingest_pushed_evidence(
             "schema_version": schema_version,
         },
     )
-
-    run.status = "analyzing"
-    await db.flush()
-    baseline = await ropa_repository.get_current_baseline_snapshot(db, org_id, source_name)
-    output = await discovery_service.run_pipeline_enriched(evidence, baseline_snapshot=baseline, run_id=str(run.id))
-    await _persist_and_audit(db, run, output, org_id=org_id, user_id=user_id, evidence=evidence)
-    await ropa_repository.persist_changes(
-        db, run, output.change_detection, source_name=source_name
+    await queue.enqueue(
+        db, org_id=org_id, job_type="ropa_evidence_analysis",
+        payload={
+            "run_id": str(run.id), "org_id": str(org_id),
+            # The evidence travels in the job payload, not re-read from anywhere
+            # else: unlike a connector run, there is no live source to re-query
+            # later -- this IS the data, already validated and size-capped by
+            # EvidenceIngest before this function was ever called.
+            "evidence": evidence.model_dump(mode="json"),
+        },
     )
     return run, True
+
+
+async def execute_queued_evidence_analysis(run_id: uuid.UUID, org_id: uuid.UUID, evidence_payload: dict) -> None:
+    """Worker entry point for a queued evidence-push analysis (job_type
+    'ropa_evidence_analysis').
+
+    Opens its own session because the worker has no request scope -- same
+    pattern as execute_queued_discovery. Any failure here (including one the
+    LLM enrichment call itself didn't swallow -- enrich_elements already falls
+    back to rules-only on its own errors, so this is for analysis/persistence
+    failures beyond that) marks the run failed and notifies the partner rather
+    than leaving it stuck at "analyzing" forever, the same regression
+    execute_queued_discovery's own failure branch guards against for the
+    connector path.
+    """
+    from app.db.session import async_session_factory
+
+    evidence = DiscoveryEvidence.model_validate(evidence_payload)
+
+    async with async_session_factory() as db:
+        run = await ropa_repository.get_run(db, run_id, org_id)
+        if run is None:
+            raise ValueError(f"ROPA run {run_id} not found for org {org_id}")
+
+        try:
+            run.status = "analyzing"
+            await db.flush()
+            baseline = await ropa_repository.get_current_baseline_snapshot(db, org_id, run.source_name)
+            output = await discovery_service.run_pipeline_enriched(
+                evidence, baseline_snapshot=baseline, run_id=str(run.id)
+            )
+        except Exception as exc:  # noqa: BLE001 -- any analysis failure must fail the run, not strand it
+            await ropa_repository.fail_run(db, run, f"{type(exc).__name__}: {exc}")
+            await audit_repository.record(
+                db, org_id=org_id, actor_user_id=None, action="ropa_evidence.failed",
+                entity_type="ropa_discovery_run", entity_id=run.id, after={"error": str(exc)},
+            )
+            await db.commit()
+            await agent_webhook_service.send_event(
+                "ropa.run.failed", run_id=str(run.id), error=f"{type(exc).__name__}: {exc}"[:500],
+                callback_url=run.agent_callback_url,
+                callback_secret=agent_webhook_service.resolve_callback_secret(
+                    run.agent_callback_secret_ciphertext
+                ),
+            )
+            raise
+
+        await _persist_and_audit(db, run, output, org_id=org_id, user_id=None, evidence=evidence)
+        await ropa_repository.persist_changes(db, run, output.change_detection, source_name=run.source_name)
+        await db.commit()
+        await agent_webhook_service.send_event(
+            "ropa.run.completed", run_id=str(run.id),
+            callback_url=run.agent_callback_url,
+            callback_secret=agent_webhook_service.resolve_callback_secret(run.agent_callback_secret_ciphertext),
+        )
 
 
 async def execute_queued_discovery(run_id: uuid.UUID, org_id: uuid.UUID) -> None:

@@ -102,6 +102,28 @@ def _payload(idempotency_key: str | None = None, *, retention_policy: str = "24 
     )
 
 
+async def _run_evidence_analysis(auth_headers: dict, run_id: str, evidence_payload: dict) -> None:
+    """Drive a queued evidence-push run to completion, the way the worker would.
+
+    POST /evidence only enqueues now (ingest_pushed_evidence); the tests below
+    call this afterward to actually run execute_queued_evidence_analysis --
+    same pattern as the connector-discovery tests calling
+    execute_queued_discovery directly. Requires the `worker_session_factory`
+    fixture to be active in the calling test (not referenced here directly --
+    it patches app.db.session.async_session_factory for the duration), since
+    this opens its own session exactly as the real worker does.
+    """
+    from app.services import ropa_run_service
+
+    token = auth_headers["Authorization"].split(" ", 1)[1]
+    org_id = jwt.decode(
+        token, os.environ["SUPABASE_JWT_SECRET"], algorithms=["HS256"], audience="authenticated",
+    )["org_id"]
+    await ropa_run_service.execute_queued_evidence_analysis(
+        uuid.UUID(run_id), uuid.UUID(org_id), evidence_payload
+    )
+
+
 @pytest.fixture
 async def client():
     """Real app, with get_db pointed at a real database (see _FIXTURE_DSN).
@@ -180,21 +202,34 @@ def auth_headers():
 
 
 @_live_db_only
-async def test_full_flow_evidence_push_to_approved_ropa(client, auth_headers, integration_headers):
+async def test_full_flow_evidence_push_to_approved_ropa(
+    client, auth_headers, integration_headers, worker_session_factory
+):
     # 1. External integration posts evidence -- no production credentials shared.
+    payload = _payload()
     response = await client.post(
         "/api/v1/ropa/evidence",
         headers=integration_headers,
-        json=_payload(),
+        json=payload,
     )
     assert response.status_code == 201, response.text
-    run = response.json()
-    assert run["ingest_mode"] == "evidence_push"
+    queued = response.json()
+    assert queued["ingest_mode"] == "evidence_push"
+    assert queued["status"] == "pending", (
+        "evidence-push must queue the analysis and return before it runs; "
+        "anything other than 'pending' here means it ran inline again"
+    )
+    run_id = queued["id"]
+
+    # 1b. The worker's entry point is what actually runs analysis -- same
+    # pattern as connector-based discovery, for the same reason (enrichment is
+    # a real network call now, so this must not run inside the request).
+    await _run_evidence_analysis(auth_headers, run_id, payload["evidence"])
+
+    run = (await client.get(f"/api/v1/ropa/runs/{run_id}", headers=auth_headers)).json()
     assert run["status"] == "completed"
     assert run["tables_scanned"] == 2
     assert run["personal_data_elements"] >= 4  # name, email, phone, card_number
-
-    run_id = run["id"]
 
     # 2. ROPA records were persisted with versioning.
     records = (await client.get(f"/api/v1/ropa/runs/{run_id}/records", headers=auth_headers)).json()
@@ -260,21 +295,54 @@ async def test_full_flow_evidence_push_to_approved_ropa(client, auth_headers, in
 
 
 @_live_db_only
-async def test_rerun_with_changed_evidence_creates_new_version(client, auth_headers, integration_headers):
+async def test_evidence_push_queues_a_job_instead_of_analyzing_inline(
+    client, integration_headers, monkeypatch
+):
+    """Regression test for the incident: POST /evidence must create the run
+    and enqueue a 'ropa_evidence_analysis' job, returning immediately -- it
+    must NOT run LLM enrichment (or any of the analysis pipeline) from the
+    request path. A self-hosted model stalling or retrying for minutes used to
+    hang this endpoint past every reasonable client timeout, because
+    run_pipeline_enriched -- and its LLM call -- ran inline here. That analysis
+    only happens in execute_queued_evidence_analysis, which the worker calls.
+    """
+    from app.agents.ropa.services import discovery_service
+
+    def _must_not_be_called(*args, **kwargs):
+        raise AssertionError(
+            "run_pipeline_enriched was called from the request path -- evidence "
+            "analysis is supposed to be queued, not run inline"
+        )
+
+    monkeypatch.setattr(discovery_service, "run_pipeline_enriched", _must_not_be_called)
+
+    response = await client.post(
+        "/api/v1/ropa/evidence", headers=integration_headers, json=_payload(),
+    )
+    assert response.status_code == 201, response.text
+    run = response.json()
+    assert run["status"] == "pending", (
+        "evidence-push must return before the worker has touched this run; "
+        "anything other than 'pending' here means analysis ran inline again"
+    )
+
+
+@_live_db_only
+async def test_rerun_with_changed_evidence_creates_new_version(
+    client, auth_headers, integration_headers, worker_session_factory
+):
     """A second run whose evidence actually differs (a new retention policy)
     must create version N+1, never overwrite the approved record."""
+    first_payload = _payload(retention_policy="24 months")
+    second_payload = _payload(retention_policy="36 months")
     first = (
-        await client.post(
-            "/api/v1/ropa/evidence", headers=integration_headers,
-            json=_payload(retention_policy="24 months"),
-        )
+        await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=first_payload)
     ).json()
     second = (
-        await client.post(
-            "/api/v1/ropa/evidence", headers=integration_headers,
-            json=_payload(retention_policy="36 months"),
-        )
+        await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=second_payload)
     ).json()
+    await _run_evidence_analysis(auth_headers, first["id"], first_payload["evidence"])
+    await _run_evidence_analysis(auth_headers, second["id"], second_payload["evidence"])
 
     first_records = (await client.get(f"/api/v1/ropa/runs/{first['id']}/records", headers=auth_headers)).json()
     second_records = (await client.get(f"/api/v1/ropa/runs/{second['id']}/records", headers=auth_headers)).json()
@@ -289,7 +357,7 @@ async def test_rerun_with_changed_evidence_creates_new_version(client, auth_head
 
 @_live_db_only
 async def test_rerun_with_unchanged_evidence_does_not_create_a_new_version(
-    client, auth_headers, integration_headers
+    client, auth_headers, integration_headers, worker_session_factory
 ):
     """Regression test: re-pushing evidence that produces the SAME record in
     substance must not mint a no-op version, even though the run itself gets a
@@ -313,11 +381,13 @@ async def test_rerun_with_unchanged_evidence_does_not_create_a_new_version(
     """
     payload = _payload()
     first = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)).json()
+    await _run_evidence_analysis(auth_headers, first["id"], payload["evidence"])
     first_records = (await client.get(f"/api/v1/ropa/runs/{first['id']}/records", headers=auth_headers)).json()
     a1 = next(r for r in first_records if r["processing_activity"] == "Event Attendee Management")
 
     second = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)).json()
     assert first["id"] != second["id"], "two distinct runs, not deduped by idempotency_key"
+    await _run_evidence_analysis(auth_headers, second["id"], payload["evidence"])
 
     second_records = (await client.get(f"/api/v1/ropa/runs/{second['id']}/records", headers=auth_headers)).json()
     a2 = next(r for r in second_records if r["processing_activity"] == "Event Attendee Management")
@@ -340,7 +410,7 @@ async def test_rerun_with_unchanged_evidence_does_not_create_a_new_version(
 
 @_live_db_only
 async def test_same_activity_name_across_sources_does_not_collide(
-    client, auth_headers, integration_headers
+    client, auth_headers, integration_headers, worker_session_factory
 ):
     """Regression test for the version-identity bug: two different sources
     producing an activity with the SAME name must never share a version
@@ -352,6 +422,8 @@ async def test_same_activity_name_across_sources_does_not_collide(
 
     run_a = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=source_a)).json()
     run_b = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=source_b)).json()
+    await _run_evidence_analysis(auth_headers, run_a["id"], source_a["evidence"])
+    await _run_evidence_analysis(auth_headers, run_b["id"], source_b["evidence"])
 
     records_a = (await client.get(f"/api/v1/ropa/runs/{run_a['id']}/records", headers=auth_headers)).json()
     records_b = (await client.get(f"/api/v1/ropa/runs/{run_b['id']}/records", headers=auth_headers)).json()
@@ -385,17 +457,19 @@ async def test_idempotency_key_returns_same_run(client, auth_headers, integratio
 
 @_live_db_only
 async def test_evidence_read_key_can_read_its_own_runs_and_promote_baseline(
-    client, integration_headers_with_read
+    client, auth_headers, integration_headers_with_read, worker_session_factory
 ):
     """Regression test for the bug where an adapter's key got 201 from /evidence
     but 401 on every read: these routes must accept the SAME key (holding
     evidence:read) the push used, with no human session involved anywhere in
     this test (see integration_auth.get_ropa_reader)."""
+    payload = _payload()
     push = await client.post(
-        "/api/v1/ropa/evidence", headers=integration_headers_with_read, json=_payload(),
+        "/api/v1/ropa/evidence", headers=integration_headers_with_read, json=payload,
     )
     assert push.status_code == 201, push.text
     run_id = push.json()["id"]
+    await _run_evidence_analysis(auth_headers, run_id, payload["evidence"])
 
     runs = await client.get("/api/v1/ropa/runs", headers=integration_headers_with_read)
     assert runs.status_code == 200, runs.text
@@ -708,17 +782,25 @@ async def test_connector_pull_discovery_fires_the_partner_webhook_on_failure(
 
 @_live_db_only
 async def test_evidence_push_fires_the_partner_webhook_exactly_once_for_an_idempotent_replay(
-    client, auth_headers, integration_headers, monkeypatch
+    client, auth_headers, integration_headers, monkeypatch, worker_session_factory
 ):
     """A retried POST /evidence with the same idempotency_key must not
     re-announce a run that already announced itself once -- the
-    ingest_pushed_evidence `is_new` guard this test is really checking."""
+    ingest_pushed_evidence `is_new` guard this test is really checking.
+
+    The webhook now fires from execute_queued_evidence_analysis (the worker's
+    entry point), not the route: POST /evidence only enqueues. `is_new` still
+    governs whether a job is enqueued at all -- the replay below finds the
+    already-committed run and enqueues nothing a second time -- so running
+    analysis once for that one run is still the only way the webhook can fire
+    more than once, and this proves it doesn't.
+    """
     from unittest.mock import AsyncMock
 
-    from app.api.v1.routes import ropa as ropa_routes
+    from app.services import ropa_run_service
 
     mock_send_event = AsyncMock()
-    monkeypatch.setattr(ropa_routes.agent_webhook_service, "send_event", mock_send_event)
+    monkeypatch.setattr(ropa_run_service.agent_webhook_service, "send_event", mock_send_event)
 
     payload = _payload(idempotency_key="replay-webhook-test")
     first = await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)
@@ -727,9 +809,51 @@ async def test_evidence_push_fires_the_partner_webhook_exactly_once_for_an_idemp
     assert second.status_code == 201, second.text
     assert first.json()["id"] == second.json()["id"], "same idempotency_key must return the same run"
 
+    await _run_evidence_analysis(auth_headers, first.json()["id"], payload["evidence"])
+
     mock_send_event.assert_awaited_once_with(
         "ropa.run.completed", run_id=first.json()["id"], callback_url=None, callback_secret=None,
     )
+
+
+@_live_db_only
+async def test_evidence_analysis_failure_fails_the_run_and_notifies_the_partner(
+    client, auth_headers, integration_headers, monkeypatch, worker_session_factory
+):
+    """Same regression execute_queued_discovery's failure branch guards
+    against, for the evidence-push path: a failure during analysis (anything
+    run_pipeline_enriched itself didn't already swallow -- enrich_elements
+    catches its own LLM errors) must still reach the partner, with this run's
+    id and the real error, and the run itself must land in status="failed" --
+    not get stuck at "analyzing" forever."""
+    from unittest.mock import AsyncMock
+
+    from app.agents.ropa.services import discovery_service
+    from app.services import ropa_run_service
+
+    def _boom(*args, **kwargs):
+        raise ValueError("synthetic analysis failure")
+
+    monkeypatch.setattr(discovery_service, "run_pipeline_enriched", _boom)
+    mock_send_event = AsyncMock()
+    monkeypatch.setattr(ropa_run_service.agent_webhook_service, "send_event", mock_send_event)
+
+    payload = _payload()
+    push = await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)
+    assert push.status_code == 201, push.text
+    run_id = push.json()["id"]
+
+    with pytest.raises(ValueError):
+        await _run_evidence_analysis(auth_headers, run_id, payload["evidence"])
+
+    mock_send_event.assert_awaited_once()
+    call_args = mock_send_event.await_args
+    assert call_args.args[0] == "ropa.run.failed"
+    assert call_args.kwargs["run_id"] == run_id
+    assert "synthetic analysis failure" in call_args.kwargs["error"]
+
+    run = (await client.get(f"/api/v1/ropa/runs/{run_id}", headers=auth_headers)).json()
+    assert run["status"] == "failed"
 
 
 @_live_db_only

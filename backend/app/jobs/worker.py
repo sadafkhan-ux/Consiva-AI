@@ -129,13 +129,25 @@ async def _process_one(job: AgentJob) -> None:
         # the slowest table -- exactly the kind of work that must not run
         # inside a request (ropa_run_service.run_discovery_for_source creates
         # the run and enqueues this; this is the only place that actually
-        # calls discover_and_analyze). evidence_push is NOT queued: it already
-        # arrives with its data in hand and has no external connection to
-        # wait on, so queuing it would add latency for nothing. Uses this same
-        # agent_jobs queue rather than a second job framework.
+        # calls discover_and_analyze). Uses this same agent_jobs queue rather
+        # than a second job framework.
         await ropa_run_service.execute_queued_discovery(
             uuid.UUID(job.payload["run_id"]),
             uuid.UUID(job.payload["org_id"]),
+        )
+    elif job.job_type == "ropa_evidence_analysis":
+        # Agent 2 evidence-push: the adapter already handed us its data, but
+        # analysis now also calls the LLM for enrichment of ambiguous columns
+        # -- a real network call that can hang or retry for minutes against a
+        # slow/unavailable model (an incident proved exactly this). That's the
+        # same "must not run inside a request" condition ropa_discovery is
+        # queued for above, so this queues too (ropa_run_service.
+        # ingest_pushed_evidence creates the run and enqueues this; this is the
+        # only place that actually calls run_pipeline_enriched for a push).
+        await ropa_run_service.execute_queued_evidence_analysis(
+            uuid.UUID(job.payload["run_id"]),
+            uuid.UUID(job.payload["org_id"]),
+            job.payload["evidence"],
         )
     elif job.job_type == "dsr_search":
         # Agent 3 (DSR Fulfillment) subject search across authorized sources. Uses

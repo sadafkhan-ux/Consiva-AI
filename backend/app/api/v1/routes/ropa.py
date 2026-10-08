@@ -595,12 +595,24 @@ async def ingest_evidence(
         integration_auth.get_integration_principal
     ),
 ) -> RunResponse:
-    """Accept externally-collected evidence from an integration adapter.
+    """Accept externally-collected evidence from an integration adapter and queue it
+    for analysis.
 
     Authenticated with an INTEGRATION KEY, not a user session: the adapter runs
     inside the customer's own infrastructure (e.g. PrepMyEvent's VM) and has no
     Supabase user to act as. Consiva never holds that system's database
     credentials on this path -- only the curated metadata they choose to send.
+
+    Only creates the run and enqueues a 'ropa_evidence_analysis' job
+    (ropa_run_service.ingest_pushed_evidence), returning as soon as that's
+    committed. The actual analysis -- including LLM enrichment, a real network
+    call that can hang or retry for minutes against a slow/unavailable model --
+    runs in the worker (execute_queued_evidence_analysis), which also fires the
+    "ropa.run.completed"/"ropa.run.failed" webhook once it actually finishes.
+    This endpoint used to run that analysis inline and block the response on
+    it; an incident where the self-hosted model stalled turned that into a
+    120+-second hang on every push is why it's queued now, the same reason
+    POST /sources/{id}/discover already is.
     """
     integration_auth.require_scope(principal, "evidence:write")
     try:
@@ -610,7 +622,7 @@ async def ingest_evidence(
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
-    run, is_new = await ropa_run_service.ingest_pushed_evidence(
+    run, _is_new = await ropa_run_service.ingest_pushed_evidence(
         db, org_id=uuid.UUID(principal.org_id), source_name=payload.source_name,
         evidence=payload.evidence, user_id=None,
         idempotency_key=payload.idempotency_key,
@@ -620,12 +632,6 @@ async def ingest_evidence(
         callback_url=callback_url, callback_secret_ciphertext=callback_secret_ciphertext,
     )
     await db.commit()
-    if is_new:
-        await agent_webhook_service.send_event(
-            "ropa.run.completed", run_id=str(run.id),
-            callback_url=run.agent_callback_url,
-            callback_secret=agent_webhook_service.resolve_callback_secret(run.agent_callback_secret_ciphertext),
-        )
     return _run_response(run)
 
 
