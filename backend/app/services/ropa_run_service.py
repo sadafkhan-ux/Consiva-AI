@@ -154,7 +154,7 @@ async def ingest_pushed_evidence(
     run.status = "analyzing"
     await db.flush()
     baseline = await ropa_repository.get_current_baseline_snapshot(db, org_id, source_name)
-    output = discovery_service.run_pipeline(evidence, baseline_snapshot=baseline)
+    output = await discovery_service.run_pipeline_enriched(evidence, baseline_snapshot=baseline, run_id=str(run.id))
     await _persist_and_audit(db, run, output, org_id=org_id, user_id=user_id, evidence=evidence)
     await ropa_repository.persist_changes(
         db, run, output.change_detection, source_name=source_name
@@ -191,7 +191,8 @@ async def execute_queued_discovery(run_id: uuid.UUID, org_id: uuid.UUID) -> None
             await db.flush()
             baseline = await ropa_repository.get_current_baseline_snapshot(db, org_id, source.name)
             output = await discovery_service.discover_and_analyze(
-                connector, org_id=str(org_id), source_name=source.name, baseline_snapshot=baseline
+                connector, org_id=str(org_id), source_name=source.name, baseline_snapshot=baseline,
+                run_id=str(run.id), enrich=True,
             )
         except (ConnectorError, ValueError) as exc:
             await ropa_repository.fail_run(db, run, f"{type(exc).__name__}: {exc}")

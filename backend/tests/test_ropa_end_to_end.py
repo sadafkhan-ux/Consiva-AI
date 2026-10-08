@@ -295,38 +295,47 @@ async def test_rerun_with_unchanged_evidence_does_not_create_a_new_version(
     substance must not mint a no-op version, even though the run itself gets a
     fresh discovery_run_id and fresh evidence local_ids every time.
 
-    /runs/{id}/records filters by discovery_run_id -- it deliberately lists
-    only the records a run CREATED a new version of, so a run that found
-    everything unchanged correctly lists none for that activity. The
-    regression is checked the other way around: the record run 1 created is
-    still the CURRENT, non-superseded version after run 2, at the same
-    version number -- i.e. run 2 recognizing it as unchanged did not fork it.
+    /runs/{id}/records filters by discovery_run_id, and that row is
+    re-pointed at whichever run most recently re-confirmed it (persist_output,
+    the `previous.content_hash == fingerprint` branch) -- so run 2 re-finding
+    this activity unchanged DOES list it under run 2, not just run 1. A run
+    that completes having re-confirmed N existing records must be able to
+    show them; a run reporting 0 records is indistinguishable from a run that
+    found nothing at all, which is the bug this used to let through (and
+    which real evidence-push integrations hit: a completed run with
+    personal_data_elements > 0 and risk findings, but an empty Records tab).
+
+    The regression itself is checked the way the docstring originally meant:
+    the record run 1 created is still the CURRENT, non-superseded version
+    after run 2 -- same row, same version number -- i.e. run 2 recognizing it
+    as unchanged did not fork it into a new version. It only relabels which
+    run that single current version is attributed to.
     """
     payload = _payload()
     first = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)).json()
+    first_records = (await client.get(f"/api/v1/ropa/runs/{first['id']}/records", headers=auth_headers)).json()
+    a1 = next(r for r in first_records if r["processing_activity"] == "Event Attendee Management")
+
     second = (await client.post("/api/v1/ropa/evidence", headers=integration_headers, json=payload)).json()
     assert first["id"] != second["id"], "two distinct runs, not deduped by idempotency_key"
 
-    first_records = (await client.get(f"/api/v1/ropa/runs/{first['id']}/records", headers=auth_headers)).json()
     second_records = (await client.get(f"/api/v1/ropa/runs/{second['id']}/records", headers=auth_headers)).json()
-
-    a1 = next(r for r in first_records if r["processing_activity"] == "Event Attendee Management")
-    assert not any(r["processing_activity"] == "Event Attendee Management" for r in second_records), (
-        "an unchanged re-push mints no new version, so run 2's own (created-by-it) "
-        "record list has none for this activity"
-    )
+    a2 = next(r for r in second_records if r["processing_activity"] == "Event Attendee Management")
+    assert a2["id"] == a1["id"], "run 2 must not have superseded run 1's record with a new one"
+    assert a2["version"] == a1["version"]
+    assert a2["status"] != "superseded"
 
     run = (await client.get(f"/api/v1/ropa/runs/{second['id']}", headers=auth_headers)).json()
     assert run["status"] == "completed", "the re-push is still a real, fully audited run"
     assert run["summary"]["unchanged_records"] >= 1
 
+    # The record now belongs to run 2's view, not run 1's -- the whole point
+    # of re-pointing discovery_run_id. Run 1's own audit trail and summary
+    # counts are untouched; only the live "current records" listing moved.
     first_records_again = (
         await client.get(f"/api/v1/ropa/runs/{first['id']}/records", headers=auth_headers)
     ).json()
-    a1_again = next(r for r in first_records_again if r["processing_activity"] == "Event Attendee Management")
-    assert a1_again["id"] == a1["id"], "run 2 must not have superseded run 1's record with a new one"
-    assert a1_again["version"] == a1["version"]
-    assert a1_again["status"] != "superseded"
+    assert not any(r["processing_activity"] == "Event Attendee Management" for r in first_records_again)
 
 
 @_live_db_only

@@ -241,6 +241,13 @@ async def persist_output(
             # new version here would be pure churn: the run that found this is
             # still fully audited (see _persist_and_audit's caller), it just
             # doesn't fork the record's own history.
+            #
+            # It must still be re-pointed at THIS run, though: list_records_for_run
+            # (GET /runs/{id}/records) matches on discovery_run_id, and without this
+            # a run that fully re-confirmed N existing records reports 0 of them --
+            # indistinguishable from a run that found nothing at all.
+            previous.discovery_run_id = run.id
+            previous.updated_at = datetime.now(UTC)
             records.append(previous)
             unchanged_count += 1
             continue

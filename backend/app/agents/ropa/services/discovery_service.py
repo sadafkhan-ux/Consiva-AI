@@ -35,6 +35,7 @@ def run_pipeline(
     *,
     review_threshold: float = classification_service.DEFAULT_REVIEW_THRESHOLD,
     baseline_snapshot: dict | None = None,
+    run_id: str | None = None,
 ) -> RopaAgentOutput:
     """Run every analysis stage over already-collected evidence.
 
@@ -45,9 +46,13 @@ def run_pipeline(
     `baseline_snapshot` is the previously promoted schema fingerprint for this
     source (change_detection_service.build_snapshot). When absent, change
     detection is skipped rather than reporting a first run as "all new".
+
+    `run_id` is this backend's own RopaDiscoveryRun.id, for the completion log
+    line below only -- purely cosmetic, never used by the analysis itself, so a
+    caller that doesn't have one yet (e.g. a unit test) can simply omit it.
     """
     elements = classification_service.classify_evidence(evidence, review_threshold=review_threshold)
-    return _analyze(evidence, elements, baseline_snapshot=baseline_snapshot)
+    return _analyze(evidence, elements, baseline_snapshot=baseline_snapshot, run_id=run_id)
 
 
 async def run_pipeline_enriched(
@@ -55,6 +60,7 @@ async def run_pipeline_enriched(
     *,
     review_threshold: float = classification_service.DEFAULT_REVIEW_THRESHOLD,
     baseline_snapshot: dict | None = None,
+    run_id: str | None = None,
 ) -> RopaAgentOutput:
     """`run_pipeline` plus the prompt's tier-4 step: ask the LLM about columns
     no deterministic rule could resolve (prompt §6, "4. Controlled AI
@@ -72,7 +78,7 @@ async def run_pipeline_enriched(
     after = sum(1 for e in elements if e.classification == "Unknown")
     if before != after:
         logger.info("ROPA enrichment resolved %d of %d ambiguous column(s)", before - after, before)
-    return _analyze(evidence, elements, baseline_snapshot=baseline_snapshot)
+    return _analyze(evidence, elements, baseline_snapshot=baseline_snapshot, run_id=run_id)
 
 
 def _analyze(
@@ -80,6 +86,7 @@ def _analyze(
     elements: list,
     *,
     baseline_snapshot: dict | None,
+    run_id: str | None = None,
 ) -> RopaAgentOutput:
     """Every stage after classification. Shared by the deterministic and
     enriched entry points so the two can never drift apart."""
@@ -98,8 +105,15 @@ def _analyze(
     )
 
     logger.info(
-        "ROPA pipeline complete run=%s tables=%d columns=%d personal_data=%d "
+        "ROPA pipeline complete run=%s evidence_run=%s tables=%d columns=%d personal_data=%d "
         "activities=%d ropa_records=%d review_items=%d changes=%d",
+        # This backend's own run id -- what GET /runs/{id} and the rest of the
+        # API actually key on. `evidence_run` is the SENDER's own self-reported
+        # discovery_run_id (an arbitrary client string, e.g. "adapter-<ts>"),
+        # kept alongside for cross-referencing an adapter's own logs, but never
+        # on its own: searching these logs by the id the API returned used to
+        # find nothing, because only the sender's id was ever printed here.
+        run_id or "unknown",
         evidence.discovery_run_id,
         len(evidence.tables),
         len(evidence.columns),
@@ -125,6 +139,7 @@ async def discover_and_analyze(
     review_threshold: float = classification_service.DEFAULT_REVIEW_THRESHOLD,
     baseline_snapshot: dict | None = None,
     enrich: bool = False,
+    run_id: str | None = None,
 ) -> RopaAgentOutput:
     """Collect evidence from any registered connector, then analyze it.
 
@@ -141,8 +156,8 @@ async def discover_and_analyze(
     )
     if enrich:
         return await run_pipeline_enriched(
-            evidence, review_threshold=review_threshold, baseline_snapshot=baseline_snapshot
+            evidence, review_threshold=review_threshold, baseline_snapshot=baseline_snapshot, run_id=run_id
         )
     return run_pipeline(
-        evidence, review_threshold=review_threshold, baseline_snapshot=baseline_snapshot
+        evidence, review_threshold=review_threshold, baseline_snapshot=baseline_snapshot, run_id=run_id
     )
