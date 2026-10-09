@@ -353,6 +353,30 @@ export function BreachConsole() {
                 >
                   Send for review
                 </button>
+                <button
+                  className="secondary"
+                  disabled={busy || !can("communication_pending")}
+                  title="Confirms containment held and the incident is ready for anyone who needs telling."
+                  onClick={() =>
+                    void act("Confirmed verified; ready to communicate.", () =>
+                      incidentsApi.transition(selected.id, "communication_pending"),
+                    )
+                  }
+                >
+                  Confirm verified
+                </button>
+                <button
+                  className="secondary"
+                  disabled={busy || !can("closure_review")}
+                  title="Confirms communications are handled and the incident is ready to be closed."
+                  onClick={() =>
+                    void act("Ready for closure review.", () =>
+                      incidentsApi.transition(selected.id, "closure_review"),
+                    )
+                  }
+                >
+                  Ready for closure review
+                </button>
                 <RejectControl
                   disabled={busy || !can("rejected")}
                   onReject={(reason) =>

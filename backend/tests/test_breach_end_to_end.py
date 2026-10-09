@@ -441,12 +441,14 @@ async def test_scenario_1_unauthorized_access_reaches_a_defensible_close(monkeyp
     await response_service.build_response_plan(db, case, actor_user_id=USER)
     assert world.actions, "an unauthorized-access incident with evidence got no plan"
 
-    await incident_service.transition(db, case, vocab.APPROVAL_REQUIRED, actor_user_id=USER, now=NOW)
+    # Nothing in this incident type's playbook needs approval, so build_response_plan
+    # advances the case straight to APPROVED on its own -- there is nothing left for a
+    # reviewer to decide, and it must not stall at RESPONSE_PENDING waiting for one.
+    assert case.status == vocab.APPROVED
     await approve_everything(db, world, case)
     summary = await response_service.plan_summary(db, case)
     assert summary["ready_to_respond"]
 
-    await incident_service.transition(db, case, vocab.APPROVED, actor_user_id=USER, now=NOW)
     await incident_service.transition(db, case, vocab.RESPONDING, actor_user_id=USER, now=NOW)
 
     cleared = [
@@ -454,15 +456,21 @@ async def test_scenario_1_unauthorized_access_reaches_a_defensible_close(monkeyp
         if a.status == "approved" or (a.status == "proposed" and not a.requires_approval)
     ]
     assert cleared, "nothing was cleared for containment, so there is nothing to perform"
-    execution = await response_service.record_tracked_execution(
-        db, case, cleared[0].id, performed_by="priya@corp",
-        attestation="Revoked the account's database role at 09:40.",
-        actor_user_id=USER, now=NOW,
-    )
-    assert execution.verification_status == "attested"
+    for action in cleared:
+        execution = await response_service.record_tracked_execution(
+            db, case, action.id, performed_by="priya@corp",
+            attestation=f"Handled {action.action_kind} at 09:40.",
+            actor_user_id=USER, now=NOW,
+        )
+        assert execution.verification_status == "attested"
     assert "cannot confirm" in execution.verification_detail["note"]
 
-    await incident_service.transition(db, case, vocab.VERIFYING, actor_user_id=USER, now=NOW)
+    # Every planned action is now resolved, so the case moves itself into VERIFYING.
+    # Before this fix nothing in the product ever performed this transition, and an
+    # incident that finished containment was stuck at RESPONDING with no way to reach
+    # a close through the real system -- this is the regression test for that gap.
+    assert case.status == vocab.VERIFYING
+
     await incident_service.transition(db, case, vocab.COMMUNICATION_PENDING, actor_user_id=USER, now=NOW)
     await incident_service.transition(db, case, vocab.CLOSURE_REVIEW, actor_user_id=USER, now=NOW)
 
@@ -471,7 +479,9 @@ async def test_scenario_1_unauthorized_access_reaches_a_defensible_close(monkeyp
     assert report.grounded_facts
 
     case.closure_summary = "Access revoked; 400 customer records read; customers told."
-    await incident_service.transition(db, case, vocab.CLOSED, actor_user_id=USER, now=NOW)
+    closing = response_service.closing_status(blocked=0, failed=0)
+    assert closing == vocab.CLOSED, "nothing was blocked or failed; this must close cleanly"
+    await incident_service.transition(db, case, closing, actor_user_id=USER, now=NOW)
     assert lifecycle.is_terminal(case.status)
 
 
@@ -572,7 +582,10 @@ async def test_scenario_3_credential_compromise_cannot_be_contained_without_appr
     gated = next(a for a in plan if a.action_kind == vocab.ACT_DISABLE_ACCOUNT)
     assert gated.requires_approval
 
-    await incident_service.transition(db, case, vocab.APPROVAL_REQUIRED, actor_user_id=USER, now=NOW)
+    # build_response_plan advances the case itself now: a plan with undecided
+    # high-risk actions does not stall at RESPONSE_PENDING waiting for something to
+    # move it on.
+    assert case.status == vocab.APPROVAL_REQUIRED
 
     # THE GATE. Attempting containment before approval must fail, not warn.
     with pytest.raises(ApprovalRequiredError):

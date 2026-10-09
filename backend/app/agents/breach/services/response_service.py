@@ -40,6 +40,7 @@ from app.agents.breach.errors import (
     IncidentNotReadyError,
 )
 from app.agents.breach.schemas import incident as vocab
+from app.agents.breach.services import incident_service
 from app.db.models import IncidentAction, IncidentCase, IncidentExecution
 from app.db.repositories import incident_repository
 from app.services import audit_service
@@ -50,6 +51,10 @@ logger = logging.getLogger(__name__)
 # and not carried out within a day is re-reviewed: the situation moves, and an
 # authorisation given on Monday's understanding should not license Friday's action.
 APPROVAL_TTL = timedelta(hours=24)
+
+# An action in one of these states needs nothing further from the response stage --
+# it was carried out, could not be, was decided against, or was never going to run.
+_RESOLVED_ACTION_STATUSES = frozenset({"completed", "failed", "rejected", "blocked", "skipped"})
 
 
 # ── Planning (§21) ──────────────────────────────────────────────────────────────
@@ -217,7 +222,38 @@ async def build_response_plan(
                 "note": "recommendations only; nothing has been performed",
             },
         )
+
+    # A plan that exists has to go somewhere. Without this, an incident planned from
+    # RESPONSE_PENDING had no way to reach APPROVAL_REQUIRED or APPROVED on its own --
+    # not from the background analysis job, and not from a reviewer building the plan
+    # by hand -- and simply stalled there. Only fires from RESPONSE_PENDING itself, so
+    # replanning an already-approved incident (adding one more action by hand) is left
+    # alone: that is a deliberate pull-back the reviewer drives, not this function.
+    if case.status == vocab.RESPONSE_PENDING:
+        summary = await plan_summary(db, case)
+        target = next_status_after_planning(summary)
+        if target != case.status:
+            await incident_service.transition(
+                db, case, target, actor_user_id=actor_user_id,
+                audit_action=vocab.AUDIT_ACTION_PLANNED,
+                detail={"plan_summary": summary},
+            )
     return proposed
+
+
+def next_status_after_planning(summary: dict) -> str:
+    """Where an incident goes once its plan exists, from RESPONSE_PENDING.
+
+    Mirrors Agent 3's dsr_run_service.next_status_after_planning for the identical
+    problem. A plan with nothing a reviewer could decide is not a plan yet -- a human
+    needs to look; a plan with undecided actions needs a decision; a plan whose
+    actions all need no further say-so is already authorised for containment to begin.
+    """
+    if summary["nothing_to_do"]:
+        return vocab.REVIEW_REQUIRED
+    if summary["awaiting_decision"]:
+        return vocab.APPROVAL_REQUIRED
+    return vocab.APPROVED
 
 
 def _expected_result(kind: str) -> str:
@@ -255,6 +291,16 @@ async def add_action(
         raise IncidentNotReadyError(f"{action_kind!r} is not a response action")
     if execution_mode not in vocab.EXECUTION_MODES:
         raise IncidentNotReadyError(f"{execution_mode!r} is not an execution mode")
+    if execution_mode == vocab.EXECUTION_MODE_CONNECTOR:
+        # The vocabulary exists for a real DSR-connector execution path that was never
+        # built -- nothing anywhere executes a connector-mode action, so accepting one
+        # here would create an action that can be approved and then can never reach
+        # completed or failed. Refused until that execution path exists.
+        raise IncidentNotReadyError(
+            "connector-mode execution is not implemented for Agent 4 yet; add this as "
+            "a tracked action (the default) and record an attestation once it is "
+            "carried out"
+        )
     if not (title.strip() and rationale.strip()):
         raise IncidentNotReadyError(
             "an action needs a title and a rationale -- a containment step nobody can "
@@ -375,6 +421,12 @@ async def decide_action(
             "expires_at": approval.expires_at.isoformat() if approval.expires_at else None,
         },
     )
+    # A decision can resolve the last outstanding action just as an attestation or a
+    # failure can -- rejecting a still-proposed, no-approval-needed action while the
+    # incident is already RESPONDING is a real reviewer move, not a hypothetical one.
+    # Without this, that path reproduced the exact stall this function's sibling
+    # checks (record_tracked_execution, mark_action_failed) exist to prevent.
+    await _advance_if_response_complete(db, case, actor_user_id=reviewer_user_id, now=moment)
     return approval
 
 
@@ -396,6 +448,17 @@ async def plan_summary(db: AsyncSession, case: IncidentCase) -> dict:
         "ready_to_respond": not undecided and bool(approved or auto),
         "nothing_to_do": not undecided and not approved and not auto,
     }
+
+
+def closing_status(*, blocked: int, failed: int) -> str:
+    """CLOSED or PARTIALLY_COMPLETED, chosen from what the plan's actions actually did.
+
+    Mirrors Agent 3's dsr_run_service.closing_status for the identical problem:
+    closing as CLOSED when a containment action was blocked or failed would state
+    something that did not happen, to the one record -- the incident's own status --
+    that a regulator or an auditor would read first.
+    """
+    return vocab.PARTIALLY_COMPLETED if (blocked or failed) else vocab.CLOSED
 
 
 # ── Controlled execution (§24, §25) ─────────────────────────────────────────────
@@ -516,7 +579,30 @@ async def record_tracked_execution(
             "verification": "attested",
         },
     )
+    await _advance_if_response_complete(db, case, actor_user_id=actor_user_id, now=moment)
     return execution
+
+
+async def _advance_if_response_complete(
+    db: AsyncSession, case: IncidentCase, *, actor_user_id: uuid.UUID | None, now: datetime,
+) -> None:
+    """Once every planned action has reached an end state, RESPONDING is done.
+
+    Without this, an incident whose containment was fully attested (or failed, or
+    blocked) had no way to reach VERIFYING on its own -- nothing else in the system
+    ever performs this transition -- and simply stalled at RESPONDING forever, with
+    no path to being closed. Fires only from RESPONDING, and only once nothing is
+    still `proposed` or `approved`; it never decides that verification itself is
+    done -- that is still a person's call, made through the next transition.
+    """
+    if case.status != vocab.RESPONDING:
+        return
+    actions = await incident_repository.list_actions(db, case.id, case.org_id)
+    if actions and all(a.status in _RESOLVED_ACTION_STATUSES for a in actions):
+        await incident_service.transition(
+            db, case, vocab.VERIFYING, actor_user_id=actor_user_id,
+            audit_action=vocab.AUDIT_ACTION_VERIFIED, now=now,
+        )
 
 
 async def mark_action_failed(
@@ -541,6 +627,7 @@ async def mark_action_failed(
     if action is None or action.incident_id != case.id:
         raise IncidentNotFoundError(f"action {action_id} not found on {case.reference}")
 
+    moment = now or datetime.now(UTC)
     action.status = "failed"
     action.blocked_reason = reason.strip()
     await db.flush()
@@ -550,4 +637,5 @@ async def mark_action_failed(
         entity_id=case.id,
         after={"action_id": str(action.id), "status": "failed", "reason": action.blocked_reason},
     )
+    await _advance_if_response_complete(db, case, actor_user_id=actor_user_id, now=moment)
     return action

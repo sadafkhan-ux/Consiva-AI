@@ -36,6 +36,13 @@ from app.services import audit_service
 
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
 
+# Targets that each have their own endpoint with real preconditions the generic
+# transition below does not check: APPROVED requires every action actually decided
+# (decide_action), CLOSED/PARTIALLY_COMPLETED require a report and a closure summary
+# (close_incident). Allowing this endpoint to reach them let any org member force an
+# incident "approved" with nothing decided, or "closed" with no report at all.
+_DEDICATED_TARGETS = frozenset({vocab.APPROVED, vocab.CLOSED, vocab.PARTIALLY_COMPLETED})
+
 
 # ── Request models ───────────────────────────────────────────────────────────────
 
@@ -342,6 +349,13 @@ async def transition(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    if payload.to_status in _DEDICATED_TARGETS:
+        raise IncidentNotReadyError(
+            f"{payload.to_status!r} can only be reached through its own endpoint "
+            "(a decision on every action for 'approved'; a report and a closure "
+            "summary for 'closed'/'partially_completed'), which checks what this "
+            "generic transition does not"
+        )
     case = await incident_service.get_incident_or_raise(db, incident_id, uuid.UUID(user.org_id))
     await incident_service.transition(
         db, case, payload.to_status, actor_user_id=uuid.UUID(user.user_id),
@@ -923,9 +937,27 @@ async def close_incident(
 
     case.closure_summary = payload.reason.strip()
     await db.flush()
+
+    # Closing as CLOSED when an action was blocked or failed would claim something
+    # that did not happen on the one field read first. Mirrors Agent 3's identical
+    # closing_status check for DSR.
+    actions = await incident_repository.list_actions(db, case.id, org_id)
+    blocked = sum(1 for a in actions if a.status == "blocked")
+    failed = sum(1 for a in actions if a.status == "failed")
+    closing = response_service.closing_status(blocked=blocked, failed=failed)
+
     await incident_service.transition(
-        db, case, vocab.CLOSED, actor_user_id=uuid.UUID(user.user_id),
-        audit_action=vocab.AUDIT_CLOSED, detail={"closure_summary": case.closure_summary},
+        db, case, closing, actor_user_id=uuid.UUID(user.user_id),
+        audit_action=(
+            vocab.AUDIT_CLOSED if closing == vocab.CLOSED else vocab.AUDIT_PARTIALLY_COMPLETED
+        ),
+        error_code=None if closing == vocab.CLOSED else (
+            vocab.ERR_ACTION_FAILED if failed else vocab.ERR_ACTION_BLOCKED
+        ),
+        error_detail=None if closing == vocab.CLOSED else (
+            f"{blocked} action(s) blocked, {failed} failed; see the plan for reasons"
+        ),
+        detail={"closure_summary": case.closure_summary, "blocked": blocked, "failed": failed},
     )
     await db.commit()
     return _incident_response(case)
