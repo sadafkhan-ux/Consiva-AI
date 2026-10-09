@@ -45,6 +45,16 @@ import {
 
 type Tab = "evidence" | "timeline" | "impact" | "response" | "comms" | "report" | "audit";
 
+/** Statuses the background analysis job passes through. "Run analysis" only queues
+ *  the job -- the worker picks it up on its own schedule -- so without polling while
+ *  the incident sits in one of these, the console looks unchanged whether the job
+ *  hasn't started yet, is running, or (rarely) got stuck. */
+const ANALYSIS_IN_PROGRESS_STATUSES = new Set([
+  "investigating",
+  "impact_assessment",
+  "risk_assessment",
+]);
+
 const STATUS_TONE: Record<string, string> = {
   closed: "ok",
   approved: "ok",
@@ -149,6 +159,35 @@ export function BreachConsole() {
       setBusy(false);
     }
   }, []);
+
+  /** "Run analysis" only queues a background job -- the worker picks it up on its own
+   *  schedule, typically within a couple of seconds, and nothing else refreshes the
+   *  screen while it runs. Without this, the console looks identical whether the job
+   *  hasn't started, is still running, or has silently finished. Polls the incident
+   *  alone (not the full loadIncident, which would flip `busy` and grey out every
+   *  control every three seconds) until the status moves on, then does one full
+   *  reload to pick up whatever the job produced. */
+  useEffect(() => {
+    const id = selected?.id;
+    const status = selected?.status;
+    if (!id || !status || !ANALYSIS_IN_PROGRESS_STATUSES.has(status)) return;
+    const interval = setInterval(() => {
+      void incidentsApi
+        .get(id)
+        .then((fresh) => {
+          if (ANALYSIS_IN_PROGRESS_STATUSES.has(fresh.status)) {
+            setSelected(fresh);
+          } else {
+            void loadIncident(id);
+          }
+        })
+        .catch(() => {
+          // A transient failure during a background poll isn't worth an error
+          // banner -- the next tick, or a manual reselect, will catch up.
+        });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [selected?.id, selected?.status, loadIncident]);
 
   /** Every mutating control funnels through here, so a refusal always surfaces as
    *  the backend's own message and the incident is always re-read afterwards. */
@@ -331,6 +370,11 @@ export function BreachConsole() {
                 >
                   Run analysis
                 </button>
+                {ANALYSIS_IN_PROGRESS_STATUSES.has(selected.status) && (
+                  <span className="small muted">
+                    Analysis in progress — this screen will refresh on its own.
+                  </span>
+                )}
                 <button
                   className="secondary"
                   disabled={busy || !can("response_pending")}
@@ -445,6 +489,11 @@ export function BreachConsole() {
                       incidentsApi.attest(selected.id, actionId, { performed_by, attestation }),
                     )
                   }
+                  onFail={(actionId, reason) =>
+                    act("Recorded as not completed.", () =>
+                      incidentsApi.failAction(selected.id, actionId, reason),
+                    )
+                  }
                 />
               )}
 
@@ -557,41 +606,68 @@ function FindingControls({
   );
 }
 
-function RejectControl({ disabled, onReject }: { disabled: boolean; onReject: (reason: string) => void }) {
+/** A collapsed toggle that opens into a required-reason field and a record/cancel
+ *  pair. Shared by "Not an incident" and "Couldn't complete it" -- both are the same
+ *  shape: a negative outcome that must say why before it can be recorded. */
+function ReasonControl({
+  openLabel,
+  prompt,
+  placeholder,
+  submitLabel = "Record",
+  className = "secondary",
+  disabled,
+  onSubmit,
+}: {
+  openLabel: string;
+  prompt: string;
+  placeholder: string;
+  submitLabel?: string;
+  className?: string;
+  disabled: boolean;
+  onSubmit: (reason: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
 
   if (!open) {
     return (
-      <button className="secondary" disabled={disabled} onClick={() => setOpen(true)}>
-        Not an incident
+      <button className={className} disabled={disabled} onClick={() => setOpen(true)}>
+        {openLabel}
       </button>
     );
   }
   return (
     <span className="dsr-intake" style={{ flex: "1 1 100%" }}>
       <label style={{ flex: "2 1 320px" }}>
-        Why is this not an incident
-        <input
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="Traced to the nightly backup job; no external access."
-        />
+        {prompt}
+        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder={placeholder} />
       </label>
       <button
         disabled={disabled || !reason.trim()}
         onClick={() => {
-          onReject(reason.trim());
+          onSubmit(reason.trim());
           setOpen(false);
           setReason("");
         }}
       >
-        Record
+        {submitLabel}
       </button>
       <button className="secondary" onClick={() => setOpen(false)}>
         Cancel
       </button>
     </span>
+  );
+}
+
+function RejectControl({ disabled, onReject }: { disabled: boolean; onReject: (reason: string) => void }) {
+  return (
+    <ReasonControl
+      openLabel="Not an incident"
+      prompt="Why is this not an incident"
+      placeholder="Traced to the nightly backup job; no external access."
+      disabled={disabled}
+      onSubmit={onReject}
+    />
   );
 }
 
@@ -1003,6 +1079,7 @@ function ResponseTab({
   onBuild,
   onDecide,
   onAttest,
+  onFail,
 }: {
   actions: IncidentAction[];
   summary: PlanSummary | null;
@@ -1010,6 +1087,7 @@ function ResponseTab({
   onBuild: () => void;
   onDecide: (actionId: string, decision: string, reason?: string) => void;
   onAttest: (actionId: string, performedBy: string, attestation: string) => void;
+  onFail: (actionId: string, reason: string) => void;
 }) {
   return (
     <div style={{ marginTop: 14 }}>
@@ -1033,7 +1111,7 @@ function ResponseTab({
 
       {actions.length === 0 && <p className="empty-note">No plan yet.</p>}
       {actions.map((a) => (
-        <ActionCard key={a.id} action={a} busy={busy} onDecide={onDecide} onAttest={onAttest} />
+        <ActionCard key={a.id} action={a} busy={busy} onDecide={onDecide} onAttest={onAttest} onFail={onFail} />
       ))}
     </div>
   );
@@ -1044,11 +1122,13 @@ function ActionCard({
   busy,
   onDecide,
   onAttest,
+  onFail,
 }: {
   action: IncidentAction;
   busy: boolean;
   onDecide: (actionId: string, decision: string, reason?: string) => void;
   onAttest: (actionId: string, performedBy: string, attestation: string) => void;
+  onFail: (actionId: string, reason: string) => void;
 }) {
   const [reason, setReason] = useState("");
   const [who, setWho] = useState("");
@@ -1128,6 +1208,14 @@ function ActionCard({
           >
             Record as done
           </button>
+          <ReasonControl
+            openLabel="Couldn't complete it"
+            prompt="What went wrong"
+            placeholder="The account could not be reached; escalated to the platform team."
+            submitLabel="Record as not completed"
+            disabled={busy}
+            onSubmit={(reason) => onFail(action.id, reason)}
+          />
         </div>
       )}
 
