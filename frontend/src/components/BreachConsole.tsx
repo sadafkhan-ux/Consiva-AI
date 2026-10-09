@@ -171,7 +171,12 @@ export function BreachConsole() {
     const id = selected?.id;
     const status = selected?.status;
     if (!id || !status || !ANALYSIS_IN_PROGRESS_STATUSES.has(status)) return;
+    let inFlight = false;
     const interval = setInterval(() => {
+      // A slow poll response (or a slow network) must not pile up a second request
+      // on top of it -- skip this tick rather than overlap.
+      if (inFlight) return;
+      inFlight = true;
       void incidentsApi
         .get(id)
         .then((fresh) => {
@@ -184,6 +189,9 @@ export function BreachConsole() {
         .catch(() => {
           // A transient failure during a background poll isn't worth an error
           // banner -- the next tick, or a manual reselect, will catch up.
+        })
+        .finally(() => {
+          inFlight = false;
         });
     }, 3000);
     return () => clearInterval(interval);
@@ -365,7 +373,7 @@ export function BreachConsole() {
 
               <div className="dsr-actions" style={{ marginTop: 14 }}>
                 <button
-                  disabled={busy || selected.is_terminal}
+                  disabled={busy || selected.is_terminal || ANALYSIS_IN_PROGRESS_STATUSES.has(selected.status)}
                   onClick={() => void act("Analysis queued.", () => incidentsApi.analyse(selected.id))}
                 >
                   Run analysis
