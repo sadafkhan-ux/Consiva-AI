@@ -68,6 +68,7 @@ from app.agents.dsr.services import sla_service as dsr_sla_service
 from app.agents.regwatch.services import action_sla_service as regwatch_action_sla_service
 from app.config import get_settings
 from app.db.models import AgentJob
+from app.db.repositories import ropa_repository
 from app.db.session import async_session_factory
 from app.jobs import queue
 from app.services import (
@@ -257,6 +258,17 @@ async def _maintenance_loop(stopping: asyncio.Event) -> None:
                 logger.warning("Reaped %d stale job(s) whose worker never released them", reaped)
         except Exception:
             logger.exception("Stale-job reaping failed; continuing with the other duties")
+
+        # A ROPA run whose queue job has permanently failed would otherwise stay
+        # "pending"/"analyzing" forever; close it with the job's real error.
+        try:
+            async with async_session_factory() as db:
+                closed = await ropa_repository.fail_runs_with_dead_jobs(db)
+                await db.commit()
+            if closed:
+                logger.warning("ROPA: closed %d run(s) whose processing job had failed", closed)
+        except Exception:
+            logger.exception("ROPA stuck-run reconciliation failed; continuing with the other duties")
 
         try:
             async with async_session_factory() as db:

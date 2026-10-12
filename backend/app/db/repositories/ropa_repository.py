@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.ropa.schemas.output import RopaAgentOutput
 from app.agents.ropa.schemas.ropa import RopaRecord
 from app.db.models import (
+    AgentJob,
     RopaClassification,
     RopaDataSource,
     RopaDiscoveryRun,
@@ -158,6 +159,58 @@ async def get_run(db: AsyncSession, run_id: uuid.UUID, org_id: uuid.UUID) -> Rop
         select(RopaDiscoveryRun).where(RopaDiscoveryRun.id == run_id, RopaDiscoveryRun.org_id == org_id)
     )
     return result.scalar_one_or_none()
+
+
+_NON_TERMINAL_RUN_STATUSES = ("pending", "discovering", "analyzing")
+_RUN_JOB_TYPES = ("ropa_evidence_analysis", "ropa_discovery")
+
+
+async def queue_state_for_runs(db: AsyncSession, run_ids: list[uuid.UUID]) -> dict[uuid.UUID, AgentJob]:
+    """The newest queue job behind each run, keyed by run id.
+
+    A run's own status only says what the worker last wrote. A run that is "pending"
+    because no worker has picked its job up, and one whose job already died, look
+    identical from that row alone -- this is how the two are told apart.
+    """
+    if not run_ids:
+        return {}
+    wanted = {str(r): r for r in run_ids}
+    rows = (
+        await db.execute(
+            select(AgentJob)
+            .where(
+                AgentJob.job_type.in_(_RUN_JOB_TYPES),
+                AgentJob.payload["run_id"].astext.in_(list(wanted)),
+            )
+            .order_by(AgentJob.created_at)
+        )
+    ).scalars().all()
+    return {wanted[str(j.payload["run_id"])]: j for j in rows}  # later (newer) job wins
+
+
+async def fail_runs_with_dead_jobs(db: AsyncSession) -> int:
+    """Marks a run failed when the job that was meant to process it has permanently
+    failed, with the job's real error as the reason.
+
+    Without this a run whose worker was killed past the retry limit stays "pending" or
+    "analyzing" indefinitely: the job row says failed, the run row never hears about
+    it. Returns how many runs were closed.
+    """
+    runs = (
+        await db.execute(
+            select(RopaDiscoveryRun).where(RopaDiscoveryRun.status.in_(_NON_TERMINAL_RUN_STATUSES))
+        )
+    ).scalars().all()
+    if not runs:
+        return 0
+    jobs = await queue_state_for_runs(db, [r.id for r in runs])
+    closed = 0
+    for run in runs:
+        job = jobs.get(run.id)
+        if job is not None and job.status == "failed":
+            await fail_run(db, run, f"Processing job failed after {job.attempts} attempt(s): {job.error or 'no error recorded'}")
+            closed += 1
+    return closed
 
 
 async def fail_run(db: AsyncSession, run: RopaDiscoveryRun, error: str) -> None:

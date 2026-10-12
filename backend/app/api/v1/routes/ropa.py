@@ -41,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.ropa.connectors import factory as connector_factory
 from app.agents.ropa.connectors.base import ConnectorError, registered_connectors
 from app.agents.ropa.schemas.evidence import DiscoveryEvidence
-from app.agents.ropa.schemas.payload import SourcePayload
+from app.agents.ropa.schemas.payload import SourcePayload, clean_source_name
 from app.core import integration_auth
 from app.core.security import CurrentUser, get_current_user
 from app.db.models import RopaIntegrationKey
@@ -247,6 +247,10 @@ class RunResponse(BaseModel):
     overall_confidence: float | None
     summary: dict
     error: str | None
+    status_detail: str | None = Field(
+        default=None,
+        description="Why a run that has not finished is in its current state, from the queue",
+    )
     created_at: str
     started_at: str | None
     completed_at: str | None
@@ -265,9 +269,31 @@ class DecisionRequest(BaseModel):
         return value
 
 
-def _run_response(run) -> RunResponse:
+_IN_FLIGHT = ("pending", "discovering", "analyzing")
+
+
+def _status_detail(run, job) -> str | None:
+    """A human reason for a not-yet-finished run, taken from its queue job only."""
+    if run.status not in ("pending", "discovering", "analyzing"):
+        return None
+    if job is None:
+        return "No processing job is queued for this run; it will not progress on its own."
+    waited = int((datetime.now(UTC) - job.created_at).total_seconds() // 60)
+    if job.status == "queued":
+        retry = f" after a failed attempt ({job.error})" if job.error else ""
+        return f"Queued{retry} for {waited} min; waiting for a worker to pick it up."
+    if job.status == "running":
+        return f"A worker is processing this run (attempt {job.attempts})."
+    if job.status == "failed":
+        return f"Processing job failed after {job.attempts} attempt(s): {job.error or 'no error recorded'}"
+    return None
+
+
+def _run_response(run, job=None) -> RunResponse:
     return RunResponse(
-        id=run.id, data_source_id=run.data_source_id, source_name=run.source_name,
+        id=run.id, data_source_id=run.data_source_id,
+        source_name=clean_source_name(run.source_name) or "Unnamed source",
+        status_detail=_status_detail(run, job),
         ingest_mode=run.ingest_mode, status=run.status,
         tables_scanned=run.tables_scanned, columns_scanned=run.columns_scanned,
         personal_data_elements=run.personal_data_elements,
@@ -643,7 +669,8 @@ async def list_runs(
 ) -> list[RunResponse]:
     """Recent discovery runs for the caller's org, newest first."""
     rows = await ropa_repository.list_runs(db, uuid.UUID(user.org_id), limit=min(limit, 200))
-    return [_run_response(r) for r in rows]
+    jobs = await ropa_repository.queue_state_for_runs(db, [r.id for r in rows if r.status in _IN_FLIGHT])
+    return [_run_response(r, jobs.get(r.id)) for r in rows]
 
 
 @router.get("/runs/{run_id}", response_model=RunResponse)
@@ -655,7 +682,8 @@ async def get_run(
     run = await ropa_repository.get_run(db, run_id, uuid.UUID(user.org_id))
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
-    return _run_response(run)
+    jobs = await ropa_repository.queue_state_for_runs(db, [run.id]) if run.status in _IN_FLIGHT else {}
+    return _run_response(run, jobs.get(run.id))
 
 
 @router.get("/runs/{run_id}/records")

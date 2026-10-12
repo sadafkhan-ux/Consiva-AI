@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { RopaRun } from "../api/ropa";
-import { RopaDashboard } from "./RopaDashboard";
+import { RopaDashboard, runDisplayName } from "./RopaDashboard";
 
 const BASE_URL = "http://127.0.0.1:8000";
 
@@ -179,5 +179,41 @@ describe("RopaDashboard: run observability stats", () => {
     render(<RopaDashboard />);
 
     await waitFor(() => expect(screen.getByText("running…")).toBeInTheDocument());
+  });
+});
+
+describe("RopaDashboard: run naming and status", () => {
+  it("never renders an empty-bracket or blank source name", () => {
+    expect(runDisplayName("Consiva ()")).toBe("Consiva");
+    expect(runDisplayName("Consiva (prod)")).toBe("Consiva (prod)");
+    expect(runDisplayName("()")).toBe("Unnamed source");
+    expect(runDisplayName("")).toBe("Unnamed source");
+    expect(runDisplayName(null)).toBe("Unnamed source");
+  });
+
+  it("shows the real reason for a pending run, and the real error for a failed one", async () => {
+    const runs: RopaRun[] = [
+      runFixture({
+        id: "run-a", source_name: "Consiva ()", ingest_mode: "evidence_push", data_source_id: null,
+        status_detail: "Queued for 7 min; waiting for a worker to pick it up.",
+      }),
+      runFixture({
+        id: "run-b", source_name: "Consiva ()", ingest_mode: "evidence_push", data_source_id: null,
+        status: "failed", error: "Processing job failed after 3 attempt(s): Reaped: worker died",
+      }),
+    ];
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/ropa/connectors")) return Promise.resolve(jsonResponse({ connectors: [] }));
+      if (url.endsWith("/api/v1/ropa/sources")) return Promise.resolve(jsonResponse([]));
+      if (url.endsWith("/api/v1/ropa/runs")) return Promise.resolve(jsonResponse(runs));
+      return Promise.resolve(jsonResponse([]));
+    }));
+
+    render(<RopaDashboard />);
+
+    await waitFor(() => expect(screen.getAllByText("Consiva")).toHaveLength(2));
+    expect(screen.queryByText("Consiva ()")).not.toBeInTheDocument();
+    expect(screen.getAllByText(/waiting for a worker/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Reaped: worker died/).length).toBeGreaterThan(0);
   });
 });

@@ -19,6 +19,7 @@ support is rejected outright rather than parsed on a guess. Minor differences
 are accepted -- new optional fields must never break an older sender.
 """
 
+import re
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field, field_validator
@@ -32,6 +33,28 @@ from app.agents.ropa.schemas.evidence import DiscoveryEvidence
 CURRENT_SCHEMA_VERSION = "1.1"
 SUPPORTED_MAJOR_VERSIONS = frozenset({"1"})
 
+_EMPTY_BRACKETS = re.compile(r"\s*(\(\s*\)|\[\s*\]|\{\s*\})\s*$")
+
+
+def clean_source_name(raw: str | None) -> str | None:
+    """A source name with whitespace collapsed and empty trailing brackets removed.
+
+    An adapter that builds its label as f"{app} ({host})" with a missing host sends
+    "Consiva ()". The empty qualifier carries no information, so it is dropped rather
+    than shown; nothing is invented in its place. Returns None when no letter or digit
+    is left, so the caller can refuse the name (on the wire) or say it is unnamed (on
+    display) instead of rendering a blank or misleading label.
+    """
+    if raw is None:
+        return None
+    name = " ".join(raw.split())
+    while True:
+        stripped = _EMPTY_BRACKETS.sub("", name)
+        if stripped == name:
+            break
+        name = stripped
+    return name if any(ch.isalnum() for ch in name) else None
+
 
 class SourcePayload(BaseModel):
     """What an external adapter POSTs to /api/v1/ropa/evidence."""
@@ -44,6 +67,14 @@ class SourcePayload(BaseModel):
     evidence: DiscoveryEvidence
     # Makes a retried push return the SAME run instead of duplicating work.
     idempotency_key: str | None = Field(default=None, max_length=200)
+
+    @field_validator("source_name")
+    @classmethod
+    def _meaningful_source_name(cls, value: str) -> str:
+        cleaned = clean_source_name(value)
+        if cleaned is None:
+            raise ValueError("source_name must contain at least one letter or digit")
+        return cleaned
 
     @field_validator("schema_version")
     @classmethod

@@ -265,10 +265,15 @@ export function RopaDashboard() {
                 className={`run-item${selected?.id === run.id ? " active" : ""}`}
                 onClick={() => setSelected(run)}
               >
-                <div className="run-source">{run.source_name}</div>
+                <div className="run-source">{runDisplayName(run.source_name)}</div>
                 <div className="run-meta">
                   {run.status} · {run.personal_data_elements} PII · {run.tables_scanned} tables
                 </div>
+                <div className="run-meta">
+                  {run.ingest_mode === "evidence_push" ? "pushed" : "connector"} · {formatWhen(run.created_at)}
+                </div>
+                {run.status === "failed" && run.error && <div className="run-meta run-error">{run.error}</div>}
+                {run.status_detail && <div className="run-meta">{run.status_detail}</div>}
               </button>
             ))}
           </aside>
@@ -281,6 +286,7 @@ export function RopaDashboard() {
                   <span className="mono small muted">run {selected.id}</span>
                 </div>
                 {selected.error && <div className="error-box">{selected.error}</div>}
+                {selected.status_detail && <div className="info-box">{selected.status_detail}</div>}
                 <div className="stat-row">
                   <Stat label="Tables" value={selected.tables_scanned} />
                   <Stat label="Columns" value={selected.columns_scanned} />
@@ -328,6 +334,22 @@ export function RopaDashboard() {
       )}
     </div>
   );
+}
+
+/** Never render an empty label or an empty-bracket qualifier like "Consiva ()".
+ * Mirrors the backend's clean_source_name; the stored value is not changed. */
+export function runDisplayName(raw: string | null | undefined): string {
+  let name = (raw ?? "").replace(/\s+/g, " ").trim();
+  let prev: string;
+  do {
+    prev = name;
+    name = name.replace(/\s*(\(\s*\)|\[\s*\]|\{\s*\})\s*$/, "");
+  } while (name !== prev);
+  return /[\p{L}\p{N}]/u.test(name) ? name : "Unnamed source";
+}
+
+function formatWhen(iso: string): string {
+  return new Date(iso).toLocaleString();
 }
 
 function formatTime(iso: string | null): string {

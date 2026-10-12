@@ -19,6 +19,8 @@ export interface RopaRun {
   overall_confidence: number | null;
   summary: Record<string, unknown>;
   error: string | null;
+  /** Why an unfinished run is in its current state, from the queue. */
+  status_detail?: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
