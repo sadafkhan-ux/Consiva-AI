@@ -1,8 +1,9 @@
 """Agent 3 (DSR Fulfillment) API.
 
-Every route is authenticated and org-scoped through the SAME dependency Agent 1 and
-Agent 2 use (core/security.get_current_user), so tenancy behaves identically across
-all three agents. Nothing here accepts an org_id from the caller -- it comes from
+Every route is authenticated and org-scoped through core/integration_auth, which accepts
+EITHER a signed-in person OR an org-scoped service key (csv_...) holding `dsr:operate`
+(cases, config reads) or `dsr:config` (config writes). The org comes from the verified
+credential in both cases, so tenancy behaves identically across all agents. Nothing here accepts an org_id from the caller -- it comes from
 the verified token and nowhere else, which is what closes the IDOR §37 asks about.
 
 The long-running steps (search, execution) are QUEUED on the existing agent_jobs
@@ -32,7 +33,8 @@ from app.agents.dsr.services import (
     response_service,
     sla_service,
 )
-from app.core.security import CurrentUser, get_current_user
+from app.core import integration_auth
+from app.core.security import CurrentUser
 from app.db.repositories import dsr_repository, ropa_repository
 from app.db.session import get_db
 from app.jobs import queue
@@ -199,7 +201,7 @@ async def _case_with_identity(db: AsyncSession, request) -> dict:
 @router.post("/requests", status_code=status.HTTP_201_CREATED)
 async def create_request(
     payload: DsrCreate,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request, is_new = await case_service.create_case(
@@ -224,7 +226,7 @@ async def create_request(
 async def list_requests(
     status_filter: str | None = None,
     limit: int = 50,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     rows = await dsr_repository.list_requests(
@@ -236,7 +238,7 @@ async def list_requests(
 @router.get("/requests/{request_id}")
 async def get_request(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
@@ -247,7 +249,7 @@ async def get_request(
 async def classify(
     request_id: uuid.UUID,
     payload: ClassifyRequest,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
@@ -263,7 +265,7 @@ async def classify(
 @router.post("/requests/{request_id}/identity/challenge")
 async def start_identity_challenge(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Issue an email challenge.
@@ -304,7 +306,7 @@ async def start_identity_challenge(
 async def verify_identity(
     request_id: uuid.UUID,
     payload: VerifyIdentity,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
@@ -341,7 +343,7 @@ async def verify_identity(
 @router.post("/requests/{request_id}/search")
 async def start_search(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Queue the subject search.
@@ -369,7 +371,7 @@ async def start_search(
 @router.get("/requests/{request_id}/results")
 async def list_results(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     org_id = uuid.UUID(user.org_id)
@@ -409,7 +411,7 @@ async def list_results(
 @router.get("/requests/{request_id}/plan")
 async def get_plan(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     org_id = uuid.UUID(user.org_id)
@@ -449,7 +451,7 @@ async def _plan_response(db: AsyncSession, request, org_id: uuid.UUID) -> dict:
 async def build_plan_from_selections(
     request_id: uuid.UUID,
     payload: PlanSelections,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Build (or rebuild) the action plan from the requester's per-record choices.
@@ -521,7 +523,7 @@ async def decide_action(
     request_id: uuid.UUID,
     action_id: uuid.UUID,
     payload: Decision,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     org_id = uuid.UUID(user.org_id)
@@ -565,7 +567,7 @@ async def decide_action(
 @router.post("/requests/{request_id}/execute")
 async def execute(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Queue execution of the approved actions.
@@ -596,7 +598,7 @@ async def execute(
 @router.get("/requests/{request_id}/executions")
 async def list_executions(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     org_id = uuid.UUID(user.org_id)
@@ -623,7 +625,7 @@ async def list_executions(
 @router.post("/requests/{request_id}/response")
 async def generate_response(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
@@ -641,7 +643,7 @@ async def generate_response(
 @router.get("/requests/{request_id}/response")
 async def get_response(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict | None:
     org_id = uuid.UUID(user.org_id)
@@ -660,7 +662,7 @@ async def get_response(
 @router.post("/requests/{request_id}/complete")
 async def complete_case(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Mark the response sent and close the case.
@@ -727,7 +729,9 @@ async def complete_case(
 def _require_admin(user: CurrentUser) -> None:
     """Configuration changes what the agent is allowed to touch, so they are not
     something an ordinary member may do. A token with no role is not an admin."""
-    if user.role != "admin":
+    # A service key has no role by design; it reaches the write routes only through
+    # get_dsr_config_writer, which has already required its dsr:config scope.
+    if user.key_name is None and user.role != "admin":
         raise CaseNotReadyError(
             "changing DSR source authorization or retention policy requires an "
             "administrator"
@@ -736,7 +740,7 @@ def _require_admin(user: CurrentUser) -> None:
 
 @router.get("/config/sources")
 async def list_source_authorizations(
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """What each source is permitted to do. Never returns a credential -- the row holds
@@ -772,7 +776,7 @@ async def list_source_authorizations(
 @router.put("/config/sources", status_code=status.HTTP_200_OK)
 async def put_source_authorization(
     payload: SourceAuthorizationIn,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Replace a source's DSR authorization.
@@ -830,7 +834,7 @@ async def put_source_authorization(
 
 @router.get("/config/retention")
 async def list_retention(
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     rows = await dsr_repository.list_retention_rules(db, uuid.UUID(user.org_id))
@@ -850,7 +854,7 @@ async def list_retention(
 @router.put("/config/retention", status_code=status.HTTP_200_OK)
 async def put_retention_rule(
     payload: RetentionRuleIn,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     _require_admin(user)
@@ -878,7 +882,7 @@ async def put_retention_rule(
 @router.delete("/config/retention/{rule_id}", status_code=status.HTTP_200_OK)
 async def disable_retention_rule(
     rule_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Disables rather than deletes. A rule that blocked an erasure last month is part
@@ -901,7 +905,7 @@ async def disable_retention_rule(
 @router.get("/requests/{request_id}/audit")
 async def case_audit(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """The case timeline, read from the SHARED append-only audit_logs table. There is
