@@ -105,6 +105,7 @@ async def ingest_pushed_evidence(
     evidence: DiscoveryEvidence,
     user_id: uuid.UUID | None,
     idempotency_key: str | None = None,
+    integration_key_id: uuid.UUID | None = None,
     integration_key_name: str | None = None,
     correlation_id: str | None = None,
     schema_version: str | None = None,
@@ -134,6 +135,13 @@ async def ingest_pushed_evidence(
     own docstring describes fixing for the connector flow, now the same fix
     for the same reason here.
 
+    `integration_key_id` is persisted onto the run (migration 0034) so a later read
+    can join back to that key's operator-chosen `name` -- the one piece of this push's
+    metadata the admin actually set custom, as opposed to `source_name`, which the
+    external adapter supplies and, in practice, is often left at a generic value.
+    `integration_key_name` is kept separately because it is used right here, for the
+    audit trail, before any such join is possible.
+
     Returns (run, is_new): `is_new` is False for an idempotency-key replay that
     short-circuited to an already-queued/completed run -- the caller uses this
     to decide whether this POST should enqueue anything at all, so a retried
@@ -146,6 +154,7 @@ async def ingest_pushed_evidence(
 
     run = await ropa_repository.create_run(
         db, org_id=org_id, source_name=source_name, ingest_mode="evidence_push",
+        integration_key_id=integration_key_id,
         requested_by_user_id=user_id, idempotency_key=idempotency_key,
         callback_url=callback_url, callback_secret_ciphertext=callback_secret_ciphertext,
     )

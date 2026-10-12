@@ -217,3 +217,93 @@ describe("RopaDashboard: run naming and status", () => {
     expect(screen.getAllByText(/Reaped: worker died/).length).toBeGreaterThan(0);
   });
 });
+
+describe("RopaDashboard: integration key minting (scope selection)", () => {
+  function stubBaseEndpoints(fetchMock: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal("fetch", fetchMock);
+  }
+
+  function baseHandlers(url: string) {
+    if (url.endsWith("/api/v1/ropa/connectors")) return Promise.resolve(jsonResponse({ connectors: [] }));
+    if (url.endsWith("/api/v1/ropa/sources")) return Promise.resolve(jsonResponse([]));
+    if (url.endsWith("/api/v1/ropa/runs")) return Promise.resolve(jsonResponse([]));
+    return null;
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends the default scope (evidence:write) when the operator accepts the scopes prompt unchanged", async () => {
+    const postBodies: unknown[] = [];
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const base = baseHandlers(url);
+      if (base) return base;
+      if (url.endsWith("/api/v1/ropa/integration-keys") && init?.method === "POST") {
+        postBodies.push(JSON.parse(String(init.body)));
+        return Promise.resolve(
+          jsonResponse({ id: "key-1", name: "prepmyevent-prod", key_prefix: "abc123", api_key: "csv_abc123_secret", scopes: ["evidence:write"] })
+        );
+      }
+      if (url.endsWith("/api/v1/ropa/integration-keys")) return Promise.resolve(jsonResponse([]));
+      throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
+    });
+    stubBaseEndpoints(fetchMock);
+    vi.spyOn(window, "prompt")
+      .mockReturnValueOnce("prepmyevent-prod") // name
+      .mockReturnValueOnce("evidence:write"); // scopes, unedited default
+
+    render(<RopaDashboard />);
+    await userEvent.click(screen.getByRole("button", { name: "New integration key" }));
+
+    await waitFor(() => expect(postBodies).toHaveLength(1));
+    expect(postBodies[0]).toEqual({ name: "prepmyevent-prod", scopes: ["evidence:write"] });
+  });
+
+  it("lets an operator grant dsr:operate so the same key is accepted on DSR Agent routes", async () => {
+    const postBodies: unknown[] = [];
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const base = baseHandlers(url);
+      if (base) return base;
+      if (url.endsWith("/api/v1/ropa/integration-keys") && init?.method === "POST") {
+        postBodies.push(JSON.parse(String(init.body)));
+        return Promise.resolve(
+          jsonResponse({ id: "key-2", name: "dsr-agent-key", key_prefix: "def456", api_key: "csv_def456_secret", scopes: ["evidence:write", "dsr:operate"] })
+        );
+      }
+      if (url.endsWith("/api/v1/ropa/integration-keys")) return Promise.resolve(jsonResponse([]));
+      throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
+    });
+    stubBaseEndpoints(fetchMock);
+    vi.spyOn(window, "prompt")
+      .mockReturnValueOnce("dsr-agent-key")
+      .mockReturnValueOnce("evidence:write, dsr:operate");
+
+    render(<RopaDashboard />);
+    await userEvent.click(screen.getByRole("button", { name: "New integration key" }));
+
+    await waitFor(() => expect(postBodies).toHaveLength(1));
+    expect(postBodies[0]).toEqual({ name: "dsr-agent-key", scopes: ["evidence:write", "dsr:operate"] });
+  });
+
+  it("does not mint a key at all when the operator cancels the scopes prompt", async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const base = baseHandlers(url);
+      if (base) return base;
+      throw new Error(`unexpected fetch: ${url} ${init?.method ?? "GET"}`);
+    });
+    stubBaseEndpoints(fetchMock);
+    vi.spyOn(window, "prompt")
+      .mockReturnValueOnce("abandoned-key")
+      .mockReturnValueOnce(null); // cancel on the scopes step
+
+    render(<RopaDashboard />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "New integration key" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "New integration key" }));
+
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/ropa/integration-keys"),
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+});

@@ -21,6 +21,12 @@ export interface RopaRun {
   error: string | null;
   /** Why an unfinished run is in its current state, from the queue. */
   status_detail?: string | null;
+  /** The operator-chosen name of the integration key that pushed this run's
+   * evidence (Integration Keys page), when it came from one. Null for a
+   * connector-driven run, which already has data_source_id. Distinguishes two
+   * genuinely different integrations whose adapters happen to send the same
+   * (often generic) source_name. */
+  integration_key_name?: string | null;
   created_at: string;
   started_at: string | null;
   completed_at: string | null;
@@ -174,6 +180,17 @@ export interface IntegrationKeyCreated {
   scopes: string[];
 }
 
+/** Mirrors backend/app/core/integration_auth.py KNOWN_SCOPES -- the mint UI offers
+ * exactly these, so a key can be scoped for DSR (dsr:operate / dsr:config) instead of
+ * silently falling back to evidence:write only. */
+export const KNOWN_INTEGRATION_SCOPES = [
+  "evidence:write",
+  "evidence:read",
+  "consent:scan",
+  "dsr:operate",
+  "dsr:config",
+] as const;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   if (!token) {
@@ -283,10 +300,10 @@ export const ropaApi = {
       { method: "POST" }
     );
   },
-  createIntegrationKey(name: string): Promise<IntegrationKeyCreated> {
+  createIntegrationKey(name: string, scopes?: string[]): Promise<IntegrationKeyCreated> {
     return request("/api/v1/ropa/integration-keys", {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, scopes }),
     });
   },
   listIntegrationKeys(): Promise<IntegrationKeySummary[]> {

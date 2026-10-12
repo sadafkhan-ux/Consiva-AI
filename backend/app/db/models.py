@@ -511,6 +511,18 @@ class RopaDiscoveryRun(Base):
         ForeignKey("ropa_data_sources.id"), nullable=True, index=True
     )
     source_name: Mapped[str] = mapped_column(String, nullable=False)
+    # Added by migration 0034. Which service key (if any) pushed this run's evidence --
+    # NULL for a connector run, which already has an authoritative name via
+    # data_source_id. The adapter's own `source_name` is caller-supplied free text and,
+    # in practice, is often left at a generic/boilerplate value, which is why two
+    # genuinely different integrations can otherwise be indistinguishable in the run
+    # list even though the operator gave each key its own name on the Integration Keys
+    # page. This column is what lets a response join back to that name (see
+    # ropa_repository.integration_key_names_for_runs) without ever rewriting the
+    # persisted source_name itself.
+    integration_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ropa_integration_keys.id"), nullable=True, index=True
+    )
     ingest_mode: Mapped[str] = mapped_column(String, nullable=False, default="connector")
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     tables_scanned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

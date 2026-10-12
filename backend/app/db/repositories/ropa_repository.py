@@ -22,6 +22,7 @@ from app.db.models import (
     RopaDataSource,
     RopaDiscoveryRun,
     RopaFinding,
+    RopaIntegrationKey,
     RopaRecordRow,
     RopaSchemaBaseline,
     RopaSchemaChange,
@@ -125,6 +126,7 @@ async def create_run(
     org_id: uuid.UUID,
     source_name: str,
     data_source_id: uuid.UUID | None = None,
+    integration_key_id: uuid.UUID | None = None,
     ingest_mode: str = "connector",
     requested_by_user_id: uuid.UUID | None = None,
     idempotency_key: str | None = None,
@@ -133,6 +135,7 @@ async def create_run(
 ) -> RopaDiscoveryRun:
     row = RopaDiscoveryRun(
         org_id=org_id, source_name=source_name, data_source_id=data_source_id,
+        integration_key_id=integration_key_id,
         ingest_mode=ingest_mode, status="pending",
         requested_by_user_id=requested_by_user_id, idempotency_key=idempotency_key,
         agent_callback_url=callback_url, agent_callback_secret_ciphertext=callback_secret_ciphertext,
@@ -141,6 +144,30 @@ async def create_run(
     db.add(row)
     await db.flush()
     return row
+
+
+async def integration_key_names_for_runs(
+    db: AsyncSession, org_id: uuid.UUID, key_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """The current `name` of each integration key in `key_ids`, scoped to `org_id`.
+
+    A run never denormalises the key's name onto itself -- it stores only the id
+    (migration 0034) -- so this is how a response looks the operator-chosen label back
+    up at read time. Org-scoped on top of the id lookup as defense in depth: the ids
+    passed in already came from this org's own runs, so this should never exclude one,
+    but a run and a key must never be joined across tenants regardless.
+    """
+    if not key_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(RopaIntegrationKey.id, RopaIntegrationKey.name).where(
+                RopaIntegrationKey.id.in_(set(key_ids)),
+                RopaIntegrationKey.org_id == org_id,
+            )
+        )
+    ).all()
+    return {row.id: row.name for row in rows}
 
 
 async def list_runs(db: AsyncSession, org_id: uuid.UUID, limit: int = 50) -> list[RopaDiscoveryRun]:

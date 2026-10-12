@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   ACTIVE_RUN_STATUSES,
+  KNOWN_INTEGRATION_SCOPES,
   ropaApi,
   type IntegrationKeySummary,
   type RopaChange,
@@ -160,8 +161,21 @@ export function RopaDashboard() {
   async function mintKey() {
     const name = window.prompt("Name this integration key (e.g. prepmyevent-prod):");
     if (!name) return;
+    // Defaults to the ROPA adapter's own scope so existing callers see no behavior
+    // change; an operator who also wants this key to work the DSR Agent (dsr:operate /
+    // dsr:config) or the Consent Agent (consent:scan) edits the list here at mint time
+    // -- there is no "add a scope later" path, since the key itself is shown only once.
+    const scopesInput = window.prompt(
+      `Scopes to grant, comma-separated. Available: ${KNOWN_INTEGRATION_SCOPES.join(", ")}`,
+      "evidence:write"
+    );
+    if (scopesInput === null) return;
+    const scopes = scopesInput
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     try {
-      const created = await ropaApi.createIntegrationKey(name);
+      const created = await ropaApi.createIntegrationKey(name, scopes.length ? scopes : undefined);
       setNewKey(created.api_key);
       await loadIntegrationKeys();
     } catch (err) {
@@ -266,6 +280,9 @@ export function RopaDashboard() {
                 onClick={() => setSelected(run)}
               >
                 <div className="run-source">{runDisplayName(run.source_name)}</div>
+                {run.integration_key_name && (
+                  <div className="run-meta muted small">via {run.integration_key_name}</div>
+                )}
                 <div className="run-meta">
                   {run.status} · {run.personal_data_elements} PII · {run.tables_scanned} tables
                 </div>
@@ -285,6 +302,11 @@ export function RopaDashboard() {
                   <RunStatusPill run={selected} />
                   <span className="mono small muted">run {selected.id}</span>
                 </div>
+                {selected.integration_key_name && (
+                  <div className="muted small">
+                    Pushed via integration key <strong>{selected.integration_key_name}</strong>
+                  </div>
+                )}
                 {selected.error && <div className="error-box">{selected.error}</div>}
                 {selected.status_detail && <div className="info-box">{selected.status_detail}</div>}
                 <div className="stat-row">

@@ -251,6 +251,12 @@ class RunResponse(BaseModel):
         default=None,
         description="Why a run that has not finished is in its current state, from the queue",
     )
+    integration_key_name: str | None = Field(
+        default=None,
+        description="The operator-chosen name of the integration key that pushed this "
+                    "run's evidence (Integration Keys page), when this run came from one. "
+                    "Null for a connector-driven run, which already has data_source_id.",
+    )
     created_at: str
     started_at: str | None
     completed_at: str | None
@@ -289,11 +295,21 @@ def _status_detail(run, job) -> str | None:
     return None
 
 
-def _run_response(run, job=None) -> RunResponse:
+def _run_response(run, job=None, integration_key_name: str | None = None) -> RunResponse:
+    # The adapter-supplied source_name is the authoritative, displayed name whenever it
+    # carries anything -- it is usually more specific than a key's name (a key can be
+    # shared by several environments; "prepmyevent.com" names the actual source).
+    # `integration_key_name` only stands in when source_name itself is genuinely empty
+    # (clean_source_name returned None), so a legacy or malformed row reads as the
+    # integration that pushed it rather than as a bare "Unnamed source". It is also
+    # always returned as its own field below, so a run whose source_name IS present but
+    # generic (e.g. two different integrations both sending the same boilerplate label)
+    # can still be told apart by which key pushed it.
     return RunResponse(
         id=run.id, data_source_id=run.data_source_id,
-        source_name=clean_source_name(run.source_name) or "Unnamed source",
+        source_name=clean_source_name(run.source_name) or integration_key_name or "Unnamed source",
         status_detail=_status_detail(run, job),
+        integration_key_name=integration_key_name,
         ingest_mode=run.ingest_mode, status=run.status,
         tables_scanned=run.tables_scanned, columns_scanned=run.columns_scanned,
         personal_data_elements=run.personal_data_elements,
@@ -652,13 +668,14 @@ async def ingest_evidence(
         db, org_id=uuid.UUID(principal.org_id), source_name=payload.source_name,
         evidence=payload.evidence, user_id=None,
         idempotency_key=payload.idempotency_key,
+        integration_key_id=principal.key_id,
         integration_key_name=principal.name,
         correlation_id=payload.correlation_id,
         schema_version=payload.schema_version,
         callback_url=callback_url, callback_secret_ciphertext=callback_secret_ciphertext,
     )
     await db.commit()
-    return _run_response(run)
+    return _run_response(run, integration_key_name=principal.name)
 
 
 @router.get("/runs", response_model=list[RunResponse])
@@ -670,7 +687,10 @@ async def list_runs(
     """Recent discovery runs for the caller's org, newest first."""
     rows = await ropa_repository.list_runs(db, uuid.UUID(user.org_id), limit=min(limit, 200))
     jobs = await ropa_repository.queue_state_for_runs(db, [r.id for r in rows if r.status in _IN_FLIGHT])
-    return [_run_response(r, jobs.get(r.id)) for r in rows]
+    key_names = await ropa_repository.integration_key_names_for_runs(
+        db, uuid.UUID(user.org_id), [r.integration_key_id for r in rows if r.integration_key_id is not None]
+    )
+    return [_run_response(r, jobs.get(r.id), key_names.get(r.integration_key_id)) for r in rows]
 
 
 @router.get("/runs/{run_id}", response_model=RunResponse)
@@ -683,7 +703,13 @@ async def get_run(
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Run not found")
     jobs = await ropa_repository.queue_state_for_runs(db, [run.id]) if run.status in _IN_FLIGHT else {}
-    return _run_response(run, jobs.get(run.id))
+    key_name = None
+    if run.integration_key_id is not None:
+        key_names = await ropa_repository.integration_key_names_for_runs(
+            db, uuid.UUID(user.org_id), [run.integration_key_id]
+        )
+        key_name = key_names.get(run.integration_key_id)
+    return _run_response(run, jobs.get(run.id), key_name)
 
 
 @router.get("/runs/{run_id}/records")
