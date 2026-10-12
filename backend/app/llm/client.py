@@ -123,6 +123,12 @@ def _strict_json_schema(schema: dict) -> dict:
     out = {k: v for k, v in schema.items()}
     if out.get("type") == "object" or "properties" in out:
         out.setdefault("additionalProperties", False)
+        # Strict mode also demands every property be listed in `required`; pydantic
+        # omits fields that have defaults, which Groq rejected for RegWatch's
+        # `_Interpretation` ("`required` ... must include every key in properties").
+        # Wire-only, like the line above: the model still validates with defaults.
+        if isinstance(out.get("properties"), dict):
+            out["required"] = list(out["properties"])
     for key in ("properties", "$defs", "definitions", "patternProperties"):
         if isinstance(out.get(key), dict):
             out[key] = {k: _strict_json_schema(v) for k, v in out[key].items()}
