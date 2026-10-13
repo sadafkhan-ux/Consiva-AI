@@ -219,77 +219,97 @@ async def _search_one_source(
         )
         return
 
-    evidence_rows = [
-        DsrEvidence(
-            org_id=request.org_id,
-            request_id=request.id,
-            search_run_id=run.id,
-            data_source_id=data_source.id,
-            source_name=data_source.name,
-            table_name=match.table_name,
-            schema_name=match.schema_name,
-            matched_column=match.matched_column,
-            identifier_kind=match.identifier_kind,
-            match_type=match.match_type,
-            confidence=match.confidence,
-            record_reference=match.record_reference,
-            record_snapshot=match.record_snapshot,
-            ropa_category=_ropa_category(match.table_name, match.matched_column),
-        )
-        for match in outcome.matches
-    ]
-    await dsr_repository.add_evidence(db, request.org_id, evidence_rows)
+    try:
+        evidence_rows = [
+            DsrEvidence(
+                org_id=request.org_id,
+                request_id=request.id,
+                search_run_id=run.id,
+                data_source_id=data_source.id,
+                source_name=data_source.name,
+                table_name=match.table_name,
+                schema_name=match.schema_name,
+                matched_column=match.matched_column,
+                identifier_kind=match.identifier_kind,
+                match_type=match.match_type,
+                confidence=match.confidence,
+                record_reference=match.record_reference,
+                record_snapshot=match.record_snapshot,
+                ropa_category=_ropa_category(match.table_name, match.matched_column),
+            )
+            for match in outcome.matches
+        ]
+        await dsr_repository.add_evidence(db, request.org_id, evidence_rows)
 
-    run.match_count = len(evidence_rows)
-    run.distinct_subject_count = outcome.distinct_subjects
-    run.tables_searched = list(outcome.tables_searched)
+        run.match_count = len(evidence_rows)
+        run.distinct_subject_count = outcome.distinct_subjects
+        run.tables_searched = list(outcome.tables_searched)
+
+        if outcome.distinct_subjects > 1:
+            run.status = "multiple_matches"
+            run.error_code = case.ERR_MULTIPLE_MATCHES
+            run.error_detail = (
+                f"{outcome.distinct_subjects} distinct subjects matched the supplied "
+                "identifier; a human must confirm which one the requester is"
+            )
+            summary.ambiguous = True
+        elif not evidence_rows:
+            run.status = "no_match"
+            run.error_code = case.ERR_NO_MATCH
+            run.error_detail = "no record matched the supplied identifiers in this source"
+        else:
+            run.status = "completed"
+
+        if outcome.truncated:
+            # More rows existed than the cap allows. Never treated as a complete result:
+            # a partial answer presented as complete is a wrong answer.
+            summary.ambiguous = True
+            run.error_code = case.ERR_MULTIPLE_MATCHES
+            run.error_detail = (
+                "the identifier matched more rows than the per-table cap; "
+                "the result is incomplete and must be reviewed"
+            )
+
+        # A source with no identity table configured reports one "distinct subject" for
+        # any number of matches, because it cannot tell -- the connector says so, and
+        # leaves it to this service to treat that as a review signal. Taking the 1 at
+        # face value made the multiple-subject guard inert on every default-configured
+        # source: records that may belong to two different people went straight to
+        # planning. getattr default True: a connector that does not expose the property
+        # makes no such disclaimer.
+        if evidence_rows and not getattr(connector, "has_identity_table", True):
+            summary.ambiguous = True
+            run.error_code = case.ERR_MULTIPLE_MATCHES
+            run.error_detail = (
+                "no identity table is configured for this source, so it cannot tell "
+                "whether the matched records belong to one person; a human must confirm"
+            )
+            summary.notes.append(
+                f"{data_source.name}: no identity_tables configured, so the number of "
+                "distinct subjects matched is unknown -- configure identity_tables on "
+                "this source's authorization to let a single-subject match proceed"
+            )
+    except Exception as exc:
+        # Everything above ran after the connector call already succeeded, so this is
+        # the same "unexpected failure" category the `except Exception` above the
+        # connector call already handles -- an evidence-insert constraint violation, the
+        # ROPA classifier, anything. Without this, the exception propagated past this
+        # function to execute_queued_search's outer handler, which fails the CASE but
+        # never touches THIS run -- leaving it at status="running" forever, indistinguishable
+        # from a search that is still in flight on a case that is actually terminal.
+        run.status = "failed"
+        run.error_code = case.ERR_SEARCH_FAILED
+        run.error_detail = f"{type(exc).__name__} while recording search results"
+        run.completed_at = datetime.now(UTC)
+        summary.sources_failed.append(data_source.name)
+        await db.flush()
+        logger.exception(
+            "Unexpected error recording search results for source %s on case %s",
+            data_source.name, request.reference,
+        )
+        return
+
     run.completed_at = datetime.now(UTC)
-
-    if outcome.distinct_subjects > 1:
-        run.status = "multiple_matches"
-        run.error_code = case.ERR_MULTIPLE_MATCHES
-        run.error_detail = (
-            f"{outcome.distinct_subjects} distinct subjects matched the supplied "
-            "identifier; a human must confirm which one the requester is"
-        )
-        summary.ambiguous = True
-    elif not evidence_rows:
-        run.status = "no_match"
-        run.error_code = case.ERR_NO_MATCH
-        run.error_detail = "no record matched the supplied identifiers in this source"
-    else:
-        run.status = "completed"
-
-    if outcome.truncated:
-        # More rows existed than the cap allows. Never treated as a complete result:
-        # a partial answer presented as complete is a wrong answer.
-        summary.ambiguous = True
-        run.error_code = case.ERR_MULTIPLE_MATCHES
-        run.error_detail = (
-            "the identifier matched more rows than the per-table cap; "
-            "the result is incomplete and must be reviewed"
-        )
-
-    # A source with no identity table configured reports one "distinct subject" for
-    # any number of matches, because it cannot tell -- the connector says so, and
-    # leaves it to this service to treat that as a review signal. Taking the 1 at
-    # face value made the multiple-subject guard inert on every default-configured
-    # source: records that may belong to two different people went straight to
-    # planning. getattr default True: a connector that does not expose the property
-    # makes no such disclaimer.
-    if evidence_rows and not getattr(connector, "has_identity_table", True):
-        summary.ambiguous = True
-        run.error_code = case.ERR_MULTIPLE_MATCHES
-        run.error_detail = (
-            "no identity table is configured for this source, so it cannot tell "
-            "whether the matched records belong to one person; a human must confirm"
-        )
-        summary.notes.append(
-            f"{data_source.name}: no identity_tables configured, so the number of "
-            "distinct subjects matched is unknown -- configure identity_tables on "
-            "this source's authorization to let a single-subject match proceed"
-        )
-
     await db.flush()
 
     summary.evidence_count += len(evidence_rows)

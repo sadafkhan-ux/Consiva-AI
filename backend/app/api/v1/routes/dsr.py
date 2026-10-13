@@ -383,7 +383,11 @@ async def list_results(
             {
                 "id": str(r.id), "source": r.source_name, "status": r.status,
                 "matches": r.match_count, "distinct_subjects": r.distinct_subject_count,
-                "tables_searched": r.tables_searched, "error_code": r.error_code,
+                # Same defensive coalesce response_service.py's _collect_facts already
+                # applies to this same column, for the same reason: a NOT NULL default
+                # at the schema level doesn't protect a row written before that
+                # constraint existed, or left mid-write by a source search that raised.
+                "tables_searched": list(r.tables_searched or []), "error_code": r.error_code,
                 "error_detail": r.error_detail,
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
             }
@@ -394,7 +398,7 @@ async def list_results(
                 "id": str(e.id), "source": e.source_name, "table": e.table_name,
                 "matched_column": e.matched_column, "identifier_kind": e.identifier_kind,
                 "match_type": e.match_type, "confidence": e.confidence,
-                "record_reference": e.record_reference, "record_snapshot": e.record_snapshot,
+                "record_reference": e.record_reference, "record_snapshot": e.record_snapshot or {},
                 # Agent 2's data category for the column that matched, so a reviewer
                 # reads "Contact Data" rather than having to know what `customer_email`
                 # signifies. Null where the classifier could not place the column.
