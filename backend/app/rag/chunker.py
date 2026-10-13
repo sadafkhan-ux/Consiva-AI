@@ -20,8 +20,55 @@ _CHARS_PER_TOKEN_ESTIMATE = 4
 # captured snippet from being truncated into a garbled, misleading fragment either way.
 # 200 chars is a fallback ceiling, not the normal case -- most sentences end well before it.
 _SECTION_HEADING_RE = re.compile(
-    r"(?im)^\s*((?:chapter|section|rule)\s+[ivxlcdm\d]+[a-z]?\b[^\n]{0,200}?)(?=[.;]\s|[.;]$|\n|$)"
+    r"(?im)^\s*((?:chapter|section|rule)\s+[ivxlcdm\d]+[a-z]?\b[^\n]{0,200}?)"
+    r"(?=\(hereinafter|[.;]\s|[.;]$|\n|$)"
 )
+
+# A line repeated identically on most pages of a document is a running header/footer
+# (title banner, page number, copyright line), not body text -- left in, it runs
+# straight into whatever real heading follows it on the page (e.g. a title banner
+# "...Act, 2023" immediately followed by "Section 7 (hereinafter...)" with no sentence
+# break pypdf's plain-text extraction preserves), which is exactly what produced a
+# `section` value like "DPDP Act 2023 2023 -- Section 7 (hereinafter referred to..."
+# a duplicated "2023" and a run-on of two unrelated lines glued into one "heading".
+_MIN_PAGES_FOR_BOILERPLATE_DETECTION = 3
+_BOILERPLATE_LINE_FRACTION = 0.5
+
+# A duplicated word pair ("2023 2023") is a near-universal pypdf artifact of the same
+# repeated line being extracted immediately adjacent to itself (column/overlay text,
+# or boilerplate detection above not catching a near-miss). Collapsed rather than left
+# in, since a citation's `section` text is shown to a customer verbatim.
+_DUPLICATE_WORD_RE = re.compile(r"\b(\w+)\s+\1\b", re.IGNORECASE)
+
+
+def _strip_boilerplate_lines(pages: list[dict]) -> list[dict]:
+    """Drops lines that repeat, verbatim, across at least half of a multi-page
+    document's pages -- running headers/footers, not content. Skipped for short
+    documents, where a genuinely repeated short phrase (a defined term, a cross-
+    reference) is far more likely than a page banner."""
+    if len(pages) < _MIN_PAGES_FOR_BOILERPLATE_DETECTION:
+        return pages
+
+    counts: dict[str, int] = {}
+    for page in pages:
+        for line in {ln.strip() for ln in page["text"].splitlines() if ln.strip()}:
+            counts[line] = counts.get(line, 0) + 1
+
+    threshold = len(pages) * _BOILERPLATE_LINE_FRACTION
+    boilerplate = {line for line, count in counts.items() if count >= threshold}
+    if not boilerplate:
+        return pages
+
+    return [
+        {**page, "text": "\n".join(
+            ln for ln in page["text"].splitlines() if ln.strip() not in boilerplate
+        )}
+        for page in pages
+    ]
+
+
+def _clean_heading(text: str) -> str:
+    return _DUPLICATE_WORD_RE.sub(r"\1", text).strip(" -–—")
 
 
 @dataclass
@@ -63,7 +110,7 @@ def _nearest_heading(text: str, upto_offset: int) -> str | None:
     for match in _SECTION_HEADING_RE.finditer(text):
         if match.start() > upto_offset:
             break
-        best = match.group(1).strip()
+        best = _clean_heading(match.group(1))
     return best
 
 
@@ -72,6 +119,7 @@ def chunk_pages(pages: list[dict], *, max_chars: int = 1500, overlap_chars: int 
     span multiple pages, so each chunk's `metadata.page_number` is unambiguous.
     `metadata.section` is a best-effort heading match — None when nothing was
     confidently detected, never guessed."""
+    pages = _strip_boilerplate_lines(pages)
     chunks: list[Chunk] = []
     for page in pages:
         stripped = page["text"].strip()

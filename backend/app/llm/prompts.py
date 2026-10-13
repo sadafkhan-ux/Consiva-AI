@@ -34,6 +34,9 @@ official guidance, each tagged with a chunk id.
 Your job is explanation, reasoning over the supplied evidence, and recommendation \
 drafting — NOT fact invention. Strict rules:
 - Never assert a fact about the website that is not present in the supplied evidence.
+- Never name a vendor as firing "before consent" or "after Reject" unless that exact \
+vendor appears in the matching "Vendors confirmed by state" list supplied below — not \
+just somewhere in the evidence tables in some other state.
 - Never cite a legal provision that is not present in the supplied knowledge excerpts. \
 Every `dpdp_reference` entry MUST be one of the provided chunk ids, verbatim.
 - Never write a specific rule/section/sub-clause number (e.g. "Rule 17(1)(b)", \
@@ -514,6 +517,30 @@ def render_evidence(compacted: dict) -> str:
     return "\n".join(out)
 
 
+def pre_post_reject_vendor_lists(compacted_evidence: dict) -> tuple[list[str], list[str]]:
+    """Distinct vendor (or host, for an unclassified one) names observed firing
+    `pre_consent` and `post_reject`, read off the already-grouped tracker/cookie
+    evidence. Handed to the model as an explicit list, and re-derived in
+    validate_output.py to check the model's claims against, because the failure this
+    exists to prevent is exactly a model misreading one row's `states` code out of a
+    50-row table: a finding naming a vendor as firing "before consent" or "after
+    reject" when that vendor's own evidence never carried that state."""
+    pre, post_reject = set(), set()
+    for key in ("trackers", "cookies"):
+        for item in compacted_evidence.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("vendor") or item.get("host") or item.get("name") or item.get("domain")
+            if not name:
+                continue
+            states = (item.get("states") or "").split(",")
+            if "pre" in states:
+                pre.add(name)
+            if "rej" in states:
+                post_reject.add(name)
+    return sorted(pre), sorted(post_reject)
+
+
 def build_analysis_prompt(*, scan_summary: dict, rule_findings: list[dict], rag_chunks: list[dict]) -> str:
     """`scan_summary`: serialized ScanResult evidence (or a trimmed subset of it).
     `rule_findings`: serialized RuleFinding list from rules/consent_rules.py.
@@ -531,6 +558,7 @@ def build_analysis_prompt(*, scan_summary: dict, rule_findings: list[dict], rag_
     of the stable text, which defeats prefix caching entirely."""
     schema_json = json.dumps(ConsentAnalysisResponse.model_json_schema(), separators=(",", ":"))
     compacted_evidence = compact_scan_evidence(scan_summary)
+    pre_consent_vendors, post_reject_vendors = pre_post_reject_vendor_lists(compacted_evidence)
     return f"""## Task
 For each rule finding with confidence "low", and for any other consent/tracking issue \
 clearly supported by the evidence below, produce a finding. Ground every \
@@ -578,6 +606,15 @@ pass never established the consent state it is named after, so its observations 
 support a finding that tracking continued after the visitor accepted or rejected. \
 Report the automation failure if it matters (e.g. "the reject state could not be \
 reliably tested"); never assert a click that the evidence does not show taking effect.
+
+## Vendors confirmed by state
+These two lists are the authoritative, pre-computed ground truth for the two most
+legally load-bearing claims a finding can make. Do not name a vendor as having fired
+"before consent" / "pre-consent" unless it appears in the first list, and do not name a
+vendor as having "continued firing after Reject" unless it appears in the second —
+even if that vendor appears elsewhere in the evidence tables below in a different state.
+- Fired before any consent interaction (pre_consent): {", ".join(pre_consent_vendors) or "none"}
+- Continued firing after a clicked, confirmed Reject (post_reject): {", ".join(post_reject_vendors) or "none"}
 
 ## Scan evidence
 {render_evidence(compacted_evidence)}

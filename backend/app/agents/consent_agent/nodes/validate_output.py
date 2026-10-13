@@ -3,10 +3,16 @@ import time
 import uuid
 
 from app.agents.consent_agent.state import AgentState
+from app.llm.prompts import compact_scan_evidence, pre_post_reject_vendor_lists
 from app.llm.schemas import ConsentAnalysisResponse
 from app.observability.stage_tracker import track_stage
+from app.rules.tracker_catalog import CMP_CATALOG, TRACKER_CATALOG
 
 MAX_VALIDATION_ATTEMPTS = 2
+
+# The model's own catalog of nameable vendors, checked against finding/recommendation
+# text verbatim -- see _unsupported_vendor_claims below.
+_KNOWN_VENDOR_NAMES = sorted({sig.vendor for sig in TRACKER_CATALOG} | {sig.cmp_vendor for sig in CMP_CATALOG})
 
 # Catches the LLM writing a specific-sounding legal citation number directly into its
 # free-text finding/recommendation prose (e.g. "DPDP Rule 17(1)(b)") -- a real, observed
@@ -52,6 +58,45 @@ def _claims_tracking_after_reject(text: str) -> bool:
     return bool(_POST_REJECT_CLAIM_RE.search(text or ""))
 
 
+# Mirrors _POST_REJECT_CLAIM_RE for the other side of the same failure mode: a finding
+# asserting tracking fired before the visitor interacted with consent at all.
+_PRE_CONSENT_CLAIM_RE = re.compile(
+    r"\b(?:before|prior to|ahead of)\W+(?:\w+\W+){0,4}?consent\b|\bpre-?consent\b",
+    re.IGNORECASE,
+)
+
+
+def _claims_tracking_before_consent(text: str) -> bool:
+    return bool(_PRE_CONSENT_CLAIM_RE.search(text or ""))
+
+
+def _unsupported_vendor_claims(
+    finding, pre_consent_vendors: list[str], post_reject_vendors: list[str]
+) -> list[str]:
+    """A finding naming a vendor as having fired BEFORE consent or AFTER a confirmed
+    Reject is a specific, checkable claim -- the failure this catches was observed
+    live: a finding named "Google Ads" as firing before consent, and another named it
+    as continuing after Reject, when this scan's own tracker evidence showed Google
+    Ads firing only during the post_accept pass. `pre_consent_vendors`/
+    `post_reject_vendors` are the same ground-truth lists handed to the model in the
+    prompt (see llm/prompts.py:pre_post_reject_vendor_lists) -- checked here in code
+    because the model restating them correctly is not guaranteed."""
+    text = f"{finding.finding} {finding.recommendation}"
+    claims_pre = _claims_tracking_before_consent(text)
+    claims_post_reject = _claims_tracking_after_reject(text)
+    if not (claims_pre or claims_post_reject):
+        return []
+    lowered = text.lower()
+    mentioned = [v for v in _KNOWN_VENDOR_NAMES if v.lower() in lowered]
+    unsupported = []
+    for vendor in mentioned:
+        if claims_pre and vendor not in pre_consent_vendors:
+            unsupported.append(f"{vendor} (named as firing before consent)")
+        if claims_post_reject and vendor not in post_reject_vendors:
+            unsupported.append(f"{vendor} (named as firing after reject)")
+    return unsupported
+
+
 def _reject_was_confirmed(scan_evidence: dict | None) -> bool:
     """True only when the scanner both clicked Reject AND observed it take effect --
     the same two halves consent_rules requires before R-003 may fire. Anything weaker,
@@ -89,10 +134,20 @@ async def validate_output(state: AgentState) -> dict:
         ungrounded = sorted({
             ref for finding in response.findings for ref in finding.dpdp_reference if ref not in valid_chunk_ids
         })
+
+        compacted_evidence = compact_scan_evidence(state.scan_evidence or {})
+        pre_consent_vendors, post_reject_vendors = pre_post_reject_vendor_lists(compacted_evidence)
+        unsupported_vendor_claims = {
+            i: claims
+            for i, finding in enumerate(response.findings)
+            if (claims := _unsupported_vendor_claims(finding, pre_consent_vendors, post_reject_vendors))
+        }
+
         meta["findings_checked"] = len(response.findings)
         meta["ungrounded_citations"] = ungrounded
+        meta["unsupported_vendor_claims"] = unsupported_vendor_claims
 
-        if not ungrounded:
+        if not ungrounded and not unsupported_vendor_claims:
             # The grounding check above only verifies citations that are PRESENT --
             # a finding with an empty dpdp_reference trivially satisfies it, so an
             # uncited legal-compliance claim could otherwise reach a customer
@@ -168,8 +223,9 @@ async def validate_output(state: AgentState) -> dict:
             return {
                 "validation_status": "failed",
                 "error": (
-                    f"LLM cited dpdp_reference ids not present in retrieved context after "
-                    f"{state.validation_attempts} retries: {ungrounded}"
+                    f"LLM output failed grounding after {state.validation_attempts} retries: "
+                    f"ungrounded dpdp_reference ids {ungrounded}; unsupported vendor-timing "
+                    f"claims {unsupported_vendor_claims}"
                 ),
             }
 
@@ -183,17 +239,29 @@ async def validate_output(state: AgentState) -> dict:
                 "validation_status": "failed",
                 "error": (
                     f"LLM wall-clock deadline exceeded before validation retry "
-                    f"{state.validation_attempts + 1}; ungrounded citations: {ungrounded}"
+                    f"{state.validation_attempts + 1}; ungrounded citations: {ungrounded}; "
+                    f"unsupported vendor-timing claims: {unsupported_vendor_claims}"
                 ),
             }
 
         meta["outcome"] = "retry"
-        return {
-            "validation_status": "retry",
-            "validation_attempts": state.validation_attempts + 1,
-            "error": (
+        error_parts = []
+        if ungrounded:
+            error_parts.append(
                 f"Your dpdp_reference values {ungrounded} are not among the provided chunk_ids "
                 f"({sorted(valid_chunk_ids)}). Only cite chunk_ids that were given to you, or omit "
                 f"dpdp_reference entries for a finding if nothing supplied is relevant."
-            ),
+            )
+        if unsupported_vendor_claims:
+            error_parts.append(
+                "Some findings name a vendor as firing before consent or after reject that is "
+                f"not in the supplied vendor lists for that state: {unsupported_vendor_claims}. "
+                f"Vendors confirmed pre_consent: {pre_consent_vendors or 'none'}; confirmed "
+                f"post_reject: {post_reject_vendors or 'none'}. Only make that specific claim "
+                "about a vendor that is actually in the matching list."
+            )
+        return {
+            "validation_status": "retry",
+            "validation_attempts": state.validation_attempts + 1,
+            "error": " ".join(error_parts),
         }

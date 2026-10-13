@@ -312,6 +312,18 @@ CMP_CATALOG: tuple[CmpSignature, ...] = (
         cmp_vendor="Transcend", domain_substrings=("transcend-cdn.com",), global_js_vars=("transcend",),
         accept_selector="#AcceptAllAndClose",
     ),
+    CmpSignature(
+        # Consiva's own consent-management SDK (see the "Consiva Consent SDK"
+        # TRACKER_CATALOG entry above for the live evidence: api.consiva.ai/sdk.js,
+        # /api/v1/banner/{id}, /api/v1/consent/record). Without this CMP signature,
+        # match_cmp() never sees it -- only match_vendor() does -- so a site running it
+        # fell through to the generic control_text_keywords path (mechanism_type=
+        # "banner", cmp_vendor unset, 0.5 confidence) even though the specific vendor
+        # was identifiable from the script src the whole time. Accept/reject selectors
+        # are left None (not yet catalogued); the generic text-match fallback still
+        # fills those in once the vendor is identified here.
+        cmp_vendor="Consiva Consent SDK", domain_substrings=("consiva.ai",),
+    ),
 )
 
 

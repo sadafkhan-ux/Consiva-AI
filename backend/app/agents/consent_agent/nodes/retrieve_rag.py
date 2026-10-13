@@ -31,30 +31,51 @@ from app.rag.retriever import retrieve
 # returning ~380 tokens, and those tokens are what let the response finish on a server
 # with n_ctx=4096 (a truncated response at top_k=4 is what started this measurement).
 # 2 is past the edge. Re-measure before changing it again.
-_TOP_K = 3
+#
+# That measurement was for ONE combined query covering every rule finding in the scan
+# -- which is also what produced the "every finding cites the same DPDP reference" bug:
+# a single blended query ("...relevant to: no privacy policy found; analytics fired
+# before consent; no cookie policy found") retrieves the top_k chunks closest to that
+# AVERAGE topic, not the chunks relevant to each distinct violation, so a finding about
+# consent notice and a finding about purpose limitation were handed the exact same
+# small pool and had nothing else to cite. Retrieving per rule finding instead (each
+# finding's own `summary` as its own query) gives each violation type a chance at its
+# own provision; results are merged and de-duplicated by chunk_id so an overlapping
+# topic across findings doesn't inflate the prompt.
+_TOP_K_PER_QUERY = 3
+_MAX_TOTAL_CHUNKS = 8
 
 
-def _build_query(rule_findings: list[dict]) -> str:
+def _queries(rule_findings: list[dict]) -> list[str]:
     if not rule_findings:
-        return "General DPDP Act consent, cookie, and website tracking compliance requirements"
-    return "DPDP Act compliance requirements relevant to: " + "; ".join(f["summary"] for f in rule_findings)
+        return ["General DPDP Act consent, cookie, and website tracking compliance requirements"]
+    # De-duplicated so two rule findings with the literal same summary (e.g. R-001
+    # firing identically on two scans merged into one run) don't retrieve twice.
+    return sorted({f["summary"] for f in rule_findings})
 
 
 async def retrieve_rag(state: AgentState) -> dict:
-    """Step 7 — pgvector similarity search over approved DPDP knowledge, scoped by
-    what the rules already flagged so retrieval stays targeted."""
-    query = _build_query(state.rule_findings)
+    """Step 7 — pgvector similarity search over approved DPDP knowledge, run once per
+    distinct rule finding so each violation type is scoped to its own retrieval rather
+    than one query blended across all of them."""
+    queries = _queries(state.rule_findings)
     llm_client = NvidiaLLMClient()
 
     async with track_stage(uuid.UUID(state.scan_id), "rag_retrieval", agent_run_id=uuid.UUID(state.agent_run_id)) as meta:
-        meta["query"] = query
+        meta["queries"] = queries
         max_distance = get_settings().rag_max_distance
+        merged: dict[str, object] = {}
         async with async_session_factory() as db:
-            chunks = await retrieve(query, db=db, llm_client=llm_client, top_k=_TOP_K, max_distance=max_distance)
+            for query in queries:
+                for chunk in await retrieve(
+                    query, db=db, llm_client=llm_client, top_k=_TOP_K_PER_QUERY, max_distance=max_distance
+                ):
+                    existing = merged.get(chunk.chunk_id)
+                    if existing is None or chunk.distance < existing.distance:
+                        merged[chunk.chunk_id] = chunk
+        chunks = sorted(merged.values(), key=lambda c: c.distance)[:_MAX_TOTAL_CHUNKS]
+
         meta["chunks_retrieved"] = len(chunks)
-        # Anything short of _TOP_K means the threshold dropped weak matches -- recorded
-        # so a sparse-context run is diagnosable from stage metadata alone.
-        meta["dropped_by_distance_threshold"] = _TOP_K - len(chunks)
         meta["max_distance"] = max_distance
         meta["results"] = [
             {
