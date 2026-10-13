@@ -163,7 +163,7 @@ def evaluate(
             source="source_authorization",
             requester_explanation=REFERRED_TO_TEAM,
         ))
-    elif not grant.write_credential_ref:
+    elif not grant.write_credential_ref and not getattr(grant, "external_execution", False):
         found.append(Constraint(
             code=case.ERR_SOURCE_NOT_AUTHORIZED, kind=KIND_SYSTEM, effect=EFFECT_BLOCK,
             reason=(
@@ -172,6 +172,19 @@ def evaluate(
             ),
             source="source_authorization",
             requester_explanation=REFERRED_TO_TEAM,
+        ))
+    elif getattr(grant, "external_execution", False):
+        # Pushed evidence: this process never writes to the source at all, so there
+        # is no write credential to require. Approving this action authorizes an
+        # EXECUTION MANIFEST entry for Consiva to carry out and report back on, not a
+        # connector write here.
+        found.append(Constraint(
+            code="EXECUTION_AUTHORIZED", kind=KIND_SYSTEM, effect=EFFECT_ALLOW,
+            reason=(
+                f"source {grant.source_name!r} is authorized for DSR action; it is "
+                "carried out by the client that pushed this evidence, not by this agent"
+            ),
+            source="source_authorization",
         ))
     else:
         found.append(Constraint(

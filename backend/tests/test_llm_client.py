@@ -143,6 +143,7 @@ def _settings(**overrides):
         "nvidia_llm_model": "nvidia-test-model", "nvidia_embed_model": "nvidia-embed-test", "nvidia_embed_dimensions": 3,
         "llm_provider": "nvidia", "groq_api_key": None, "groq_api_base_url": "https://api.groq.com/openai/v1", "groq_model": None,
         "llm_primary_base_url": None, "llm_primary_model": None, "llm_primary_api_key": None,
+        "anthropic_api_key": None, "anthropic_model": "claude-haiku-5-5",
     }
     base.update(overrides)
     return MagicMock(**base)

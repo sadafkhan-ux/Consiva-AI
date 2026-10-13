@@ -26,6 +26,7 @@ from app.db.models import (
     DsrActionPlan,
     DsrApproval,
     DsrEvidence,
+    DsrEvidencePush,
     DsrExecution,
     DsrIdentityVerification,
     DsrRequest,
@@ -202,6 +203,21 @@ async def list_search_runs(db: AsyncSession, request_id: uuid.UUID, org_id: uuid
         .order_by(DsrSearchRun.created_at)
     )
     return list(result.scalars().all())
+
+
+async def find_search_run_by_idempotency_key(
+    db: AsyncSession, org_id: uuid.UUID, idempotency_key: str
+) -> DsrSearchRun | None:
+    """A prior push with this `client_reference`, if one exists. The unique index on
+    (org_id, idempotency_key) in migration 0035 is the real guarantee; this is what
+    lets a retried POST /requests/{id}/evidence return the existing run instead of a
+    duplicate-key error."""
+    result = await db.execute(
+        select(DsrSearchRun).where(
+            DsrSearchRun.org_id == org_id, DsrSearchRun.idempotency_key == idempotency_key
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def add_evidence(db: AsyncSession, org_id: uuid.UUID, rows: list[DsrEvidence]) -> None:
@@ -621,6 +637,78 @@ async def upsert_source_authorization(
 
 
 # ── Case timeline ────────────────────────────────────────────────────────────────
+
+
+# ── Pushed evidence: the raw package, encrypted at rest ──────────────────────────
+
+
+async def create_evidence_push(
+    db: AsyncSession,
+    *,
+    org_id: uuid.UUID,
+    request_id: uuid.UUID,
+    search_run_id: uuid.UUID,
+    integration_key_id: uuid.UUID | None,
+    source_name: str,
+    searched_at: datetime | None,
+    subject: dict,
+    payload_ciphertext: str,
+    table_count: int,
+    row_count: int,
+    truncated: bool,
+    client_reference: str | None,
+) -> DsrEvidencePush:
+    row = DsrEvidencePush(
+        org_id=org_id, request_id=request_id, search_run_id=search_run_id,
+        integration_key_id=integration_key_id, source_name=source_name,
+        searched_at=searched_at, subject=subject, payload_ciphertext=payload_ciphertext,
+        table_count=table_count, row_count=row_count, truncated=truncated,
+        client_reference=client_reference,
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def find_evidence_push_by_client_reference(
+    db: AsyncSession, org_id: uuid.UUID, client_reference: str
+) -> DsrEvidencePush | None:
+    result = await db.execute(
+        select(DsrEvidencePush).where(
+            DsrEvidencePush.org_id == org_id, DsrEvidencePush.client_reference == client_reference
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_evidence_pushes(db: AsyncSession, request_id: uuid.UUID, org_id: uuid.UUID) -> list[DsrEvidencePush]:
+    result = await db.execute(
+        select(DsrEvidencePush).where(
+            DsrEvidencePush.request_id == request_id, DsrEvidencePush.org_id == org_id,
+            DsrEvidencePush.purged_at.is_(None),
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def purge_evidence_pushes(db: AsyncSession, request_id: uuid.UUID, org_id: uuid.UUID) -> int:
+    """Overwrite the encrypted payload with NULL and stamp `purged_at` for every
+    not-yet-purged push on this case. Returns how many rows were purged.
+
+    A purge is a deletion, not a soft-delete with the data still sitting in the
+    ciphertext column -- `payload_ciphertext` is actually cleared, so even a
+    database dump taken after this point cannot recover it. `dsr_evidence` (the
+    minimized, classified rows the engine actually reasons over) is untouched --
+    it keeps living under the case's existing retention, exactly as a
+    connector-driven search's evidence always has.
+    """
+    rows = await list_evidence_pushes(db, request_id, org_id)
+    now = datetime.now(UTC)
+    for row in rows:
+        row.payload_ciphertext = None
+        row.purged_at = now
+    await db.flush()
+    return len(rows)
 
 
 async def list_case_audit(

@@ -49,6 +49,13 @@ class SourceGrant:
     erasable_columns: dict[str, tuple[str, ...]]    # {table: (column, ...)}
     allow_execution: bool
     write_credential_ref: str | None
+    # True only for a grant synthesized from a PUSHED evidence table (push_evidence
+    # addendum), never for one resolved from a stored dsr_source_authorizations row
+    # (`resolve()` below always leaves this False). It means execution of a mutating
+    # action happens OUTSIDE this process -- Consiva itself carries it out and
+    # reports back via POST /requests/{id}/execution-report -- so the constraint
+    # engine must not demand a write_credential_ref this process will never use.
+    external_execution: bool = False
 
     # ── Search-side checks ───────────────────────────────────────────────────────
 

@@ -152,13 +152,16 @@ ERR_ACTION_FAILED = "ACTION_FAILED"
 ERR_ACTION_PARTIAL = "ACTION_PARTIAL"
 ERR_VERIFICATION_FAILED = "VERIFICATION_FAILED"
 ERR_SLA_BREACH = "SLA_BREACH"
+# Push evidence (§ push-evidence addendum): a POST /requests/{id}/evidence body
+# exceeded a documented limit (tables, rows per table, total rows, payload bytes).
+ERR_EVIDENCE_TOO_LARGE = "EVIDENCE_TOO_LARGE"
 
 ERROR_CODES = frozenset({
     ERR_IDENTITY_REQUIRED, ERR_IDENTITY_FAILED, ERR_SOURCE_NOT_AUTHORIZED,
     ERR_CONNECTOR_UNAVAILABLE, ERR_CONNECTOR_TIMEOUT, ERR_SEARCH_FAILED, ERR_NO_MATCH,
     ERR_MULTIPLE_MATCHES, ERR_POLICY_REVIEW_REQUIRED, ERR_APPROVAL_REQUIRED,
     ERR_ACTION_BLOCKED, ERR_ACTION_FAILED, ERR_ACTION_PARTIAL, ERR_VERIFICATION_FAILED,
-    ERR_SLA_BREACH,
+    ERR_SLA_BREACH, ERR_EVIDENCE_TOO_LARGE,
 })
 
 # ── Audit actions (§35) ──────────────────────────────────────────────────────────
@@ -189,3 +192,9 @@ AUDIT_ESCALATED = "dsr.escalated"
 AUDIT_PARTIALLY_COMPLETED = "dsr.partially_completed"
 AUDIT_STATUS_CHANGED = "dsr.status_changed"
 AUDIT_SLA_BREACHED = "dsr.sla_breached"
+
+# ── Push evidence (Consiva-run search posted back to the agent) ─────────────────
+AUDIT_EVIDENCE_PUSHED = "dsr.evidence_pushed"
+AUDIT_EXECUTION_MANIFEST_ISSUED = "dsr.execution_manifest_issued"
+AUDIT_EXECUTION_REPORT_RECEIVED = "dsr.execution_report_received"
+AUDIT_EVIDENCE_PURGED = "dsr.evidence_purged"

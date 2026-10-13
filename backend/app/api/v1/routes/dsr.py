@@ -17,16 +17,19 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, status
-from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, Depends, Request, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.dsr.connectors import authorization
-from app.agents.dsr.errors import CaseNotReadyError, DsrNotFoundError
+from app.agents.dsr.errors import CaseNotReadyError, DsrNotFoundError, EvidenceTooLargeError
 from app.agents.dsr.schemas import case as case_vocab
+from app.agents.dsr.schemas.evidence_push import EvidencePush
 from app.agents.dsr.services import (
     approval_service,
     case_service,
+    evidence_push_service,
     identity_service,
     lifecycle,
     planning_service,
@@ -410,6 +413,159 @@ async def list_results(
     }
 
 
+# ── Push evidence: Consiva runs the lookup itself and posts back the result ─────
+#
+# The pull path above (`POST /search`) has the agent connect to the customer's
+# database itself. An org with no registered source (no `ropa_data_sources` row,
+# and therefore nothing `/config/sources` could ever authorize) can never use
+# it -- every case ends in `failed`/SOURCE_NOT_AUTHORIZED. Consiva already holds
+# those credentials; this lets it run the search and hand the agent the matched
+# records instead, following the same push shape ROPA's `/evidence` already uses
+# (app/api/v1/routes/ropa.py's `ingest_evidence`) -- same auth story (an org's
+# integration key, `dsr:operate` -- the SAME scope that already gates /search and
+# every other case-mutating route; no new scope was needed), same idempotency
+# contract (a retried push with the same key returns what the first one produced).
+
+@router.post("/requests/{request_id}/evidence", status_code=status.HTTP_201_CREATED)
+async def push_evidence(
+    request_id: uuid.UUID,
+    http_request: Request,
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Accept evidence Consiva's own lookup produced, analyze it, and leave the
+    case in the SAME state a pull search would reach: classified, evidenced,
+    planned (constraints and retention applied), and -- for an ambiguous or
+    truncated result -- routed to REVIEW_REQUIRED exactly as an ambiguous
+    connector-driven search already is.
+
+    Refused with 409 unless the case's identity is verified (the same gate
+    `/search` applies) and the case is in a status that may legally move to
+    SEARCHING -- `failed` included, so a case stuck there by
+    SOURCE_NOT_AUTHORIZED can be recovered this way. Refused with 413, the limit
+    named in the message, over a documented ceiling on tables, rows per table,
+    total rows, or payload bytes -- never silently truncated, which would hand
+    the plan builder an incomplete answer it believes is complete.
+
+    The payload bytes are checked on the RAW body, before it is parsed at all, so
+    an oversized push is refused without ever being held in parsed form; see
+    evidence_push_service.MAX_PUSH_PAYLOAD_BYTES.
+    """
+    raw = await http_request.body()
+    if len(raw) > evidence_push_service.MAX_PUSH_PAYLOAD_BYTES:
+        raise EvidenceTooLargeError(
+            f"push payload is {len(raw)} byte(s); max "
+            f"{evidence_push_service.MAX_PUSH_PAYLOAD_BYTES} bytes"
+        )
+    try:
+        push = EvidencePush.model_validate_json(raw)
+    except ValidationError as exc:
+        # The same 422 envelope every other malformed body on this API gets
+        # (app/main.py's RequestValidationError handler) -- "too large" (413,
+        # above) and "malformed" are different outcomes and must not share a code.
+        raise RequestValidationError(exc.errors()) from exc
+
+    org_id = uuid.UUID(user.org_id)
+    request = await case_service.get_case_or_raise(db, request_id, org_id)
+    run, plan, _actions = await dsr_run_service.ingest_pushed_evidence(
+        db, request, push,
+        integration_key_id=user.key_id, integration_key_name=user.key_name,
+        actor_user_id=uuid.UUID(user.user_id),
+    )
+    await db.commit()
+    return {
+        "search_run_id": str(run.id),
+        "evidence_count": run.match_count,
+        "case": await _case_with_identity(db, request),
+        "plan": (await _plan_response(db, request, org_id)) if plan is not None else None,
+    }
+
+
+class ExecutionReportItem(BaseModel):
+    """What Consiva actually carried out for ONE manifest action."""
+
+    action_id: uuid.UUID
+    status: str
+    rows_affected: int | None = Field(default=None, ge=0)
+    occurred_at: datetime | None = None
+    error_text: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("status")
+    @classmethod
+    def _known_status(cls, value: str) -> str:
+        if value not in ("done", "failed", "skipped"):
+            raise ValueError("status must be one of 'done', 'failed', 'skipped'")
+        return value
+
+
+class ExecutionReport(BaseModel):
+    items: list[ExecutionReportItem] = Field(min_length=1, max_length=2000)
+
+
+@router.post("/requests/{request_id}/execution-report")
+async def execution_report(
+    request_id: uuid.UUID,
+    payload: ExecutionReport,
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Consiva reports what it actually did with the execution manifest
+    `POST /execute` handed back: per action id, whether it was done/failed/skipped,
+    how many rows it affected, when, and why if it failed.
+
+    Idempotent per action id -- reporting the same action twice returns the first
+    recorded outcome rather than double-counting it. Once every manifest action has
+    a reported outcome, the case closes the same way a connector-driven execution
+    already does: EXECUTION_VERIFIED (or FAILED if nothing succeeded), then
+    RESPONSE_PENDING, so `/response` and `/complete` need no change at all --
+    `/complete` already closes a case COMPLETED or PARTIALLY_COMPLETED depending on
+    whether anything here failed or was skipped.
+    """
+    request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
+    result = await dsr_run_service.record_execution_report(
+        db, request, payload.items, actor_user_id=uuid.UUID(user.user_id),
+    )
+    await db.commit()
+    return {
+        "recorded": len(result["executions"]),
+        "case_closed": result["closed"],
+        "case": await _case_with_identity(db, request),
+    }
+
+
+@router.post("/requests/{request_id}/evidence/purge")
+async def purge_pushed_evidence(
+    request_id: uuid.UUID,
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Clear the encrypted raw package(s) POST /evidence stored for this case.
+
+    Refused unless the case is terminal (completed/partially_completed/rejected/
+    cancelled/expired) -- the raw payload may still be needed while the case is
+    open (a re-plan can read dsr_evidence, which this never touches, but a
+    reviewer investigating a push itself may still need the original). `/complete`
+    already calls this automatically when it closes a case COMPLETED or
+    PARTIALLY_COMPLETED; this exists for every other terminal path, and for an
+    operator who wants it purged sooner.
+    """
+    org_id = uuid.UUID(user.org_id)
+    request = await case_service.get_case_or_raise(db, request_id, org_id)
+    if not lifecycle.is_terminal(request.status):
+        raise CaseNotReadyError(
+            f"case {request.reference} is {request.status!r}, not terminal; evidence may "
+            "only be purged once the case is closed"
+        )
+    purged = await evidence_push_service.purge(db, request.id, org_id)
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action=case_vocab.AUDIT_EVIDENCE_PURGED, entity_type=case_vocab.AUDIT_ENTITY,
+        entity_id=request.id, after={"pushes_purged": purged},
+    )
+    await db.commit()
+    return {"pushes_purged": purged}
+
+
 # ── Plan, review, approval ───────────────────────────────────────────────────────
 
 @router.get("/requests/{request_id}/plan")
@@ -421,6 +577,23 @@ async def get_plan(
     org_id = uuid.UUID(user.org_id)
     request = await case_service.get_case_or_raise(db, request_id, org_id)
     return await _plan_response(db, request, org_id)
+
+
+def _action_dict(a) -> dict:
+    """One action, in the shape both the plan view and a push-mode execution
+    manifest return it. `data_source_id is None` is how a reader (or a future
+    maintainer) tells a pushed-evidence action apart from a connector-backed one --
+    the former has no registered source to trace back to."""
+    return {
+        "id": str(a.id), "source": a.source_name, "table": a.table_name,
+        "operation": a.operation, "payload": a.operation_payload,
+        "reason": a.reason, "expected_result": a.expected_result,
+        "risk": a.risk, "requires_approval": a.requires_approval,
+        "status": a.status, "blocked_reason": a.blocked_reason,
+        "requester_explanation": a.requester_explanation,
+        "record_reference": a.record_reference,
+        "pushed_evidence": a.data_source_id is None,
+    }
 
 
 async def _plan_response(db: AsyncSession, request, org_id: uuid.UUID) -> dict:
@@ -435,18 +608,7 @@ async def _plan_response(db: AsyncSession, request, org_id: uuid.UUID) -> dict:
             "summary": plan.summary, "requires_approval": plan.requires_approval,
             "constraints_evaluated": plan.constraints_evaluated,
         },
-        "actions": [
-            {
-                "id": str(a.id), "source": a.source_name, "table": a.table_name,
-                "operation": a.operation, "payload": a.operation_payload,
-                "reason": a.reason, "expected_result": a.expected_result,
-                "risk": a.risk, "requires_approval": a.requires_approval,
-                "status": a.status, "blocked_reason": a.blocked_reason,
-                "requester_explanation": a.requester_explanation,
-                "record_reference": a.record_reference,
-            }
-            for a in actions
-        ],
+        "actions": [_action_dict(a) for a in actions],
         "decisions": await approval_service.plan_decision_summary(db, request, plan.id),
     }
 
@@ -574,18 +736,43 @@ async def execute(
     user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Queue execution of the approved actions.
+    """Queue execution of the approved actions -- or, when every runnable action
+    came from PUSHED evidence (no connector, no credential this agent could use to
+    write to that source), return them as an execution manifest instead, for
+    Consiva to carry out and report back on via POST /execution-report. See
+    dsr_run_service.issue_execution_manifest's docstring for why `execute` must
+    not attempt the erasure itself in that case.
 
-    Refused unless the case is APPROVED. Safe to call twice: every action claims an
-    idempotency key before it does anything, so a duplicate request returns the
-    previous outcome rather than performing a deletion again (§25).
+    Refused unless the case is APPROVED. Safe to call twice: a connector-driven
+    action claims an idempotency key before it does anything (§25), and reissuing
+    a manifest is idempotent by construction -- nothing changes until Consiva
+    reports back.
     """
-    request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
+    org_id = uuid.UUID(user.org_id)
+    request = await case_service.get_case_or_raise(db, request_id, org_id)
     if request.status != case_vocab.APPROVED:
         raise CaseNotReadyError(
             f"case {request.reference} is {request.status}; execution requires an "
             "approved plan"
         )
+
+    plan = await dsr_repository.get_current_plan(db, request.id, org_id)
+    actions = await dsr_repository.list_actions(db, plan.id, org_id) if plan else []
+    runnable = [
+        a for a in actions
+        if a.status == "approved" or (a.status == "proposed" and not a.requires_approval)
+    ]
+    if runnable and all(a.data_source_id is None for a in runnable):
+        manifest = await dsr_run_service.issue_execution_manifest(
+            db, request, actor_user_id=uuid.UUID(user.user_id)
+        )
+        await db.commit()
+        return {
+            "mode": "push",
+            "manifest": [_action_dict(a) for a in manifest],
+            "case": await _case_with_identity(db, request),
+        }
+
     job = await queue.enqueue(
         db, org_id=request.org_id, job_type="dsr_execute",
         payload={"request_id": str(request.id), "org_id": str(request.org_id)},
@@ -596,7 +783,7 @@ async def execute(
         entity_id=request.id, after={"job_id": str(job.id)},
     )
     await db.commit()
-    return {"job_id": str(job.id), "case": await _case_with_identity(db, request)}
+    return {"mode": "connector", "job_id": str(job.id), "case": await _case_with_identity(db, request)}
 
 
 @router.get("/requests/{request_id}/executions")
@@ -719,6 +906,19 @@ async def complete_case(
         entity_id=request.id,
         after={"response_id": str(response.id), "version": response.version},
     )
+
+    # The case just became terminal. Any raw pushed-evidence package is purged
+    # here automatically -- dsr_evidence (what the engine actually reasoned over)
+    # is untouched, so nothing above (the response, the audit trail) depended on
+    # it still existing.
+    purged = await evidence_push_service.purge(db, request.id, org_id)
+    if purged:
+        await audit_service.record(
+            db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+            action=case_vocab.AUDIT_EVIDENCE_PURGED, entity_type=case_vocab.AUDIT_ENTITY,
+            entity_id=request.id, after={"pushes_purged": purged},
+        )
+
     await db.commit()
     return await _case_with_identity(db, request)
 

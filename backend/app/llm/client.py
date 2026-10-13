@@ -2,16 +2,28 @@
 
     BaseLLMClient (shared: retry loop, deadline budget, schema validation,
                    retry-on-invalid-output feedback, structured-output contract)
-        |-- NvidiaLLMClient  (chat + embeddings -- embeddings are NVIDIA-only, see below)
-        `-- GroqLLMClient    (chat only)
+        |-- NvidiaLLMClient    (chat + embeddings -- embeddings are NVIDIA-only, see below)
+        |-- GroqLLMClient      (chat only)
+        |-- SelfHostedLLMClient (chat only -- the self-hosted "gemma-server" llama.cpp box)
+        `-- ClaudeLLMClient    (chat only -- Anthropic's Messages API)
 
-Both concrete clients wrap the SAME generic `openai.AsyncOpenAI` transport pointed at
-a different OpenAI-compatible base_url (verified against current docs:
-NVIDIA NIM -> https://integrate.api.nvidia.com/v1, Groq -> https://api.groq.com/openai/v1)
--- no provider-specific SDK, no provider-specific business logic anywhere outside this
-file. `get_reasoning_llm_client()` is the ONE place that reads `settings.llm_provider`
-and picks a concrete class; every caller (agents/consent_agent/nodes/llm_reasoning.py)
+NvidiaLLMClient/GroqLLMClient/SelfHostedLLMClient wrap the SAME generic
+`openai.AsyncOpenAI` transport pointed at a different OpenAI-compatible base_url
+(verified against current docs: NVIDIA NIM -> https://integrate.api.nvidia.com/v1,
+Groq -> https://api.groq.com/openai/v1) -- no provider-specific SDK, no
+provider-specific business logic anywhere outside this file. ClaudeLLMClient is the
+one exception: Anthropic's Messages API is not OpenAI-compatible, so it talks to the
+official `anthropic` SDK directly instead (see its own docstring below) while still
+honoring the shared `generate_structured()` contract every caller uses.
+`get_reasoning_llm_client()` is the ONE place that reads `settings.llm_provider` and
+picks a concrete fallback class; every caller (agents/consent_agent/nodes/llm_reasoning.py)
 only ever calls the shared `generate_structured()` contract.
+
+Primary-provider selection (generate_structured_with_fallback): ANTHROPIC_API_KEY, if
+set, makes ClaudeLLMClient the primary reasoning provider, in place of the self-hosted
+"gemma-server" box (LLM_PRIMARY_BASE_URL/LLM_PRIMARY_MODEL). If ANTHROPIC_API_KEY is
+unset, behavior is exactly as before: LLM_PRIMARY_* is tried first if configured, else
+settings.llm_provider's client runs directly.
 
 Embeddings stay NVIDIA-only regardless of `LLM_PROVIDER`: confirmed live against
 Groq's real /v1/models endpoint that its catalog is chat/audio-only (no embedding
@@ -26,6 +38,13 @@ import logging
 import time
 from typing import Literal, TypeVar
 
+from anthropic import AsyncAnthropic
+from anthropic import AuthenticationError as AnthropicAuthenticationError
+from anthropic import BadRequestError as AnthropicBadRequestError
+from anthropic import ConflictError as AnthropicConflictError
+from anthropic import NotFoundError as AnthropicNotFoundError
+from anthropic import PermissionDeniedError as AnthropicPermissionDeniedError
+from anthropic import UnprocessableEntityError as AnthropicUnprocessableEntityError
 from openai import (
     AsyncOpenAI,
     AuthenticationError,
@@ -66,6 +85,18 @@ _NON_RETRYABLE_ERRORS = (
     PermissionDeniedError,
     UnprocessableEntityError,
     ConflictError,
+)
+
+# Same reasoning as _NON_RETRYABLE_ERRORS above, but for the `anthropic` SDK's own
+# exception classes -- ClaudeLLMClient talks to the Messages API directly rather than
+# through the shared openai.AsyncOpenAI transport, so it needs its own non-retryable set.
+_ANTHROPIC_NON_RETRYABLE_ERRORS = (
+    AnthropicAuthenticationError,
+    AnthropicBadRequestError,
+    AnthropicNotFoundError,
+    AnthropicPermissionDeniedError,
+    AnthropicUnprocessableEntityError,
+    AnthropicConflictError,
 )
 
 # Bounds on what a schema-repair attempt carries forward. A pydantic ValidationError
@@ -514,6 +545,106 @@ class SelfHostedLLMClient(BaseLLMClient):
         )
 
 
+class ClaudeLLMClient(BaseLLMClient):
+    """Anthropic's Claude Messages API as the PRIMARY reasoning provider, in place of
+    SelfHostedLLMClient (the self-hosted llama.cpp "gemma-server" box) -- used when
+    settings.anthropic_api_key is set; see generate_structured_with_fallback, which
+    still falls back to settings.llm_provider's client (NVIDIA/Groq) if this one
+    genuinely fails.
+
+    Only `_chat` is overridden: Anthropic's Messages API is not OpenAI-compatible
+    (system is a top-level request field, not a message with role="system"; structured
+    output goes through `output_config.format` rather than `response_format`), so this
+    talks to the official `anthropic` SDK directly instead of going through
+    BaseLLMClient's `_init_transport`/`AsyncOpenAI`. generate_structured's shared
+    retry/validation/deadline-budget logic above is unchanged and still applies.
+
+    No sampling params (temperature/top_p/top_k): on the current-generation models this
+    is meant to run against (default ANTHROPIC_MODEL=claude-haiku-5-5; also true of
+    claude-opus-5-5), thinking runs on by default/can't be fully disabled, and any
+    non-default sampling value alongside it is a 400 -- so this relies on
+    `output_config.format`'s schema-constrained JSON instead of low temperature for
+    deterministic output shape.
+    """
+
+    def __init__(self, settings: Settings | None = None):
+        settings = settings or get_settings()
+        if not settings.anthropic_api_key:
+            raise LLMOutputValidationError(
+                "A Claude LLM client was requested but ANTHROPIC_API_KEY is not set in .env."
+            )
+        self.provider = "claude"
+        self.model_name = settings.anthropic_model
+        self._call_timeout = 60.0
+        # Matches NvidiaLLMClient/GroqLLMClient's default ceiling (BaseLLMClient's
+        # class default) -- Claude's own max output is far higher, but this project's
+        # structured-output completions have never needed more (see BaseLLMClient's
+        # _max_output_tokens docstring).
+        self._max_output_tokens = 4000
+        self._client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=self._call_timeout)
+
+    async def _chat(
+        self, messages: list[dict], *, retry_meta: dict | None = None, deadline_epoch: float | None = None,
+        schema: type[BaseModel] | None = None,
+    ) -> tuple[str, dict]:
+        if deadline_epoch is not None:
+            remaining = deadline_epoch - time.time()
+            if remaining <= 0:
+                raise LLMOutputValidationError(
+                    "LLM wall-clock deadline already exceeded before this request could be sent."
+                )
+            call_timeout = min(self._call_timeout, remaining)
+            stop_condition = stop_after_attempt(3) | stop_after_delay(remaining)
+        else:
+            call_timeout = self._call_timeout
+            stop_condition = stop_after_attempt(3)
+
+        # generate_structured always builds `messages` with the system prompt as the
+        # first entry (role="system"); Claude takes system as its own top-level field
+        # instead of a message in the list, so it is split out here.
+        system_content = messages[0]["content"]
+        claude_messages = [{"role": m["role"], "content": m["content"]} for m in messages[1:]]
+
+        output_config: dict = {"effort": "medium"}
+        if schema is not None:
+            output_config["format"] = {
+                "type": "json_schema",
+                "schema": _strict_json_schema(schema.model_json_schema()),
+            }
+
+        retrying = AsyncRetrying(
+            reraise=True,
+            stop=stop_condition,
+            wait=wait_exponential(multiplier=1, min=1, max=10),
+            retry=retry_if_not_exception_type(_ANTHROPIC_NON_RETRYABLE_ERRORS),
+            before_sleep=functools.partial(_record_chat_retry, self.provider, retry_meta),
+        )
+        async for attempt in retrying:
+            with attempt:
+                response = await self._client.messages.create(
+                    model=self.model_name,
+                    max_tokens=self._max_output_tokens,
+                    system=system_content,
+                    messages=claude_messages,
+                    output_config=output_config,
+                    timeout=call_timeout,
+                )
+        # stop_details is only populated when stop_reason == "refusal" -- guarded per
+        # the Claude API's own contract, not assumed.
+        if response.stop_reason == "refusal":
+            category = response.stop_details.category if response.stop_details else None
+            raise LLMOutputValidationError(f"Claude declined the request (stop_reason=refusal, category={category}).")
+        usage = response.usage.model_dump() if response.usage else {}
+        text = next((block.text for block in response.content if block.type == "text"), "")
+        return text, usage
+
+    async def embed(self, texts: list[str], *, input_type: Literal["query", "passage"]) -> list[list[float]]:
+        raise NotImplementedError(
+            "Claude has no text-embeddings endpoint -- RAG embedding/retrieval always uses "
+            "NvidiaLLMClient directly, independent of the primary/fallback reasoning provider."
+        )
+
+
 def resolve_reasoning_provider_and_model(settings: Settings | None = None) -> tuple[str, str]:
     """Pure, side-effect-free lookup of (provider, model) for the CURRENTLY configured
     reasoning provider -- used to stamp agent_runs.llm_provider/llm_model up front
@@ -522,6 +653,8 @@ def resolve_reasoning_provider_and_model(settings: Settings | None = None) -> tu
     if configured) -- llm_reasoning.py overwrites this afterwards with whichever
     provider actually answered, in case a fallback was triggered."""
     settings = settings or get_settings()
+    if settings.anthropic_api_key:
+        return "claude", settings.anthropic_model
     if settings.llm_primary_base_url and settings.llm_primary_model:
         return "self_hosted", settings.llm_primary_model
     if settings.llm_provider == "groq":
@@ -547,11 +680,14 @@ async def generate_structured_with_fallback(
     *, system: str, user: str, schema: type[T], settings: Settings | None = None,
     max_attempts: int = 3, usage_sink: dict | None = None, deadline_epoch: float | None = None,
 ) -> tuple[T, dict]:
-    """Tries the primary self-hosted provider FIRST (if LLM_PRIMARY_* is configured);
-    falls back to settings.llm_provider's client (NVIDIA by default) ONLY if the
-    primary genuinely fails -- never calls both when the primary succeeds. Both
-    attempts share the SAME deadline_epoch (no timeout multiplication: a fallback
-    attempt only gets whatever wall-clock budget the primary didn't use).
+    """Tries the primary provider FIRST, falling back to settings.llm_provider's
+    client (NVIDIA by default) ONLY if the primary genuinely fails -- never calls both
+    when the primary succeeds. The primary is ClaudeLLMClient if ANTHROPIC_API_KEY is
+    set; otherwise the self-hosted "gemma-server" box (SelfHostedLLMClient) if
+    LLM_PRIMARY_* is configured; otherwise there is no primary and the fallback client
+    runs directly. Both attempts share the SAME deadline_epoch (no timeout
+    multiplication: a fallback attempt only gets whatever wall-clock budget the
+    primary didn't use).
 
     Returns (parsed_response, fallback_meta) -- fallback_meta is the exact
     provider/model/status/reason data section 11 asks for, meant to be merged
@@ -563,9 +699,13 @@ async def generate_structured_with_fallback(
         "fallback_provider": None, "fallback_model": None,
     }
 
-    primary_configured = bool(settings.llm_primary_base_url and settings.llm_primary_model)
-    if primary_configured:
+    primary_client: BaseLLMClient | None = None
+    if settings.anthropic_api_key:
+        primary_client = ClaudeLLMClient(settings)
+    elif settings.llm_primary_base_url and settings.llm_primary_model:
         primary_client = SelfHostedLLMClient(settings)
+
+    if primary_client is not None:
         fallback_meta["primary_attempted"] = True
         fallback_meta["primary_provider"] = primary_client.provider
         fallback_meta["primary_model"] = primary_client.model_name

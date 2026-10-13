@@ -57,6 +57,12 @@ class CurrentUser:
     # integration acted on their behalf, which "a human did it" alone would lose.
     # None means a person was really at the keyboard.
     key_name: str | None = None
+    # The key's own row id, alongside key_name -- set together, by the same
+    # branch of core/integration_auth._authenticate_with_scope. Lets a caller
+    # record WHICH key acted (a structured id, not just its display name) without
+    # a second lookup, the same way ROPA runs already resolve a display name back
+    # from a stored integration_key_id.
+    key_id: uuid.UUID | None = None
 
 
 def get_current_user(

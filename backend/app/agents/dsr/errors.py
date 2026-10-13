@@ -73,6 +73,18 @@ class SearchFailedError(DsrError):
     code = case.ERR_SEARCH_FAILED
 
 
+# ── Push evidence (Consiva-run search posted back to the agent) ─────────────────
+
+class EvidenceTooLargeError(DsrError):
+    """A POST /requests/{id}/evidence push exceeded a documented ceiling (tables,
+    rows per table, total rows, or payload bytes). Rejected whole -- never silently
+    truncated, which would hand a plan-builder an incomplete answer it believes is
+    complete (§47's same principle, applied at the door)."""
+
+    status_code = 413
+    code = case.ERR_EVIDENCE_TOO_LARGE
+
+
 # ── Policy and approval (§20, §22, §23) ──────────────────────────────────────────
 
 class ApprovalRequiredError(DsrError):

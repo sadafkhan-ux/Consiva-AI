@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     llm_primary_model: str | None = None
     llm_primary_api_key: str | None = None
 
+    # Claude (Anthropic) -- when set, this becomes the PRIMARY reasoning provider for
+    # the Consent Agent, replacing the self-hosted "gemma-server" box above
+    # (LLM_PRIMARY_*); llm_provider (NVIDIA/Groq) stays the fallback. See
+    # app/llm/client.py's ClaudeLLMClient and generate_structured_with_fallback for
+    # the selection order. Leave unset to keep using LLM_PRIMARY_*/LLM_PROVIDER
+    # exactly as before.
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-haiku-5-5"
+
     # Postgres
     database_url: str
 

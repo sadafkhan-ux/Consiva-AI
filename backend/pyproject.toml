@@ -12,6 +12,7 @@ dependencies = [
     "langgraph-checkpoint-postgres>=2.0",
     "psycopg[binary]>=3.2",  # langgraph-checkpoint-postgres needs a psycopg3 wrapper; bare psycopg needs system libpq
     "openai>=1.54",
+    "anthropic>=1.13",
     "playwright>=1.48",
     "beautifulsoup4>=4.12",
     "lxml>=5.3",

@@ -225,6 +225,7 @@ async def _authenticate_with_scope(
         org_id=principal.org_id,
         role=None,          # a key is never an admin; role-gated routes stay closed to it
         key_name=principal.name,
+        key_id=principal.key_id,
     )
 
 

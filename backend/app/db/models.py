@@ -832,6 +832,11 @@ class DsrSearchRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Added by migration 0035: 'push' means Consiva ran the lookup itself and POSTed
+    # the result (POST /requests/{id}/evidence) -- 'connector' (the default) means
+    # this agent connected to the source directly, exactly as before.
+    ingest_mode: Mapped[str] = mapped_column(String, nullable=False, default="connector")
+    idempotency_key: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class DsrEvidence(Base):
@@ -950,6 +955,37 @@ class DsrExecution(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DsrEvidencePush(Base):
+    """The raw package Consiva POSTed to `/requests/{id}/evidence`, encrypted at rest
+    (migration 0035). Exists beside `dsr_evidence` (which stays exactly as it was,
+    unchanged by this table) because a push carries whole matched rows -- bulk
+    personal data, not the engine's already-minimized projection -- and that bulk
+    content gets its own tighter, purgeable lifecycle rather than living forever
+    next to the rest of the case.
+
+    `payload_ciphertext` is NULL once purged; nothing here is ever logged."""
+
+    __tablename__ = "dsr_evidence_pushes"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_requests.id"), nullable=False, index=True)
+    search_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dsr_search_runs.id"), nullable=False)
+    integration_key_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("ropa_integration_keys.id"), nullable=True
+    )
+    source_name: Mapped[str] = mapped_column(String, nullable=False)
+    searched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    subject: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    payload_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    table_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    client_reference: Mapped[str | None] = mapped_column(String, nullable=True)
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class DsrResponse(Base):
