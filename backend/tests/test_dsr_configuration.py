@@ -103,19 +103,21 @@ def test_configuration_requires_a_token(path):
         assert client.request(method, path, json={}).status_code == 401
 
 
-def _auth_headers(org_id: uuid.UUID) -> dict:
+def _auth_headers(org_id: uuid.UUID, *, role: str | None = None) -> dict:
     """Same real-JWT approach as test_ropa_end_to_end.py's auth_headers, so this route
-    is exercised through the production auth dependency rather than a stub."""
-    token = jwt.encode(
-        {
-            "sub": str(uuid.uuid4()),
-            "org_id": str(org_id),
-            "aud": "authenticated",
-            "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
-        },
-        os.environ["SUPABASE_JWT_SECRET"],
-        algorithm="HS256",
-    )
+    is exercised through the production auth dependency rather than a stub.
+
+    `role` is omitted by default (a legacy-shaped token, as before); pass
+    role="admin" for a route gated by `_require_admin` (PUT /config/sources)."""
+    claims = {
+        "sub": str(uuid.uuid4()),
+        "org_id": str(org_id),
+        "aud": "authenticated",
+        "exp": int((datetime.now(UTC) + timedelta(hours=1)).timestamp()),
+    }
+    if role is not None:
+        claims["role"] = role
+    token = jwt.encode(claims, os.environ["SUPABASE_JWT_SECRET"], algorithm="HS256")
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -168,6 +170,116 @@ def test_sources_are_looked_up_once_not_once_per_authorization(monkeypatch):
     assert len(list_data_sources_calls) == 1, (
         "one batched lookup for the whole route, not one per authorization"
     )
+
+
+def test_get_source_authorizations_is_scoped_to_the_callers_org(monkeypatch):
+    """Two organisations each have their own authorized source. A caller from org A
+    must never see org B's row, even though both are served by the same route and
+    the same in-memory fakes."""
+    from app.db.repositories import dsr_repository, ropa_repository
+
+    org_a, org_b = uuid.uuid4(), uuid.uuid4()
+    source_a = SimpleNamespace(id=uuid.uuid4(), name="crm-a")
+    source_b = SimpleNamespace(id=uuid.uuid4(), name="crm-b")
+
+    def auth_for(source):
+        return SimpleNamespace(
+            id=uuid.uuid4(), data_source_id=source.id, enabled=True,
+            searchable_tables=["t"], identity_tables=["t"],
+            identifier_columns={"t": {"email": "email"}},
+            returnable_columns={"t": ["name"]}, record_key_columns={"t": ["id"]},
+            erasable_columns={"t": []}, allow_execution=False, write_credential_ref=None,
+        )
+
+    auth_a, auth_b = auth_for(source_a), auth_for(source_b)
+
+    async def list_source_authorizations(db, org):
+        return {org_a: [auth_a], org_b: [auth_b]}.get(org, [])
+
+    async def list_data_sources(db, org):
+        return {org_a: [source_a], org_b: [source_b]}.get(org, [])
+
+    monkeypatch.setattr(dsr_repository, "list_source_authorizations", list_source_authorizations)
+    monkeypatch.setattr(ropa_repository, "list_data_sources", list_data_sources)
+
+    response_a = client.get("/api/v1/dsr/config/sources", headers=_auth_headers(org_a))
+    response_b = client.get("/api/v1/dsr/config/sources", headers=_auth_headers(org_b))
+
+    assert response_a.status_code == 200 and response_b.status_code == 200
+    names_a = {row["source_name"] for row in response_a.json()}
+    names_b = {row["source_name"] for row in response_b.json()}
+    assert names_a == {"crm-a"}
+    assert names_b == {"crm-b"}
+    assert "crm-b" not in names_a
+    assert "crm-a" not in names_b
+
+
+def test_put_source_authorization_rejects_a_cross_org_data_source(monkeypatch):
+    """A data_source_id that is real, but belongs to a DIFFERENT organisation, must be
+    rejected exactly the way a nonexistent id is (404, non-disclosure) --
+    ropa_repository.get_data_source's own WHERE org_id == org_id filter is what
+    enforces this: a foreign id is simply invisible to this org's lookup."""
+    from app.db.repositories import dsr_repository, ropa_repository
+
+    org_id = uuid.uuid4()
+    foreign_source_id = uuid.uuid4()
+
+    calls = []
+
+    async def get_data_source(db, source_id, org):
+        calls.append((source_id, org))
+        return None  # the real query would find nothing: this id is some other org's
+
+    async def upsert_source_authorization(db, **kw):
+        raise AssertionError(
+            "must never persist an authorization for a source this org cannot see"
+        )
+
+    monkeypatch.setattr(ropa_repository, "get_data_source", get_data_source)
+    monkeypatch.setattr(dsr_repository, "upsert_source_authorization", upsert_source_authorization)
+
+    response = client.put(
+        "/api/v1/dsr/config/sources",
+        json={"data_source_id": str(foreign_source_id), "allow_execution": False},
+        headers=_auth_headers(org_id, role="admin"),
+    )
+
+    assert response.status_code == 404, response.text
+    assert calls == [(foreign_source_id, org_id)]
+
+
+@pytest.mark.parametrize("unsupported_connector", ["mysql", "mongodb", "salesforce"])
+def test_put_source_authorization_rejects_an_unsupported_connector(monkeypatch, unsupported_connector):
+    """A ROPA source whose connector DSR has no implementation for must be refused
+    AT CONFIGURATION TIME, with no row persisted -- not accepted here and only
+    discovered to be useless the first time a search actually runs against it."""
+    from app.db.repositories import dsr_repository, ropa_repository
+
+    org_id = uuid.uuid4()
+    source_id = uuid.uuid4()
+    unsupported_source = SimpleNamespace(
+        id=source_id, name="legacy-source", connector=unsupported_connector,
+    )
+
+    async def get_data_source(db, sid, org):
+        return unsupported_source
+
+    async def upsert_source_authorization(db, **kw):
+        raise AssertionError(
+            "an unsupported connector must be rejected before anything is persisted"
+        )
+
+    monkeypatch.setattr(ropa_repository, "get_data_source", get_data_source)
+    monkeypatch.setattr(dsr_repository, "upsert_source_authorization", upsert_source_authorization)
+
+    response = client.put(
+        "/api/v1/dsr/config/sources",
+        json={"data_source_id": str(source_id), "allow_execution": False},
+        headers=_auth_headers(org_id, role="admin"),
+    )
+
+    assert response.status_code == 403, response.text
+    assert unsupported_connector in response.json()["detail"]
 
 
 def test_a_retention_rule_must_name_its_authority():

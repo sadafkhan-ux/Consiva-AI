@@ -508,6 +508,10 @@ button.reject { background: var(--red); }
 .pill-bad { background: rgba(193,84,74,.15); color: var(--red); }
 .pill-muted { background: var(--panel-2); color: var(--muted); }
 
+/* A disabled DSR source authorization: the "disabled" pill already says so, but a
+   pill alone is easy to miss in a dense table -- dim the whole row too. */
+.dsr tr.row-disabled { opacity: .55; }
+
 .dsr { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
 .dsr .card {
   background: var(--panel); border: 1px solid var(--border);

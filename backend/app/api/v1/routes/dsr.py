@@ -23,7 +23,13 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.dsr.connectors import authorization
-from app.agents.dsr.errors import CaseNotReadyError, DsrNotFoundError, EvidenceTooLargeError
+from app.agents.dsr.connectors.factory import SUPPORTED_CONNECTORS
+from app.agents.dsr.errors import (
+    CaseNotReadyError,
+    DsrNotFoundError,
+    EvidenceTooLargeError,
+    SourceNotAuthorizedError,
+)
 from app.agents.dsr.schemas import case as case_vocab
 from app.agents.dsr.schemas.evidence_push import EvidencePush
 from app.agents.dsr.services import (
@@ -995,6 +1001,11 @@ async def put_source_authorization(
     source = await ropa_repository.get_data_source(db, payload.data_source_id, org_id)
     if source is None:
         raise DsrNotFoundError(f"data source {payload.data_source_id} not found")
+    if source.connector not in SUPPORTED_CONNECTORS:
+        raise SourceNotAuthorizedError(
+            f"source {source.name!r} uses connector {source.connector!r}, which DSR "
+            f"cannot search -- supported connectors are {sorted(SUPPORTED_CONNECTORS)}"
+        )
 
     candidate = SimpleNamespace(
         enabled=True,

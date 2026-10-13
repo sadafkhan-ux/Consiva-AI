@@ -130,8 +130,10 @@ async def run_search(
     authorizations = await dsr_repository.list_source_authorizations(db, request.org_id)
     if not authorizations:
         raise SourceNotAuthorizedError(
-            "no data source is authorized for DSR in this organization; "
-            "register one before running a search"
+            "no data source is authorized for DSR in this organization; registering a "
+            "source for Agent 2 (ROPA) discovery does not authorize it for DSR -- an "
+            "administrator must explicitly authorize a source from the DSR "
+            "Configuration tab (PUT /api/v1/dsr/config/sources) before a search can run"
         )
 
     # Every authorization's source belongs to this same org, so one list call covers

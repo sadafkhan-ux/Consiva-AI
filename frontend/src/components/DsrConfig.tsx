@@ -27,6 +27,34 @@ const OPERATION_LABELS: Record<string, string> = {
   delete_record: "Delete the record",
 };
 
+/** Mirrors backend/app/agents/dsr/connectors/factory.py's SUPPORTED_CONNECTORS. This is a
+ * frontend-only hint so an admin doesn't fill out a whole authorization form only to have
+ * PUT /config/sources reject it -- the backend remains the sole source of truth and
+ * re-checks this itself regardless of what this set says, so a drift here is a worse UX
+ * hint, never a security gap. */
+const SUPPORTED_DSR_CONNECTORS = new Set(["postgres"]);
+
+/** Why DSR would skip or reject this authorized source even though the row exists --
+ * grounded in what the backend itself checks: search_service.run_search skips an
+ * authorization whose source is missing/disabled (sources_by_id lookup, "authorization
+ * outlived the source it points at"), and PUT /config/sources now 403s outright for a
+ * connector outside SUPPORTED_DSR_CONNECTORS. */
+function unusableReasons(
+  authorization: DsrSourceAuthorization,
+  source: RopaDataSource | undefined,
+): string[] {
+  const reasons: string[] = [];
+  if (!authorization.enabled) reasons.push("DSR authorization is disabled");
+  if (!source) reasons.push("source no longer exists in ROPA");
+  else {
+    if (!source.enabled) reasons.push("ROPA source itself is disabled");
+    if (!SUPPORTED_DSR_CONNECTORS.has(source.connector)) {
+      reasons.push(`connector "${source.connector}" is not supported by DSR`);
+    }
+  }
+  return reasons;
+}
+
 function parseJsonObject(
   raw: string,
   label: string,
@@ -130,6 +158,9 @@ function SourceAuthorizationSection({
   onError: (message: string) => void;
 }) {
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
+  const sourceById = new Map(sources.map((s) => [s.id, s]));
+  const authorizedIds = new Set(authorizations.map((a) => a.data_source_id));
+  const unauthorizedSources = sources.filter((s) => !authorizedIds.has(s.id));
 
   return (
     <section className="card">
@@ -151,45 +182,120 @@ function SourceAuthorizationSection({
               <th>Execution</th>
               <th>Write credential</th>
               <th>Status</th>
+              <th>Usable by DSR</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {authorizations.map((a) => (
-              <tr key={a.id}>
-                <td>
-                  <strong>{a.source_name ?? "(deleted source)"}</strong>
-                </td>
-                <td className="small">{a.searchable_tables.join(", ") || "—"}</td>
-                <td className="small">{a.identity_tables.join(", ") || "—"}</td>
-                <td>
-                  <span className={`pill pill-${a.allow_execution ? "warn" : "muted"}`}>
-                    {a.allow_execution ? "can act" : "read only"}
-                  </span>
-                </td>
-                <td>
-                  {a.write_credential_configured ? (
-                    <span className="pill pill-ok">set</span>
-                  ) : (
-                    <span className="pill pill-muted">none</span>
-                  )}
-                </td>
-                <td>
-                  <span className={`pill pill-${a.enabled ? "ok" : "muted"}`}>
-                    {a.enabled ? "enabled" : "disabled"}
-                  </span>
-                </td>
-                <td>
-                  {isAdmin && (
-                    <button className="secondary small" onClick={() => setEditingSourceId(a.data_source_id)}>
-                      Edit
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+            {authorizations.map((a) => {
+              const reasons = unusableReasons(a, sourceById.get(a.data_source_id));
+              return (
+                <tr key={a.id} className={a.enabled ? undefined : "row-disabled"}>
+                  <td>
+                    <strong>{a.source_name ?? "(deleted source)"}</strong>
+                  </td>
+                  <td className="small">{a.searchable_tables.join(", ") || "—"}</td>
+                  <td className="small">{a.identity_tables.join(", ") || "—"}</td>
+                  <td>
+                    <span className={`pill pill-${a.allow_execution ? "warn" : "muted"}`}>
+                      {a.allow_execution ? "can act" : "read only"}
+                    </span>
+                  </td>
+                  <td>
+                    {a.write_credential_configured ? (
+                      <span className="pill pill-ok">set</span>
+                    ) : (
+                      <span className="pill pill-muted">none</span>
+                    )}
+                  </td>
+                  <td>
+                    <span className={`pill pill-${a.enabled ? "ok" : "muted"}`}>
+                      {a.enabled ? "enabled" : "disabled"}
+                    </span>
+                    {!a.enabled && (
+                      <div className="muted small">DSR will not use this source while disabled.</div>
+                    )}
+                  </td>
+                  <td>
+                    {reasons.length === 0 ? (
+                      <span className="pill pill-ok">ready</span>
+                    ) : (
+                      <>
+                        <span className="pill pill-bad">needs attention</span>
+                        <div className="muted small">{reasons.join("; ")}.</div>
+                      </>
+                    )}
+                  </td>
+                  <td>
+                    {isAdmin && (
+                      <button className="secondary small" onClick={() => setEditingSourceId(a.data_source_id)}>
+                        Edit
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+      )}
+
+      {sources.length > 0 && (
+        <div className="needs-authorization" style={{ marginTop: 16 }}>
+          <h3>Registered in ROPA, not yet authorized for DSR</h3>
+          {unauthorizedSources.length === 0 ? (
+            <p className="muted small">
+              Every ROPA-registered source already has a DSR authorization.
+            </p>
+          ) : (
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Connector</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {unauthorizedSources.map((s) => {
+                  const supported = SUPPORTED_DSR_CONNECTORS.has(s.connector);
+                  return (
+                    <tr key={s.id}>
+                      <td>
+                        <strong>{s.name}</strong>
+                      </td>
+                      <td className="small">
+                        {s.connector}
+                        {!supported && (
+                          <>
+                            {" "}
+                            <span className="pill pill-bad">not supported by DSR yet</span>
+                          </>
+                        )}
+                      </td>
+                      <td>
+                        {isAdmin && (
+                          <button
+                            className="secondary small"
+                            disabled={!supported}
+                            title={
+                              supported
+                                ? undefined
+                                : `DSR currently only supports ${[...SUPPORTED_DSR_CONNECTORS].join(", ")} sources`
+                            }
+                            onClick={() => setEditingSourceId(s.id)}
+                          >
+                            Authorize this source
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
       )}
 
       {isAdmin && sources.length === 0 && (

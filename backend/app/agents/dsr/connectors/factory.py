@@ -23,6 +23,14 @@ from app.agents.dsr.connectors.authorization import SourceGrant, resolve
 from app.agents.dsr.connectors.postgres import PostgresDsrConfig, PostgresDsrConnector
 from app.agents.dsr.errors import SourceNotAuthorizedError
 
+# The single source of truth for "can DSR actually search this source at all" --
+# build_connector's own if/elif below is the only code that would otherwise encode
+# this, which meant it was only discoverable by attempting a search and watching it
+# fail. Exposed here so the config-time authorization route (PUT /config/sources)
+# can reject an unsupported connector up front, instead of accepting an authorization
+# that is guaranteed to fail every time a search actually runs against it.
+SUPPORTED_CONNECTORS = frozenset({"postgres"})
+
 _MAX_CREDENTIAL_REF_LEN = 128
 
 

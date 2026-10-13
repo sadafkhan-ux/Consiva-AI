@@ -157,6 +157,112 @@ describe("DsrConfig: loading and rendering", () => {
   });
 });
 
+describe("DsrConfig: ROPA sources not yet authorized for DSR", () => {
+  it("lists a ROPA source with no dsr_source_authorizations row, without needing the dropdown", async () => {
+    const fetchMock = configFetchMock({
+      sources: [
+        makeSource({ id: "source-1", name: "prepmyevent-production" }),
+        makeSource({ id: "source-2", name: "legacy-mongo", connector: "mongodb" }),
+      ],
+      authorizations: [makeAuthorization({ data_source_id: "source-1" })],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DsrConfig isAdmin />);
+
+    await waitFor(() => expect(screen.getByRole("cell", { name: "legacy-mongo" })).toBeInTheDocument());
+    // The already-authorized source is not also listed as needing authorization.
+    expect(screen.getByText("Registered in ROPA, not yet authorized for DSR")).toBeInTheDocument();
+    expect(screen.getByText("mongodb")).toBeInTheDocument();
+    expect(screen.getByText("not supported by DSR yet")).toBeInTheDocument();
+
+    // The unsupported connector's authorize button is disabled so an admin doesn't
+    // fill out the whole form only to have the backend reject it.
+    const authorizeButton = screen.getByRole("button", { name: "Authorize this source" });
+    expect(authorizeButton).toBeDisabled();
+  });
+
+  it("shows a reassuring message when every ROPA source already has a DSR authorization", async () => {
+    const fetchMock = configFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DsrConfig isAdmin />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Every ROPA-registered source already has a DSR authorization."),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it("authorizing an unauthorized source from the new list reuses the real authorization form", async () => {
+    const fetchMock = configFetchMock({
+      sources: [
+        makeSource({ id: "source-1", name: "prepmyevent-production" }),
+        makeSource({ id: "source-2", name: "prepmyevent-staging" }),
+      ],
+      authorizations: [makeAuthorization({ data_source_id: "source-1" })],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DsrConfig isAdmin />);
+    await waitFor(() =>
+      expect(screen.getByRole("cell", { name: "prepmyevent-staging" })).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Authorize this source" }));
+    expect(screen.getByText("Edit authorization")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Save authorization" }));
+    await waitFor(() =>
+      expect(screen.getByText("Authorization saved for prepmyevent-staging.")).toBeInTheDocument(),
+    );
+    const putCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === `${BASE_URL}/api/v1/dsr/config/sources` && init?.method === "PUT",
+    );
+    expect(putCall).toBeTruthy();
+    const body = JSON.parse((putCall![1] as RequestInit).body as string);
+    expect(body).toMatchObject({ data_source_id: "source-2" });
+  });
+});
+
+describe("DsrConfig: authorized-but-unusable sources", () => {
+  it("flags an authorized source whose underlying ROPA source is disabled", async () => {
+    const fetchMock = configFetchMock({
+      sources: [makeSource({ id: "source-1", enabled: false })],
+      authorizations: [makeAuthorization({ data_source_id: "source-1" })],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DsrConfig isAdmin={false} />);
+
+    await waitFor(() => expect(screen.getByText("needs attention")).toBeInTheDocument());
+    expect(screen.getByText(/ROPA source itself is disabled/)).toBeInTheDocument();
+  });
+
+  it("flags an authorized source whose connector DSR no longer supports", async () => {
+    const fetchMock = configFetchMock({
+      sources: [makeSource({ id: "source-1", connector: "mongodb" })],
+      authorizations: [makeAuthorization({ data_source_id: "source-1" })],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DsrConfig isAdmin={false} />);
+
+    await waitFor(() => expect(screen.getByText("needs attention")).toBeInTheDocument());
+    expect(screen.getByText(/connector "mongodb" is not supported by DSR/)).toBeInTheDocument();
+  });
+
+  it("marks a healthy authorization as ready", async () => {
+    const fetchMock = configFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DsrConfig isAdmin={false} />);
+
+    await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());
+  });
+});
+
 describe("DsrConfig: non-admin view", () => {
   it("shows the admin-required banner and hides edit controls for a non-admin viewer", async () => {
     const fetchMock = configFetchMock();

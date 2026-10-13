@@ -537,6 +537,37 @@ def test_a_malicious_schema_name_is_refused():
         connector._qualified("subscriptions")
 
 
+# ── Gap: a non-mutating operation must never open a write connection ─────────────
+
+@pytest.mark.asyncio
+async def test_a_non_mutating_operation_never_opens_a_connection_at_all():
+    """disclose / retain / no_op touch nothing (see authorization.py's own comment to
+    that effect). This is the other half of the guarantee that makes it safe for an
+    OTHER-classified, confidence-0.0 case to sail through to EXECUTING without a
+    human overriding its classification first: whatever operation planning_service
+    assigns it (always OP_NO_OP, never a key in _OPERATION_FOR_TYPE), the connector
+    must refuse to even dial the database for it, let alone write. Asserting
+    `_connect` raises if called proves this is not just "it happened not to write
+    anything that time" but a real refusal to attempt a connection."""
+    connector = _connector()
+
+    async def _must_not_connect(*, write: bool):
+        raise AssertionError(
+            f"a non-mutating operation opened a connection (write={write}); "
+            "it must never need to reach the database at all"
+        )
+
+    connector._connect = _must_not_connect
+
+    for operation in (case.OP_DISCLOSE, case.OP_RETAIN, case.OP_NO_OP):
+        outcome = await connector.execute_action(
+            table_name="subscriptions", record_reference={"subscription_id": "S-1"},
+            operation=operation, payload={},
+        )
+        assert outcome.rows_affected == 0
+        assert outcome.verified is True
+
+
 # ── Defect 9: internal reasons were shown verbatim to the data subject ───────────
 
 def test_a_configuration_failure_is_not_explained_to_the_requester():

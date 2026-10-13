@@ -673,6 +673,219 @@ async def test_a_case_with_no_authorized_source_fails_explicitly(world, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_zero_ropa_sources_and_unauthorized_ropa_source_are_both_source_not_authorized(
+    world, monkeypatch,
+):
+    """Two different real-world situations -- no ROPA source exists at all, and a
+    ROPA source exists but was never authorized for DSR -- must both fail explicitly
+    with SOURCE_NOT_AUTHORIZED, and the message must make sense either way (it must
+    never claim "no source is registered" when one plainly is)."""
+    from app.db.repositories import dsr_repository, ropa_repository
+
+    async def no_authorizations(db, org_id):
+        return []
+
+    monkeypatch.setattr(dsr_repository, "list_source_authorizations", no_authorizations)
+
+    # Scenario A: a ROPA source IS registered (the fixture's own DATA_SOURCE),
+    # just never authorized for DSR.
+    request_a = await _open_case("Show me my data.")
+    await _verify(request_a)
+    with pytest.raises(SourceNotAuthorizedError) as exc_a:
+        await search_service.run_search(FakeDB(), request_a)
+
+    assert "ROPA" in exc_a.value.message
+    assert "config/sources" in exc_a.value.message
+
+    # Scenario B: no ROPA source exists at all.
+    async def no_ropa_sources(db, org_id):
+        return []
+
+    monkeypatch.setattr(ropa_repository, "list_data_sources", no_ropa_sources)
+    request_b = await _open_case("Show me my data.")
+    await _verify(request_b)
+    with pytest.raises(SourceNotAuthorizedError) as exc_b:
+        await search_service.run_search(FakeDB(), request_b)
+
+    # Same error code, same message, either way -- the check never even reaches
+    # the ROPA source list once no authorization exists, so the two situations
+    # cannot be told apart by this error, which is exactly why its wording must
+    # make sense regardless of which one actually happened.
+    assert exc_a.value.code == exc_b.value.code == case.ERR_SOURCE_NOT_AUTHORIZED
+    assert exc_a.value.message == exc_b.value.message
+
+
+@pytest.mark.asyncio
+async def test_no_match_and_authorization_failure_are_distinguishable_by_status_alone(
+    world, monkeypatch,
+):
+    """§ Definition of Done: a zero-match search must be distinguishable from a failed
+    search. Both outcomes carry an error_code, but the case's STATUS must differ too
+    -- a reader who only looks at status (not error_code) must never confuse "we
+    searched and found nothing" with "we could not search at all"."""
+    from app.db.repositories import dsr_repository
+
+    # Outcome 1: the search runs to completion and finds nothing.
+    _use_connector(monkeypatch, FakeConnector(matches=[], distinct=0))
+    no_match_case = await _open_case("Show me my data.")
+    await _verify(no_match_case)
+    summary = await _search(no_match_case)
+    assert summary.outcome_code == case.ERR_NO_MATCH
+    assert no_match_case.error_code == case.ERR_NO_MATCH
+    assert no_match_case.status == case.SEARCH_COMPLETED
+
+    # Outcome 2: the search cannot even be attempted -- nothing is authorized.
+    async def no_authorizations(db, org_id):
+        return []
+
+    monkeypatch.setattr(dsr_repository, "list_source_authorizations", no_authorizations)
+    failed_case = await _open_case("Show me my data.")
+    await _verify(failed_case)
+    await case_service.transition(FakeDB(), failed_case, case.SEARCHING, actor_user_id=USER)
+    with pytest.raises(SourceNotAuthorizedError) as excinfo:
+        await search_service.run_search(FakeDB(), failed_case)
+    await case_service.transition(
+        FakeDB(), failed_case, case.FAILED, audit_action=case.AUDIT_FAILED,
+        error_code=excinfo.value.code, error_detail=excinfo.value.message,
+    )
+    assert failed_case.error_code == case.ERR_SOURCE_NOT_AUTHORIZED
+    assert failed_case.status == case.FAILED
+
+    # The point: status alone tells them apart, with no need to read error_code.
+    assert no_match_case.status != failed_case.status
+
+
+@pytest.mark.asyncio
+async def test_retry_after_fixing_source_authorization_reaches_the_same_case(world, monkeypatch):
+    """The bug this whole investigation started from: "DSR search fails with
+    SOURCE_NOT_AUTHORIZED even though a source is registered". The fix is not to
+    change this behaviour (it is correct -- ROPA registration is not DSR
+    authorization) but to prove the RECOVERY path genuinely works: once an admin
+    authorizes a source, retrying the SAME case (not opening a new one) succeeds."""
+    from app.db.repositories import dsr_repository
+
+    async def no_authorizations(db, org_id):
+        return []
+
+    monkeypatch.setattr(dsr_repository, "list_source_authorizations", no_authorizations)
+    request = await _open_case("Show me my data.")
+    await _verify(request)
+    case_id = request.id
+
+    # (a) The search fails explicitly: no source is authorized.
+    await case_service.transition(FakeDB(), request, case.SEARCHING, actor_user_id=USER)
+    with pytest.raises(SourceNotAuthorizedError) as excinfo:
+        await search_service.run_search(FakeDB(), request)
+    await case_service.transition(
+        FakeDB(), request, case.FAILED, audit_action=case.AUDIT_FAILED,
+        error_code=excinfo.value.code, error_detail=excinfo.value.message,
+    )
+    assert request.status == case.FAILED
+    assert request.error_code == case.ERR_SOURCE_NOT_AUTHORIZED
+    assert len(world.requests) == 1, "no second case was opened for this failure"
+
+    # (b) An administrator fixes the configuration -- a source is now authorized.
+    async def fixed_authorizations(db, org_id):
+        return [AUTHORIZATION]
+
+    monkeypatch.setattr(dsr_repository, "list_source_authorizations", fixed_authorizations)
+    _use_connector(monkeypatch, FakeConnector(matches=[match()]))
+
+    # (c) The retry is legal (FAILED -> SEARCHING is an explicit lifecycle edge) and
+    # lands on the SAME case id.
+    assert lifecycle.can_transition(case.FAILED, case.SEARCHING)
+    await case_service.transition(FakeDB(), request, case.SEARCHING, actor_user_id=USER)
+    summary = await search_service.run_search(FakeDB(), request)
+    await case_service.transition(
+        FakeDB(), request, case.SEARCH_COMPLETED,
+        error_code=summary.outcome_code,
+        error_detail="see search runs" if summary.outcome_code else None,
+    )
+
+    # (d) It proceeded past the authorization check and found the record -- on the
+    # same case, with no duplicate ever created.
+    assert request.id == case_id
+    assert len(world.requests) == 1
+    assert request.status == case.SEARCH_COMPLETED
+    assert summary.outcome_code is None
+    assert summary.evidence_count == 1
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_intent_is_recorded_as_other_with_zero_confidence(world):
+    """§14: a request asking for two different things must never be quietly resolved
+    into one. The raw classifier's own ambiguity handling is covered in
+    test_dsr_classification.py; this proves case_service.classify_case -- the layer
+    an actual case goes through -- records the SAME closed, reviewable outcome
+    (OTHER, confidence 0.0) for it that an unmatched request gets, not something
+    that looks like a confident guess."""
+    request, _ = await case_service.create_case(
+        FakeDB(), org_id=ORG,
+        raw_request="Send me a copy of my data and then correct my phone number.",
+        requester_email="a@b.com", created_by_user_id=USER, now=NOW,
+    )
+    await case_service.classify_case(FakeDB(), request, actor_user_id=USER)
+
+    assert request.request_type == case.OTHER
+    assert request.classification_confidence == 0.0
+    assert request.status == case.CLASSIFIED
+
+
+@pytest.mark.asyncio
+async def test_other_classified_case_never_executes_a_mutating_operation(world, monkeypatch):
+    """§47 / the one place a real defect could still be hiding: an unclassifiable
+    request (OTHER, confidence 0.0) must never reach a destructive write without a
+    human first overriding the classification via classify_case(override_type=...).
+
+    The planner maps an unmapped request_type to OP_NO_OP (never a key in
+    _OPERATION_FOR_TYPE), OP_NO_OP is not a MUTATING_OPERATION so it never requires
+    approval, and the case is therefore free to sail straight through to EXECUTING
+    -- but what it hands the connector is an operation the real PostgresDsrConnector
+    refuses to touch the database for at all (see
+    connectors/postgres.py::execute_action). This proves that chain holds together
+    end to end, recording what each action's connector call actually carried."""
+    calls: list[dict] = []
+
+    class RecordingConnector(FakeConnector):
+        async def execute_action(self, **kw):
+            calls.append(kw)
+            return await super().execute_action(**kw)
+
+    connector = RecordingConnector(matches=[match()])
+    _use_connector(monkeypatch, connector)
+
+    request = await _open_case("Hello, I have a question about my recent order.")
+    assert request.request_type == case.OTHER
+    assert request.classification_confidence == 0.0
+
+    await _verify(request)
+    await _search(request)
+    plan, actions = await _plan(request)
+
+    assert actions, "the record found must still produce an action, never a silent drop"
+    assert all(a.operation == case.OP_NO_OP for a in actions)
+    assert not plan.requires_approval
+    assert not any(a.requires_approval for a in actions)
+
+    from app.services import dsr_run_service
+
+    next_status = dsr_run_service.next_status_after_planning(plan, actions)
+    await case_service.transition(FakeDB(), request, next_status, actor_user_id=USER)
+    await case_service.transition(FakeDB(), request, case.EXECUTING, actor_user_id=USER)
+
+    for action in actions:
+        execution = await execution_service.execute_action(
+            FakeDB(), request, action.id, now=NOW,
+        )
+        assert execution.status == "verified"
+
+    # Every call the connector actually received carried OP_NO_OP, never a mutation.
+    assert calls, "execution never reached the connector at all"
+    assert all(c["operation"] == case.OP_NO_OP for c in calls)
+    assert all(c["operation"] not in case.MUTATING_OPERATIONS for c in calls)
+
+
+@pytest.mark.asyncio
 async def test_a_search_covers_every_configured_authorized_source(world, monkeypatch):
     """Two authorized sources must both be searched, not just the first one found --
     and looking up their data sources must be one batched call, not one per
