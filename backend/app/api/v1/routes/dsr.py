@@ -17,7 +17,7 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.dsr.connectors import authorization
 from app.agents.dsr.connectors.factory import SUPPORTED_CONNECTORS
 from app.agents.dsr.errors import (
+    AdminRequiredError,
     CaseNotReadyError,
     DsrNotFoundError,
     EvidenceTooLargeError,
@@ -234,12 +235,12 @@ async def create_request(
 @router.get("/requests")
 async def list_requests(
     status_filter: str | None = None,
-    limit: int = 50,
+    limit: int = Query(default=50, ge=1, le=200),
     user: CurrentUser = Depends(integration_auth.get_dsr_operator),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     rows = await dsr_repository.list_requests(
-        db, uuid.UUID(user.org_id), status=status_filter, limit=min(limit, 200)
+        db, uuid.UUID(user.org_id), status=status_filter, limit=limit
     )
     return [_case_response(r) for r in rows]
 
@@ -819,7 +820,7 @@ async def list_executions(
 
 # ── Response ─────────────────────────────────────────────────────────────────────
 
-@router.post("/requests/{request_id}/response")
+@router.post("/requests/{request_id}/response", status_code=status.HTTP_201_CREATED)
 async def generate_response(
     request_id: uuid.UUID,
     user: CurrentUser = Depends(integration_auth.get_dsr_operator),
@@ -868,12 +869,27 @@ async def complete_case(
     having been answered, which is why COMPLETED is reachable only from
     RESPONSE_PENDING in the state machine.
 
-    Closes as PARTIALLY_COMPLETED when any action was blocked or failed. Telling a
-    requester their case is "completed" when one of their records was retained under
-    a policy is telling them something untrue about their own data (§47).
+    Refused unless the case is CURRENTLY at RESPONSE_PENDING. This is deliberately
+    stricter than "a response exists": PARTIALLY_COMPLETED is one of the exception
+    statuses the state machine allows from ANY non-terminal status (lifecycle's
+    `_ALWAYS_REACHABLE`), so without this check a case still EXECUTING (or pulled
+    back into APPROVAL_REQUIRED by a re-plan) could be closed PARTIALLY_COMPLETED
+    on the strength of a stale response left over from an earlier round, while its
+    actions were still unresolved -- exactly the silent, premature closure §47
+    forbids.
+
+    Closes as PARTIALLY_COMPLETED when any action was blocked, rejected, or failed.
+    Telling a requester their case is "completed" when one of their records was
+    retained under a policy is telling them something untrue about their own data
+    (§47).
     """
     org_id = uuid.UUID(user.org_id)
     request = await case_service.get_case_or_raise(db, request_id, org_id)
+    if request.status != case_vocab.RESPONSE_PENDING:
+        raise CaseNotReadyError(
+            f"case {request.reference} is {request.status}; completion requires the case "
+            f"to be at {case_vocab.RESPONSE_PENDING} with its actions resolved"
+        )
     response = await dsr_repository.get_latest_response(db, request.id, org_id)
     if response is None:
         raise CaseNotReadyError(
@@ -886,7 +902,11 @@ async def complete_case(
 
     plan = await dsr_repository.get_current_plan(db, request.id, org_id)
     actions = await dsr_repository.list_actions(db, plan.id, org_id) if plan else []
-    blocked = sum(1 for a in actions if a.status == "blocked")
+    # "rejected" (a reviewer explicitly declined the action) is folded into
+    # `blocked`: both mean a record was deliberately left unchanged, and excluding
+    # rejected actions here would let a case with one rejected action close as a
+    # plain COMPLETED -- see dsr_run_service.closing_status's docstring.
+    blocked = sum(1 for a in actions if a.status in ("blocked", "rejected"))
     failed = sum(1 for a in actions if a.status == "failed")
     closing = dsr_run_service.closing_status(blocked=blocked, failed=failed)
 
@@ -902,7 +922,7 @@ async def complete_case(
         error_code=None if closing == case_vocab.COMPLETED else case_vocab.ERR_ACTION_PARTIAL,
         error_detail=(
             None if closing == case_vocab.COMPLETED
-            else f"{blocked} action(s) blocked, {failed} failed; see the plan for reasons"
+            else f"{blocked} action(s) blocked or rejected, {failed} failed; see the plan for reasons"
         ),
         detail={"blocked": blocked, "failed": failed, "response_id": str(response.id)},
     )
@@ -942,7 +962,7 @@ def _require_admin(user: CurrentUser) -> None:
     # A service key has no role by design; it reaches the write routes only through
     # get_dsr_config_writer, which has already required its dsr:config scope.
     if user.key_name is None and user.role != "admin":
-        raise CaseNotReadyError(
+        raise AdminRequiredError(
             "changing DSR source authorization or retention policy requires an "
             "administrator"
         )

@@ -386,3 +386,18 @@ def test_the_label_uses_the_same_rules_agent_2_uses():
     assert search_service._ropa_category("customers", "email") == (
         personal_data_rules.classify_column("email", table_name="customers").category
     )
+
+
+def test_list_requests_rejects_an_out_of_range_limit_instead_of_silently_clamping_it():
+    """`limit` used to be a bare `int`, silently clamped to 200 via `min(limit, 200)`
+    -- every other paginated list route in this codebase (and in this agent itself,
+    e.g. GET /config/sources style limits elsewhere) 422s on an out-of-range value
+    via Query(ge=..., le=...) instead. A caller passing limit=100000 by mistake
+    deserves a validation error, not a query that silently ran with limit=200."""
+    org_id = uuid.uuid4()
+    for bad in (0, -1, 201, 100000):
+        resp = client.get(
+            "/api/v1/dsr/requests", params={"limit": bad}, headers=_auth_headers(org_id)
+        )
+        assert resp.status_code == 422, (bad, resp.status_code)
+        # Rejected by request validation, before the handler ever touches a database.

@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.agents.dsr.errors import CaseNotReadyError
+from app.agents.dsr.errors import AdminRequiredError
 from app.api.v1.routes import dsr
 from app.core import integration_auth
 from app.core.security import CurrentUser
@@ -36,5 +36,9 @@ def test_key_passes_admin_check_but_roleless_or_member_person_does_not():
     dsr._require_admin(CurrentUser(user_id="u", org_id="o", role=None, key_name="k"))
     dsr._require_admin(CurrentUser(user_id="u", org_id="o", role="admin"))
     for role in (None, "member"):
-        with pytest.raises(CaseNotReadyError):
+        with pytest.raises(AdminRequiredError) as exc:
             dsr._require_admin(CurrentUser(user_id="u", org_id="o", role=role))
+        # A permission failure, not a case-state one -- it used to raise
+        # CaseNotReadyError (409), which misrepresented this as a precondition about
+        # some case rather than a question of who is asking.
+        assert exc.value.status_code == 403

@@ -34,6 +34,7 @@ from app.agents.dsr.errors import CaseNotReadyError, IdentityFailedError, Identi
 from app.agents.dsr.schemas import case
 from app.db.models import DsrIdentityVerification, DsrRequest
 from app.db.repositories import dsr_repository
+from app.services import audit_service
 
 # A verification is good for this long once issued. Long enough for a person to find
 # the email, short enough that a leaked challenge has a small window.
@@ -174,6 +175,18 @@ async def submit_challenge(
     elif verification.attempts >= verification.max_attempts:
         # Burned. A fresh challenge must be issued; this row cannot be retried.
         verification.status = case.IDV_FAILED
+        await db.flush()
+        # The only place this case's identity verification permanently failed; with
+        # no audit entry, a reviewer investigating why a case stalled (or an incident
+        # review afterward) would see no trace of the exhausted attempts at all. No
+        # actor_user_id -- this is the (unauthenticated) requester's own submission.
+        await audit_service.record(
+            db, org_id=request.org_id, actor_user_id=None,
+            action=case.AUDIT_IDENTITY_FAILED, entity_type=case.AUDIT_ENTITY,
+            entity_id=request.id,
+            after={"verification_id": str(verification.id), "attempts": verification.attempts},
+        )
+        return verification
     await db.flush()
     return verification
 
@@ -191,6 +204,13 @@ async def verify_manually(
     Both arguments are mandatory and the note must be substantive. §13 says "do not
     claim verification without evidence" -- an empty note is a claim without
     evidence, so it is refused rather than stored.
+
+    This writes its own audit_logs entry, unconditionally -- it does not rely on the
+    caller also moving the case's status (case_service.transition only audits a
+    STATUS change, and only fires for a handful of pre-search statuses). A case that
+    is already past IDENTITY_VERIFIED (e.g. a verification is being redone mid-flow)
+    still gets this claim recorded with who made it and what they checked; without
+    this, that event left no trace in the shared audit trail at all.
     """
     if not evidence_note or not evidence_note.strip():
         raise CaseNotReadyError(
@@ -198,6 +218,7 @@ async def verify_manually(
             "was checked (§13: verification is never claimed without evidence)."
         )
     moment = now or datetime.now(UTC)
+    note = evidence_note.strip()
     verification = await dsr_repository.create_identity_verification(
         db,
         org_id=request.org_id,
@@ -210,6 +231,20 @@ async def verify_manually(
     verification.status = case.IDV_MANUALLY_VERIFIED
     verification.verified_at = moment
     verification.verified_by_user_id = reviewer_user_id
-    verification.evidence_note = evidence_note.strip()
+    verification.evidence_note = note
     await db.flush()
+    await audit_service.record(
+        db,
+        org_id=request.org_id,
+        actor_user_id=reviewer_user_id,
+        action=case.AUDIT_IDENTITY_VERIFIED,
+        entity_type=case.AUDIT_ENTITY,
+        entity_id=request.id,
+        after={
+            "method": "manual",
+            "verification_id": str(verification.id),
+            "verified_by_user_id": str(reviewer_user_id),
+            "evidence_note": note,
+        },
+    )
     return verification

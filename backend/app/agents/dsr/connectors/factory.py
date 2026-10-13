@@ -2,9 +2,22 @@
 
 Same secret discipline as Agent 2's factory (agents/ropa/connectors/factory.py): the
 non-secret half of the connection comes from the `ropa_data_sources.config` row, and
-the secret half is resolved at call time from the environment entry NAMED by
-`credential_ref`. The secret is never stored, never returned by an API, never logged
-and never reaches the LLM.
+the secret half is resolved at call time. The secret is never stored, never returned
+by an API, never logged and never reaches the LLM.
+
+The READ credential is resolved from the SAME `ropa_data_sources` row Agent 2 already
+reads, so it supports both of that row's credential mechanisms, exactly as Agent 2's
+own factory does: `credential_ciphertext` (migration 0031, set via
+POST /sources/{id}/credential and decrypted with Agent 2's Fernet key) tried first,
+falling back to `credential_ref` (the NAME of an environment entry). A source an
+administrator set up with only a ciphertext -- no credential_ref env var -- discovers
+fine under Agent 2, so it must resolve just as well here; otherwise DSR would fail
+every such source with a misleading "no credential_ref" error for a credential that
+in fact exists and resolves.
+
+The WRITE credential has no ciphertext counterpart: `dsr_source_authorizations.
+write_credential_ref` is DSR's own column (no `write_credential_ciphertext` field
+exists), so it resolves only via the environment-entry path.
 
 What is different here, and deliberately so: a DSR connector may be built in two
 modes. `for_search` resolves only the READ credential. `for_execution` additionally
@@ -18,6 +31,9 @@ from __future__ import annotations
 
 import os
 from typing import Any
+
+from app.agents.ropa.connectors.base import ConnectorError as RopaConnectorError
+from app.agents.ropa.connectors.factory import decrypt_credential
 
 from app.agents.dsr.connectors.authorization import SourceGrant, resolve
 from app.agents.dsr.connectors.postgres import PostgresDsrConfig, PostgresDsrConnector
@@ -34,9 +50,21 @@ SUPPORTED_CONNECTORS = frozenset({"postgres"})
 _MAX_CREDENTIAL_REF_LEN = 128
 
 
-def _resolve_secret(credential_ref: str | None, *, purpose: str) -> str | None:
-    """Read a secret by the NAME the configuration gives. Every error message names
-    the ref, never a value -- these messages reach logs and API responses."""
+def _resolve_secret(
+    credential_ref: str | None, *, purpose: str, credential_ciphertext: str | None = None,
+) -> str | None:
+    """Read a secret by the NAME the configuration gives, or decrypt it if the
+    source stored one via Agent 2's POST /sources/{id}/credential. `purpose="write"`
+    callers never pass `credential_ciphertext` -- the write credential has no such
+    column to read it from. Every error message names the ref, or the failure mode,
+    never a value -- these messages reach logs and API responses."""
+    if credential_ciphertext:
+        try:
+            return decrypt_credential(credential_ciphertext)
+        except RopaConnectorError as exc:
+            raise SourceNotAuthorizedError(
+                f"{purpose} credential for this source could not be decrypted: {exc}"
+            ) from exc
     if not credential_ref:
         return None
     if len(credential_ref) > _MAX_CREDENTIAL_REF_LEN or not credential_ref.replace("_", "").isalnum():
@@ -81,10 +109,15 @@ def build_connector(
         missing = [k for k in ("host", "dbname", "user") if not config.get(k)]
         if missing:
             raise SourceNotAuthorizedError(f"postgres source config missing: {missing}")
-        read_password = _resolve_secret(data_source.credential_ref, purpose="read")
+        read_password = _resolve_secret(
+            data_source.credential_ref,
+            purpose="read",
+            credential_ciphertext=getattr(data_source, "credential_ciphertext", None),
+        )
         if read_password is None:
             raise SourceNotAuthorizedError(
-                f"source {data_source.name!r} has no credential_ref for its read password"
+                f"source {data_source.name!r} has no credential_ref or stored "
+                "credential for its read password"
             )
 
         write_user = write_password = None

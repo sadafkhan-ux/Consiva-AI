@@ -56,6 +56,8 @@ from app.agents.dsr.errors import (
     VerificationFailedError,
 )
 from app.agents.dsr.schemas import case
+from app.core.exceptions import ConsivaError
+from app.scanner.url_safety import assert_safe_host
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +130,23 @@ class PostgresDsrConnector:
             user, password = self._config.write_user, self._config.write_password
         else:
             user, password = self._config.read_user, self._config.read_password
+
+        # The same guard app.agents.purpose.connectors.structured.read_postgres uses
+        # before dialling a caller-supplied DSN: the host here is admin-configured
+        # (ropa_data_sources.config), not a per-request caller value, but it is still
+        # effectively caller-supplied from the platform's point of view -- any org
+        # admin can set it -- and without this check a source pointed at a private,
+        # loopback, link-local or cloud-metadata address turns this connector into an
+        # SSRF / internal-network-reconnaissance primitive shared across every org on
+        # this worker. Checked on every connection attempt, not just once at source
+        # registration, so a DNS answer that changes after that moment cannot slip a
+        # blocked address past a check that only ran once at config time.
+        try:
+            await assert_safe_host(self._config.host)
+        except ConsivaError as exc:
+            raise ConnectorUnavailableError(
+                f"source {self._grant.source_name!r} targets a disallowed host: {exc}"
+            ) from None
 
         try:
             conn = await asyncpg.connect(
@@ -353,7 +372,7 @@ class PostgresDsrConnector:
                 )
                 verified, detail = await self._verify(
                     conn, table=table_name, reference=record_reference,
-                    operation=operation, payload=payload,
+                    operation=operation, payload=payload, rows_affected=rows_affected,
                 )
                 if not verified:
                     # Roll back rather than leave a half-done, unverifiable change.
@@ -409,7 +428,7 @@ class PostgresDsrConnector:
 
     async def _verify(
         self, conn: asyncpg.Connection, *, table: str, reference: dict[str, Any],
-        operation: str, payload: dict[str, Any],
+        operation: str, payload: dict[str, Any], rows_affected: int,
     ) -> tuple[bool, dict[str, Any]]:
         """Read the record back and check the intended end state actually holds."""
         quoted_table = self._qualified(table)
@@ -419,6 +438,17 @@ class PostgresDsrConnector:
             remaining = await conn.fetchval(
                 f"SELECT count(*) FROM {quoted_table} WHERE {where_sql}", *where_args
             )
+            # "no rows remain" is also trivially true when the DELETE matched nothing
+            # to begin with -- a stale or wrong record_reference deletes zero rows and
+            # a bare absence check would call that verified, because the row was never
+            # there to leave behind. rows_affected==0 must be its own failure: this
+            # action did not do anything, which is not the same claim as "it did the
+            # thing and the thing stuck."
+            if rows_affected == 0:
+                return False, {
+                    "check": "record absent", "rows_remaining": int(remaining),
+                    "note": "the delete matched no row; nothing was removed by this action",
+                }
             return remaining == 0, {"check": "record absent", "rows_remaining": int(remaining)}
 
         columns = sorted(payload)

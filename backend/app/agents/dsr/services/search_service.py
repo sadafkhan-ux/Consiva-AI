@@ -19,6 +19,7 @@ say honestly rather than reporting a clean "no data found".
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -60,6 +61,25 @@ def _ropa_category(table_name: str, column_name: str) -> str | None:
     return result.category if result.is_personal_data else None
 
 
+def _record_key(source_name: str, table_name: str, record_reference: dict) -> tuple[str, str, str]:
+    """A stable, hashable identity for one matched record: the same (source, table,
+    record_reference) a prior search attempt on this SAME case already turned into a
+    `dsr_evidence` row. A case may be searched more than once -- a connector failure
+    retried after the source is fixed, an ambiguous result retried after review --
+    and `dsr_search_runs`/`dsr_evidence` are append-only history, so nothing deletes
+    or supersedes an earlier attempt's rows. Without this, a record that matches
+    again on a second attempt becomes a SECOND `dsr_evidence` row for the exact same
+    underlying record, and `planning_service.build_plan` (which reads every
+    evidence row ever written for the case) then plans -- and could execute -- the
+    same disclosure or deletion twice.
+
+    `record_reference` is serialized rather than compared as a dict because a dict
+    is not hashable; `default=str` tolerates a value json can't natively encode
+    (e.g. a UUID or date) the same way encrypt_push_payload already does.
+    """
+    return (source_name, table_name, json.dumps(record_reference, sort_keys=True, default=str))
+
+
 def requester_identifiers(request: DsrRequest) -> dict[str, str]:
     """The identifiers this case may be searched on. Only these three: a DSR search
     matches a person by an identifier they gave, not by name similarity."""
@@ -93,10 +113,19 @@ class SearchSummary:
     @property
     def outcome_code(self) -> str | None:
         """The single code that best describes how the search ended, or None when it
-        ended cleanly with matches."""
+        ended cleanly with matches AND every authorized source actually answered.
+
+        A source failing is never folded into a clean ending just because another
+        source found something: "we found 2 records, and could not reach a third
+        system at all" is a materially different outcome from "we found 2 records,
+        full stop", and a reviewer (or an automated retry) reading only the case's
+        own error_code -- not every dsr_search_runs row -- must be able to tell
+        them apart. See dsr_run_service._search_detail, which composes the matching
+        human-readable text for this same code.
+        """
         if self.ambiguous:
             return case.ERR_MULTIPLE_MATCHES
-        if not self.found_anything and self.sources_failed:
+        if self.sources_failed:
             return case.ERR_SEARCH_FAILED
         if not self.found_anything:
             return case.ERR_NO_MATCH
@@ -143,6 +172,15 @@ async def run_search(
         s.id: s for s in await ropa_repository.list_data_sources(db, request.org_id)
     }
 
+    # Every record this case already has evidence for, from THIS search or any
+    # earlier attempt -- fetched once, up front, rather than once per source. A
+    # retry (connector failure fixed, ambiguity reviewed) must not re-litigate a
+    # record it already evidenced; see `_record_key`'s docstring.
+    existing_evidence_keys = {
+        _record_key(e.source_name, e.table_name, e.record_reference)
+        for e in await dsr_repository.list_evidence(db, request.id, request.org_id)
+    }
+
     summary = SearchSummary()
     for authorization in authorizations:
         data_source = sources_by_id.get(authorization.data_source_id)
@@ -156,6 +194,7 @@ async def run_search(
         await _search_one_source(
             db, request, authorization, data_source, identifiers, summary,
             job_id=job_id, correlation_id=correlation_id,
+            existing_evidence_keys=existing_evidence_keys,
         )
 
     return summary
@@ -171,7 +210,14 @@ async def _search_one_source(
     *,
     job_id: uuid.UUID | None,
     correlation_id: str | None,
+    existing_evidence_keys: set[tuple[str, str, str]] | None = None,
 ) -> None:
+    # Optional and defaulted to None (treated as empty) rather than required: a
+    # caller driving one source in isolation (outside `run_search`, e.g. a focused
+    # test) has no case-wide evidence history to check and should see unchanged,
+    # undeduplicated behaviour rather than an AttributeError.
+    if existing_evidence_keys is None:
+        existing_evidence_keys = set()
     run = await dsr_repository.create_search_run(
         db,
         org_id=request.org_id,
@@ -241,7 +287,30 @@ async def _search_one_source(
             )
             for match in outcome.matches
         ]
-        await dsr_repository.add_evidence(db, request.org_id, evidence_rows)
+
+        # Insert only the rows this case does not already have evidence for. A
+        # record already evidenced by an earlier attempt on this same case is not
+        # re-inserted -- `run.match_count` below still reports the full number of
+        # records THIS run matched (a truthful account of what this run found), but
+        # `dsr_evidence` itself gains at most one row per real-world record, so
+        # planning never double-plans (and could double-execute) the same
+        # disclosure or deletion. See `_record_key`'s docstring.
+        rows_to_insert = []
+        duplicate_count = 0
+        for row in evidence_rows:
+            key = _record_key(row.source_name, row.table_name, row.record_reference)
+            if key in existing_evidence_keys:
+                duplicate_count += 1
+                continue
+            existing_evidence_keys.add(key)
+            rows_to_insert.append(row)
+        await dsr_repository.add_evidence(db, request.org_id, rows_to_insert)
+        if duplicate_count:
+            summary.notes.append(
+                f"{data_source.name}: {duplicate_count} matched record(s) were already "
+                "recorded as evidence by an earlier search on this case and were not "
+                "duplicated"
+            )
 
         run.match_count = len(evidence_rows)
         run.distinct_subject_count = outcome.distinct_subjects

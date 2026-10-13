@@ -116,6 +116,21 @@ async def decide_action(
             f"action {action_id} is already {action.status}; a decision cannot be "
             "recorded against work that has started"
         )
+    if action.status in ("approved", "rejected"):
+        # This action already carries a reviewer's decision. Letting a second call
+        # (a stale UI re-submitting, two reviewers racing on the same action, or a
+        # retried request) silently overwrite it is exactly the gap
+        # FindingAlreadyDecidedError closes for Agent 1/2 findings -- here it would
+        # mean a rejected deletion could be flipped to approved (or the reverse)
+        # with no conflict and no trace of the first reviewer's call beyond the
+        # audit log. `request_more_information` / `escalated` deliberately return an
+        # action to "proposed" and are exempt from this guard by design, since that
+        # is how a decided-too-early action is reopened for a fresh decision.
+        raise CaseNotReadyError(
+            f"action {action_id} has already been decided ({action.status}); a new "
+            "decision cannot be recorded without first reopening it via "
+            "request_more_information or escalated"
+        )
     if action.status == "blocked" and decision in APPROVING_DECISIONS:
         # A constraint blocked this action. A reviewer may escalate or reject it,
         # but "approve" cannot override a retention rule or a missing authorization.

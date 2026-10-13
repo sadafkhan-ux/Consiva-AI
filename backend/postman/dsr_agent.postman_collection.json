@@ -1,0 +1,3244 @@
+{
+  "info": {
+    "name": "Consiva - DSR Fulfillment (Agent 3)",
+    "description": "API contract for the DSR Fulfillment agent, covering all 25 endpoints defined in backend/app/api/v1/routes/dsr.py (requests CRUD, classify, identity challenge/verify, search, results, evidence push/purge, execution-report, plan, action decision, execute, executions, response, complete, config/sources, config/retention x3, audit). Built ENTIRELY from static code reading -- the route handlers themselves, app/agents/dsr/services/*.py, app/agents/dsr/schemas/{case,evidence_push}.py, app/agents/dsr/errors.py, app/core/integration_auth.py, and app/main.py's exception handlers. NOT EXECUTED LIVE against any server: the only running stack on this box is production (docker-compose.prod.yml), which is strictly off-limits, so no request in this collection has been fired. To actually run it: point baseUrl at a non-production test deployment, obtain a real bearer token (a signed-in person's JWT, or a service key minted with dsr:operate / dsr:config scope -- app/core/integration_auth.py), and replace every placeholder id variable with a real one from that environment, in the order the folders run (most later folders depend on state created by earlier ones in the SAME case).\n\nAuth: EITHER a signed-in person's bearer JWT OR an org-scoped service key (csv_...) holding `dsr:operate` (cases, config reads) or `dsr:config` (config writes) -- app/core/integration_auth.py's _authenticate_with_scope. The org comes from the verified credential in both cases; nothing accepts an org_id from the caller.\n\nError envelope: DSR is NOT under the `/api/v1/consent-agent` prefix, so it gets the plain `{\"detail\": ...}` envelope (app/main.py consiva_error_handler / validation_error_handler, default branch), same as Purpose Classifier -- for a ConsivaError subclass, `detail` is a string; for a FastAPI RequestValidationError, `detail` is the default list of {loc, msg, type} objects.\n\nNon-disclosure: every route keyed by {request_id} resolves it through case_service.get_case_or_raise, which treats a case in another org exactly like one that does not exist -> 404 for both, never 403/403-like disclosure (\u00a737). The same pattern applies to {rule_id} and {action_id}.\n\nFindings surfaced while building this collection (full detail in the agent's task report): (1) POST /requests/{id}/response creates a new row every call but returns 200, while POST /requests/{id}/evidence (also row-creating) returns 201 -- an inconsistency within this same file (folder 17). (2) GET /requests?limit=N silently clamps >200 rather than 422ing, unlike every other limit param in this codebase (folder 2). (3) _require_admin's role check returns 409 (CaseNotReadyError) for what is really an authorization failure, where 403 is used for the equivalent case everywhere else in this same file (folders 21/23/24). (4) Two AUDIT_* constants in schemas/case.py (AUDIT_IDENTITY_FAILED, AUDIT_RESULTS_FOUND) are defined but never actually recorded anywhere -- a failed identity-verification attempt leaves no audit trail at all (folder 6).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "REPLACE_WITH_REAL_BEARER_TOKEN",
+      "type": "string"
+    },
+    {
+      "key": "requestId",
+      "value": "11111111-1111-1111-1111-111111111111",
+      "type": "string"
+    },
+    {
+      "key": "foreignRequestId",
+      "value": "22222222-2222-2222-2222-222222222222",
+      "type": "string"
+    },
+    {
+      "key": "actionId",
+      "value": "33333333-3333-3333-3333-333333333333",
+      "type": "string"
+    },
+    {
+      "key": "evidenceId",
+      "value": "44444444-4444-4444-4444-444444444444",
+      "type": "string"
+    },
+    {
+      "key": "dataSourceId",
+      "value": "55555555-5555-5555-5555-555555555555",
+      "type": "string"
+    },
+    {
+      "key": "retentionRuleId",
+      "value": "66666666-6666-6666-6666-666666666666",
+      "type": "string"
+    },
+    {
+      "key": "issuedChallengePlaintext",
+      "value": "REPLACE_WITH_CHALLENGE_FROM_FOLDER_5_RESPONSE",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Create Request (POST /requests)",
+      "item": [
+        {
+          "name": "Happy path - email identifier",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests",
+            "description": "CREATES STATE: inserts a new dsr_requests row and immediately classifies it (case_service.create_case + classify_case, routes/dsr.py:210-231). Two audit entries land on this case (dsr.created, dsr.request_classified) before the response is built. Repeating the SAME idempotency_key returns the EXISTING case (is_new=False) instead of a second one -- that's the idempotency contract this endpoint relies on for a double-submitted web form.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"raw_request\": \"Please delete all my personal information.\",\n  \"requester_email\": \"person@example.com\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('case is classified and has allowed_transitions', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.property('id');",
+                  "  pm.expect(body.status).to.be.oneOf(['classified', 'identity_pending', 'received']);",
+                  "  pm.expect(body.request_type).to.not.eql('unclassified');",
+                  "  pm.expect(body.allowed_transitions).to.be.an('array');",
+                  "  pm.collectionVariables.set('requestId', body.id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Idempotent retry - same idempotency_key returns the same case",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests",
+            "description": "Run this request TWICE in a row (same idempotency_key both times). case_service.create_case (routes/dsr.py:216-225) looks up find_request_by_idempotency_key first and returns that row with is_new=False on the second call -- no second dsr_requests row, no second classify_case call. SAFE to re-run; verify manually that the 'id' in both responses is identical.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"raw_request\": \"Please delete all my personal information.\",\n  \"requester_email\": \"person@example.com\",\n  \"idempotency_key\": \"demo-key-001\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201 on every call (not 200 on repeat)', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - raw_request missing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests",
+            "description": "SAFE / no state created. `raw_request` is required, min_length=1 on DsrCreate (routes/dsr.py:58). 422, FastAPI default `detail` list.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requester_email\": \"person@example.com\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('detail names raw_request', () => { const b = pm.response.json(); pm.expect(b.detail.some(e => (e.loc||[]).includes('raw_request'))).to.be.true; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - requester_email missing '@'",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests",
+            "description": "SAFE / no state created. DsrCreate._looks_like_email (routes/dsr.py:64-69) rejects a value with no '@' -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"raw_request\": \"Show me my data.\",\n  \"requester_email\": \"not-an-email\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - no identifier supplied at all",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests",
+            "description": "SAFE / no state created. Passes Pydantic (no field is individually required besides raw_request) but case_service.create_case (case_service.py:~97-101) then raises CaseNotReadyError (409) because none of email/phone/reference was given -- a case with nothing to search on. Note this is a DOMAIN validation error returned as 409, while the field-shape errors above are 422 -- both are 'this request is malformed', just caught at different layers (Pydantic vs service), which is intentional here but worth knowing when writing a client: don't assume 422 covers every bad-input case.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"raw_request\": \"Show me my data.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('detail explains the identifier requirement', () => pm.expect(pm.response.json().detail).to.match(/identifier/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"raw_request\": \"x\", \"requester_email\": \"a@b.com\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. List Requests (GET /requests)",
+      "item": [
+        {
+          "name": "Happy path - default limit",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests",
+            "description": "READ-ONLY, safe to re-run. `limit` defaults to 50, capped at 200 via `min(limit, 200)` (routes/dsr.py:242) -- note this is a silent clamp, not a 422, unlike Purpose Classifier's `Query(le=...)` pattern; passing limit=99999 does not error, it just returns at most 200 rows."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - status_filter",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests?status_filter=completed",
+            "description": "READ-ONLY, safe to re-run. `status_filter` is a free-form `str | None`, not a Pydantic Literal against case.ALL_STATUSES -- an unrecognised value (e.g. status_filter=bogus) does not 422, it just matches no rows and returns [] with 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('every row matches the filter', () => { const rows = pm.response.json(); rows.forEach(r => pm.expect(r.status).to.eql('completed')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Documented quirk - limit above 200 is silently clamped, not rejected",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests?limit=99999",
+            "description": "DOCUMENTED QUIRK, READ-ONLY, safe to re-run. `limit: int = 50` has no Pydantic ge/le constraint (routes/dsr.py:237); `min(limit, 200)` clamps it inside the handler. Compare to Purpose Classifier's GET /purpose/assessments, which uses `Query(le=100)` and genuinely 422s above the max -- the two agents disagree on whether an out-of-range limit is a client error or a value to silently correct."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200 (not 422 -- silently clamped)', () => pm.response.to.have.status(200));",
+                  "pm.test('at most 200 rows', () => pm.expect(pm.response.json().length).to.be.at.most(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Get Request (GET /requests/{id})",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}",
+            "description": "READ-ONLY, safe to re-run. requestId must belong to the caller's org."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('id matches requested case', () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('requestId')));",
+                  "pm.test('identity_status is present (joined from dsr_identity_verifications)', () => pm.expect(pm.response.json()).to.have.property('identity_status'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - random UUID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/99999999-9999-9999-9999-999999999999",
+            "description": "READ-ONLY, safe to re-run. A syntactically valid UUID matching no row in this org -> DsrNotFoundError -> 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - malformed UUID path param",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/not-a-uuid",
+            "description": "READ-ONLY, safe to re-run. `request_id: uuid.UUID` path param fails FastAPI's type coercion before the handler runs -> 422 (distinct from the well-formed-but-missing case above, which is 404)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Classify (POST /requests/{id}/classify)",
+      "item": [
+        {
+          "name": "Happy path - auto-classify (no override)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/classify",
+            "description": "MUTATES STATE: re-runs the deterministic classifier over raw_request and writes a dsr.request_classified audit entry every time, even if the outcome doesn't change (case_service.classify_case). Safe to re-run -- re-classifying is idempotent in effect, not in audit-log row count.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('request_type is a known type', () => pm.expect(['access','correction','deletion','export','information','other']).to.include(pm.response.json().request_type));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - manual override",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/classify",
+            "description": "MUTATES STATE: classification_method becomes 'manual', classification_confidence becomes 1.0 (case_service.classify_case's override branch).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"override_type\": \"deletion\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('request_type reflects the override', () => pm.expect(pm.response.json().request_type).to.eql('deletion'));",
+                  "pm.test('classification_method is manual', () => pm.expect(pm.response.json().classification_method).to.eql('manual'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - unknown override_type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/classify",
+            "description": "SAFE / nothing changed: case_service.classify_case's override branch calls request_classifier.coerce_model_type, which returns None for an unrecognised value, and the handler raises CaseNotReadyError (409) naming the valid set -- note `override_type` itself is a plain `str` on ClassifyRequest (routes/dsr.py:81), not a Pydantic Literal, so this is caught in the SERVICE layer as 409, not by Pydantic as 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"override_type\": \"not_a_real_type\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/classify",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/classify",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Start Identity Challenge (POST /requests/{id}/identity/challenge)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/challenge",
+            "description": "MUTATES STATE: inserts a dsr_identity_verifications row (status=in_progress), moves the case RECEIVED->IDENTITY_PENDING if it was still RECEIVED, and writes a dsr.identity_verification_started audit entry (routes/dsr.py:274-311). The plaintext challenge is returned ONCE in this response and is NOT retrievable again -- only its SHA-256 hash is stored. Re-running this creates a brand-new verification row each time (not idempotent); the old one is simply superseded by get_latest_identity_verification."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('challenge is returned once, never empty', () => pm.expect(pm.response.json().challenge).to.be.a('string').and.not.empty);",
+                  "pm.test('delivery_note explains no email provider is configured', () => pm.expect(pm.response.json().delivery_note).to.match(/no outbound email/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - case has no requester_email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/challenge",
+            "description": "Requires a case created WITHOUT requester_email (e.g. phone/reference only) to actually exercise. identity_service.start_challenge raises CaseNotReadyError (409) when request.requester_email is empty, directing the operator to manual verification instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('detail suggests manual verification', () => pm.expect(pm.response.json().detail).to.match(/manual/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/identity/challenge",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/challenge",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Verify Identity (POST /requests/{id}/identity/verify)",
+      "item": [
+        {
+          "name": "Happy path - manual verification",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/verify",
+            "description": "MUTATES STATE: inserts a dsr_identity_verifications row (status=manually_verified) and -- because satisfied=true -- transitions the case to IDENTITY_VERIFIED with a dsr.identity_verified audit entry (routes/dsr.py:314-347).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"manual\": true,\n  \"evidence_note\": \"Checked a government ID over a video call.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('satisfied is true', () => pm.expect(pm.response.json().satisfied).to.be.true);",
+                  "pm.test('case.identity_status reflects it', () => pm.expect(pm.response.json().case.identity_status).to.eql('manually_verified'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - challenge answered correctly",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/verify",
+            "description": "Requires having run '5. Start Identity Challenge' first and captured its `challenge` value into the issuedChallengePlaintext variable. identity_service.submit_challenge compares with hmac.compare_digest; a match sets status=verified.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challenge\": \"{{issuedChallengePlaintext}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('satisfied is true on a correct code', () => pm.expect(pm.response.json().satisfied).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - wrong code (never raises; reports unsatisfied)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/verify",
+            "description": "MUTATES STATE (increments verification.attempts) but returns 200, not an error: identity_service.submit_challenge's docstring is explicit that it 'never raises on a wrong answer' so that 'wrong code' and 'no such verification in progress' are not distinguishable from outside -- a deliberate anti-enumeration design, same spirit as the 404 non-disclosure pattern elsewhere. NOTE (audit-trail gap, reported but not fixed -- outside this agent's editable route): neither this wrong-answer path nor the max-attempts-exhausted path writes ANY audit_service.record call, even though case.AUDIT_IDENTITY_FAILED ('dsr.identity_failed') exists in schemas/case.py and is never referenced anywhere in the codebase -- a failed identity check leaves no trace in the case's audit timeline at all.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challenge\": \"0000000000000000000000000000000000\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200 (not an error)', () => pm.response.to.have.status(200));",
+                  "pm.test('satisfied is false', () => pm.expect(pm.response.json().satisfied).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - neither challenge nor manual supplied",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/verify",
+            "description": "SAFE / no state changed. Neither `challenge` nor `manual=true` -> the handler itself raises CaseNotReadyError (409) (routes/dsr.py:331-332), before either identity_service function is called.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - manual=true with no evidence_note",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/verify",
+            "description": "SAFE / no state changed. identity_service.verify_manually requires a substantive evidence_note (\u00a713: 'verification is never claimed without evidence') -> CaseNotReadyError (409).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"manual\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('detail cites the evidence-note requirement', () => pm.expect(pm.response.json().detail).to.match(/evidence/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/identity/verify",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"manual\": true, \"evidence_note\": \"x\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/verify",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"manual\": true, \"evidence_note\": \"x\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Start Search (POST /requests/{id}/search)",
+      "item": [
+        {
+          "name": "Happy path - identity already verified",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/search",
+            "description": "MUTATES STATE: transitions the case to SEARCHING (dsr.search_started audit entry) and enqueues a `dsr_search` job on the shared agent_jobs queue. The search itself runs asynchronously in a worker -- this response reports only that it was QUEUED, per \u00a733/\u00a734 (never show progress the backend hasn't reported). Requires the case to already have passed identity verification."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('job_id is returned', () => pm.expect(pm.response.json().job_id).to.be.a('string'));",
+                  "pm.test('case moved to searching', () => pm.expect(pm.response.json().case.status).to.eql('searching'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Identity gate - 403 when identity is not yet satisfied",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/search",
+            "description": "Requires a freshly-created case with NO identity verification done yet. identity_service.assert_identity_satisfied is checked at the API boundary (routes/dsr.py:360-365), BEFORE any job is queued -- IdentityRequiredError, 403, never a queued job that would only fail once a worker picked it up."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 403', () => pm.response.to.have.status(403));",
+                  "pm.test('detail cites identity verification', () => pm.expect(pm.response.json().detail).to.match(/identity/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lifecycle conflict - case not in a status that can move to searching",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/search",
+            "description": "Requires a case already in e.g. COMPLETED. case_service.transition's lifecycle.assert_transition rejects an illegal move -> InvalidCaseTransitionError (409), naming the legal next states."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/search",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/search",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8. Get Results (GET /requests/{id}/results)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/results",
+            "description": "READ-ONLY, safe to re-run. Returns every dsr_search_runs row and every dsr_evidence row for this case (routes/dsr.py:380-419), regardless of the case's current status -- this endpoint itself does not filter by status, so a FAILED case's prior (possibly partial) search_runs are still visible here. See the frontend findings in this agent's report for how the UI must (and, after this session's fix, does) read `search_runs[].status`/`error_code` here rather than inferring success from an empty `evidence` array alone."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('shape has search_runs and evidence arrays', () => { const b = pm.response.json(); pm.expect(b.search_runs).to.be.an('array'); pm.expect(b.evidence).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/results",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/results",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "9. Push Evidence (POST /requests/{id}/evidence)",
+      "item": [
+        {
+          "name": "Happy path - push evidence Consiva already looked up",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence",
+            "description": "CREATES STATE: inserts a dsr_search_runs row and dsr_evidence rows directly (no connector, no queued job), analyzes them, and advances the case through classified -> evidenced -> planned exactly as a connector-driven search would (dsr_run_service.ingest_pushed_evidence). Requires identity already verified and the case in a status legally able to move to SEARCHING (failed included, specifically so a case stuck on SOURCE_NOT_AUTHORIZED can be recovered this way -- see the route's own docstring, routes/dsr.py:442-459). `client_reference` is the idempotency key: retried with the same value, returns what the first call produced.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_name\": \"crm_export\",\n  \"subject\": {\n    \"email\": \"person@example.com\"\n  },\n  \"tables\": [\n    {\n      \"table_name\": \"customers\",\n      \"match_count\": 1,\n      \"columns\": [\n        \"id\",\n        \"email\",\n        \"full_name\"\n      ],\n      \"identifier_columns\": {\n        \"email\": \"email\"\n      },\n      \"record_key_columns\": [\n        \"id\"\n      ],\n      \"rows\": [\n        {\n          \"id\": \"1\",\n          \"email\": \"person@example.com\",\n          \"full_name\": \"Test Person\"\n        }\n      ],\n      \"truncated\": false\n    }\n  ],\n  \"truncated\": false,\n  \"client_reference\": \"push-demo-001\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('evidence_count matches the pushed row count', () => pm.expect(pm.response.json().evidence_count).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Too large - payload exceeds MAX_PUSH_PAYLOAD_BYTES (10 MiB)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence",
+            "description": "SAFE / no state created. routes/dsr.py:460-465 checks `len(raw)` against evidence_push_service.MAX_PUSH_PAYLOAD_BYTES (10 MiB) BEFORE the body is parsed at all -> EvidenceTooLargeError, 413. This check runs even before the malformed-JSON check below, so an oversized AND malformed body still returns 413, not 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"_note\": \"In a real run, replace this with an actual body >10MiB (e.g. one table with thousands of wide rows) to exercise this path for real -- the byte check runs on the RAW body before any JSON parsing, so even a huge but otherwise-valid body triggers it.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 413 for an oversized body (manual verification needed for a real >10MiB payload)', () => {});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed body - fails EvidencePush validation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence",
+            "description": "SAFE / no state created. `source_name` must contain a letter/digit (empty fails) and `subject` needs at least one of email/phone/reference (PushedSubject._at_least_one) -- both are Pydantic ValueErrors, caught by routes/dsr.py:466-472 and re-raised as RequestValidationError specifically so this shares the exact same 422 envelope every other malformed body on this API gets, distinct from the 413 case above.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_name\": \"\",\n  \"subject\": {},\n  \"tables\": []\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - identity not verified",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence",
+            "description": "Requires a freshly-created case with no identity verification. dsr_run_service.ingest_pushed_evidence applies the same identity gate as the pull-search path -> IdentityRequiredError, 403.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_name\": \"crm_export\",\n  \"subject\": {\n    \"email\": \"person@example.com\"\n  },\n  \"tables\": [\n    {\n      \"table_name\": \"customers\",\n      \"match_count\": 1,\n      \"columns\": [\n        \"id\",\n        \"email\",\n        \"full_name\"\n      ],\n      \"identifier_columns\": {\n        \"email\": \"email\"\n      },\n      \"record_key_columns\": [\n        \"id\"\n      ],\n      \"rows\": [\n        {\n          \"id\": \"1\",\n          \"email\": \"person@example.com\",\n          \"full_name\": \"Test Person\"\n        }\n      ],\n      \"truncated\": false\n    }\n  ],\n  \"truncated\": false,\n  \"client_reference\": \"push-demo-001\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/evidence",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_name\": \"crm_export\",\n  \"subject\": {\n    \"email\": \"person@example.com\"\n  },\n  \"tables\": [\n    {\n      \"table_name\": \"customers\",\n      \"match_count\": 1,\n      \"columns\": [\n        \"id\",\n        \"email\",\n        \"full_name\"\n      ],\n      \"identifier_columns\": {\n        \"email\": \"email\"\n      },\n      \"record_key_columns\": [\n        \"id\"\n      ],\n      \"rows\": [\n        {\n          \"id\": \"1\",\n          \"email\": \"person@example.com\",\n          \"full_name\": \"Test Person\"\n        }\n      ],\n      \"truncated\": false\n    }\n  ],\n  \"truncated\": false,\n  \"client_reference\": \"push-demo-001\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_name\": \"crm_export\",\n  \"subject\": {\n    \"email\": \"person@example.com\"\n  },\n  \"tables\": [\n    {\n      \"table_name\": \"customers\",\n      \"match_count\": 1,\n      \"columns\": [\n        \"id\",\n        \"email\",\n        \"full_name\"\n      ],\n      \"identifier_columns\": {\n        \"email\": \"email\"\n      },\n      \"record_key_columns\": [\n        \"id\"\n      ],\n      \"rows\": [\n        {\n          \"id\": \"1\",\n          \"email\": \"person@example.com\",\n          \"full_name\": \"Test Person\"\n        }\n      ],\n      \"truncated\": false\n    }\n  ],\n  \"truncated\": false,\n  \"client_reference\": \"push-demo-001\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10. Execution Report (POST /requests/{id}/execution-report)",
+      "item": [
+        {
+          "name": "Happy path - report a done action",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execution-report",
+            "description": "MUTATES STATE: records the outcome for the named manifest action, idempotent per action_id (reporting the same id twice returns the first recorded outcome, dsr_run_service.record_execution_report). Once every manifest action has a reported outcome, the case auto-closes to EXECUTION_VERIFIED/FAILED then RESPONSE_PENDING. Requires a push-mode execution manifest already issued via POST /execute.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"action_id\": \"{{actionId}}\",\n      \"status\": \"done\",\n      \"rows_affected\": 1\n    }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('recorded count matches items sent', () => pm.expect(pm.response.json().recorded).to.eql(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - empty items array",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execution-report",
+            "description": "SAFE / no state changed. ExecutionReport.items has min_length=1 (routes/dsr.py:508) -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": []\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - unknown status value",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execution-report",
+            "description": "SAFE / no state changed. ExecutionReportItem._known_status (routes/dsr.py:499-504) only accepts 'done'/'failed'/'skipped' -> 422, unlike Purpose Classifier's analogous free-text `decision` field, which is NOT enum-checked at the Pydantic layer and ends up as a 404 instead (see that collection's documented quirk #7).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"action_id\": \"{{actionId}}\",\n      \"status\": \"maybe\"\n    }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/execution-report",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"items\": [{\"action_id\": \"{{actionId}}\", \"status\": \"done\"}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execution-report",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"items\": [{\"action_id\": \"{{actionId}}\", \"status\": \"done\"}]}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "11. Purge Pushed Evidence (POST /requests/{id}/evidence/purge)",
+      "item": [
+        {
+          "name": "Happy path - terminal case",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence/purge",
+            "description": "MUTATES STATE (deletes encrypted raw push packages; dsr_evidence itself, what the engine actually reasoned over, is untouched): requires the case already be terminal (completed/partially_completed/rejected/cancelled/expired). Idempotent in effect -- purging twice just reports 0 the second time."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('pushes_purged is a number', () => pm.expect(pm.response.json().pushes_purged).to.be.a('number'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lifecycle conflict - case is not terminal yet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence/purge",
+            "description": "Requires a non-terminal case (e.g. still searching/approval_required). routes/dsr.py:560-564 raises CaseNotReadyError (409) explicitly, before calling evidence_push_service.purge."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('detail explains it is not terminal', () => pm.expect(pm.response.json().detail).to.match(/terminal/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/evidence/purge",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence/purge",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "12. Get Plan (GET /requests/{id}/plan)",
+      "item": [
+        {
+          "name": "Happy path - plan exists",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
+            "description": "READ-ONLY, safe to re-run."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - no plan built yet",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
+            "description": "READ-ONLY, safe to re-run. _plan_response (routes/dsr.py:605-619) returns {\"plan\": null, \"actions\": [], \"decisions\": null} rather than 404 when no plan has been built yet -- a documented, deliberate '200 + empty shape' for 'nothing here yet', consistent with how GET /response behaves (folder 18) but worth noting since it differs from how a missing {id} itself is handled (404)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200 even with no plan', () => pm.response.to.have.status(200));",
+                  "pm.test('plan is null, actions is empty, decisions is null', () => { const b = pm.response.json(); pm.expect(b.plan).to.be.null; pm.expect(b.actions).to.eql([]); pm.expect(b.decisions).to.be.null; });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/plan",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "13. Build Plan From Selections (POST /requests/{id}/plan)",
+      "item": [
+        {
+          "name": "Happy path - per-record selections",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
+            "description": "MUTATES STATE: builds (or REBUILDS, superseding any prior plan/approvals) the action plan from the requester's choices and -- if the computed next_status differs from the current one -- transitions the case (routes/dsr.py:622-681), e.g. into APPROVAL_REQUIRED or straight to APPROVED. Requires identity verified and evidenceId naming real evidence on this case.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"selections\": [\n    {\n      \"evidence_id\": \"{{evidenceId}}\",\n      \"action\": \"delete\"\n    }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('plan and actions are returned', () => { const b = pm.response.json(); pm.expect(b.plan).to.not.be.null; pm.expect(b.actions).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - unknown selection action",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
+            "description": "SAFE / no state changed. RecordSelection._known_action (routes/dsr.py:148-153) only accepts case.SELECTIONS ('delete','keep','correct','export','review') -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"selections\": [\n    {\n      \"evidence_id\": \"{{evidenceId}}\",\n      \"action\": \"shred\"\n    }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - evidence_id does not belong to this case",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
+            "description": "SAFE / no state changed. routes/dsr.py:646-653 checks every selection's evidence_id against this case's own evidence and raises CaseNotReadyError (409) -- REJECTED, not silently dropped, because dropping it would build a plan that does not match what the person actually chose.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"selections\": [\n    {\n      \"evidence_id\": \"99999999-9999-9999-9999-999999999999\",\n      \"action\": \"keep\"\n    }\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('detail names the mismatch', () => pm.expect(pm.response.json().detail).to.match(/does not belong/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Identity gate - 403 when identity is not satisfied",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
+            "description": "Requires a case with no identity verification. identity_service.assert_identity_satisfied is checked here too (routes/dsr.py:645) -- records describe evidence, and evidence is only readable once identity is established.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"selections\": []\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/plan",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"selections\": []}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"selections\": []}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "14. Decide Action (POST /requests/{id}/actions/{action_id}/decision)",
+      "item": [
+        {
+          "name": "Happy path - approve a low-risk action (no reason required)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/actions/{{actionId}}/decision",
+            "description": "MUTATES STATE: records the reviewer's decision on this action (approval_service.decide_action) and, once every action in the plan is decided, may auto-transition the case to APPROVED or (if everything was rejected/blocked) RESPONSE_PENDING (routes/dsr.py:693-734, \u00a747: the requester still gets told why nothing happened).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('decision echoed back', () => pm.expect(pm.response.json().decision).to.eql('approved'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - reject with a reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/actions/{{actionId}}/decision",
+            "description": "MUTATES STATE -- see the approve case above for the auto-transition rule.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\",\n  \"reason\": \"Retained under the organisation's billing-records retention rule.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - unknown decision value",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/actions/{{actionId}}/decision",
+            "description": "SAFE / no state changed. Decision._known_decision (routes/dsr.py:165-170) validates against approval_service.DECISIONS -> 422 -- unlike Purpose Classifier's analogous 'maybe' case (folder 7 there), which is a plain `str` field and ends up a 404 instead. DSR is the stricter, more consistent one here.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"maybe\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - action_id does not exist / wrong org",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/actions/99999999-9999-9999-9999-999999999999/decision",
+            "description": "SAFE / no state changed. approval_service.decide_action looks the action up scoped to this case/org -> DsrNotFoundError, 404.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/actions/{{actionId}}/decision",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"decision\": \"approved\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/actions/{{actionId}}/decision",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"decision\": \"approved\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "15. Execute (POST /requests/{id}/execute)",
+      "item": [
+        {
+          "name": "Happy path - connector mode (queued job)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execute",
+            "description": "MUTATES STATE: when at least one runnable action has a registered connector source, enqueues a `dsr_execute` job and writes a dsr.action_started audit entry (routes/dsr.py:739-792). Safe to call twice -- a connector-driven action claims an idempotency key before doing anything, and reissuing is idempotent by construction."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('mode is connector or push', () => pm.expect(['connector','push']).to.include(pm.response.json().mode));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - push mode (manifest returned, nothing executed here)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execute",
+            "description": "When every runnable action came from pushed evidence (data_source_id is None, no connector credential this agent could use), returns an execution manifest for Consiva to carry out and report back via POST /execution-report instead of queuing a job -- see dsr_run_service.issue_execution_manifest's docstring for why execute() must not attempt the erasure itself here."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('push mode returns a manifest array', () => { const b = pm.response.json(); if (b.mode === 'push') pm.expect(b.manifest).to.be.an('array'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lifecycle conflict - case is not APPROVED",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execute",
+            "description": "Requires a case in any status other than approved. routes/dsr.py:759-763 raises CaseNotReadyError (409) explicitly before even reading the plan."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
+                  "pm.test('detail cites an approved plan requirement', () => pm.expect(pm.response.json().detail).to.match(/approved/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/execute",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execute",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "16. List Executions (GET /requests/{id}/executions)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/executions",
+            "description": "READ-ONLY, safe to re-run. `verification_status` and `status` are deliberately separate fields (\u00a723: 'the write ran' vs 'a read-back confirmed it' are different claims)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/executions",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/executions",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "17. Generate Response (POST /requests/{id}/response)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/response",
+            "description": "CREATES STATE: response_service.build_response ALWAYS inserts a brand-new dsr_responses row with an incremented `version` (dsr_repository.next_response_version) -- calling this twice produces TWO response rows, v1 and v2, both retrievable by version even though GET /response only returns the latest. API-INCONSISTENCY, REPORT-ONLY (routes/dsr.py:822, not this agent's editable route): this handler has NO explicit status_code, so FastAPI defaults it to 200 -- yet it creates a new resource exactly the way POST /requests/{id}/evidence does (routes/dsr.py:435), which explicitly sets status_code=201. Two 'this POST creates a new row' endpoints in the same file disagree on 200 vs 201 for no documented reason."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200 (see description for the 200-vs-201 inconsistency with push-evidence)', () => pm.response.to.have.status(200));",
+                  "pm.test('grounded_facts is an array every sentence must trace to', () => pm.expect(pm.response.json().grounded_facts).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/response",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/response",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "18. Get Response (GET /requests/{id}/response)",
+      "item": [
+        {
+          "name": "Happy path - a response exists",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/response",
+            "description": "READ-ONLY, safe to re-run. Returns the LATEST dsr_responses row."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - no response drafted yet",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/response",
+            "description": "READ-ONLY, safe to re-run. Returns bare `null` (not a 404, not an envelope) when no response exists yet -- routes/dsr.py:840-845's declared return type is `dict | None` and FastAPI serialises None as a JSON null body with status 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200 even with nothing drafted', () => pm.response.to.have.status(200));",
+                  "pm.test('body is null', () => pm.expect(pm.response.json()).to.be.null);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/response",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/response",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "19. Complete Case (POST /requests/{id}/complete)",
+      "item": [
+        {
+          "name": "Happy path - fully completed",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/complete",
+            "description": "MUTATES STATE: marks the latest response sent, transitions the case to COMPLETED or PARTIALLY_COMPLETED depending on whether any action was blocked/failed (dsr_run_service.closing_status, \u00a747 -- never claims 'completed' when a record was actually retained), writes dsr.response_sent + dsr.completed/dsr.partially_completed audit entries, and auto-purges any pushed-evidence raw package. Requires RESPONSE_PENDING with a response already generated."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('case is terminal', () => pm.expect(pm.response.json().is_terminal).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - no response generated yet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/complete",
+            "description": "SAFE / no state changed. routes/dsr.py:877-881 raises CaseNotReadyError (409) when dsr_repository.get_latest_response returns None."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/complete",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/complete",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "20. List Source Authorizations (GET /config/sources)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/sources",
+            "description": "READ-ONLY, safe to re-run. Open to any `dsr:operate` caller, not admin-gated (only the PUT below is) -- never returns a credential, only `write_credential_configured: bool`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no credential value leaks', () => { pm.response.json().forEach(a => pm.expect(a).to.not.have.property('write_credential_ref')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/config/sources",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "21. Put Source Authorization (PUT /config/sources)",
+      "item": [
+        {
+          "name": "Happy path - admin replaces a source's authorization",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/sources",
+            "description": "MUTATES STATE: upserts the dsr_source_authorizations row for this data source, validated through connectors/authorization.resolve BEFORE being stored (so a malformed config fails here, not at search time), and writes a dsr.source_authorization_changed audit entry whose `after` payload includes only the write_credential_ref NAME, never a secret. Requires `requires_scope=dsr:config` AND (for a person token) role=admin.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"data_source_id\": \"{{dataSourceId}}\",\n  \"searchable_tables\": [\n    \"customers\"\n  ],\n  \"identity_tables\": [\n    \"customers\"\n  ],\n  \"identifier_columns\": {\n    \"customers\": {\n      \"email\": \"email\"\n    }\n  },\n  \"returnable_columns\": {\n    \"customers\": [\n      \"id\",\n      \"email\",\n      \"full_name\"\n    ]\n  },\n  \"record_key_columns\": {\n    \"customers\": [\n      \"id\"\n    ]\n  },\n  \"erasable_columns\": {\n    \"customers\": [\n      \"full_name\"\n    ]\n  },\n  \"allow_execution\": false,\n  \"write_credential_ref\": null\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin gate - signed-in member, not an admin",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/sources",
+            "description": "Requires a non-admin person's bearer token. _require_admin (routes/dsr.py:939-948) raises CaseNotReadyError (409) -- note this is 409, not 403, for what is really an authorization/role failure; compare to IdentityRequiredError and ApprovalRequiredError elsewhere in this same file, which both correctly use 403 for 'you are not allowed to do this'. Likely worth a closer look (report-only; _require_admin is not this agent's editable route).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"data_source_id\": \"{{dataSourceId}}\",\n  \"searchable_tables\": [],\n  \"identity_tables\": [],\n  \"identifier_columns\": {},\n  \"returnable_columns\": {},\n  \"record_key_columns\": {},\n  \"erasable_columns\": {},\n  \"allow_execution\": false\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409 (documented inconsistency: an authz failure returned as a conflict)', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - data_source_id does not exist / wrong org",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/sources",
+            "description": "SAFE / no state changed. routes/dsr.py:1001-1003 raises DsrNotFoundError (404) when ropa_repository.get_data_source finds nothing in this org.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"data_source_id\": \"99999999-9999-9999-9999-999999999999\",\n  \"searchable_tables\": [],\n  \"identity_tables\": [],\n  \"identifier_columns\": {},\n  \"returnable_columns\": {},\n  \"record_key_columns\": {},\n  \"erasable_columns\": {},\n  \"allow_execution\": false\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - write_credential_ref looks like a secret, not a name",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/sources",
+            "description": "SAFE / no state changed. SourceAuthorizationIn._looks_like_a_ref (routes/dsr.py:104-112) rejects anything that isn't alnum/underscore -> 422 (this is the guard that stops an operator pasting the actual secret into this field by mistake).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"data_source_id\": \"{{dataSourceId}}\",\n  \"searchable_tables\": [],\n  \"identity_tables\": [],\n  \"identifier_columns\": {},\n  \"returnable_columns\": {},\n  \"record_key_columns\": {},\n  \"erasable_columns\": {},\n  \"allow_execution\": false,\n  \"write_credential_ref\": \"not an env var name!\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/sources",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"data_source_id\": \"{{dataSourceId}}\", \"searchable_tables\": [], \"identity_tables\": [], \"identifier_columns\": {}, \"returnable_columns\": {}, \"record_key_columns\": {}, \"erasable_columns\": {}, \"allow_execution\": false}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "22. List Retention Rules (GET /config/retention)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention",
+            "description": "READ-ONLY, safe to re-run. Open to any dsr:operate caller."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "23. Put Retention Rule (PUT /config/retention)",
+      "item": [
+        {
+          "name": "Happy path - organisation-wide rule",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention",
+            "description": "MUTATES STATE: upserts a dsr_retention_rules row and writes a dsr.retention_rule_changed audit entry. `authority` is mandatory (min_length=3) -- a retention block with no attributable legal source is exactly the unattributable claim the engine refuses to make.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table_name\": \"invoices\",\n  \"date_column\": \"issued_at\",\n  \"retention_days\": 2555,\n  \"authority\": \"Income Tax Act, 1961 s.44AA record-keeping requirement\",\n  \"applies_to_operations\": [\n    \"delete_record\"\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - authority missing",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention",
+            "description": "SAFE / no state changed. `authority` is required, min_length=3 (routes/dsr.py:122) -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table_name\": \"invoices\",\n  \"date_column\": \"issued_at\",\n  \"retention_days\": 2555\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - applies_to_operations names a non-mutating operation",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention",
+            "description": "SAFE / no state changed. RetentionRuleIn._known_operations (routes/dsr.py:127-136) only accepts case.MUTATING_OPERATIONS ('update_field','anonymize_field','delete_record') -- a retention rule cannot restrict a read-only disclosure -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table_name\": \"invoices\",\n  \"date_column\": \"issued_at\",\n  \"retention_days\": 30,\n  \"authority\": \"test\",\n  \"applies_to_operations\": [\n    \"disclose\"\n  ]\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - retention_days out of range",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention",
+            "description": "SAFE / no state changed. `retention_days` has gt=0 (routes/dsr.py:121) -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table_name\": \"invoices\",\n  \"date_column\": \"issued_at\",\n  \"retention_days\": 0,\n  \"authority\": \"test\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin gate - signed-in member, not an admin",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention",
+            "description": "Requires a non-admin person's bearer token. Same _require_admin path as folder 21 -> 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table_name\": \"invoices\",\n  \"date_column\": \"issued_at\",\n  \"retention_days\": 30,\n  \"authority\": \"test\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"table_name\": \"invoices\", \"date_column\": \"issued_at\", \"retention_days\": 30, \"authority\": \"test\"}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "24. Disable Retention Rule (DELETE /config/retention/{rule_id})",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention/{{retentionRuleId}}",
+            "description": "MUTATES STATE: DISABLES (enabled=false), never deletes the row -- a rule that blocked an erasure in the past is part of why that case ended as it did, and the audit trail still refers to it by id. Writes a dsr.retention_rule_disabled audit entry."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('enabled is now false', () => pm.expect(pm.response.json().enabled).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - rule_id does not exist / wrong org",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention/99999999-9999-9999-9999-999999999999",
+            "description": "SAFE / no state changed. dsr_repository.delete_retention_rule returns false for a row outside this org or missing entirely -> DsrNotFoundError, 404 (same non-disclosure shape as case lookups)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Admin gate - signed-in member, not an admin",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention/{{retentionRuleId}}",
+            "description": "Requires a non-admin person's bearer token -> 409, same _require_admin path."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/config/retention/{{retentionRuleId}}",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "25. Case Audit Timeline (GET /requests/{id}/audit)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/audit",
+            "description": "READ-ONLY, safe to re-run. Read from the SHARED append-only audit_logs table, filtered by (org_id, entity_type='dsr_request', entity_id=request_id) -- dsr_repository.list_case_audit (db/repositories/dsr_repository.py:714-730). Reviewed this route and its repository call for this agent's audit: both are correctly org- and entity-scoped, and every spot-checked audit_service.record(...after=...) call across the DSR services stores only ids/booleans/status strings/table-column NAMES -- never a connector credential, write_credential_ref's actual secret, or a raw record_snapshot/PII value. No bug found in this specific route; see this agent's report for the two audit-trail GAPS found elsewhere (identity-verification failures, and the never-recorded AUDIT_RESULTS_FOUND constant) -- both outside this route and reported, not fixed, per this agent's lane."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array of audit entries', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "pm.test('entries never carry a credential-shaped key', () => {",
+                  "  const rows = pm.response.json();",
+                  "  rows.forEach(r => {",
+                  "    const after = JSON.stringify(r.after || {});",
+                  "    pm.expect(after).to.not.match(/password|dsn|auth_header/i);",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{foreignRequestId}}/audit",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the case id in the path belongs to a different org than the caller's token. Every DSR route resolves the {request_id} path param through case_service.get_case_or_raise (routes/dsr.py), which queries dsr_repository.get_request(db, request_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise DsrNotFoundError -> 404, never 403. This is the same IDOR-closing non-disclosure pattern documented at the top of routes/dsr.py (\u00a737) and is consistent across every one of the 19 routes keyed by {request_id}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/audit",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

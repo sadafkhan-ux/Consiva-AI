@@ -91,6 +91,10 @@ export function DsrDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Distinct from `cases.length === 0`: without this, the very first render --
+  // before loadCases() has even resolved once -- is indistinguishable from a
+  // genuinely empty list and shows "No DSR cases yet." while still loading.
+  const [casesLoading, setCasesLoading] = useState(true);
 
   // Intake form
   const [rawRequest, setRawRequest] = useState("");
@@ -109,6 +113,8 @@ export function DsrDashboard() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load cases.");
+    } finally {
+      setCasesLoading(false);
     }
   }, []);
 
@@ -279,8 +285,9 @@ export function DsrDashboard() {
               ))}
             </select>
           </div>
-          {cases.length === 0 && <p className="muted">No DSR cases yet.</p>}
-          {cases.length > 0 && filteredCases.length === 0 && (
+          {casesLoading && <p className="muted">Loading cases…</p>}
+          {!casesLoading && cases.length === 0 && <p className="muted">No DSR cases yet.</p>}
+          {!casesLoading && cases.length > 0 && filteredCases.length === 0 && (
             <p className="muted">No case matches this search.</p>
           )}
           <ul>
@@ -400,7 +407,12 @@ export function DsrDashboard() {
             </nav>
 
             {tab === "evidence" && (
-              <EvidenceTab runs={searchRuns} evidence={evidence} />
+              <EvidenceTab
+                runs={searchRuns}
+                evidence={evidence}
+                caseStatus={selected.status}
+                errorCode={selected.error_code}
+              />
             )}
             {tab === "plan" && (
               <PlanTab
@@ -429,7 +441,47 @@ export function DsrDashboard() {
   );
 }
 
-function EvidenceTab({ runs, evidence }: { runs: DsrSearchRun[]; evidence: DsrEvidence[] }) {
+/** The evidence-empty message must never read like a successful zero-match search
+ *  when the case's own search actually failed to run at all -- "no records found"
+ *  and "the search errored out" are different claims, and conflating them is how an
+ *  operator ends up telling a requester "you have no data" when the truth is "we
+ *  never managed to check" (§47's same principle, applied to this screen). */
+function evidenceEmptyMessage(
+  runs: DsrSearchRun[],
+  caseStatus: string,
+  errorCode: string | null,
+): { text: string; tone: "muted" | "warn" } | null {
+  if (runs.length === 0) {
+    // The Searches table above already says "No search has run yet." -- repeating
+    // the identical sentence here would be noise, not a second distinct state.
+    return null;
+  }
+  if (caseStatus === "failed") {
+    return {
+      text:
+        `The search did not complete -- it failed with ${errorCode ?? "an unrecorded error"}. ` +
+        "This is not the same as finding no data: see the error above, resolve it, and retry the search.",
+      tone: "warn",
+    };
+  }
+  return {
+    text: "No records matched. The search completed and found no data for this person in the systems searched.",
+    tone: "muted",
+  };
+}
+
+function EvidenceTab({
+  runs,
+  evidence,
+  caseStatus,
+  errorCode,
+}: {
+  runs: DsrSearchRun[];
+  evidence: DsrEvidence[];
+  caseStatus: string;
+  errorCode: string | null;
+}) {
+  const emptyMessage = evidenceEmptyMessage(runs, caseStatus, errorCode);
   return (
     <>
       <h3>Searches</h3>
@@ -455,7 +507,9 @@ function EvidenceTab({ runs, evidence }: { runs: DsrSearchRun[]; evidence: DsrEv
       </table>
 
       <h3>Evidence ({evidence.length})</h3>
-      {evidence.length === 0 && <p className="muted">No records matched.</p>}
+      {evidence.length === 0 && emptyMessage && (
+        <p className={emptyMessage.tone === "warn" ? "banner banner-warn" : "muted"}>{emptyMessage.text}</p>
+      )}
       <table className="data">
         <thead>
           <tr><th>Where</th><th>Matched on</th><th>Type</th><th>Record</th><th>Data held</th></tr>

@@ -192,6 +192,7 @@ def _compose(request: DsrRequest, evidence, runs, executions, actions) -> str:
     ]
     failed_exec = [e for e in executions if e.status == "failed"]
     blocked = [a for a in actions if a.status == "blocked"]
+    rejected = [a for a in actions if a.status == "rejected"]
 
     if verified:
         total_rows = sum(e.rows_affected or 0 for e in verified)
@@ -221,6 +222,18 @@ def _compose(request: DsrRequest, evidence, runs, executions, actions) -> str:
             f"{len(failed_exec)} action(s) did not complete successfully "
             f"({', '.join(sorted({e.error_code or 'unknown' for e in failed_exec}))}). "
             "These are being followed up and you will receive a further update."
+        )
+
+    if rejected:
+        # Deliberately generic, not the reviewer's `DsrApproval.reason` -- that text is
+        # written for the audit trail by an internal reviewer and was never vetted as
+        # requester-facing, the same distinction this function already keeps between
+        # `blocked_reason` (reviewer) and `requester_explanation` (requester) above.
+        lines.append("")
+        lines.append(
+            f"{len(rejected)} record(s) were reviewed and were NOT changed. A member of "
+            "our team made this decision after reviewing your request; contact us if "
+            "you would like more detail."
         )
 
     return "\n".join(lines)

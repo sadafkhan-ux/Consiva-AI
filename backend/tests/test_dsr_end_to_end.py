@@ -835,15 +835,20 @@ async def test_ambiguous_intent_is_recorded_as_other_with_zero_confidence(world)
 async def test_other_classified_case_never_executes_a_mutating_operation(world, monkeypatch):
     """§47 / the one place a real defect could still be hiding: an unclassifiable
     request (OTHER, confidence 0.0) must never reach a destructive write without a
-    human first overriding the classification via classify_case(override_type=...).
+    human first overriding the classification via classify_case(override_type=...),
+    AND must never close looking "handled" without a human having looked at it at all
+    -- even when the mapped operation (OP_NO_OP) is itself harmless.
 
     The planner maps an unmapped request_type to OP_NO_OP (never a key in
-    _OPERATION_FOR_TYPE), OP_NO_OP is not a MUTATING_OPERATION so it never requires
-    approval, and the case is therefore free to sail straight through to EXECUTING
-    -- but what it hands the connector is an operation the real PostgresDsrConnector
-    refuses to touch the database for at all (see
-    connectors/postgres.py::execute_action). This proves that chain holds together
-    end to end, recording what each action's connector call actually carried."""
+    _OPERATION_FOR_TYPE). OP_NO_OP is not a MUTATING_OPERATION, so on its own it would
+    never require approval -- but request_type == OTHER is ITSELF now also a
+    needs_approval trigger (planning_service.py's `needs_approval` tuple), precisely
+    because "nothing destructive to approve" is not the same thing as "nobody needs to
+    look at this". That forces every OTHER-classified case through APPROVAL_REQUIRED,
+    never straight to APPROVED, regardless of how harmless its mapped operation is.
+    This also proves the connector-level backstop still holds even past that gate:
+    what reaches the connector is an operation the real PostgresDsrConnector refuses to
+    touch the database for at all (see connectors/postgres.py::execute_action)."""
     calls: list[dict] = []
 
     class RecordingConnector(FakeConnector):
@@ -864,13 +869,22 @@ async def test_other_classified_case_never_executes_a_mutating_operation(world, 
 
     assert actions, "the record found must still produce an action, never a silent drop"
     assert all(a.operation == case.OP_NO_OP for a in actions)
-    assert not plan.requires_approval
-    assert not any(a.requires_approval for a in actions)
+    assert plan.requires_approval, (
+        "an unclassified request must stop for a human even though its operation is a no-op"
+    )
+    assert all(a.requires_approval for a in actions)
 
     from app.services import dsr_run_service
 
     next_status = dsr_run_service.next_status_after_planning(plan, actions)
+    assert next_status == case.APPROVAL_REQUIRED
     await case_service.transition(FakeDB(), request, next_status, actor_user_id=USER)
+
+    await approval_service.decide_action(
+        FakeDB(), request, actions[0].id, reviewer_user_id=USER,
+        decision="approved", reason="reviewed: a genuine no-op, safe to close", now=NOW,
+    )
+    await case_service.transition(FakeDB(), request, case.APPROVED, actor_user_id=USER)
     await case_service.transition(FakeDB(), request, case.EXECUTING, actor_user_id=USER)
 
     for action in actions:
@@ -1035,3 +1049,49 @@ async def test_scenario_3b_partial_deletion_reports_both_halves(world, monkeypat
                                   error_detail="1 record retained under a policy")
     assert request.status == case.PARTIALLY_COMPLETED
     assert lifecycle.is_terminal(request.status)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_action_is_not_silently_omitted_from_the_requesters_response(world, monkeypatch):
+    """A reviewer declining to act on a record is a deliberate non-change, the same
+    as a constraint block -- the requester-facing response must say so, not just
+    stay silent about that record the way it used to (response_service._compose had
+    no branch at all for action.status == "rejected", so a declined record simply
+    never appeared in the generated text)."""
+    from app.agents.dsr.connectors import factory
+
+    _use_connector(monkeypatch, FakeConnector(matches=[match(), match("orders", 11)]))
+    request = await _open_case("Delete my personal information.")
+    await _verify(request)
+    await _search(request)
+
+    grants = {DATA_SOURCE.name: factory.build_grant(AUTHORIZATION, source_name=DATA_SOURCE.name)}
+    _, actions = await planning_service.build_plan(FakeDB(), request, grants=grants)
+    assert len(actions) == 2
+
+    await case_service.transition(FakeDB(), request, case.APPROVAL_REQUIRED)
+    await approval_service.decide_action(
+        FakeDB(), request, actions[0].id, reviewer_user_id=USER,
+        decision="approved", reason="identity confirmed", now=NOW,
+    )
+    await approval_service.decide_action(
+        FakeDB(), request, actions[1].id, reviewer_user_id=USER,
+        decision="rejected", reason="requester withdrew this part by phone", now=NOW,
+    )
+    await case_service.transition(FakeDB(), request, case.APPROVED)
+    await case_service.transition(FakeDB(), request, case.EXECUTING)
+    await execution_service.execute_action(FakeDB(), request, actions[0].id, now=NOW)
+
+    from app.services import dsr_run_service
+
+    # A rejected action folds into `blocked` for this accounting, per
+    # closing_status's own documented contract -- a reviewer declining to act is a
+    # deliberate non-change, exactly like a constraint block.
+    status, code = dsr_run_service.status_after_execution(succeeded=1, failed=0, blocked=1)
+    await case_service.transition(FakeDB(), request, status, error_code=code)
+    await case_service.transition(FakeDB(), request, case.RESPONSE_PENDING, error_code=code)
+    response = await response_service.build_response(FakeDB(), request)
+
+    assert "1 record(s) were reviewed and were NOT changed" in response.body_text
+    # The reviewer's internal rejection reason is not the requester-facing text.
+    assert "requester withdrew this part by phone" not in response.body_text

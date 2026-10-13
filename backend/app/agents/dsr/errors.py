@@ -95,6 +95,16 @@ class ApprovalRequiredError(DsrError):
     code = case.ERR_APPROVAL_REQUIRED
 
 
+class AdminRequiredError(DsrError):
+    """A config-changing route was called by a person token without the admin role.
+    This is a permission failure, not a case-state one -- distinct from
+    CaseNotReadyError (409, a precondition about THIS case), which this used to be
+    raised as, incorrectly: changing who an agent is allowed to search/write isn't
+    blocked on any case's state, it's blocked on who is asking."""
+
+    status_code = 403
+
+
 class ActionBlockedError(DsrError):
     status_code = 409
     code = case.ERR_ACTION_BLOCKED

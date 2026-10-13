@@ -201,6 +201,13 @@ def _plan_one(
         intended in case.MUTATING_OPERATIONS
         or effect == rules.EFFECT_REVIEW
         or (selection in case.SELECTIONS_REQUIRING_REVIEW)
+        # An unclassified/ambiguous request (OTHER, confidence 0.0) must never close
+        # looking "handled" with nobody having looked at it -- even though its mapped
+        # operation (no_op) is harmless, request_type == OTHER is itself the signal
+        # that nobody actually decided what this request is, which is a human decision
+        # this flow must not skip just because there happens to be nothing destructive
+        # to approve.
+        or request.request_type == case.OTHER
     )
     return (
         _action(

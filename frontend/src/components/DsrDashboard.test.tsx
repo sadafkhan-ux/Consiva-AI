@@ -68,6 +68,30 @@ describe("DsrDashboard: case list", () => {
     expect(fetchMock).toHaveBeenCalledWith(`${BASE_URL}/api/v1/dsr/requests`, expect.anything());
   });
 
+  it("shows a loading indicator before the first fetch resolves, distinct from the empty state", async () => {
+    let resolveFetch!: (value: unknown) => void;
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/dsr/requests")) {
+        return new Promise((resolve) => {
+          resolveFetch = resolve;
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DsrDashboard />);
+
+    // Before the list call resolves, the screen must say "loading", never the
+    // same empty-list message a genuinely empty org would see.
+    expect(screen.getByText("Loading cases…")).toBeInTheDocument();
+    expect(screen.queryByText("No DSR cases yet.")).not.toBeInTheDocument();
+
+    resolveFetch(jsonResponse([]));
+    await waitFor(() => expect(screen.getByText("No DSR cases yet.")).toBeInTheDocument());
+    expect(screen.queryByText("Loading cases…")).not.toBeInTheDocument();
+  });
+
   it("shows an empty state and no case rows when there are no cases", async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url.endsWith("/api/v1/dsr/requests")) return Promise.resolve(jsonResponse([]));
@@ -179,6 +203,72 @@ describe("DsrDashboard: case detail", () => {
     );
     expect(promptSpy).toHaveBeenCalledWith("Read this code to the requester.", "123456");
     await waitFor(() => expect(screen.getByText("Identity challenge issued.")).toBeInTheDocument());
+  });
+});
+
+describe("DsrDashboard: evidence tab reflects actual search outcome, not just evidence count", () => {
+  async function renderCaseWithResults(
+    caseOverrides: Partial<DsrCase>,
+    results: { search_runs: DsrSearchRun[]; evidence: DsrEvidence[] },
+  ) {
+    const CASE = makeCase(caseOverrides);
+    const fetchMock = vi.fn((url: string) => {
+      if (url.endsWith("/api/v1/dsr/requests")) return Promise.resolve(jsonResponse([CASE]));
+      if (url.endsWith(`/api/v1/dsr/requests/${CASE.id}`)) return Promise.resolve(jsonResponse(CASE));
+      if (url.endsWith(`/api/v1/dsr/requests/${CASE.id}/results`)) return Promise.resolve(jsonResponse(results));
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<DsrDashboard />);
+    await waitFor(() => expect(screen.getByText("DSR-0001")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /DSR-0001/ }));
+    await waitFor(() => expect(screen.getByText(/^Evidence \(/)).toBeInTheDocument());
+  }
+
+  it("not yet searched: says no search has run, never 'no records matched'", async () => {
+    await renderCaseWithResults(
+      { status: "identity_verified", error_code: null, allowed_transitions: ["searching"] },
+      { search_runs: [], evidence: [] },
+    );
+    expect(screen.getByText("No search has run yet.")).toBeInTheDocument();
+    expect(screen.queryByText(/No records matched/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/did not complete/)).not.toBeInTheDocument();
+  });
+
+  it("genuine zero-match: a completed search says so, distinctly from a failure", async () => {
+    const RUN: DsrSearchRun = {
+      id: "run-1", source: "crm", status: "completed", matches: 0, distinct_subjects: 0,
+      tables_searched: ["customers"], error_code: null, error_detail: null,
+      completed_at: "2026-01-01T00:05:00+00:00",
+    };
+    await renderCaseWithResults(
+      { status: "search_completed", error_code: null, allowed_transitions: ["response_pending"] },
+      { search_runs: [RUN], evidence: [] },
+    );
+    expect(
+      screen.getByText(
+        "No records matched. The search completed and found no data for this person in the systems searched.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/did not complete/)).not.toBeInTheDocument();
+  });
+
+  it("failed search: says the search errored out, never the zero-match wording", async () => {
+    const RUN: DsrSearchRun = {
+      id: "run-1", source: "crm", status: "failed", matches: 0, distinct_subjects: 0,
+      tables_searched: [], error_code: "SOURCE_NOT_AUTHORIZED", error_detail: "no authorized source",
+      completed_at: "2026-01-01T00:05:00+00:00",
+    };
+    await renderCaseWithResults(
+      {
+        status: "failed", error_code: "SOURCE_NOT_AUTHORIZED", error_detail: "no authorized source",
+        allowed_transitions: ["searching"],
+      },
+      { search_runs: [RUN], evidence: [] },
+    );
+    expect(screen.getByText(/The search did not complete -- it failed with SOURCE_NOT_AUTHORIZED/)).toBeInTheDocument();
+    expect(screen.queryByText(/^No records matched\./)).not.toBeInTheDocument();
   });
 });
 

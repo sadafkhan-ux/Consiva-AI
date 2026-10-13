@@ -335,7 +335,22 @@ export function DsrEmailFirst() {
                 {r.error_code && <> · <span className="pill pill-warn">{r.error_code}</span> {r.error_detail}</>}
               </p>
             ))}
-            {evidence.length === 0 && (
+            {evidence.length === 0 && kase?.status === "failed" && (
+              <>
+                <p className="banner banner-warn">
+                  The search did not complete -- it failed with{" "}
+                  {kase.error_code ?? "an unrecorded error"}
+                  {kase.error_detail ? `: ${kase.error_detail}` : ""}. This is not the same as
+                  finding no data; resolve the error above and start the search again.
+                </p>
+                <div className="dsr-actions">
+                  <button disabled={busy} onClick={() => kase && startSearch(kase.id)}>
+                    Retry search
+                  </button>
+                </div>
+              </>
+            )}
+            {evidence.length === 0 && kase?.status !== "failed" && (
               <p className="muted">
                 No record matched that email in the systems we searched. Nothing will be changed.
               </p>

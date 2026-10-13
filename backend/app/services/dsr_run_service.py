@@ -124,6 +124,24 @@ async def execute_queued_actions(request_id: uuid.UUID, org_id: uuid.UUID, job_i
     """
     async with async_session_factory() as db:
         request = await case_service.get_case_or_raise(db, request_id, org_id)
+        if request.status not in (case.APPROVED, case.EXECUTING):
+            # A duplicate/stale `dsr_execute` job: POST /execute's connector path
+            # enqueues a job without itself moving the case out of APPROVED (see
+            # its docstring), so a route-level retry before this worker runs can
+            # leave two jobs queued for the same case. By the time the second one
+            # is dequeued, the first has already carried the case past EXECUTING
+            # (to EXECUTION_VERIFIED/RESPONSE_PENDING, or FAILED). Nothing is left
+            # to execute and nothing ought to be re-done -- the actions themselves
+            # are protected by execution_service's idempotency-key claim either
+            # way -- so this is a silent no-op rather than a crash on an illegal
+            # state transition (lifecycle only allows EXECUTING -> ... from
+            # APPROVED/EXECUTING, never from RESPONSE_PENDING or FAILED).
+            logger.info(
+                "DSR execute job for case %s arrived while the case was already %s; "
+                "nothing left to execute, treating this job as a no-op",
+                request.reference, request.status,
+            )
+            return
         plan = await dsr_repository.get_current_plan(db, request.id, request.org_id)
         if plan is None:
             await case_service.transition(
@@ -171,7 +189,11 @@ async def execute_queued_actions(request_id: uuid.UUID, org_id: uuid.UUID, job_i
                     "DSR action %s failed for case %s: %s", action.id, request.reference, exc.code
                 )
 
-        blocked = sum(1 for a in actions if a.status == "blocked")
+        # A reviewer's rejection ("rejected") is as much "this was not done" as a
+        # constraint block -- both leave the record unchanged on purpose. Counting
+        # only "blocked" here would let a plan with one approved-and-executed action
+        # and one rejected action report as a clean, non-partial EXECUTION_VERIFIED.
+        blocked = sum(1 for a in actions if a.status in ("blocked", "rejected"))
         if failed or blocked:
             plan.status = "partially_executed"
         elif succeeded:
@@ -225,9 +247,12 @@ def closing_status(*, blocked: int, failed: int) -> str:
     """COMPLETED or PARTIALLY_COMPLETED.
 
     Telling a requester their case is "completed" when one of their records was
-    retained under a policy, or when an action failed, is telling them something
-    untrue about their own data. Both statuses are terminal; only one of them claims
-    everything was done.
+    retained under a policy, rejected by a reviewer, or when an action failed, is
+    telling them something untrue about their own data. Both statuses are terminal;
+    only one of them claims everything was done. Callers are expected to fold a
+    reviewer's "rejected" action decisions into `blocked` -- a reviewer declining to
+    act on a record is a deliberate non-change, exactly like a constraint block, and
+    must not be invisible to this check.
     """
     return case.PARTIALLY_COMPLETED if (blocked or failed) else case.COMPLETED
 
@@ -311,6 +336,18 @@ def _search_detail(summary) -> str | None:
         return f"no record found; {len(summary.sources_failed)} source(s) could not be searched"
     if not summary.found_anything:
         return "no record matched the supplied identifiers in any authorized source"
+    if summary.sources_failed:
+        # Mirrors SearchSummary.outcome_code's own ordering: a source failing is
+        # never folded into a clean result just because another source found
+        # something. Without this branch, a case with evidence from one source and
+        # a failure in another carried error_code=SEARCH_FAILED (outcome_code
+        # already accounts for this) but error_detail=None -- an inconsistent,
+        # self-contradicting pairing that told a reviewer reading only the detail
+        # text that nothing was wrong.
+        return (
+            f"{len(summary.sources_searched)} source(s) searched successfully; "
+            f"{len(summary.sources_failed)} source(s) could not be searched"
+        )
     return None
 
 
@@ -593,7 +630,13 @@ async def record_execution_report(
     if not pending:
         succeeded = sum(1 for a in actions_by_id.values() if a.status == "executed")
         failed = sum(1 for a in actions_by_id.values() if a.status == "failed")
-        blocked = sum(1 for a in actions_by_id.values() if a.status in ("blocked", "skipped"))
+        # "rejected" (a reviewer declined the action before it ever reached the
+        # manifest) counts the same as "blocked"/"skipped" here -- all three mean the
+        # record was deliberately left unchanged, and excluding "rejected" would let
+        # this path close a case as a clean EXECUTION_VERIFIED despite one.
+        blocked = sum(
+            1 for a in actions_by_id.values() if a.status in ("blocked", "skipped", "rejected")
+        )
         if succeeded or failed or blocked:
             closed = True
             plan.status = (
