@@ -28,6 +28,32 @@ def _is_blocked_ip(ip_str: str) -> bool:
     )
 
 
+async def assert_safe_host(hostname: str) -> list[str]:
+    """The scheme-agnostic half of the guard: resolves `hostname` and rejects it if any
+    resolved address is private/loopback/link-local/etc. Shared by `assert_safe_url`
+    (HTTP(S) fetches) and by any other outbound connection that is caller-supplied but
+    doesn't have a URL to parse a scheme from -- e.g. a database DSN.
+
+    Async for the same reason as `assert_safe_url`: the DNS lookup runs on asyncio's
+    own resolver thread pool (`loop.getaddrinfo`) rather than blocking the event loop.
+    """
+    try:
+        addr_infos = await asyncio.get_running_loop().getaddrinfo(hostname, None)
+    except socket.gaierror as exc:
+        raise ScanAuthorizationError(f"Could not resolve hostname: {hostname}") from exc
+
+    safe_ips = []
+    for _family, _type, _proto, _canonname, sockaddr in addr_infos:
+        ip = sockaddr[0]
+        if _is_blocked_ip(ip):
+            raise ScanAuthorizationError(
+                f"Host {hostname!r} resolves to a disallowed address ({ip}) — private, "
+                "loopback, link-local, and other internal ranges cannot be reached."
+            )
+        safe_ips.append(ip)
+    return safe_ips
+
+
 async def assert_safe_url(url: str) -> list[str]:
     """Async so the DNS lookup below runs on asyncio's own resolver thread pool
     (`loop.getaddrinfo`) instead of blocking the event loop -- this is called from
@@ -46,18 +72,4 @@ async def assert_safe_url(url: str) -> list[str]:
     if not parsed.hostname:
         raise ScanAuthorizationError(f"URL has no hostname: {url}")
 
-    try:
-        addr_infos = await asyncio.get_running_loop().getaddrinfo(parsed.hostname, None)
-    except socket.gaierror as exc:
-        raise ScanAuthorizationError(f"Could not resolve hostname: {parsed.hostname}") from exc
-
-    safe_ips = []
-    for _family, _type, _proto, _canonname, sockaddr in addr_infos:
-        ip = sockaddr[0]
-        if _is_blocked_ip(ip):
-            raise ScanAuthorizationError(
-                f"URL {url!r} resolves to a disallowed address ({ip}) — private, loopback, "
-                "link-local, and other internal ranges cannot be scanned."
-            )
-        safe_ips.append(ip)
-    return safe_ips
+    return await assert_safe_host(parsed.hostname)

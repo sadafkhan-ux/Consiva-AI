@@ -24,8 +24,12 @@ import csv
 import io
 import re
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import asyncpg
+
+from app.core.exceptions import ConsivaError
+from app.scanner.url_safety import assert_safe_host
 
 # Schemas that describe the database itself rather than the organisation's data.
 _SYSTEM_SCHEMAS = ("pg_catalog", "information_schema", "pg_toast")
@@ -88,6 +92,21 @@ async def read_postgres(dsn: str, *, source_name: str) -> StructuredSchema:
     """
     if not dsn or not dsn.strip():
         raise ConnectorError("No connection string was supplied.")
+
+    # The same guard rest.read_openapi uses before fetching a caller-supplied URL: a
+    # DSN here is equally caller-supplied, and without this check this "schema
+    # discovery" feature is a working SSRF / internal-network-reconnaissance primitive
+    # -- it would dial any host asyncpg can reach, including this platform's own
+    # Docker-Compose-internal services, and the connection error (refused / timed out
+    # / wrong protocol) is persisted on the run record and readable by the requesting
+    # org via GET /api/v1/purpose/assessments/{run_id}.
+    hostname = urlparse(dsn.strip()).hostname
+    if not hostname:
+        raise ConnectorError("The connection string has no resolvable host.")
+    try:
+        await assert_safe_host(hostname)
+    except ConsivaError as exc:
+        raise ConnectorError(f"That connection string cannot be used: {_safe(exc)}") from None
 
     try:
         conn = await asyncpg.connect(dsn, timeout=15)

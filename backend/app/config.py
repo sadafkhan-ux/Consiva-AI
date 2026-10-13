@@ -120,6 +120,12 @@ class Settings(BaseSettings):
     scanner_timeout_seconds: int = 30
     scanner_user_agent: str = "ConsivaConsentAgent/0.1"
     scanner_max_scans_per_org_per_day: int = 50
+    # Purpose Classifier (Agent 6): an assessment request can carry a caller-supplied
+    # DSN/spec URL/CSV body that the worker will act on -- unbounded submissions let
+    # one org occupy every slot in the single shared worker pool (jobs/worker.py's
+    # fixed WORKER_CONCURRENCY) with requests that are slow to fail rather than
+    # queued. Same shape of problem as the scanner's own rate limit above.
+    purpose_max_assessments_per_org_per_day: int = 100
     # Bounded concurrent page fetching for the pre_consent crawl (moved here from a
     # hardcoded crawler.py constant so ops can tune it per deployment without a code
     # change). Default of 4 is the value already measured live against a real 25-page

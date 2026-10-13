@@ -100,6 +100,37 @@ def test_free_text_hints_are_low_confidence_and_not_comparable():
     assert not mapping.comparable
 
 
+def test_mapping_comparable_boundary_is_inclusive_of_0_7():
+    """0.7 is the stated floor. The check must be `>=`, not `>`, or a mapping that
+    rests on a known phrase at exactly the floor would be wrongly excluded."""
+    assert reconciliation.Mapping("marketing", 0.7, "boundary").comparable is True
+
+
+def test_mapping_just_below_0_7_is_not_comparable():
+    assert reconciliation.Mapping("marketing", 0.69, "just under").comparable is False
+
+
+def test_a_multi_purpose_string_does_not_get_silently_split():
+    """"Marketing and analytics" carries a substring hint for both codes. The mapping
+    must not quietly pick one -- it is a hint-level match whichever hint wins, so it
+    stays below the comparable floor either way."""
+    mapping = reconciliation.to_taxonomy("marketing and analytics")
+    assert not mapping.comparable
+
+
+def test_a_multi_purpose_declaration_cannot_produce_a_mismatch():
+    alignment, _, _ = reconciliation.compare("marketing and analytics", "analytics")
+    assert alignment == reconciliation.UNDETERMINED
+
+
+@pytest.mark.parametrize("typo", ["Markting Communications", "Analtyics", "Advertizing"])
+def test_a_typo_in_a_known_business_purpose_is_not_guessed(typo):
+    """A near-miss on a known phrase gets no special-cased fuzzy match -- it is just
+    another unmapped string, exactly like a purpose nobody has ever written down."""
+    mapping = reconciliation.to_taxonomy(typo)
+    assert not mapping.comparable
+
+
 # ── Comparison: mismatch only when both sides are solid ─────────────────────────
 
 def test_the_same_purpose_in_two_vocabularies_is_aligned_not_a_mismatch():
@@ -198,6 +229,29 @@ def test_every_high_severity_finding_requires_review():
     assert comparison_service.assess(item, {}, None).finding.review_required is True
 
 
+def test_a_subject_seen_in_both_pre_and_post_consent_states_still_violates():
+    """Occurrences grouped across passes can carry more than one state. The presence
+    of ANY unconsented state is enough -- it must not be diluted by a later, separate
+    accepted state on the same merged entry."""
+    item = _observed(purpose="marketing", consent_states=["pre_consent", "post_accept"])
+    result = comparison_service.assess(item, {}, consent_obtained=True)
+    assert result.finding.finding_type == comparison_service.WITHOUT_CONSENT
+
+
+def test_a_genuine_mismatch_with_proper_consent_is_reported_as_mismatch_not_a_violation():
+    """The severity ordering the other way around: with consent fine, a real
+    declared/observed disagreement surfaces as the mismatch it is, never inflated
+    into a consent violation that never happened."""
+    item = _observed(purpose="marketing", consent_states=["post_accept"])
+    result = comparison_service.assess(
+        item, {"ads.example.com": _declared("Customer Account Management")},
+        consent_obtained=True,
+    )
+    assert result.alignment == "mismatch"
+    assert result.finding.finding_type == comparison_service.MISMATCH
+    assert result.finding.severity == "medium"
+
+
 # ── Nothing is invented ─────────────────────────────────────────────────────────
 
 def test_no_declared_purpose_means_no_mismatch_is_claimed():
@@ -222,6 +276,63 @@ def test_declarations_are_matched_exactly_never_fuzzily():
     item = _observed(subject_label="ads.example.com")
     result = comparison_service.assess(item, {"ads.example.co": _declared()}, True)
     assert result.declared_purpose is None
+
+
+def test_an_observed_purpose_with_no_category_is_undetermined_not_mismatch():
+    """The observed side can be unclassified (a null `category` from the Consent
+    Agent) while a declaration still exists for that subject. That is a missing
+    half, not a disagreement, and must not be reported as one."""
+    item = _observed(purpose=None, consent_states=["post_accept"])
+    result = comparison_service.assess(
+        item, {"ads.example.com": _declared("Customer Account Management")},
+        consent_obtained=True,
+    )
+    assert result.alignment == reconciliation.UNDETERMINED
+    assert result.finding is None or result.finding.finding_type != comparison_service.MISMATCH
+
+
+def test_a_declared_purpose_with_no_matching_observed_item_produces_no_assessment():
+    """A declaration for a table nothing was ever observed about is not an absence
+    this agent can report on through this path -- there is no observed row to attach
+    a finding to, so none is manufactured for it. The structured path assesses only
+    what it actually read, never every declared key."""
+    from app.agents.purpose.connectors.structured import Column, StructuredSchema, Table
+    from app.agents.purpose.services import structured_service
+
+    schema = StructuredSchema(source_name="db", tables=[
+        Table("public", "customers", [Column("email", "text")]),
+    ])
+    declared = structured_service.index_declared_by_table({
+        "customers.email": _declared("Customer Account Management"),
+        "ghost_table.email": _declared("Marketing Communications"),
+    })
+    observed = structured_service.observe(schema)
+    assert [o.subject_label for o in observed] == ["customers"]
+    results = [comparison_service.assess(o, declared, None) for o in observed]
+    assert len(results) == 1, "a declaration with nothing observed must not synthesise a row"
+
+
+# ── No fabrication: a violation claim always traces to an observed state ────────
+
+def test_a_third_party_service_roll_up_can_never_trigger_a_consent_violation():
+    """A `third_party_service` row carries no consent state of its own -- observed_
+    service leaves it empty rather than inheriting one from a member tracker. Even
+    though its purpose may require consent, there is no timing evidence to accuse it
+    with, so no violation can be raised for it."""
+    item = _observed(subject_type="third_party_service", purpose="marketing", consent_states=[])
+    result = comparison_service.assess(item, {}, consent_obtained=None)
+    assert result.finding is None or result.finding.finding_type != comparison_service.WITHOUT_CONSENT
+
+
+@pytest.mark.parametrize("purpose", ["marketing", "analytics"])
+def test_empty_consent_states_never_fabricates_a_violation(purpose):
+    """`fired_without_consent` is computed purely from the states list; an empty list
+    contains nothing that could be `pre_consent` or `post_reject`, so the property is
+    false by construction. There is no code path from "no evidence" to "violation"."""
+    item = _observed(purpose=purpose, consent_states=[])
+    assert item.fired_without_consent is False
+    result = comparison_service.assess(item, {}, consent_obtained=None)
+    assert result.finding is None or result.finding.finding_type != comparison_service.WITHOUT_CONSENT
 
 
 # ── Retention: a prompt, never a verdict ────────────────────────────────────────
@@ -262,6 +373,18 @@ def test_an_unparseable_expiry_is_unknown_not_a_finding():
     status, note = retention_service.evaluate(item)
     assert status == retention_service.UNKNOWN
     assert "gap in the evidence" in note
+
+
+def test_retention_at_exactly_the_395_day_threshold_is_within_expectation():
+    """The check is strictly `>` the threshold, so the boundary day itself is still
+    within expectation, not already a review trigger."""
+    item = _observed(subject_type="cookie", purpose="analytics", expiry_days=395)
+    assert retention_service.evaluate(item)[0] == retention_service.WITHIN_EXPECTATION
+
+
+def test_retention_one_day_past_the_threshold_is_review_required():
+    item = _observed(subject_type="cookie", purpose="analytics", expiry_days=396)
+    assert retention_service.evaluate(item)[0] == retention_service.REVIEW_REQUIRED
 
 
 # ── Grouping: one finding per thing to act on ───────────────────────────────────
@@ -309,6 +432,36 @@ def test_a_grouped_finding_says_how_many_requests_it_covers():
     item.occurrences = 12
     finding = comparison_service.assess(item, {}, None).finding
     assert "12 requests" in finding.description
+
+
+def test_conflicting_categories_for_the_same_subject_are_kept_separate_not_merged():
+    """Two trackers sharing a host but genuinely disagreeing about category (one
+    analytics, one marketing) are a real conflict in the evidence, not noise to
+    collapse. Purpose is part of the grouping key, so both survive as distinct
+    entries rather than one silently winning."""
+    from app.agents.purpose.services.observed_service import _group
+
+    grouped = _group([
+        _observed(purpose="analytics", consent_states=["post_accept"]),
+        _observed(purpose="marketing", consent_states=["post_accept"]),
+    ])
+    assert len(grouped) == 2
+    assert {g.purpose for g in grouped} == {"analytics", "marketing"}
+
+
+def test_each_side_of_a_conflicting_pair_is_judged_on_its_own_merits():
+    """Grouping keeps both rows distinct; comparison does not pick a winner between
+    them either -- each is assessed independently against the same declaration, so
+    one can align while the other mismatches."""
+    declared = {"ads.example.com": _declared("Marketing Communications")}
+    analytics_result = comparison_service.assess(
+        _observed(purpose="analytics", consent_states=["post_accept"]), declared, True
+    )
+    marketing_result = comparison_service.assess(
+        _observed(purpose="marketing", consent_states=["post_accept"]), declared, True
+    )
+    assert analytics_result.alignment == "mismatch"
+    assert marketing_result.alignment == "aligned"
 
 
 # ── Structured sources: the input that makes comparison resolvable ──────────────
@@ -462,6 +615,28 @@ def test_an_ambiguous_bare_name_gets_no_alias():
         assert observed.lookup_aliases == []
 
 
+def test_index_declared_by_table_normalizes_case_and_whitespace_in_the_key():
+    """Rekeying must not depend on the caller having already normalised its input --
+    a declaration key read with stray case or surrounding whitespace still produces
+    a usable, lowercased table key."""
+    from app.agents.purpose.services import structured_service
+
+    declared = {"  Attendees.Email  ": _declared("Event Attendee Management")}
+    extended = structured_service.index_declared_by_table(declared)
+    assert "attendees" in extended
+    assert extended["attendees"].purpose == "Event Attendee Management"
+
+
+def test_lookup_matches_a_declared_purpose_regardless_of_observed_case():
+    """The observed side's label case (as read from a schema) must not block a match
+    against a declaration recorded in a different case."""
+    item = _observed(subject_label="Ads.Example.COM")
+    result = comparison_service.assess(
+        item, {"ads.example.com": _declared("Marketing Communications")}, True
+    )
+    assert result.declared_purpose == "Marketing Communications"
+
+
 # ── The connector reads shape, never contents ───────────────────────────────────
 
 def test_csv_reads_only_the_header():
@@ -500,6 +675,56 @@ def test_connector_errors_never_leak_credentials():
     assert "hunter2" not in _safe(leaked)
     assert "admin" not in _safe(leaked)
     assert "db.internal" in _safe(leaked), "the host is diagnostic and should survive"
+
+
+# ── SECURITY REGRESSION: the Postgres connector has no SSRF/internal-address guard ──
+#
+# `rest.read_openapi` rejects a caller-supplied URL that resolves to a private,
+# loopback, link-local or cloud-metadata address BEFORE making any request --
+# see test_an_internal_address_is_refused_before_any_request_is_made above, which
+# pins exactly that contract for the REST connector.
+#
+# `read_postgres` takes an equally caller-supplied `dsn` (AssessSourceRequest.dsn,
+# routes/purpose.py) and applies NO equivalent check: it is handed straight to
+# asyncpg.connect(). Since this backend runs inside a Docker Compose network where
+# internal service hostnames resolve (the app's own `db` container, `backend`,
+# `redis`, etc. -- see docker-compose.prod.yml's `consiva` network) and the
+# connector's error messages are persisted on the run record and readable by the
+# requesting org via GET /api/v1/purpose/assessments/{run_id} (purpose_run_service.py
+# `_mark_failed` stores `str(exc)[:500]` on `run.error`), an authenticated member of
+# any org can use this "schema discovery" feature to make the worker open TCP
+# connections to arbitrary internal hosts/ports and read back whether the connection
+# was refused, timed out, or spoke a non-Postgres protocol -- a working blind-SSRF /
+# internal network reconnaissance primitive. This is the asymmetry this test pins.
+#
+# This test encodes the SECURE behaviour (reject before connecting, like the REST
+# connector) and is expected to FAIL until `read_postgres` gains the same
+# `assert_safe_url`-style guard `rest.read_openapi` already has. It must keep failing
+# honestly rather than being loosened -- see the module docstring's own warning about
+# findings that silently stop meaning anything.
+@pytest.mark.asyncio
+async def test_postgres_connector_blocks_internal_addresses(monkeypatch):
+    from app.agents.purpose.connectors import structured
+
+    attempted_connect = {"called": False}
+
+    async def _fake_connect(dsn, timeout=15):
+        attempted_connect["called"] = True
+        raise OSError("connection refused -- test stub, no real network call was made")
+
+    monkeypatch.setattr(structured.asyncpg, "connect", _fake_connect)
+
+    with pytest.raises(structured.ConnectorError):
+        await structured.read_postgres(
+            "postgresql://user:pass@127.0.0.1:5432/internal", source_name="ssrf-probe"
+        )
+
+    assert not attempted_connect["called"], (
+        "read_postgres dialled a loopback address instead of refusing it before any "
+        "connection attempt, the same way rest.read_openapi refuses an internal URL "
+        "before calling httpx. There is currently no host/IP validation on `dsn` at "
+        "all -- this test documents that gap and will keep failing until one is added."
+    )
 
 
 # ── Summary ─────────────────────────────────────────────────────────────────────
@@ -784,3 +1009,211 @@ def test_both_paths_claim_through_the_same_helper():
         "the scan path is setting status itself again instead of claiming through "
         "_mark_running -- the double-execution guard lives in the helper"
     )
+
+
+# ── API-CONTRACT REGRESSIONS: /sources/assess and /findings/{id}/decision ──────────
+#
+# An audit of the route and service layer found four status-code/behaviour defects:
+# an invalid connector request surfaced as a bare 500 instead of a 4xx, an unknown
+# `decision` value also surfaced as the wrong status (404, via NotFoundError, instead
+# of a validation error), a missing-reason rejection used the base 500-status
+# ConsivaError instead of the ReasonRequiredError this codebase already has for
+# exactly this rule elsewhere (review_service.py), and a finding could be decided a
+# second time with no conflict at all, silently overwriting the first reviewer's call.
+
+import pytest as _pytest2  # noqa: E402
+
+from app.core.exceptions import (  # noqa: E402
+    FindingAlreadyDecidedError,
+    InvalidSourceRequestError,
+)
+
+
+@_pytest2.mark.parametrize(
+    "kwargs",
+    [
+        dict(connector="not-a-real-connector"),
+        dict(connector="postgres", dsn=None),
+        dict(connector="postgres", dsn="   "),
+        dict(connector="csv", csv_content=None),
+        dict(connector="rest", spec_url=None),
+    ],
+)
+async def test_an_invalid_source_assessment_request_is_a_client_error_not_a_500(kwargs):
+    """These are all malformed requests from the caller -- they must never reach the
+    base ConsivaError's default status_code=500. Validation happens before any `db`
+    use, so a real session isn't needed to exercise it."""
+    from app.services import purpose_run_service as svc
+
+    with _pytest2.raises(InvalidSourceRequestError) as exc:
+        await svc.request_source_assessment(
+            db=None, org_id=uuid.uuid4(), user_id=uuid.uuid4(),
+            source_name="some source", **kwargs,
+        )
+    assert exc.value.status_code == 422
+
+
+def test_an_unknown_decision_value_is_rejected_by_request_validation():
+    """`decision` is a closed set (approved | rejected | dismissed). A bad value must
+    fail Pydantic validation (-> HTTP 422) rather than reach the handler at all, where
+    it previously raised NotFoundError (-> HTTP 404) -- the wrong status for a
+    malformed request, and easy to confuse with "the finding doesn't exist"."""
+    from pydantic import ValidationError
+
+    from app.api.v1.routes.purpose import DecisionRequest
+
+    with _pytest2.raises(ValidationError):
+        DecisionRequest(decision="not-a-real-decision")
+
+    # The three real values still construct cleanly.
+    for value in ("approved", "rejected", "dismissed"):
+        assert DecisionRequest(decision=value).decision == value
+
+
+class _FakeScalars:
+    def __init__(self, obj):
+        self._obj = obj
+
+    def first(self):
+        return self._obj
+
+
+class _FakeResult:
+    def __init__(self, obj):
+        self._obj = obj
+
+    def scalars(self):
+        return _FakeScalars(self._obj)
+
+
+class _FakeFindingSession:
+    """Just enough of AsyncSession for decide_finding's query + audit_service.record +
+    commit/refresh -- no real database, so these tests stay as fast as the rest of the
+    suite."""
+
+    def __init__(self, finding):
+        self._finding = finding
+        self.committed = False
+
+    async def execute(self, _stmt):
+        return _FakeResult(self._finding)
+
+    def add(self, _row):
+        pass
+
+    async def flush(self):
+        pass
+
+    async def commit(self):
+        self.committed = True
+
+    async def refresh(self, _obj):
+        pass
+
+
+def _fake_user(org_id: uuid.UUID, user_id: uuid.UUID):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(org_id=str(org_id), user_id=str(user_id))
+
+
+async def test_rejecting_without_a_reason_raises_the_existing_reason_required_error():
+    """Not a bare ConsivaError (-> 500): this exact rule already has a dedicated 422
+    exception elsewhere in the codebase (review_service.py's ReasonRequiredError), and
+    the decision endpoint must use it too."""
+    from app.api.v1.routes.purpose import DecisionRequest, decide_finding
+    from app.core.exceptions import ReasonRequiredError
+    from app.db.models import PurposeFinding
+
+    org_id = uuid.uuid4()
+    finding = PurposeFinding(
+        id=uuid.uuid4(), org_id=org_id, assessment_id=uuid.uuid4(),
+        finding_type="mismatch", severity="medium", title="t", description="d",
+        status="pending",
+    )
+    db = _FakeFindingSession(finding)
+
+    with _pytest2.raises(ReasonRequiredError) as exc:
+        await decide_finding(
+            finding.id, DecisionRequest(decision="rejected", reason="  "),
+            user=_fake_user(org_id, uuid.uuid4()), db=db,
+        )
+    assert exc.value.status_code == 422
+    assert not db.committed
+
+
+async def test_a_finding_cannot_be_decided_twice():
+    """Two reviewers racing, or a stale UI re-submitting, must conflict (409) rather
+    than silently overwrite the first decision -- the same contract
+    FindingAlreadyDecidedError already enforces for Consent findings."""
+    from app.api.v1.routes.purpose import DecisionRequest, decide_finding
+    from app.db.models import PurposeFinding
+
+    org_id = uuid.uuid4()
+    finding = PurposeFinding(
+        id=uuid.uuid4(), org_id=org_id, assessment_id=uuid.uuid4(),
+        finding_type="mismatch", severity="medium", title="t", description="d",
+        status="approved",  # already decided
+    )
+    db = _FakeFindingSession(finding)
+
+    with _pytest2.raises(FindingAlreadyDecidedError) as exc:
+        await decide_finding(
+            finding.id, DecisionRequest(decision="rejected", reason="changed my mind"),
+            user=_fake_user(org_id, uuid.uuid4()), db=db,
+        )
+    assert exc.value.status_code == 409
+    assert not db.committed
+    assert finding.status == "approved", "the already-decided finding must be untouched"
+
+
+# ── RESOURCE-EXHAUSTION REGRESSIONS: per-org rate limit + bounded request fields ───
+#
+# Unbounded assessment submissions let one org occupy every slot in the single shared
+# worker pool with requests that are slow to fail (a connector timeout each), starving
+# every other org's queued work -- the same shape of risk scanner_max_scans_per_org_
+# per_day already guards against for consent scans.
+
+class _FakeCountSession:
+    """Just enough of AsyncSession for `_assert_within_daily_rate_limit`'s COUNT query
+    -- returns a fixed count, never touches a real database."""
+
+    def __init__(self, count: int):
+        self._count = count
+
+    async def execute(self, _stmt):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(scalar_one=lambda: self._count)
+
+
+async def test_the_daily_assessment_rate_limit_is_enforced():
+    from app.config import get_settings
+    from app.core.exceptions import RateLimitExceededError
+    from app.services import purpose_run_service as svc
+
+    settings = get_settings()
+    org_id = uuid.uuid4()
+
+    # One under the limit: must not raise.
+    db = _FakeCountSession(settings.purpose_max_assessments_per_org_per_day - 1)
+    await svc._assert_within_daily_rate_limit(db, org_id=org_id)
+
+    # At the limit: must raise -- this is a >=, not a strict >, check.
+    db = _FakeCountSession(settings.purpose_max_assessments_per_org_per_day)
+    with _pytest2.raises(RateLimitExceededError) as exc:
+        await svc._assert_within_daily_rate_limit(db, org_id=org_id)
+    assert exc.value.status_code == 429
+
+
+async def test_an_oversized_source_assessment_field_is_rejected_by_request_validation():
+    from pydantic import ValidationError
+
+    from app.api.v1.routes.purpose import AssessSourceRequest
+
+    with _pytest2.raises(ValidationError):
+        AssessSourceRequest(
+            source_name="s", connector="postgres", dsn="x" * 2049,
+        )
+    # A field at/under its bound still constructs cleanly.
+    AssessSourceRequest(source_name="s", connector="postgres", dsn="x" * 2048)

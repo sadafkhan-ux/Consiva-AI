@@ -1582,9 +1582,10 @@ class PurposeAssessment(Base):
 class PurposeFinding(Base):
     """The subset of assessments worth a person's attention.
 
-    `decided_by_user_id` is a plain UUID, not a ForeignKey: this branch's models carry
-    no `User` class, and an ORM relationship to a model that does not exist fails at
-    mapper-configuration time -- which breaks every unrelated query in the process.
+    `decided_by_user_id` is a plain UUID rather than a mapped relationship to `User`,
+    consistent with the same field on `RopaRecord` and `RiskFinding` -- the DB-level
+    `references users(id)` (migration 0025) still enforces referential integrity;
+    nothing here depends on an ORM-level relationship to resolve it.
     """
 
     __tablename__ = "purpose_findings"

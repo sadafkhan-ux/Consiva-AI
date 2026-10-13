@@ -121,6 +121,14 @@ class InvalidActionTransitionError(ConsivaError):
     status_code = 409
 
 
+class InvalidSourceRequestError(ConsivaError):
+    """Raised when a source-assessment request names an unsupported connector, or omits
+    the field that connector requires (a DSN for postgres, content for csv, a spec URL
+    for rest) -- a malformed request from the caller, not a server failure."""
+
+    status_code = 422
+
+
 class InvalidEditError(ConsivaError):
     """Raised when a reviewer's edited_payload contains a value outside the same
     enum/type constraints the LLM's own output is held to (e.g. risk_level="banana").

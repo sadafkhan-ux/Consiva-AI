@@ -1,0 +1,801 @@
+{
+  "info": {
+    "name": "Consiva - Purpose Classifier (Agent 6 / DPC)",
+    "description": "API contract for the Purpose Classifier agent, covering all 7 endpoints defined in backend/app/api/v1/routes/purpose.py. Built entirely from static code reading (route handlers, purpose_run_service.py, db/models.py, core/exceptions.py, main.py exception handlers). NOT executed against any live server -- see the collection-level 'NOT VERIFIED' note below and the task report for what a human must do before running this for real.\n\nAuth: person-JWT only, header `Authorization: Bearer <token>` (fastapi.security.HTTPBearer, see app/core/security.py get_current_user). Org scope is bound centrally by `bind_request_scope` in app/api/v1/router.py for every v1 route -- there is no per-route scope parameter.\n\nError envelope: Purpose does NOT use the `{\"error\": {\"code\":...}}` envelope that app/main.py reserves for paths starting with `/api/v1/consent-agent`. Every Purpose error -- including FastAPI's own 422 validation errors -- comes back as plain `{\"detail\": ...}` (app/main.py consiva_error_handler / validation_error_handler, the non-consent-agent branches). For a ConsivaError, `detail` is a string. For a framework RequestValidationError (bad body/query/path shape), `detail` is FastAPI's default list of `{loc, msg, type}` objects, NOT a string.\n\nNOT VERIFIED LIVE: no request in this collection has been executed. To actually run it: point `baseUrl` at a non-production test deployment (never the prod docker-compose stack on this box), obtain a real bearer token (e.g. a non-production `/api/v1/dev/demo-token` if `AUTO_LOGIN_ENABLED`/development env, or a real login), and replace the placeholder `scanId`/`runId`/`findingId`/`foreignRunId`/`foreignFindingId` variables with real org-scoped IDs from that environment.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8000", "type": "string" },
+    { "key": "authToken", "value": "REPLACE_WITH_REAL_BEARER_TOKEN", "type": "string" },
+    { "key": "scanId", "value": "11111111-1111-1111-1111-111111111111", "type": "string" },
+    { "key": "runId", "value": "22222222-2222-2222-2222-222222222222", "type": "string" },
+    { "key": "findingId", "value": "33333333-3333-3333-3333-333333333333", "type": "string" },
+    { "key": "foreignRunId", "value": "44444444-4444-4444-4444-444444444444", "type": "string" },
+    { "key": "foreignFindingId", "value": "55555555-5555-5555-5555-555555555555", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1. Start Assessment (POST /purpose/assessments)",
+      "item": [
+        {
+          "name": "Happy path - queue assessment over a consent scan",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments",
+            "body": { "mode": "raw", "raw": "{\n  \"scan_id\": \"{{scanId}}\"\n}" },
+            "description": "CREATES STATE: inserts a new `purpose_runs` row (status=queued) and enqueues a `purpose_assessment` job (purpose_run_service.request_assessment, purpose.py:141-156). Re-running creates ANOTHER run every time -- this endpoint is not idempotent at the API layer (the `_mark_running` guard in purpose_run_service.py:244-288 only prevents the SAME run_id from being executed twice by the worker if its queued job is delivered more than once; it does nothing to stop two separate POSTs from creating two separate runs). Cleanup: delete/ignore the extra `purpose_runs` row if re-run against a real DB. Requires `scan_id` to reference a completed consent scan owned by the caller's org (ConsentScan.org_id == token org_id), else 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('response has run fields', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body).to.have.property('id');",
+                  "  pm.expect(body.status).to.eql('queued');",
+                  "  pm.expect(body.scan_id).to.eql(pm.collectionVariables.get('scanId'));",
+                  "  pm.expect(body.assessments_count).to.eql(0);",
+                  "  pm.expect(body.findings_count).to.eql(0);",
+                  "  pm.expect(body.started_at).to.be.null;",
+                  "  pm.expect(body.completed_at).to.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - missing scan_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments",
+            "body": { "mode": "raw", "raw": "{}" },
+            "description": "SAFE / no state created: `scan_id` is a required field on StartAssessmentRequest (purpose.py:34-38) with no default, so FastAPI/Pydantic rejects the body before the handler runs -- the error comes from app/main.py's `validation_error_handler`'s default (non-consent-agent) branch: `{\"detail\": jsonable_encoder(exc.errors())}`, i.e. FastAPI's native list of {loc, msg, type}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('detail is a list naming scan_id', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.detail).to.be.an('array');",
+                  "  const hit = body.detail.some(e => (e.loc || []).includes('scan_id'));",
+                  "  pm.expect(hit).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - malformed UUID for scan_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments",
+            "body": { "mode": "raw", "raw": "{\n  \"scan_id\": \"not-a-uuid\"\n}" },
+            "description": "SAFE / no state created: `scan_id: uuid.UUID` fails Pydantic's UUID coercion before the handler runs. Same 422 / FastAPI-default-list envelope as the missing-field case."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('detail is a list', () => pm.expect(pm.response.json().detail).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed JSON body",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments",
+            "body": { "mode": "raw", "raw": "{ this is not json" },
+            "description": "SAFE / no state created: body cannot be parsed as JSON at all. FastAPI raises a RequestValidationError for the body-parsing failure itself, handled by the same non-consent-agent branch as the field-level cases -> 422, `{\"detail\": [...]}`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": [ "pm.test('status is 422', () => pm.response.to.have.status(422));" ] }
+            }
+          ]
+        },
+        {
+          "name": "Not found - scan_id does not belong to caller's org",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments",
+            "body": { "mode": "raw", "raw": "{\n  \"scan_id\": \"{{foreignRunId}}\"\n}" },
+            "description": "CROSS-ORG TEST: a syntactically valid UUID that either does not exist, or exists but belongs to a different org than the caller's token. purpose_run_service.request_assessment (purpose_run_service.py:106-110) queries ConsentScan WHERE id = scan_id AND org_id = caller_org -- a scan in another org fails that filter identically to a scan that doesn't exist at all, so the two cases are indistinguishable by design (non-disclosure, consistent with the rest of this codebase). Raises NotFoundError -> 404, `{\"detail\": \"Scan <id> not found\"}` (purpose_run_service.py:110). SAFE / no state created: the check happens before the `PurposeRun` row is inserted."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments",
+            "body": { "mode": "raw", "raw": "{\n  \"scan_id\": \"{{scanId}}\"\n}" },
+            "description": "SAFE / no state created. HTTPBearer(auto_error=False) finds no credentials -> get_current_user raises HTTPException(401, 'Missing bearer token') (core/security.py). FastAPI's own HTTPException handler (not the custom ones) produces `{\"detail\": \"Missing bearer token\"}`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Assess Source (POST /purpose/sources/assess)",
+      "item": [
+        {
+          "name": "Happy path - csv connector",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/sources/assess",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"source_name\": \"demo_crm_export\",\n  \"connector\": \"csv\",\n  \"csv_content\": \"id,email,created_at\\n1,a@example.com,2024-01-01\",\n  \"table_name\": \"demo_customers\"\n}"
+            },
+            "description": "CREATES STATE: inserts a new `purpose_runs` row (status=queued, scan_id=null) and enqueues a `purpose_assessment` job in 'source' mode (purpose_run_service.request_source_assessment, purpose.py:159-181). Not idempotent -- re-running creates another run. `csv_content` here is sent once and is never stored on the run record (only the first header row is read by the worker; body rows are never read)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 202', () => pm.response.to.have.status(202));",
+                  "pm.test('run queued, scan_id null', () => {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.status).to.eql('queued');",
+                  "  pm.expect(body.scan_id).to.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - missing source_name",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/sources/assess",
+            "body": { "mode": "raw", "raw": "{\n  \"connector\": \"csv\",\n  \"csv_content\": \"id,email\\n1,a@example.com\"\n}" },
+            "description": "SAFE / no state created: `source_name` is required with `min_length=1` on AssessSourceRequest (purpose.py:48). Missing field -> 422, FastAPI default list envelope under `detail`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('detail names source_name', () => {",
+                  "  const body = pm.response.json();",
+                  "  const hit = body.detail.some(e => (e.loc || []).includes('source_name'));",
+                  "  pm.expect(hit).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - empty source_name (min_length violation)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/sources/assess",
+            "body": { "mode": "raw", "raw": "{\n  \"source_name\": \"\",\n  \"connector\": \"csv\",\n  \"csv_content\": \"id,email\\n1,a@example.com\"\n}" },
+            "description": "SAFE / no state created: `source_name` has `min_length=1` (purpose.py:48) -- an empty string fails Pydantic's constrained-str validation -> 422."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": [ "pm.test('status is 422', () => pm.response.to.have.status(422));" ] }
+            }
+          ]
+        },
+        {
+          "name": "Backend quirk - invalid connector value returns 500, not 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/sources/assess",
+            "body": { "mode": "raw", "raw": "{\n  \"source_name\": \"demo\",\n  \"connector\": \"mongodb\"\n}" },
+            "description": "DOCUMENTED QUIRK, SAFE / no state created: `connector` is typed as a plain `str` on AssessSourceRequest (purpose.py:49), not a Pydantic Literal/enum, so an invalid value is NOT caught by request validation. It is only checked inside purpose_run_service.request_source_assessment (purpose_run_service.py:55-58), which raises the BASE `ConsivaError` (no subclass) for an unsupported connector. `ConsivaError.status_code` defaults to 500 (app/core/exceptions.py), so this comes back as a 500 Internal Server Error with `{\"detail\": \"Unsupported connector 'mongodb'. Use 'postgres', 'csv' or 'rest'.\"}` -- a client-input error surfaced as a server error. Flagged in the final report as a likely bug (compare to e.g. InvalidUrlError=400 used elsewhere in exceptions.py for exactly this kind of shape problem)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 500 (documented quirk, NOT the semantically correct 400/422)', () => pm.response.to.have.status(500));",
+                  "pm.test('detail names the bad connector', () => pm.expect(pm.response.json().detail).to.match(/Unsupported connector/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - postgres connector missing dsn",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/sources/assess",
+            "body": { "mode": "raw", "raw": "{\n  \"source_name\": \"prod_db\",\n  \"connector\": \"postgres\"\n}" },
+            "description": "SAFE / no state created: purpose_run_service.py:59-60 raises base ConsivaError when connector='postgres' and `dsn` is blank -> 500 (same base-class quirk as the invalid-connector case above), `{\"detail\": \"A connection string is required for the postgres connector.\"}`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 500 (ConsivaError base class, not 400/422)', () => pm.response.to.have.status(500));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/sources/assess",
+            "body": { "mode": "raw", "raw": "{\n  \"source_name\": \"demo\",\n  \"connector\": \"csv\",\n  \"csv_content\": \"id\\n1\"\n}" },
+            "description": "SAFE / no state created. Same 401 path as every other endpoint (core/security.py get_current_user)."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 401', () => pm.response.to.have.status(401));" ] } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. List Assessments / Runs (GET /purpose/assessments)",
+      "item": [
+        {
+          "name": "Happy path - default limit",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments",
+            "description": "READ-ONLY, safe to re-run. `limit` query param defaults to 25 (purpose.py:186, `Query(default=25, ge=1, le=100)`). No offset/cursor pagination exists -- it is a single page of the most recent runs, ordered by `created_at DESC` (purpose.py:193), scoped to the caller's org only."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - explicit limit",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments?limit=5",
+            "description": "READ-ONLY, safe to re-run. `limit` honoured up to 100."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('at most 5 rows', () => pm.expect(pm.response.json().length).to.be.at.most(5));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - limit above max (101)",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments?limit=101",
+            "description": "READ-ONLY, safe to re-run (fails before any query runs). `le=100` constraint on the `limit` Query param (purpose.py:186) -> 422, FastAPI default `detail` list."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": [ "pm.test('status is 422', () => pm.response.to.have.status(422));" ] }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - limit below min (0)",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments?limit=0",
+            "description": "READ-ONLY, safe to re-run. `ge=1` constraint -> 422."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": [ "pm.test('status is 422', () => pm.response.to.have.status(422));" ] }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments",
+            "description": "READ-ONLY, safe to re-run. 401 per core/security.py get_current_user."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 401', () => pm.response.to.have.status(401));" ] } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Get Assessment / Run by ID (GET /purpose/assessments/{id})",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/{{runId}}",
+            "description": "READ-ONLY, safe to re-run. `runId` must belong to the caller's org."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('id matches requested run', () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('runId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/{{foreignRunId}}",
+            "description": "CROSS-ORG TEST: valid auth, but `foreignRunId` is an ID belonging to a different org than the caller's token. purpose.py:205-209 filters `WHERE id = run_id AND org_id = caller_org`, so a run in another org is indistinguishable from a run that doesn't exist -- both raise NotFoundError -> 404 (purpose.py:211), never a 403. This non-disclosure behaviour is consistent across the whole route file. READ-ONLY, safe to re-run."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - random UUID",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/99999999-9999-9999-9999-999999999999",
+            "description": "READ-ONLY, safe to re-run. A syntactically valid UUID matching no row -> 404."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 404', () => pm.response.to.have.status(404));" ] } }
+          ]
+        },
+        {
+          "name": "Validation error - malformed UUID path param",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/not-a-uuid",
+            "description": "READ-ONLY, safe to re-run. `run_id: uuid.UUID` path param fails FastAPI's type coercion before the handler runs -> 422, FastAPI default `detail` list (not a 404 -- the path shape itself is invalid, distinct from a well-formed UUID that just has no matching row)."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 422', () => pm.response.to.have.status(422));" ] } }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/{{runId}}",
+            "description": "READ-ONLY, safe to re-run. 401."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 401', () => pm.response.to.have.status(401));" ] } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Get Assessment Results (GET /purpose/assessments/{id}/results)",
+      "item": [
+        {
+          "name": "Happy path - no filter",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/{{runId}}/results",
+            "description": "READ-ONLY, safe to re-run. Returns every PurposeAssessment row for this run, including `undetermined` ones (purpose.py:224-229), ordered by `created_at` ascending."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - alignment filter",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/{{runId}}/results?alignment=mismatch",
+            "description": "READ-ONLY, safe to re-run. `alignment` (purpose.py:218-220) is a free-form `str | None` query param -- NOT a Pydantic enum/Literal, so any string is accepted; an unrecognised value (e.g. `alignment=bogus`) does not error, it simply matches no rows and returns `[]` with 200."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('every row matches the filter', () => {",
+                  "  const rows = pm.response.json();",
+                  "  rows.forEach(r => pm.expect(r.alignment).to.eql('mismatch'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Backend quirk - cross-org run_id returns 200 with empty list, not 404",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/{{foreignRunId}}/results",
+            "description": "CROSS-ORG TEST + DOCUMENTED INCONSISTENCY: unlike GET /assessments/{id} (endpoint 4), this handler never checks that `run_id` itself exists or belongs to the caller's org -- it only filters PurposeAssessment rows by `run_id` AND `org_id = caller_org` (purpose.py:230-236). For a run_id belonging to another org (or a run_id that doesn't exist at all), there are zero matching assessment rows under the caller's org, so the response is 200 with `[]`, NOT 404. A client cannot tell 'this run has no results yet' apart from 'this run_id belongs to someone else' apart from 'this run_id never existed' from this endpoint alone. READ-ONLY, safe to re-run."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200 (not 404 -- documented inconsistency vs endpoint 4)', () => pm.response.to.have.status(200));",
+                  "pm.test('empty array', () => pm.expect(pm.response.json()).to.eql([]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - malformed UUID path param",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/not-a-uuid/results",
+            "description": "READ-ONLY, safe to re-run. 422, same as endpoint 4's malformed-UUID case."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 422', () => pm.response.to.have.status(422));" ] } }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/purpose/assessments/{{runId}}/results",
+            "description": "READ-ONLY, safe to re-run. 401."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 401', () => pm.response.to.have.status(401));" ] } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. List Findings (GET /purpose/findings)",
+      "item": [
+        {
+          "name": "Happy path - default limit",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings",
+            "description": "READ-ONLY, safe to re-run. `limit` defaults to 50 (purpose.py:244, `ge=1, le=200`). No offset/cursor pagination -- a single page, `created_at DESC`, org-scoped."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - status and severity filters",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings?status=pending&severity=high&limit=10",
+            "description": "READ-ONLY, safe to re-run. `status` and `severity` (purpose.py:242-243) are free-form `str | None` query params -- not Pydantic enums -- so an unrecognised value matches no rows rather than erroring."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('rows match both filters', () => {",
+                  "  const rows = pm.response.json();",
+                  "  rows.forEach(r => { pm.expect(r.status).to.eql('pending'); pm.expect(r.severity).to.eql('high'); });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - limit above max (201)",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "Authorization", "value": "Bearer {{authToken}}" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings?limit=201",
+            "description": "READ-ONLY, safe to re-run. `le=200` on the `limit` Query param -> 422."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 422', () => pm.response.to.have.status(422));" ] } }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/purpose/findings",
+            "description": "READ-ONLY, safe to re-run. 401."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 401', () => pm.response.to.have.status(401));" ] } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Decide Finding (POST /purpose/findings/{id}/decision)",
+      "item": [
+        {
+          "name": "Happy path - approve (no reason required)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings/{{findingId}}/decision",
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"approved\"\n}" },
+            "description": "CREATES/MUTATES STATE: overwrites `purpose_findings.status`, `decided_by_user_id`, `decided_at`, `decision_reason` for this finding and writes an audit_log row (purpose.py:290-303). NOT idempotent in a conflict-safe sense -- unlike the FindingAlreadyDecidedError pattern used elsewhere in this codebase (app/services/review_service.py), this handler never checks that the finding is still 'pending' before overwriting it, so calling it twice (even with different decisions) just silently overwrites the previous decision rather than returning 409. Cleanup before re-running against a real DB: reset the finding's status back to 'pending' or use a fresh findingId. Note the response model (FindingResponse) does NOT echo back decided_at/decided_by_user_id/decision_reason -- only id/assessment_id/finding_type/severity/title/description/review_required/status/created_at."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status updated to approved', () => pm.expect(pm.response.json().status).to.eql('approved'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - reject with reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings/{{findingId}}/decision",
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"rejected\",\n  \"reason\": \"Reviewed manually -- observed purpose matches the declared one; comparison tool mis-tokenised the field name.\"\n}" },
+            "description": "CREATES/MUTATES STATE -- see the approve request's description for the overwrite/cleanup caveat. `reason` is required for `rejected`/`dismissed` (enforced in the handler, purpose.py:274-279)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status updated to rejected', () => pm.expect(pm.response.json().status).to.eql('rejected'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Backend quirk - reject without reason returns 500, not 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings/{{findingId}}/decision",
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"rejected\"\n}" },
+            "description": "DOCUMENTED QUIRK, SAFE / no state mutated (the finding lookup and write happen AFTER this check, purpose.py:272-288). purpose.py:274-279 raises the BASE `ConsivaError` (not the existing `ReasonRequiredError`, which is status_code=422 and used for exactly this situation elsewhere in app/services/review_service.py) when `decision` is rejected/dismissed and `reason` is blank. Base ConsivaError defaults to status_code=500 (app/core/exceptions.py), so a missing-reason request -- a plain client input error -- comes back as a 500 Internal Server Error: `{\"detail\": \"A reason is required to reject a finding.\"}`. Flagged in the final report as a likely bug: this endpoint does not reuse the ReasonRequiredError convention already established for the same rule on other findings."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 500 (documented quirk, should likely be 422)', () => pm.response.to.have.status(500));",
+                  "pm.test('detail mentions reason required', () => pm.expect(pm.response.json().detail).to.match(/reason is required/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Backend quirk - unknown decision value returns 404, not 422",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings/{{findingId}}/decision",
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"maybe\"\n}" },
+            "description": "DOCUMENTED QUIRK, SAFE / no state mutated. `decision` is typed as a plain `str` on DecisionRequest (purpose.py:125), not a Literal/enum, so Pydantic accepts any string. purpose.py:272-273 then validates it manually and raises `NotFoundError` -- the 404 exception class -- for an unrecognised value: `{\"detail\": \"Unknown decision 'maybe'\"}`. Using NotFoundError (404) for what is really an invalid-input/enum problem is inconsistent with the rest of the codebase's HTTP semantics (compare InvalidEditError=422 in app/core/exceptions.py for an analogous out-of-enum value elsewhere). Flagged in the final report."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 (documented quirk, should likely be 422)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions unknown decision', () => pm.expect(pm.response.json().detail).to.match(/Unknown decision/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings/{{foreignFindingId}}/decision",
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"approved\"\n}" },
+            "description": "CROSS-ORG TEST, SAFE / no state mutated: valid auth, but `foreignFindingId` belongs to a different org. purpose.py:281-288 filters `WHERE id = finding_id AND org_id = caller_org`; a finding in another org is indistinguishable from one that doesn't exist -> NotFoundError -> 404, never 403 (same non-disclosure pattern as endpoint 4). The lookup happens before any write, so nothing is mutated."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404, not 403 (non-disclosure)', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - malformed UUID path param",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings/not-a-uuid/decision",
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"approved\"\n}" },
+            "description": "SAFE / no state mutated. `finding_id: uuid.UUID` path param fails type coercion -> 422 before the handler runs."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 422', () => pm.response.to.have.status(422));" ] } }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/purpose/findings/{{findingId}}/decision",
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"approved\"\n}" },
+            "description": "SAFE / no state mutated. 401."
+          },
+          "event": [
+            { "listen": "test", "script": { "exec": [ "pm.test('status is 401', () => pm.response.to.have.status(401));" ] } }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import FindingAlreadyDecidedError, NotFoundError, ReasonRequiredError
 from app.core.security import CurrentUser, get_current_user
 from app.db.models import PurposeAssessment, PurposeFinding, PurposeRun
 from app.db.session import get_db
@@ -45,23 +46,28 @@ class AssessSourceRequest(BaseModel):
     run record -- a DSN persisted on a row is a credential in a table many people read.
     """
 
-    source_name: str = Field(..., min_length=1, description="A name you will recognise later.")
+    # Bounded, not just required/optional: this body reaches a worker that will act on
+    # it (connect to `dsn`, fetch `spec_url`), so an unbounded field is also an
+    # unbounded chunk of memory/network held open on the single shared worker pool --
+    # see RateLimitExceededError below for the per-org request-count half of this.
+    source_name: str = Field(..., min_length=1, max_length=255, description="A name you will recognise later.")
     connector: str = Field(..., description="postgres | csv | rest")
     dsn: str | None = Field(
-        default=None,
+        default=None, max_length=2048,
         description="PostgreSQL connection string. Required for the postgres connector. "
                     "Only table and column NAMES are read -- never row data.",
     )
     csv_content: str | None = Field(
-        default=None,
+        default=None, max_length=1_000_000,
         description="CSV text for the csv connector. Only the header row is parsed; "
                     "the body is never read.",
     )
     table_name: str | None = Field(
-        default=None, description="What the CSV represents. Defaults to the source name."
+        default=None, max_length=255,
+        description="What the CSV represents. Defaults to the source name.",
     )
     spec_url: str | None = Field(
-        default=None,
+        default=None, max_length=2048,
         description="OpenAPI/Swagger specification URL. Required for the rest "
                     "connector. The SPECIFICATION is read, never the API's records -- "
                     "a spec is pure shape and contains no personal data, while a "
@@ -69,7 +75,7 @@ class AssessSourceRequest(BaseModel):
                     "questions about.",
     )
     auth_header: str | None = Field(
-        default=None,
+        default=None, max_length=4096,
         description="Optional Authorization header value for fetching the "
                     "specification, e.g. 'Bearer ...'. Sent once and never stored on "
                     "the run record.",
@@ -122,7 +128,7 @@ class FindingResponse(BaseModel):
 
 
 class DecisionRequest(BaseModel):
-    decision: str = Field(..., description="approved | rejected | dismissed")
+    decision: Literal["approved", "rejected", "dismissed"]
     reason: str | None = Field(
         default=None,
         description="Required when rejecting or dismissing -- a finding set aside "
@@ -269,12 +275,8 @@ async def decide_finding(
     aside is itself a compliance decision, and one with no recorded reasoning cannot be
     told apart later from one nobody looked at.
     """
-    if body.decision not in ("approved", "rejected", "dismissed"):
-        raise NotFoundError(f"Unknown decision {body.decision!r}")
     if body.decision in ("rejected", "dismissed") and not (body.reason or "").strip():
-        from app.core.exceptions import ConsivaError
-
-        raise ConsivaError(
+        raise ReasonRequiredError(
             f"A reason is required to {body.decision.rstrip('ed')} a finding."
         )
 
@@ -286,6 +288,11 @@ async def decide_finding(
     )).scalars().first()
     if finding is None:
         raise NotFoundError(f"Purpose finding {finding_id} not found")
+    if finding.status != "pending":
+        raise FindingAlreadyDecidedError(
+            f"Purpose finding {finding_id} was already {finding.status}; it cannot be "
+            "decided again."
+        )
 
     before = {"status": finding.status}
     finding.status = body.decision

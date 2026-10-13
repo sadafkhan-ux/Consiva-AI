@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.purpose.connectors import rest, structured
@@ -28,7 +28,8 @@ from app.agents.purpose.services import (
     retention_service,
     structured_service,
 )
-from app.core.exceptions import ConsivaError, NotFoundError
+from app.config import get_settings
+from app.core.exceptions import InvalidSourceRequestError, NotFoundError, RateLimitExceededError
 from app.db.models import ConsentScan, PurposeAssessment, PurposeFinding, PurposeRun
 from app.db.session import async_session_factory, set_org_scope
 from app.jobs import queue
@@ -37,6 +38,25 @@ from app.services import audit_service
 logger = logging.getLogger(__name__)
 
 JOB_TYPE = "purpose_assessment"
+
+
+async def _assert_within_daily_rate_limit(db: AsyncSession, *, org_id: uuid.UUID) -> None:
+    """Both request paths create a `purpose_runs` row and enqueue one job onto the
+    single shared, cross-tenant worker pool -- an unbounded caller can occupy every
+    slot in it (slow-to-fail connector targets hold a slot for the whole connector
+    timeout), starving every other org's queued work, not just their own."""
+    settings = get_settings()
+    since = datetime.now(UTC) - timedelta(days=1)
+    recent_count = (await db.execute(
+        select(func.count()).select_from(PurposeRun).where(
+            PurposeRun.org_id == org_id, PurposeRun.created_at >= since,
+        )
+    )).scalar_one()
+    if recent_count >= settings.purpose_max_assessments_per_org_per_day:
+        raise RateLimitExceededError(
+            "Purpose assessment rate limit reached "
+            f"({settings.purpose_max_assessments_per_org_per_day}/day for this org)."
+        )
 
 
 async def request_source_assessment(
@@ -53,18 +73,22 @@ async def request_source_assessment(
     credential in a table that many people can read.
     """
     if connector not in ("postgres", "csv", "rest"):
-        raise ConsivaError(
+        raise InvalidSourceRequestError(
             f"Unsupported connector {connector!r}. Use 'postgres', 'csv' or 'rest'."
         )
     if connector == "postgres" and not (dsn or "").strip():
-        raise ConsivaError("A connection string is required for the postgres connector.")
+        raise InvalidSourceRequestError(
+            "A connection string is required for the postgres connector."
+        )
     if connector == "csv" and not (csv_content or "").strip():
-        raise ConsivaError("File content is required for the csv connector.")
+        raise InvalidSourceRequestError("File content is required for the csv connector.")
     if connector == "rest" and not (spec_url or "").strip():
-        raise ConsivaError(
+        raise InvalidSourceRequestError(
             "An OpenAPI specification URL is required for the rest connector. This "
             "agent reads the specification, never the API's records."
         )
+
+    await _assert_within_daily_rate_limit(db, org_id=org_id)
 
     run = PurposeRun(org_id=org_id, scan_id=None, status="queued")
     db.add(run)
@@ -108,6 +132,8 @@ async def request_assessment(
     )).scalars().first()
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
+
+    await _assert_within_daily_rate_limit(db, org_id=org_id)
 
     run = PurposeRun(org_id=org_id, scan_id=scan_id, status="queued")
     db.add(run)
