@@ -66,7 +66,7 @@ def test_the_success_path_is_unchanged():
 # ── What a rule-derived finding says, and does not say ──────────────────────────
 
 def test_a_rule_match_becomes_a_finding_carrying_the_rules_own_summary():
-    finding = fallback._as_finding(_rule(), "Request timed out.")
+    finding = fallback._as_finding(_rule())
     assert "continued firing after the visitor clicked Reject" in finding.finding
     assert finding.category == "marketing"
     assert finding.risk_level == "high"
@@ -74,26 +74,55 @@ def test_a_rule_match_becomes_a_finding_carrying_the_rules_own_summary():
 
 
 def test_it_says_in_its_own_text_that_the_narrative_is_missing():
-    """A reader must not mistake this for the product's normal, explained output."""
-    finding = fallback._as_finding(_rule(), "Request timed out.")
+    """A reader must not mistake this for the product's normal, explained output --
+    but, since 23 Oct 2026, the raw failure reason (provider errors, ungrounded
+    citation UUIDs) is no longer part of that text. It used to be: a real scan's
+    finding_text read "...failed grounding after 2 retries: ungrounded dpdp_reference
+    ids ['24977b5b-...', ...]..." verbatim, an internal diagnostic presented as a DPDP
+    finding's explanation. That detail still exists -- see
+    test_create_rule_findings_passes_the_reason_as_internal_notes_not_customer_text
+    below -- it just isn't here."""
+    finding = fallback._as_finding(_rule())
     assert "could not be produced" in finding.finding
-    assert "Request timed out." in finding.finding
     assert "has not been written up" in finding.finding
+    assert "Request timed out" not in finding.finding
 
 
-def test_it_cites_nothing():
-    """Citations are resolved from what the model cited, and it cited nothing.
-    Attaching the retrieved chunks anyway would present regulatory references as
-    though something had applied them to this finding."""
-    finding = fallback._as_finding(_rule(), "timeout")
+def test_as_finding_itself_cites_nothing():
+    """`_as_finding` builds the LLM-origin ConsentFindingLLM object, and the model
+    cited nothing -- that field stays empty. This is distinct from what the finding is
+    actually PERSISTED with: create_rule_findings attaches the backend-resolved RAG
+    citations via a separate argument to finding_repository.create_finding (see
+    test_rule_citations_resolves_retrieved_chunks below), exactly like
+    create_findings.py does for a model-cited finding."""
+    finding = fallback._as_finding(_rule())
     assert finding.dpdp_reference == []
+
+
+def test_rule_citations_resolves_retrieved_chunks():
+    """The chunks retrieve_rag.py found for this scan's rule findings are real,
+    deterministic retrieval results -- attaching them to the rule-derived finding is
+    not inventing a citation, it is not throwing away one that was already found."""
+    chunks = [
+        {"chunk_id": "c1", "document_title": "DPDP Act 2023", "section": "Section 6", "document_version": "1.0"},
+        {"chunk_id": "c2", "document_title": "DPDP Rules 2025", "section": None, "document_version": None},
+    ]
+    resolved = fallback._rule_citations(chunks)
+    assert resolved == [
+        {"chunk_id": "c1", "section": "Section 6", "source_doc": "DPDP Act 2023", "version": "1.0"},
+        {"chunk_id": "c2", "section": None, "source_doc": "DPDP Rules 2025", "version": None},
+    ]
+
+
+def test_rule_citations_is_empty_when_nothing_was_retrieved():
+    assert fallback._rule_citations([]) == []
 
 
 @pytest.mark.parametrize("confidence", ["high", "low"])
 def test_every_rule_finding_requires_human_review_whatever_the_rule_thought(confidence):
     """A rule confident enough to skip review when a narrative was coming with it is
     not confident enough to skip review when nothing explains it."""
-    finding = fallback._as_finding(_rule(confidence=confidence), "timeout")
+    finding = fallback._as_finding(_rule(confidence=confidence))
     assert finding.requires_human_review is True
 
 
@@ -101,19 +130,33 @@ def test_every_rule_finding_requires_human_review_whatever_the_rule_thought(conf
     ("high", "high"), ("medium", "medium"), ("low", "low"), ("unrecognised", "medium"),
 ])
 def test_priority_follows_the_rules_risk_with_a_safe_default(risk, expected):
-    assert fallback._as_finding(_rule(risk_level=risk), "x").priority == expected
+    assert fallback._as_finding(_rule(risk_level=risk)).priority == expected
 
 
 def test_a_rule_with_no_summary_still_produces_readable_text():
-    finding = fallback._as_finding(_rule(summary=""), "timeout")
+    finding = fallback._as_finding(_rule(summary=""))
     assert "A compliance rule matched this scan." in finding.finding
 
 
 def test_the_recommendation_does_not_ask_for_a_rescan():
     """The evidence is already collected. Telling somebody to re-crawl a 25-page site
     because a model call timed out wastes eleven minutes to fix nothing."""
-    finding = fallback._as_finding(_rule(), "timeout")
+    finding = fallback._as_finding(_rule())
     assert "does not need re-scanning" in finding.recommendation
+
+
+# ── The raw failure reason goes to internal_notes, never to customer text ───────
+
+def test_create_rule_findings_passes_the_reason_as_internal_notes_not_customer_text():
+    """The wiring for A.4: `reason` (the raw provider-error / ungrounded-citation
+    diagnostic) must reach finding_repository.create_finding as `internal_notes`, and
+    must never be interpolated into the `finding=` text that _as_finding builds."""
+    body = inspect.getsource(fallback.create_rule_findings)
+    assert "internal_notes=reason" in body
+    assert "dpdp_reference=citations" in body
+
+    as_finding_body = inspect.getsource(fallback._as_finding)
+    assert "reason" not in as_finding_body
 
 
 # ── What the audit record has to show ───────────────────────────────────────────

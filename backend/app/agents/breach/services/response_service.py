@@ -40,7 +40,7 @@ from app.agents.breach.errors import (
     IncidentNotReadyError,
 )
 from app.agents.breach.schemas import incident as vocab
-from app.agents.breach.services import incident_service
+from app.agents.breach.services import incident_service, investigation_service
 from app.db.models import IncidentAction, IncidentCase, IncidentExecution
 from app.db.repositories import incident_repository
 from app.services import audit_service
@@ -375,6 +375,11 @@ async def decide_action(
         raise IncidentNotReadyError(f"{decision!r} is not a review decision")
     if decision in vocab.DECISIONS_REQUIRING_REASON and not (reason and reason.strip()):
         raise IncidentNotReadyError(f"a {decision} decision requires a reason")
+    # A reviewer's free-text reason is exactly the shape of risk this agent's own
+    # evidence-redaction exists for -- redacted before it reaches the persisted
+    # approval row or the audit trail, not just evidence.detail.
+    if reason:
+        reason, _ = investigation_service.redact_text(reason)
 
     action = await incident_repository.get_action(db, action_id, case.org_id)
     if action is None or action.incident_id != case.id:
@@ -383,6 +388,21 @@ async def decide_action(
         raise IncidentNotReadyError(
             f"action {action_id} is already {action.status}; a decision cannot be "
             "recorded against work that has started"
+        )
+    if action.status in ("approved", "rejected"):
+        # This action already carries a reviewer's decision. Letting a second call
+        # (a stale UI re-submitting, two reviewers racing on the same action, or a
+        # retried request) silently overwrite it is exactly the gap Agent 3's
+        # approval_service.decide_action closes for DSR actions -- here it would mean
+        # a rejected containment action could be flipped to approved (or the reverse)
+        # with no conflict and no trace of the first reviewer's call beyond the audit
+        # log. `request_more_information` / `escalated` deliberately return an action
+        # to "proposed" and are exempt from this guard by design, since that is how a
+        # decided-too-early action is reopened for a fresh decision.
+        raise IncidentNotReadyError(
+            f"action {action_id} has already been decided ({action.status}); a new "
+            "decision cannot be recorded without first reopening it via "
+            "request_more_information or escalated"
         )
 
     # Approving a high-risk containment without a recorded rationale is what the audit
@@ -456,7 +476,10 @@ def closing_status(*, blocked: int, failed: int) -> str:
     Mirrors Agent 3's dsr_run_service.closing_status for the identical problem:
     closing as CLOSED when a containment action was blocked or failed would state
     something that did not happen, to the one record -- the incident's own status --
-    that a regulator or an auditor would read first.
+    that a regulator or an auditor would read first. Callers are expected to fold a
+    reviewer's "rejected" action decisions into `blocked` -- a reviewer declining to
+    authorise a containment step is a deliberate non-change, exactly like a
+    constraint block, and must not be invisible to this check.
     """
     return vocab.PARTIALLY_COMPLETED if (blocked or failed) else vocab.CLOSED
 
@@ -489,10 +512,20 @@ async def _preflight(
             f"incident {case.reference} is {case.status}; containment may only be "
             f"carried out from {vocab.APPROVED} or {vocab.RESPONDING}"
         )
-    if action.status == "blocked":
-        raise ActionBlockedError(f"action {action_id} is blocked: {action.blocked_reason}")
-    if action.status == "completed":
-        raise ActionBlockedError(f"action {action_id} is already complete")
+    if action.status in _RESOLVED_ACTION_STATUSES:
+        # Every status in this set is an end state the response stage already
+        # considers settled (see its definition above). Before this check only
+        # "blocked" and "completed" were caught here, which left a real gap: an
+        # action a reviewer explicitly REJECTED -- or one already recorded as
+        # "failed" or "skipped" -- could still pass preflight and be attested
+        # (recorded as successfully carried out) or re-marked, as long as it did not
+        # itself require approval. A reviewer's "no" has to stop containment just as
+        # completely as a constraint block does.
+        detail = f": {action.blocked_reason}" if action.status == "blocked" and action.blocked_reason else ""
+        raise ActionBlockedError(
+            f"action {action_id} is already {action.status}{detail}; it cannot be "
+            "carried out or recorded against again"
+        )
 
     if action.requires_approval:
         approval = await incident_repository.latest_approval_for_action(
@@ -539,6 +572,11 @@ async def record_tracked_execution(
             "an attestation must say what was actually done -- a tick with no "
             "description is not a record of anything"
         )
+    # "What was actually done" is free text a person types about a real account/
+    # system -- the same credential-pasting risk evidence redaction already guards
+    # against, and this is returned verbatim via GET /actions with no separate
+    # reveal-gate the way evidence.detail has.
+    attestation, _ = investigation_service.redact_text(attestation)
 
     execution, is_new = await incident_repository.claim_execution(
         db, org_id=case.org_id, incident_id=case.id, action_id=action.id,
@@ -619,13 +657,39 @@ async def mark_action_failed(
     An action somebody tried and could not complete is a different thing from one
     nobody has started, and the difference changes what happens next -- it is usually
     the point at which an incident should escalate.
+
+    Shares the shape of an attestation's preflight (§24), deliberately not its exact
+    approval-currency re-check: an action nobody was ever authorised to attempt
+    (still `proposed` while requiring approval), or one that already reached an end
+    state (blocked, completed, rejected, failed, skipped), cannot be "attempted and
+    failed" -- that would misrepresent an action nobody tried, or re-litigate one
+    already settled, as a genuine failed attempt.
     """
     if not (reason and reason.strip()):
         raise IncidentNotReadyError("a failed action must say why it failed")
+    reason, _ = investigation_service.redact_text(reason)
 
     action = await incident_repository.get_action(db, action_id, case.org_id)
     if action is None or action.incident_id != case.id:
         raise IncidentNotFoundError(f"action {action_id} not found on {case.reference}")
+
+    if case.status not in (vocab.APPROVED, vocab.RESPONDING):
+        raise ApprovalRequiredError(
+            f"incident {case.reference} is {case.status}; a containment action can "
+            f"only be reported as failed from {vocab.APPROVED} or {vocab.RESPONDING}"
+        )
+    if action.status in _RESOLVED_ACTION_STATUSES:
+        raise ActionBlockedError(
+            f"action {action_id} is already {action.status}; it cannot be reported "
+            "as failed again"
+        )
+    if action.requires_approval and action.status != "approved":
+        # Still `proposed` means nobody has authorised this action yet -- nobody can
+        # genuinely have attempted and failed at work nobody approved.
+        raise ApprovalRequiredError(
+            f"action {action_id} has not been approved; it cannot be reported as "
+            "failed because nobody was authorised to attempt it"
+        )
 
     moment = now or datetime.now(UTC)
     action.status = "failed"

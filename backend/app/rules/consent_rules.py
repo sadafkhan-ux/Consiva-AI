@@ -90,6 +90,93 @@ def _registered_domain(url: str) -> str:
     return f"{ext.domain}.{ext.suffix}" if ext.suffix else ext.domain
 
 
+# Which DPDP Act 2023 provision each deterministic rule is actually about -- verified
+# against the Act's own text in the knowledge base (knowledge_documents "DPDP Act
+# 2023"), not guessed:
+#   Section 4  grounds for processing (the umbrella that names consent and "certain
+#              legitimate uses" as the two lawful bases)
+#   Section 5  notice
+#   Section 6  consent, INCLUDING sub-section (4)'s right to withdraw consent
+#   Section 7  "certain legitimate uses" -- an EXEMPTION from needing consent at all,
+#              not an obligation about consent/notice/withdrawal. A live scan cited
+#              finding R-001/R-003 (tracking before consent / after Reject) against
+#              "section 7 (legitimate uses)" -- the wrong provision for a finding
+#              about consent not being honoured; that chunk also turned out to be a
+#              chunker false-positive (a mid-sentence cross-reference to "section 7"
+#              inside a DIFFERENT section's text, matched as if it were a heading --
+#              see rag/chunker.py's own documented limitation on this exact failure
+#              mode).
+# This is NOT a mapping the LLM is told to trust blindly or that gets written onto a
+# finding as a citation directly -- it only steers retrieve_rag.py's query toward the
+# right provision. Whatever chunk actually comes back still has to survive
+# validate_output.py's grounding check before it can be cited.
+RULE_DPDP_TOPIC_HINTS: dict[str, str] = {
+    "R-001": "consent under section 6, processing personal data before consent is given",
+    "R-002": "notice under section 5 and consent under section 6",
+    "R-003": "withdrawal of consent under sub-section (4) of section 6",
+    "R-004": "notice under section 5, processing personal data without notice",
+    "R-005": "withdrawal of consent under sub-section (4) of section 6, consent as easy to withdraw as to give",
+    "R-006": "notice under section 5",
+    "R-007": "notice under section 5",
+}
+
+
+# Field/record categories a DPDP consent violation claim is actually about. A request
+# classified into neither (fonts, CDN assets, first-party functional scripts) is not
+# evidence of tracking without consent, whatever consent state it was observed in.
+_CONSENT_RELEVANT_CATEGORIES = ("analytics", "marketing")
+
+
+def _grouped_state_counts(records, *, vendor_of) -> dict[str, dict[str, int]]:
+    """Shared core for tracker_consent_state_counts/cookie_consent_state_counts below:
+    per consent-state, per-category DISTINCT-VENDOR counts (a set, not a running
+    total), so ten requests to the same analytics endpoint count once, not ten --
+    reusing the same vendor-grouping idea derive_third_party_services already applies
+    to the third-party-services list, rather than a second implementation of it."""
+    buckets: dict[str, dict[str, set[str]]] = {}
+    for record in records:
+        if record.category not in _CONSENT_RELEVANT_CATEGORIES:
+            continue
+        vendor = vendor_of(record)
+        for state in record.consent_states:
+            bucket = buckets.setdefault(state, {c: set() for c in _CONSENT_RELEVANT_CATEGORIES})
+            bucket[record.category].add(vendor)
+    return {
+        state: {
+            **{c: len(vendors) for c, vendors in bucket.items()},
+            "total": len(set().union(*bucket.values())) if bucket else 0,
+        }
+        for state, bucket in buckets.items()
+    }
+
+
+def tracker_consent_state_counts(trackers: list[TrackerRecord]) -> dict[str, dict[str, int]]:
+    """Per-consent-state tracker counts restricted to analytics/marketing-classified
+    trackers -- not fonts, CDN assets or first-party functional scripts, which
+    classify_tracker already tells apart (see its own docstring) -- grouped by vendor
+    (falling back to the request's registered domain when a category-matched tracker
+    somehow has no vendor, which should not happen in practice but is handled rather
+    than assumed).
+
+    This replaced counting every collected tracker toward "N trackers fired before
+    consent": a real scan (swaransoft.com, scan 2f942a64) reported 44 pre-consent and
+    36 post-reject trackers that way, when `trackers_found` for that scan was 56 total
+    and the large majority were static assets, not analytics/marketing scripts -- and
+    a tracker firing on every one of 25 pages was counted 25 times instead of once.
+    """
+    return _grouped_state_counts(
+        trackers, vendor_of=lambda t: t.vendor or _registered_domain(t.script_src)
+    )
+
+
+def cookie_consent_state_counts(cookies: list[CookieRecord]) -> dict[str, dict[str, int]]:
+    """Same restriction and vendor-grouping as tracker_consent_state_counts, for
+    cookies."""
+    return _grouped_state_counts(
+        cookies, vendor_of=lambda c: c.vendor or c.domain or c.name
+    )
+
+
 def derive_third_party_services(trackers: list[TrackerRecord]) -> list[ThirdPartyServiceRecord]:
     """Rolls up individual tracker script observations into one record per vendor (or,
     for unrecognized scripts, per registered domain) — the granularity the required

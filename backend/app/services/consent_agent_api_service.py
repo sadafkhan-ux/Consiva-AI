@@ -334,6 +334,12 @@ async def get_result(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
     recs = await _recommendations_by_finding(db, [r.id for r in rows])
     counts = await scan_repository.get_scan_counts(db, scan.id)
     scan_meta = next((s.stage_metadata or {} for s in stages if s.stage == "website_scan"), {})
+    # The analytics/marketing-only, vendor-grouped breakdown lives on the classification
+    # stage (it needs category/vendor, which classify_scan() only produces after
+    # website_scan has already finished -- see scan_service.py). Falls back to
+    # website_scan's own raw, unclassified per-state counts for a scan run before this
+    # existed, rather than showing nothing.
+    classification_meta = next((s.stage_metadata or {} for s in stages if s.stage == "classification"), {})
 
     duration_ms = None
     if scan.started_at and scan.completed_at:
@@ -362,8 +368,22 @@ async def get_result(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
         "consent_states": {
             "accept_interaction": scan_meta.get("accept_interaction"),
             "reject_interaction": scan_meta.get("reject_interaction"),
-            "cookies_by_consent_state": scan_meta.get("cookies_by_consent_state") or {},
-            "trackers_by_consent_state": scan_meta.get("trackers_by_consent_state") or {},
+            "cookies_by_consent_state": (
+                classification_meta.get("cookies_by_consent_state")
+                or scan_meta.get("cookies_by_consent_state") or {}
+            ),
+            "trackers_by_consent_state": (
+                classification_meta.get("trackers_by_consent_state")
+                or scan_meta.get("trackers_by_consent_state") or {}
+            ),
+            # Only present once classification_meta has them (this scan ran after the
+            # tracker/cookie-count fix) -- {} for an older scan, not a fabricated split.
+            "trackers_by_consent_state_by_category": classification_meta.get(
+                "trackers_by_consent_state_by_category"
+            ) or {},
+            "cookies_by_consent_state_by_category": classification_meta.get(
+                "cookies_by_consent_state_by_category"
+            ) or {},
         },
         "evidence_counts": counts,
         "cookies": evidence.get("cookies", []),

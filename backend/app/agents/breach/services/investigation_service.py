@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # against the WORDS of a key rather than the whole key: an exact-match list lets
 # `db_password` straight through, which a live run found it doing.
 _SECRET_WORDS = frozenset({
-    "password", "passwd", "pwd", "passphrase", "secret", "token", "apikey",
+    "password", "passwd", "pwd", "pass", "passphrase", "secret", "token", "apikey",
     "credential", "credentials", "privatekey", "authorization", "cookie", "bearer",
     "signature", "otp",
 })
@@ -85,6 +85,12 @@ _SECRET_VALUE_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
     (re.compile(r"\b(?:Bearer|Basic)\s+([A-Za-z0-9._~+/=-]{12,})"), 1),
     # An AWS access key id, which is a fixed, unmistakable shape.
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), 0),
+    # A credential embedded in a connection-string/URI authority:
+    # `postgres://admin:S3cr3t!pass@db.internal:5432/prod` or a single bearer-style
+    # token before the `@` (`https://ghp_xxx@github.com/...`). The slash-free,
+    # whitespace-free character classes stop at the first `/` or `@`, so this never
+    # reaches into a path or query string -- only the literal authority credential.
+    (re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://(?:[^\s/@:]+:)?([^\s/@]+)@"), 1),
     # `PGPASSWORD=hunter2`, `api_key: sk-...`, `token="..."` inside a log line.
     (
         re.compile(

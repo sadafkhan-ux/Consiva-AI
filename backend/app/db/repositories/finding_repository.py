@@ -14,10 +14,15 @@ async def create_finding(
     agent_run_id: uuid.UUID,
     finding: ConsentFindingLLM,
     dpdp_reference: list[dict],
+    internal_notes: str | None = None,
 ) -> ConsentFinding:
     """`dpdp_reference` is the backend-resolved {chunk_id, section, source_doc, version}
     list (see agents/consent_agent/nodes/create_findings.py) — NOT finding.dpdp_reference,
-    which is just the LLM's raw chunk_id citations."""
+    which is just the LLM's raw chunk_id citations.
+
+    `internal_notes` is technical/diagnostic text (provider errors, ungrounded
+    citation ids) that must never appear in `finding.finding` / finding_text -- see
+    create_rule_findings.py, the only current caller that passes one."""
     row = ConsentFinding(
         scan_id=scan_id,
         agent_run_id=agent_run_id,
@@ -29,6 +34,7 @@ async def create_finding(
         dpdp_reference=dpdp_reference,
         requires_human_review=finding.requires_human_review,
         status="pending",
+        internal_notes=internal_notes,
     )
     db.add(row)
     await db.flush()

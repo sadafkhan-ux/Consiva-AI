@@ -57,6 +57,7 @@ async def _llm_reasoning_inner(state: AgentState) -> dict:
             response, fallback_meta = await generate_structured_with_fallback(
                 system=SYSTEM_PROMPT, user=user_prompt, schema=ConsentAnalysisResponse,
                 settings=settings, usage_sink=usage_sink, deadline_epoch=deadline_epoch,
+                agent="consent", scan_id=state.scan_id,
             )
         except Exception as exc:
             # Degrade, do not explode.

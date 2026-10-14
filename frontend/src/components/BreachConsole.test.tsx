@@ -446,6 +446,88 @@ describe("BreachConsole: analysis-progress polling", () => {
   });
 });
 
+describe("BreachConsole: a failed section fetch must not look like an empty one", () => {
+  it("shows a distinct error, not 'No evidence filed yet.', when the evidence fetch fails", async () => {
+    const incident = makeIncident();
+    const fetchMock = vi.fn((url: string) => {
+      const path = url.replace(BASE_URL, "");
+      if (path === "/api/v1/incidents") return Promise.resolve(jsonResponse([incident]));
+      if (path === `/api/v1/incidents/${incident.id}`) return Promise.resolve(jsonResponse(incident));
+      if (path.endsWith("/evidence")) {
+        return Promise.resolve(jsonResponse({ detail: "internal error" }, 500));
+      }
+      if (path.endsWith("/timeline") || path.endsWith("/communications") || path.endsWith("/audit")) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (path.endsWith("/impact")) {
+        return Promise.resolve(
+          jsonResponse({ systems: [], data_categories: [], subjects: [], total: { record_count: null, count_basis: "unknown" } }),
+        );
+      }
+      if (path.endsWith("/risk")) return Promise.resolve(jsonResponse({ current: null, history: [] }));
+      if (path.endsWith("/actions")) return Promise.resolve(jsonResponse(emptyPlan()));
+      if (path.endsWith("/report")) return Promise.resolve(jsonResponse(null));
+      throw new Error(`unexpected fetch: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<BreachConsole />);
+    await selectIncident(incident.reference);
+
+    // The evidence tab is the default -- the failure must show immediately.
+    await screen.findByText("Could not load evidence.", { exact: false });
+    expect(screen.queryByText("No evidence filed yet.")).not.toBeInTheDocument();
+
+    // Fix the backend, retry, and the ordinary empty state takes over.
+    fetchMock.mockImplementation((url: string) => {
+      const path = url.replace(BASE_URL, "");
+      if (path === "/api/v1/incidents") return Promise.resolve(jsonResponse([incident]));
+      if (path === `/api/v1/incidents/${incident.id}`) return Promise.resolve(jsonResponse(incident));
+      if (path.endsWith("/evidence")) return Promise.resolve(jsonResponse([]));
+      if (path.endsWith("/timeline") || path.endsWith("/communications") || path.endsWith("/audit")) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (path.endsWith("/impact")) {
+        return Promise.resolve(
+          jsonResponse({ systems: [], data_categories: [], subjects: [], total: { record_count: null, count_basis: "unknown" } }),
+        );
+      }
+      if (path.endsWith("/risk")) return Promise.resolve(jsonResponse({ current: null, history: [] }));
+      if (path.endsWith("/actions")) return Promise.resolve(jsonResponse(emptyPlan()));
+      if (path.endsWith("/report")) return Promise.resolve(jsonResponse(null));
+      throw new Error(`unexpected fetch: ${path}`);
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+
+    await screen.findByText("No evidence filed yet.");
+    expect(screen.queryByText("Could not load evidence.", { exact: false })).not.toBeInTheDocument();
+  });
+
+  it("recovers independently per tab -- a failed audit fetch doesn't block the evidence tab", async () => {
+    const incident = makeIncident();
+    const { fetchMock } = makeRouter({
+      incidents: () => [incident],
+      // makeRouter's default /audit handler returns []; override it to fail instead.
+    });
+    fetchMock.mockImplementation(((original) =>
+      ((url: string, init?: RequestInit) => {
+        const path = url.replace(BASE_URL, "");
+        if (path.endsWith("/audit")) return Promise.resolve(jsonResponse({ detail: "boom" }, 500));
+        return original(url, init);
+      }))(fetchMock.getMockImplementation()!));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<BreachConsole />);
+    await selectIncident(incident.reference);
+
+    // Evidence (the default tab) loaded fine.
+    await screen.findByText("No evidence filed yet.");
+
+    await userEvent.click(screen.getByRole("button", { name: "audit" }));
+    await screen.findByText("Could not load the audit trail.", { exact: false });
+  });
+});
+
 describe("BreachConsole: duplicate analysis submissions", () => {
   it("disables Run analysis while analysis is already in progress", async () => {
     const incident = makeIncident({ status: "investigating" });

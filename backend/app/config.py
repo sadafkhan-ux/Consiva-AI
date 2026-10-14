@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     # exactly as before.
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-haiku-5-5"
+    # Required when ANTHROPIC_API_KEY is an organization-scoped key (scope.type ==
+    # "organization" -- check via GET /v1/organizations/api_keys with this same key).
+    # Such a key has no single workspace to bill/rate-limit against, so every request
+    # needs this header or Anthropic returns 400 invalid_request_error ("This API key
+    # is not scoped to a workspace..."). A key created while a specific workspace was
+    # selected in the Console (scope.type == "workspace") already carries its own
+    # workspace and does not need this -- leave it unset for that case.
+    anthropic_workspace_id: str | None = None
 
     # Postgres
     database_url: str

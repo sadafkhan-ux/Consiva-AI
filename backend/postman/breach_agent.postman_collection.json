@@ -1,0 +1,4072 @@
+{
+  "info": {
+    "name": "Consiva - Breach Response (Agent 4)",
+    "description": "API contract for the Breach Response agent, covering all 30 routes defined in backend/app/api/v1/routes/incidents.py (create, list, get, classify, finding, transition, evidence x3, timeline x2, systems, analyse, impact, subjects, risk, plan, actions x2, decision, attest, failed, communications x4, report x2, close, audit). Built ENTIRELY from static code reading -- the route handlers themselves, app/agents/breach/services/*.py, app/agents/breach/schemas/incident.py, app/agents/breach/errors.py, app/agents/breach/services/lifecycle.py, and tests/test_breach_fixes_regression.py (the prior F-1..F-5 audit fixes). NOT EXECUTED LIVE against any server: the only running stack on this box is production (docker-compose.prod.yml), which is strictly off-limits, so no request in this collection has been fired. To actually run it: point baseUrl at a non-production test deployment, obtain a real bearer token (a signed-in person's JWT via Depends(get_current_user) -- this agent has no separate service-key auth path the way DSR does), and replace every placeholder id variable with a real one from that environment, in the order the folders run (later folders depend on state created by earlier ones on the SAME incident: 1 creates it, 13 queues analysis, 17 builds a plan whose actions feed 18-22's actionId, 23 drafts a communication feeding 25-26's communicationId, 27 generates the report 29's close requires).\n\nAuth: a signed-in person's bearer JWT via Depends(get_current_user) -- every route uses the same dependency, so auth and org-scoping behave identically across all 30 routes. Nothing accepts an org_id from the caller.\n\nError envelope: plain `{\"detail\": ...}` (app/main.py's default ConsivaError/RequestValidationError handling) -- for a domain error (IncidentError subclass) `detail` is a string; for a FastAPI RequestValidationError, `detail` is the default list of {loc, msg, type} objects.\n\nNon-disclosure: every route keyed by {incident_id} resolves it through incident_service.get_incident_or_raise, which treats an incident in another org exactly like one that does not exist -> 404 for both, never 403 (errors.py IncidentNotFoundError's own docstring states this is deliberate). Confirmed by spot-check across every {incident_id}-keyed route.\n\nFindings surfaced while building this collection (full detail in this agent's task report; backend findings are report-only -- every backend file here belongs to one of four other active lanes, so nothing was fixed in incidents.py or app/agents/breach/** from this lane): (1) communication_service.py's approve_communication and mark_communication_sent both raise IncidentNotReadyError (409) for a communication id that does not exist or belongs to another incident, where the equivalent action-id lookups elsewhere in this agent correctly raise IncidentNotFoundError (404) -- folders 25 and 26. (2) No per-org rate limit on POST /incidents or POST /{id}/analyse, the same class of gap already fixed in Purpose Classifier and reported (not yet fixed) in DSR earlier this session -- folder 13. (3) Every free-text reason/error_detail/closure_summary field reaches the shared audit log completely unredacted, unlike evidence.detail which is scrubbed by investigation_service.redact() first -- folder 30. (4) Breach's classify route takes override_type as a bare query parameter while DSR's equivalent takes a JSON body field of the same name, and the two agents' 'unknown override value' errors return different status codes (400 here, 409 in DSR) -- folder 4. (5) Attestation text and action blocked_reason are returned verbatim through GET /{id}/actions with no redaction and no detail-reveal gate, unlike evidence -- folder 19.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "REPLACE_WITH_REAL_BEARER_TOKEN",
+      "type": "string"
+    },
+    {
+      "key": "incidentId",
+      "value": "11111111-1111-1111-1111-111111111111",
+      "type": "string"
+    },
+    {
+      "key": "foreignIncidentId",
+      "value": "22222222-2222-2222-2222-222222222222",
+      "type": "string"
+    },
+    {
+      "key": "actionId",
+      "value": "33333333-3333-3333-3333-333333333333",
+      "type": "string"
+    },
+    {
+      "key": "evidenceId",
+      "value": "44444444-4444-4444-4444-444444444444",
+      "type": "string"
+    },
+    {
+      "key": "communicationId",
+      "value": "55555555-5555-5555-5555-555555555555",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Create Incident (POST /incidents)",
+      "item": [
+        {
+          "name": "Happy path - manual report",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents",
+            "description": "CREATES STATE: inserts an incident_cases row and, because this is a new (non-idempotent-replay) incident, immediately classifies it and transitions REPORTED -> VALIDATING in the same request (routes/incidents.py create_incident, lines ~259-283). Two audit entries land before the response is built (incident.created, incident.classified) plus the VALIDATING transition's own incident.validated entry -- three audit rows from one call.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Unauthorized access to the customer database\",\n  \"description\": \"An account with no business reason queried the customers table 400 times overnight.\",\n  \"source\": \"siem\",\n  \"detected_at\": \"2026-01-01T03:00:00Z\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('incident is classified and carries allowed_transitions', () => {\n  const body = pm.response.json();\n  pm.expect(body).to.have.property('id');\n  pm.expect(body.status).to.eql('validating');\n  pm.expect(body.incident_type).to.be.a('string');\n  pm.expect(body.allowed_transitions).to.be.an('array');\n  pm.expect(body.sla).to.have.property('due_at');\n  pm.collectionVariables.set('incidentId', body.id);\n});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Idempotent retry - same idempotency_key returns the same incident",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents",
+            "description": "Run this request TWICE with the same idempotency_key. incident_service.create_incident looks up an existing row by idempotency_key first and returns is_new=False on the second call -- no second row, no second classify/validate. SAFE to re-run; verify manually the 'id' is identical both times.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Unauthorized access to the customer database\",\n  \"description\": \"An account with no business reason queried the customers table 400 times overnight.\",\n  \"source\": \"siem\",\n  \"detected_at\": \"2026-01-01T03:00:00Z\",\n  \"idempotency_key\": \"demo-breach-key-001\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201 on every call (not 200 on repeat)', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - description shorter than 10 characters",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents",
+            "description": "SAFE / no state created. IncidentCreate.description has min_length=10 (routes/incidents.py:51) -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Something happened\",\n  \"description\": \"too short\",\n  \"source\": \"manual\",\n  \"detected_at\": \"2026-01-01T03:00:00Z\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - source not a known value",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents",
+            "description": "SAFE / no state created. IncidentCreate._known_source (routes/incidents.py:59-64) rejects a value outside vocab.INCIDENT_SOURCES as a pydantic ValueError -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Something happened\",\n  \"description\": \"A longer description of what was observed.\",\n  \"source\": \"carrier_pigeon\",\n  \"detected_at\": \"2026-01-01T03:00:00Z\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - initial_severity not a known value",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents",
+            "description": "SAFE / no state created. IncidentCreate._known_severity (routes/incidents.py:66-71) rejects a value outside vocab.SEVERITIES -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Something happened\",\n  \"description\": \"A longer description of what was observed.\",\n  \"source\": \"manual\",\n  \"detected_at\": \"2026-01-01T03:00:00Z\",\n  \"initial_severity\": \"catastrophic\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"x\",\n  \"description\": \"A longer description of what was observed.\",\n  \"source\": \"manual\",\n  \"detected_at\": \"2026-01-01T03:00:00Z\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. List Incidents (GET /incidents)",
+      "item": [
+        {
+          "name": "Happy path - default limit",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents",
+            "description": "READ-ONLY, safe to re-run. `limit` defaults to 50, clamped with `min(limit, 200)` (routes/incidents.py:293-295) -- note this is a silent clamp, not a 422, same quirk already documented in this session's dsr_agent collection for GET /dsr/requests: passing limit=99999 does not error, it just returns at most 200 rows. Consistent WITHIN this file (list_incidents is the only paginated list route here), so this is a cross-AGENT inconsistency (Purpose Classifier 422s past its max) rather than a within-file bug."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - status_filter",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents?status_filter=closed",
+            "description": "READ-ONLY, safe to re-run. status_filter is a free-form str | None, not a Literal against vocab.ALL_STATUSES -- an unrecognised value does not 422, it just matches no rows and returns [] with 200 (same shape as DSR's status_filter)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Documented quirk - limit above 200 is silently clamped, not rejected",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents?limit=99999",
+            "description": "DOCUMENTED QUIRK, READ-ONLY, safe to re-run. See the happy-path note above."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('at most 200 rows', () => pm.expect(pm.response.json().length).to.be.at.most(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Get Incident (GET /incidents/{id})",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}",
+            "description": "READ-ONLY, safe to re-run. incidentId must belong to the caller's org."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('id matches requested incident', () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('incidentId')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - random UUID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/99999999-9999-9999-9999-999999999999",
+            "description": "READ-ONLY, safe to re-run. A syntactically valid UUID matching no row in this org -> IncidentNotFoundError -> 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - malformed UUID path param",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/not-a-uuid",
+            "description": "READ-ONLY, safe to re-run. `incident_id: uuid.UUID` path param fails FastAPI's type coercion before the handler runs -> 422 (distinct from the well-formed-but-missing case above, which is 404)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Classify (POST /incidents/{id}/classify)",
+      "item": [
+        {
+          "name": "Happy path - auto-classify (no override)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/classify",
+            "description": "MUTATES STATE: re-runs the deterministic classifier and writes an incident.classified audit entry every time, even if the outcome doesn't change. Safe to re-run -- idempotent in effect, not in audit-log row count.\n\nCONTRACT NOTE: unlike DSR's POST /requests/{id}/classify, which takes a JSON body (ClassifyRequest{override_type}), this route's `override_type` is a bare function parameter with no Pydantic model and no explicit Query()/Body() marker (routes/incidents.py classify, `override_type: str | None = None`) -- FastAPI resolves an unmarked simple-typed parameter on a POST route as a QUERY parameter, not a body field. Two agents in the same codebase expose the 'classify with an override' operation with two different request shapes for no stated reason."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('incident_type is a known type', () => pm.expect(pm.response.json().incident_type).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - manual override via query param",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/classify?override_type=insider_incident",
+            "description": "MUTATES STATE: classification_method becomes 'manual', classification_confidence becomes 1.0. override_type travels as a QUERY STRING, not a JSON body field -- see the contract note above."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('incident_type reflects the override', () => pm.expect(pm.response.json().incident_type).to.eql('insider_incident'));",
+                  "pm.test('classification_method is manual', () => pm.expect(pm.response.json().classification_method).to.eql('manual'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - unknown override_type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/classify?override_type=not_a_real_type",
+            "description": "SAFE / nothing changed. classification.coerce_model_type returns None for an unrecognised value and incident_service.classify_incident raises InvalidIncidentError -- status_code 400 (errors.py IncidentError base / InvalidIncidentError). CROSS-AGENT INCONSISTENCY WORTH NOTING: DSR's equivalent ('override_type not a real request type') raises CaseNotReadyError -> 409, while Breach's raises InvalidIncidentError -> 400, for the semantically identical mistake ('the override value you supplied is not one of the valid types'). Neither is wrong in isolation (400 for a malformed value is arguably the more defensible of the two), but a client integrating with both agents cannot assume one status code for this class of error across the platform."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/classify",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/classify",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Set Finding (POST /incidents/{id}/finding)",
+      "item": [
+        {
+          "name": "Happy path - probable, no reason required",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/finding",
+            "description": "MUTATES STATE. Only `confirmed` requires actor + reason; any other confidence level is accepted from a machine or a person with no reason at all.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"field\": \"personal_data_involved\",\n  \"confidence\": \"probable\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('field set to probable', () => pm.expect(pm.response.json().personal_data_involved).to.eql('probable'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - confirmed with a reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/finding",
+            "description": "MUTATES STATE. `confirmed` is the only route a finding can reach that level -- recorded with a named actor_user_id and this reason. SECURITY NOTE: this `reason` free-text field is written verbatim into audit_service.record(after={'reason': reason}) with NO redaction pass (incident_service.py set_finding's audit call) -- see this agent's report for the cross-cutting finding that every free-text reason/error_detail/closure_summary field in this agent reaches the audit log unredacted, unlike evidence.detail which investigation_service.redact() scrubs first.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"field\": \"breach_confirmed\",\n  \"confidence\": \"confirmed\",\n  \"reason\": \"Egress logs show 12,000 rows leaving to an external host at 02:14.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - confirmed with no reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/finding",
+            "description": "SAFE / nothing changed. incident_service.set_finding requires a non-empty reason for 'confirmed' -> IncidentNotReadyError, 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"field\": \"breach_confirmed\",\n  \"confidence\": \"confirmed\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - unknown field",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/finding",
+            "description": "SAFE / no state created. FindingIn._known_field (routes/incidents.py) rejects anything outside ('personal_data_involved', 'breach_confirmed') -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"field\": \"something_else\",\n  \"confidence\": \"possible\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/finding",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"field\": \"breach_confirmed\",\n  \"confidence\": \"possible\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/finding",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"field\": \"breach_confirmed\",\n  \"confidence\": \"possible\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Generic Transition (POST /incidents/{id}/transition)",
+      "item": [
+        {
+          "name": "Happy path - a legal target with no dedicated endpoint",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/transition",
+            "description": "MUTATES STATE. Requires the incident to currently be in a status that can legally reach 'investigating' (e.g. fresh from create, which lands at 'validating').",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_status\": \"investigating\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status updated', () => pm.expect(pm.response.json().status).to.eql('investigating'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Guard - APPROVED can only be reached through decide_action",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/transition",
+            "description": "SAFE / rejected before the database is even touched (regression-tested in tests/test_breach_fixes_regression.py, F-3). _DEDICATED_TARGETS blocks 'approved', 'closed' and 'partially_completed' on this generic route because each has real preconditions (every action decided; a report plus a closure summary) that this endpoint does not check -> IncidentNotReadyError, 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_status\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Guard - CLOSED can only be reached through close_incident",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/transition",
+            "description": "SAFE / rejected before the database is touched, same _DEDICATED_TARGETS guard as above.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_status\": \"closed\",\n  \"reason\": \"trying to skip the report requirement\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - rejecting with no reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/transition",
+            "description": "SAFE / nothing changed. Requires a 'rejected'-reachable current status. lifecycle.requires_reason covers REJECTED and ESCALATED -- incident_service.transition raises IncidentNotReadyError (409) when neither error_detail nor detail.reason is supplied, because rejecting/escalating is a human conclusion that must be accounted for even though it carries no error_code.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_status\": \"rejected\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - illegal transition for the current status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/transition",
+            "description": "SAFE / nothing changed. lifecycle.assert_transition rejects a move the state machine does not allow from the incident's current status -> InvalidIncidentTransitionError, 409, naming the legal next states.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_status\": \"verifying\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/transition",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_status\": \"investigating\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/transition",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_status\": \"investigating\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Add Evidence (POST /incidents/{id}/evidence)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence",
+            "description": "CREATES STATE: append-only insert into incident_evidence (investigation_service.add_evidence). No update/delete path exists for evidence anywhere in this agent.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"access_log\",\n  \"source_system\": \"siem\",\n  \"summary\": \"400 SELECTs against customers from 203.0.113.9 between 02:00 and 02:14.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('secrets_redacted is reported explicitly', () => pm.expect(pm.response.json()).to.have.property('secrets_redacted'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - secret-shaped field in detail is redacted before storage",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence",
+            "description": "CREATES STATE. investigation_service.redact() strips any key that looks like a credential (is_secret_key) and any value matching a credential-shaped pattern inside a string (redact_text), BEFORE the row is ever written -- the only place in this agent's evidence/response/ communication pipeline that does. secrets_redacted must be true.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"application_log\",\n  \"source_system\": \"app-server-3\",\n  \"summary\": \"Config dump captured during triage.\",\n  \"detail\": {\n    \"db_password\": \"hunter2\",\n    \"note\": \"Authorization: Bearer eyJhbGciOi.example.token\"\n  }\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('secrets were found and redacted', () => pm.expect(pm.response.json().secrets_redacted).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - kind not a known evidence kind",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence",
+            "description": "SAFE / no state created. EvidenceIn._known_kind rejects a value outside vocab.EVIDENCE_KINDS -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"rumor\",\n  \"source_system\": \"siem\",\n  \"summary\": \"Someone said something.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - summary missing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence",
+            "description": "SAFE / no state created. EvidenceIn.summary has min_length=1 -> 422. (investigation_service.add_evidence ALSO re-checks summary is non-empty and would raise InvalidIncidentError/400 if it somehow got past Pydantic -- harmless defense-in-depth, this path is unreachable via the API.)",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"access_log\",\n  \"source_system\": \"siem\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/evidence",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"access_log\",\n  \"source_system\": \"siem\",\n  \"summary\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"access_log\",\n  \"source_system\": \"siem\",\n  \"summary\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "8. List Evidence (GET /incidents/{id}/evidence)",
+      "item": [
+        {
+          "name": "Happy path - detail is never in the list",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence",
+            "description": "READ-ONLY, safe to re-run. list_evidence deliberately omits `detail` from every row (routes/incidents.py:397-418's own docstring) -- a list view is the one most likely to be left open on a shared screen. `has_detail` tells the UI whether there is anything to reveal; the reveal itself is a separate, audited GET (folder 9)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "pm.test('no row carries a detail field', () => { const rows = pm.response.json(); rows.forEach(r => pm.expect(r).to.not.have.property('detail')); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/evidence",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "9. Get Evidence Detail (GET /incidents/{id}/evidence/{evidence_id})",
+      "item": [
+        {
+          "name": "Happy path - audited read",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence/{{evidenceId}}",
+            "description": "READ-ONLY but MUTATES THE AUDIT LOG: every read of evidence detail writes an incident.evidence_viewed audit entry BEFORE the response is returned (routes/incidents.py:441-446) -- who looked at incident evidence is itself something an investigation may need to answer. Re-running this adds another audit row each time; it is still safe to re-run in the sense that it changes nothing about the evidence itself."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('detail is present here (unlike the list)', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - random evidence UUID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence/99999999-9999-9999-9999-999999999999",
+            "description": "SAFE / no state changed. get_evidence returns None for this org, or a row whose incident_id doesn't match -> IncidentNotFoundError, 404 (routes/incidents.py:437-439)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/evidence/{{evidenceId}}",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/evidence/{{evidenceId}}",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10. Add Timeline Entry (POST /incidents/{id}/timeline)",
+      "item": [
+        {
+          "name": "Happy path - possible confidence needs no evidence citation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/timeline",
+            "description": "CREATES STATE: append-only insert into incident_timeline.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"occurred_at\": \"2026-01-01T02:14:00Z\",\n  \"event\": \"Unusual egress volume observed.\",\n  \"confidence\": \"possible\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - probable or better requires an evidence_id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/timeline",
+            "description": "SAFE / nothing created. investigation_service.add_timeline_entry requires evidence_id when vocab.at_least(confidence, PROBABLE) -- an entry asserted at better than POSSIBLE with nothing behind it is 'a guess wearing a timestamp' per the function's own docstring -> EvidenceUnavailableError, 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"occurred_at\": \"2026-01-01T02:14:00Z\",\n  \"event\": \"The database was read.\",\n  \"confidence\": \"probable\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - confidence not a known level",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/timeline",
+            "description": "SAFE / no state created. TimelineIn._known_confidence rejects anything outside vocab.CONFIDENCE_LEVELS -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"occurred_at\": \"2026-01-01T02:14:00Z\",\n  \"event\": \"Something happened.\",\n  \"confidence\": \"pretty_sure\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/timeline",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"occurred_at\": \"2026-01-01T02:14:00Z\",\n  \"event\": \"x\",\n  \"confidence\": \"possible\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/timeline",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"occurred_at\": \"2026-01-01T02:14:00Z\",\n  \"event\": \"x\",\n  \"confidence\": \"possible\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "11. Get Timeline (GET /incidents/{id}/timeline)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/timeline",
+            "description": "READ-ONLY, safe to re-run."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/timeline",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/timeline",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "12. Add Affected System (POST /incidents/{id}/systems)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/systems",
+            "description": "CREATES STATE. `known_to_consiva` in the response reflects whether this system name matched an existing ROPA data source -- false means its contents are unknown to Consiva, a gap rather than an absence of personal data.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"system_name\": \"crm-postgres\",\n  \"system_kind\": \"database\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - system_kind not known",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/systems",
+            "description": "SAFE / no state created. AffectedSystemIn._known_kind rejects a value outside vocab.SYSTEM_KINDS -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"system_name\": \"mystery-box\",\n  \"system_kind\": \"mainframe_from_1985\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/systems",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"system_name\": \"x\",\n  \"system_kind\": \"database\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/systems",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"system_name\": \"x\",\n  \"system_kind\": \"database\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "13. Start Analysis (POST /incidents/{id}/analyse)",
+      "item": [
+        {
+          "name": "Happy path - queues the background job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/analyse",
+            "description": "MUTATES STATE: if the incident is still REPORTED/VALIDATING, transitions it to INVESTIGATING, then enqueues an `incident_analysis` job on the shared agent_jobs queue (routes/incidents.py:518-542). The job runs asynchronously in a worker -- this response only reports that it was QUEUED, never progress the backend hasn't reported.\n\nRATE-LIMITING GAP (reported, not fixed -- outside this lane's editable files): this route has NO per-org request-rate limit of any kind. grep across app/api/v1/routes/incidents.py and every app/agents/breach/services/*.py file for rate_limit/RateLimitExceededError/count_scans_since-style quota logic returns nothing. Every call enqueues a real worker job (DB reads across ROPA mappings and all of an incident's evidence), so a caller looping on this endpoint -- or on POST /incidents itself, which has the identical gap -- can flood the job queue with no backend check at all. Purpose Classifier (consent_agent.py:180-187, RateLimitExceededError, count_scans_since-based hourly quota) and the equivalent DSR gap (reported earlier this session, not yet fixed) are the two other instances of exactly this class of gap on this platform; Breach is the third and has neither endpoint protected. Suggested fix location: a per-org count against incident_cases created in the last hour before create_incident commits (incidents.py:253-283), and a similar count against queued incident_analysis jobs before start_analysis enqueues another one (incidents.py:518-542)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('job_id is returned', () => pm.expect(pm.response.json().job_id).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/analyse",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/analyse",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "14. Get Impact (GET /incidents/{id}/impact)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/impact",
+            "description": "READ-ONLY, safe to re-run. `total` always carries its count_basis alongside the number -- never a bare figure (routes/incidents.py:589-590's own comment)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('total always carries its basis', () => pm.expect(pm.response.json().total).to.have.property('count_basis'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/impact",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/impact",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "15. Record Subjects (POST /incidents/{id}/subjects)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/subjects",
+            "description": "CREATES STATE.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_group\": \"customers\",\n  \"record_count\": 400,\n  \"count_basis\": \"counted\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - count_basis not a known value",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/subjects",
+            "description": "SAFE / no state created. SubjectsIn._known_basis rejects anything outside ('counted', 'estimated', 'unknown') -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_group\": \"customers\",\n  \"count_basis\": \"guessed\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/subjects",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_group\": \"x\",\n  \"count_basis\": \"unknown\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/subjects",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject_group\": \"x\",\n  \"count_basis\": \"unknown\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "16. Get Risk (GET /incidents/{id}/risk)",
+      "item": [
+        {
+          "name": "Happy path - no assessment yet",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/risk",
+            "description": "READ-ONLY, safe to re-run. `current: null` before any risk assessment has run."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/risk",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/risk",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "17. Build Plan (POST /incidents/{id}/plan)",
+      "item": [
+        {
+          "name": "Happy path - incident already in response_pending",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/plan",
+            "description": "MUTATES STATE: proposes containment actions and -- per F-4 of this session's prior audit (tests/test_breach_fixes_regression.py) -- advances the incident past RESPONSE_PENDING on its own once a plan exists, rather than stalling there. Requires the incident to already be in RESPONSE_PENDING (reach it via risk_assessment -> response_pending, or the generic transition route, before calling this)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('a plan with at least one action exists', () => pm.expect(pm.response.json().summary.total).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lifecycle conflict - incident not yet in response_pending",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/plan",
+            "description": "Requires a freshly-created incident (status=validating). response_service.build_response_plan's own precondition on case.status rejects building a plan before the incident has reached response_pending -> 409."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/plan",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/plan",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "18. Add Action (POST /incidents/{id}/actions)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions",
+            "description": "CREATES STATE. NOTE ON F-1 (this session's prior audit, tests/test_breach_fixes_regression.py): ActionIn (routes/incidents.py) has NO execution_mode field at all -- every action added through this route is forced to execution_mode='tracked' inside response_service.add_action's default. Connector-mode execution is therefore unreachable from the public API entirely, not merely rejected at the service layer; the regression test exercises the service function directly to prove the service-layer guard still holds for any OTHER internal caller.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action_kind\": \"preserve_logs\",\n  \"title\": \"Preserve access and query logs\",\n  \"rationale\": \"Establishing scope later depends entirely on logs kept now.\",\n  \"expected_result\": \"relevant logs are copied somewhere retention cannot expire them\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('execution_mode is always tracked through this route', () => pm.expect(pm.response.json().requires_approval).to.be.a('boolean'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - action_kind not known",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions",
+            "description": "SAFE / no state created. ActionIn._known_kind rejects a value outside vocab.ACTION_KINDS -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action_kind\": \"summon_the_vendor\",\n  \"title\": \"Do something\",\n  \"rationale\": \"Because.\",\n  \"expected_result\": \"It works.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/actions",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action_kind\": \"preserve_logs\",\n  \"title\": \"x\",\n  \"rationale\": \"y\",\n  \"expected_result\": \"z\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action_kind\": \"preserve_logs\",\n  \"title\": \"x\",\n  \"rationale\": \"y\",\n  \"expected_result\": \"z\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "19. Get Plan (GET /incidents/{id}/actions)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions",
+            "description": "READ-ONLY, safe to re-run. Each action's `executions` array includes raw `attestation` text (routes/incidents.py _plan_response ~line 714) -- SECURITY NOTE: unlike evidence.detail, nothing in response_service.record_tracked_execution runs attestation text through investigation_service.redact() before storage. A person who pastes a credential into 'what they actually did' (e.g. 'reset the password to Xk29!af') has it returned verbatim by this route to anyone who can view the plan -- no has_detail-style gate the way evidence has. See this agent's report."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('actions is an array', () => pm.expect(pm.response.json().actions).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/actions",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "20. Decide Action (POST /incidents/{id}/actions/{action_id}/decision)",
+      "item": [
+        {
+          "name": "Happy path - approve",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/decision",
+            "description": "MUTATES STATE. If this resolves the last undecided action while APPROVAL_REQUIRED, also transitions the incident to APPROVED in the same call.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"Proportionate to the evidence.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - reject with no reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/decision",
+            "description": "SAFE / nothing changed. vocab.DECISIONS_REQUIRING_REASON includes 'rejected' -> IncidentNotReadyError, 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - approving a high-risk action with no reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/decision",
+            "description": "Requires a high-risk action (e.g. disable_account). response_service.decide_action requires a reason for any approval of a risk='high' action, independent of DECISIONS_REQUIRING_REASON -> 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - unknown decision",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/decision",
+            "description": "SAFE / no state created. DecisionIn._known_decision rejects anything outside vocab.DECISIONS -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"maybe_later\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - random action id on a real incident",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/99999999-9999-9999-9999-999999999999/decision",
+            "description": "SAFE / no state changed. response_service.decide_action raises IncidentNotFoundError (404) when the action id doesn't resolve under this incident -- correctly 404, not 409 (contrast with folder 25's finding about the two communication-decision routes, which get this wrong).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/actions/{{actionId}}/decision",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/decision",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "21. Attest Action (POST /incidents/{id}/actions/{action_id}/attest)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/attest",
+            "description": "MUTATES STATE: records a human attestation, never an executed-by-Consiva action. verification_status is always 'attested', never upgraded to 'read_back' -- Consiva did not observe this and cannot confirm its effect. If this was the last outstanding action while RESPONDING, also advances the incident to VERIFYING. SECURITY NOTE: `attestation` is stored verbatim, with no redaction pass -- see folder 19's note.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"performed_by\": \"priya@corp\",\n  \"attestation\": \"Disabled the account's database role at 09:40.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('verification_status is attested, never upgraded', () => pm.expect(pm.response.json().verification_status).to.eql('attested'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - attestation too short",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/attest",
+            "description": "SAFE / no state created. AttestationIn.attestation has min_length=5 -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"performed_by\": \"priya@corp\",\n  \"attestation\": \"ok\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - random action id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/99999999-9999-9999-9999-999999999999/attest",
+            "description": "SAFE / no state changed. record_tracked_execution raises IncidentNotFoundError (404) for an action id that doesn't resolve under this incident.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"performed_by\": \"x\",\n  \"attestation\": \"Did a thing.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/actions/{{actionId}}/attest",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"performed_by\": \"x\",\n  \"attestation\": \"Did a thing.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/attest",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"performed_by\": \"x\",\n  \"attestation\": \"Did a thing.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "22. Fail Action (POST /incidents/{id}/actions/{action_id}/failed)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/failed",
+            "description": "MUTATES STATE. The request body reuses DecisionIn, but `decision` itself is never read by the handler or by response_service.mark_action_failed -- only `reason` matters (routes/incidents.py fail_action passes `reason=payload.reason or \"\"`). The frontend always sends decision='rejected' as a filler value; any string in that field is accepted and ignored.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\",\n  \"reason\": \"The account could not be reached; escalated to the platform team.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status is failed', () => pm.expect(pm.response.json().status).to.eql('failed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - reason missing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/failed",
+            "description": "SAFE / nothing changed. mark_action_failed requires a non-empty reason -> IncidentNotReadyError, 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Not found - random action id",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/99999999-9999-9999-9999-999999999999/failed",
+            "description": "SAFE / no state changed. mark_action_failed raises IncidentNotFoundError (404).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\",\n  \"reason\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/actions/{{actionId}}/failed",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\",\n  \"reason\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/actions/{{actionId}}/failed",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\",\n  \"reason\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "23. Draft Communication (POST /incidents/{id}/communications)",
+      "item": [
+        {
+          "name": "Happy path - internal audience (auto-drafted, no review gate)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications",
+            "description": "CREATES STATE. Internal/management/privacy_team land at status='draft'; a body is auto-composed from recorded facts if none is supplied.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"audience\": \"internal\",\n  \"subject\": \"Incident status update\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('internal draft does not require review', () => pm.expect(pm.response.json().status).to.eql('draft'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - external audience requires review",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications",
+            "description": "CREATES STATE. vocab.EXTERNAL_AUDIENCES forces status='review_required' -- cannot be marked sent without an approval decision first (folder 26).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"audience\": \"customer\",\n  \"subject\": \"Notice about a recent security incident\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('external draft requires review', () => pm.expect(pm.response.json().status).to.eql('review_required'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - audience not known",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications",
+            "description": "SAFE / no state created. CommunicationIn._known_audience rejects anything outside vocab.COMMUNICATION_AUDIENCES -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"audience\": \"the_press\",\n  \"subject\": \"Statement\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validation error - subject too short",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications",
+            "description": "SAFE / no state created. CommunicationIn.subject has min_length=3 -> 422.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"audience\": \"internal\",\n  \"subject\": \"Hi\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/communications",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"audience\": \"internal\",\n  \"subject\": \"Update\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"audience\": \"internal\",\n  \"subject\": \"Update\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "24. List Communications (GET /incidents/{id}/communications)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications",
+            "description": "READ-ONLY, safe to re-run. `body` IS returned in full here (unlike evidence detail, which is gated behind a separate audited request) -- a drafted communication is meant to be read and edited by reviewers before approval, so no gate is appropriate here."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/communications",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "25. Decide Communication (POST /incidents/{id}/communications/{communication_id}/decision)",
+      "item": [
+        {
+          "name": "Happy path - approve",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/{{communicationId}}/decision",
+            "description": "MUTATES STATE.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - reject with no reason",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/{{communicationId}}/decision",
+            "description": "SAFE / nothing changed. approve_communication requires a reason when decision=rejected -> IncidentNotReadyError, 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"rejected\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - already decided (duplicate-decision guard)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/{{communicationId}}/decision",
+            "description": "Requires a communication already approved or rejected. approve_communication's own guard (communication_service.py, comment cites 'same class of gap as Agent 3's DsrApproval guard') refuses a second decision on the same draft -> 409. A genuine strength: re-submission from a stale UI or a race between two reviewers cannot silently overwrite the first decision.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "BUG: missing/foreign communication id returns 409, not 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/99999999-9999-9999-9999-999999999999/decision",
+            "description": "CONFIRMED BUG (communication_service.py approve_communication, `if comm is None or comm.incident_id != case.id: raise IncidentNotReadyError(...)`): a communication id that does not exist at all, or belongs to a different incident, raises IncidentNotReadyError -> 409 ('this doesn't exist' reported as 'a precondition is missing'), not IncidentNotFoundError -> 404. Compare folder 20's equivalent case for actions (decide_action's missing-action-id path), which correctly raises IncidentNotFoundError/404 for the identical situation. This is the exact class of status-code bug already found and fixed in DSR's own routes this session (_require_admin returning 409 for what is really 'not found'/'not allowed'). Suggested fix: change both raises in communication_service.py (approve_communication and mark_communication_sent, see folder 26) from IncidentNotReadyError to IncidentNotFoundError. Out of this lane's editable files -- communication_service.py belongs to another lane.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('ACTUAL current behavior is 409 (this is the bug, not the spec)', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/communications/{{communicationId}}/decision",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/{{communicationId}}/decision",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "26. Mark Communication Sent (POST /incidents/{id}/communications/{communication_id}/sent)",
+      "item": [
+        {
+          "name": "Happy path - internal draft needs no prior approval",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/{{communicationId}}/sent",
+            "description": "MUTATES STATE: records that a PERSON sent it. Consiva has no outbound provider and never sends anything itself. For an internal/management/privacy_team draft (not in EXTERNAL_AUDIENCES), this is allowed straight from 'draft' with no approval step."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('note explains Consiva sends nothing', () => pm.expect(pm.response.json().note).to.match(/no outbound provider/));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - external draft not yet approved",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/{{communicationId}}/sent",
+            "description": "Requires an external-audience communication still in 'draft' or 'review_required'. mark_communication_sent's absolute gate for EXTERNAL_AUDIENCES refuses no matter who asks -> ApprovalRequiredError, 403."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 403', () => pm.response.to.have.status(403));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Already sent - idempotent, not an error",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/{{communicationId}}/sent",
+            "description": "SAFE to re-run against an already-sent communication: mark_communication_sent returns the row as-is (`if comm.status == 'sent': return comm`) rather than erroring -- a deliberate idempotent re-click, not a double-send."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "BUG: missing/foreign communication id returns 409, not 404",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/99999999-9999-9999-9999-999999999999/sent",
+            "description": "CONFIRMED BUG, same shape as folder 25: mark_communication_sent (communication_service.py) raises IncidentNotReadyError -> 409 for a communication id that does not exist or belongs to another incident, where every other 'this id doesn't resolve under this incident' case in this agent (evidence, actions) correctly raises IncidentNotFoundError -> 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('ACTUAL current behavior is 409 (this is the bug, not the spec)', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/communications/{{communicationId}}/sent",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/communications/{{communicationId}}/sent",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "27. Generate Report (POST /incidents/{id}/report)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/report",
+            "description": "CREATES STATE: a new incident_reports row every call, version incremented (communication_service.generate_report). drafted_by_model is always null on this path -- deterministic, assembled from recorded facts, no model involved."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('grounded_facts is an array', () => pm.expect(pm.response.json().grounded_facts).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Re-generate - creates a new version, does not overwrite",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/report",
+            "description": "Run this twice: `version` increments each time rather than the second call replacing the first (next_report_version). The report history is append-only, same as evidence."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/report",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/report",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "28. Get Report (GET /incidents/{id}/report)",
+      "item": [
+        {
+          "name": "Happy path - no report yet returns null, not 404",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/report",
+            "description": "READ-ONLY, safe to re-run. get_report returns `None` (serialised as JSON `null`, HTTP 200) when no report has been generated yet -- deliberately not a 404, since 'no report yet' is a normal state for an open incident, not an error."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Happy path - latest report after at least one has been generated",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/report",
+            "description": "Requires folder 27 to have run at least once first. Returns the highest-version report."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/report",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/report",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "29. Close Incident (POST /incidents/{id}/close)",
+      "item": [
+        {
+          "name": "Happy path - nothing outstanding, closes cleanly",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/close",
+            "description": "MUTATES STATE, TERMINAL: requires the incident already in CLOSURE_REVIEW and a report already generated (folder 27). `decision` is accepted but not actually branched on by close_incident -- only `reason` (used as the mandatory closure_summary) and the recorded actions' outcomes decide the result. closing_status(blocked, failed) determines CLOSED vs PARTIALLY_COMPLETED; as of a concurrent fix landed on this file during this session, a reviewer's 'rejected' decision on an action is now folded into 'blocked' for this purpose too (close_incident, 'blocked = sum(1 for a in actions if a.status in (\"blocked\", \"rejected\"))') -- a declined containment action is a deliberate non-change and must show up here exactly like a hard block.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"Access revoked; 400 customer records read; customers told.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status is closed when nothing was blocked or failed', () => pm.expect(pm.response.json().status).to.eql('closed'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - no closure summary",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/close",
+            "description": "SAFE / nothing changed. close_incident requires a non-blank `reason` as the closure summary -> IncidentNotReadyError, 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Domain error - no report generated yet",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/close",
+            "description": "Requires an incident in CLOSURE_REVIEW with no report ever generated. close_incident requires get_latest_report to return something first -> IncidentNotReadyError, 409.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"Done.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 409', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Partial completion - a blocked or rejected action is reported honestly",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/close",
+            "description": "Requires an incident in CLOSURE_REVIEW, a report already generated, and at least one action with status='blocked', 'rejected' or 'failed'. Regression-tested as F-5 (tests/test_breach_fixes_regression.py) -- closing must never report CLOSED when something did not actually happen.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"Investigation complete; one action could not be carried out.\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('status is partially_completed, never closed, when something was blocked/failed', () => pm.expect(pm.response.json().status).to.eql('partially_completed'));",
+                  "pm.test('error_code explains which', () => pm.expect(pm.response.json().error_code).to.be.oneOf(['ACTION_BLOCKED', 'ACTION_FAILED']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/close",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/close",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approved\",\n  \"reason\": \"x\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "30. Get Incident Audit Timeline (GET /incidents/{id}/audit)",
+      "item": [
+        {
+          "name": "Happy path",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/audit",
+            "description": "READ-ONLY, safe to re-run. Reads the SHARED append-only audit_logs table, filtered by (org_id, entity_type='incident_case', entity_id=incident_id) -- distinct from GET .../timeline, which is what happened in the world, not in Consiva.\n\nCROSS-CUTTING AUDIT FINDING (this agent's own lane, spot-checked every audit_service.record(...) call site across incident_service.py, investigation_service.py, response_service.py, communication_service.py and sla_service.py): no call passes a raw evidence.detail dict or a communication body -- both are deliberately excluded from every after={...} payload in this codebase. BUT every free-text `reason`/`error_detail`/`closure_summary` field DOES reach the audit log completely unredacted: incident_service.py transition() (`after={'error_detail': error_detail, **(detail or {})}`, ~line 206-209) and set_finding() (`after={field: confidence, 'reason': reason}`, ~line 314), response_service.py decide_action() (`after={..., 'reason': reason, ...}`, ~line 433-437), and communication_service.py approve_communication() (`after={..., 'reason': reason}`, ~line 439-440) all write a human-typed free-text field straight into the shared audit log with none of investigation_service.redact()'s credential-pattern scrubbing applied. A reviewer who pastes 'disabled using the temp password Xk29!af' into any approval/rejection/finding/closure reason field writes that credential into the permanent audit trail. Suggested fix (outside this lane's editable files): route every free-text reason/detail value through investigation_service.redact_text() before it reaches audit_service.record's after= payload, in incident_service.py, response_service.py and communication_service.py."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('response is an array of audit entries', () => pm.expect(pm.response.json()).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-org access attempt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/incidents/{{foreignIncidentId}}/audit",
+            "description": "CROSS-ORG TEST, SAFE / no state changed: valid auth, but the incident id in the path belongs to a different org than the caller's token. Every route resolves {incident_id} through incident_service.get_incident_or_raise, which queries by (incident_id, org_id) -- a row in another org is indistinguishable from a row that does not exist at all, so BOTH raise IncidentNotFoundError -> 404, never 403 (errors.py:37-40's own docstring states this is deliberate). Spot-checked and holds across every {incident_id}-keyed route in this file."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 404 not 403 (non-disclosure)', () => pm.response.to.have.status(404));",
+                  "pm.test('detail mentions not found', () => pm.expect(pm.response.json().detail).to.match(/not found/i));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unauthenticated - no Authorization header",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/incidents/{{incidentId}}/audit",
+            "description": "SAFE / no state changed. Depends(get_current_user) rejects a missing/invalid bearer token with 401 before the handler body runs -- the same dependency every route in this file uses, so tenancy and authentication behave identically across all 30 routes."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 401', () => pm.response.to.have.status(401));",
+                  "pm.test('detail present', () => pm.expect(pm.response.json()).to.have.property('detail'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

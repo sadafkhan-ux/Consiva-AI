@@ -687,7 +687,7 @@ async def _crawl_full_site(
         site_domain=site_domain, scripts_by_page=scripts_by_page,
         network_requests_by_page=network_requests_by_page,
     )
-    policies = detect_policies(all_links, crawled_page_text)
+    policies = detect_policies(all_links, crawled_page_text, site_domain)
     consent_signal = detect_consent_signal(
         scripts=all_scripts_flat, visible_text=" ".join(all_visible_text_parts),
         detected_global_vars=sorted(detected_global_vars),

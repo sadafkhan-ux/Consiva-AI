@@ -229,6 +229,11 @@ class ConsentFinding(Base):
     dpdp_reference: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     requires_human_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    # Technical/diagnostic detail (provider errors, ungrounded citation ids) that must
+    # never reach a customer via finding_text -- see migrations/0036 and
+    # create_rule_findings.py. Deliberately absent from every customer-facing API
+    # schema (FindingOut / consent_scans.py's FindingResponse).
+    internal_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
