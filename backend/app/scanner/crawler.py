@@ -327,6 +327,20 @@ async def _navigate_with_retry(browser_page: Page, url: str, timeout_ms: int) ->
     what a permanent failure means (fail the whole scan for the seed, or record+skip
     for anything else) and can log/persist the real cause, not a generic message.
 
+    wait_until="domcontentloaded", not "load" -- measured live against a real site
+    (honda2wheelersindia.com) whose "load" event hangs on slow/flaky THIRD-PARTY
+    stragglers unrelated to the page itself (a live-chat widget's long-poll script,
+    CDN-hosted banner media, ad/analytics beacons): reproduced 3x with one shared
+    context navigating 4 pages concurrently, "load" timed out on all 4 pages twice
+    and on 1 of 4 the third time, while a direct domcontentloaded probe against the
+    same URL returned the complete, genuine page (correct title, full HTML, zero
+    bot-challenge markers) in 1.56s every time. domcontentloaded does not lose
+    evidence quality here: the fixed _TRACKER_SETTLE_MS wait and the adaptive
+    _progressive_scroll pass both already run AFTER whichever milestone goto()
+    resolves on, and were already relied on (instead of "networkidle") to give
+    async-loading trackers/CMP banners their chance to fire -- that mechanism is
+    unchanged and unaffected by which milestone goto() itself waited for.
+
     Returns (response, status, exception, attempts_used). status is "success",
     "failed" (any non-timeout navigation error), or "timeout" (Playwright's own
     TimeoutError specifically) -- distinguished so callers can record which."""
@@ -334,7 +348,7 @@ async def _navigate_with_retry(browser_page: Page, url: str, timeout_ms: int) ->
     status = "failed"
     for attempt in range(_NAV_MAX_ATTEMPTS):
         try:
-            response = await browser_page.goto(url, timeout=timeout_ms, wait_until="load")
+            response = await browser_page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
             return response, "success", None, attempt + 1
         except PlaywrightTimeoutError as exc:
             last_exc = exc
@@ -596,88 +610,115 @@ async def _crawl_full_site(
         _discover(url, "sitemap")
 
     max_concurrent = settings.scanner_max_concurrent_pages
-    # Where each cookie was first seen, filled after every batch -- see
+    # Where each cookie was first seen, filled after every completed group -- see
     # cookie_detector.attribute_new_cookies. Read-only bookkeeping: the cookie LIST
     # still comes from the single jar read after the crawl, exactly as before.
     cookie_observations: dict = {}
 
-    while queue and diagnostics["pages_attempted"] < budget:
-        batch: list[tuple[str, str]] = []
-        while queue and len(batch) < max_concurrent and diagnostics["pages_attempted"] + len(batch) < budget:
-            _rank, _n, url, via = heapq.heappop(queue)
-            batch.append((url, via))
+    def _record_result(url: str, via: str, result: dict) -> None:
+        page_local_id = f"page-{len(pages)}"
 
-        try:
-            results = await asyncio.gather(
-                *(_fetch_one_page(context, url, root_url, settings) for url, _via in batch)
-            )
-        except _SeedUnreachable as exc:
-            # A secondary page's own failure inside the same gather() is recorded as an
-            # explicit failed/timeout PageRecord (never raised) rather than propagating
-            # here, so this can only be the seed URL -- safe to fail the whole scan.
-            raise RuntimeError(
-                f"Could not reach the site at all: {exc.url} after {exc.attempts} attempt(s) ({exc.cause})"
-            ) from exc.cause
-        diagnostics["pages_attempted"] += len(batch)
+        if result["status"] != "success":
+            # Never silently skip: a secondary page that failed after bounded
+            # retries still gets an explicit PageRecord, distinguishing "timeout"
+            # from any other "failed" -- never left out of the pages list.
+            pages.append(PageRecord(
+                local_id=page_local_id, url=url, title=None, http_status=None,
+                discovered_via=result["status"],  # "failed" | "timeout"
+            ))
+            diagnostics["pages_timeout" if result["status"] == "timeout" else "pages_failed"] += 1
+            return
+
+        diagnostics["pages_scanned"] += 1
+        parsed = result["parsed"]
+        detected_global_vars.update(result["global_vars"])
+        pages.append(PageRecord(
+            local_id=page_local_id, url=url, title=result["title"], http_status=result["http_status"],
+            discovered_via=via,
+        ))
+        forms.extend(detect_forms(page_local_id, parsed.forms))
+        scripts_by_page[page_local_id] = parsed.scripts + result["iframe_scripts"]
+        network_requests_by_page[page_local_id] = result["request_records"]
+        all_links.extend(parsed.links)
+        crawled_page_text[url] = parsed.visible_text
+        # rendered_text (document.body.innerText + every open shadow root's text,
+        # see _SHADOW_DOM_TEXT_JS) is a strict superset of parsed.visible_text for
+        # THIS purpose -- used only for consent-signal keyword detection, not for
+        # crawled_page_text/policy_detector above, which is unaffected.
+        all_visible_text_parts.append(result["rendered_text"] or parsed.visible_text)
+        # Consent detection reads ONLY this -- see detect_consent_signal.
+        all_control_text_parts.append(
+            result.get("rendered_control_text") or parsed.control_text
+        )
+        if result.get("iframe_control_text"):
+            all_control_text_parts.append(result["iframe_control_text"])
+        if result["iframe_text"]:
+            all_visible_text_parts.append(result["iframe_text"])
+        all_scripts_flat.extend(parsed.scripts)
+        all_scripts_flat.extend(result["iframe_scripts"])
+        diagnostics["total_scroll_steps"] += result["scroll_steps"]
+
+        for link in parsed.links:
+            _discover(link.href, "link")
+
+    # Rolling pool, not fixed lockstep batches: a page is launched the instant a
+    # slot frees up, rather than waiting for every other page in its cohort to
+    # finish first. Fixed batches made one slow/retried page (up to ~93s: all
+    # _NAV_MAX_ATTEMPTS attempts timing out at scanner_timeout_seconds each, plus
+    # backoff) stall the other (max_concurrent - 1) pages' slots even though they'd
+    # long since finished -- measured live on a 25-page/concurrency-4 scan where a
+    # single blocked page dominated its whole batch's wall time. A rolling pool
+    # keeps exactly max_concurrent navigations in flight at all times (budget
+    # permitting), so a slow page only ever blocks its own slot.
+    in_flight: dict[asyncio.Task, tuple[str, str]] = {}
+
+    def _fill_pool() -> None:
+        while queue and len(in_flight) < max_concurrent and diagnostics["pages_attempted"] + len(in_flight) < budget:
+            _rank, _n, url, via = heapq.heappop(queue)
+            in_flight[asyncio.create_task(_fetch_one_page(context, url, root_url, settings))] = (url, via)
+
+    _fill_pool()
+    while in_flight:
+        done, _pending = await asyncio.wait(in_flight.keys(), return_when=asyncio.FIRST_COMPLETED)
+        group = [(*in_flight.pop(task), task) for task in done]
+        diagnostics["pages_attempted"] += len(group)
+
+        results: list[tuple[str, str, dict]] = []
+        for url, via, task in group:
+            try:
+                results.append((url, via, task.result()))
+            except _SeedUnreachable as exc:
+                # A secondary page's own failure is recorded as an explicit
+                # failed/timeout PageRecord (never raised) rather than propagating
+                # here, so this can only be the seed URL -- safe to fail the whole
+                # scan. Cancel every other in-flight navigation first so none are
+                # left orphaned (and their pages properly closed via _fetch_one_page's
+                # own finally block running under cancellation).
+                for other in in_flight:
+                    other.cancel()
+                if in_flight:
+                    await asyncio.gather(*in_flight.keys(), return_exceptions=True)
+                raise RuntimeError(
+                    f"Could not reach the site at all: {exc.url} after {exc.attempts} attempt(s) ({exc.cause})"
+                ) from exc.cause
 
         try:
             jar = await context.cookies()
         except PlaywrightError as exc:
-            logger.debug("Could not read cookies after a batch for %s: %s", root_url, exc)
+            logger.debug("Could not read cookies after a page group for %s: %s", root_url, exc)
         else:
             cookie_observations.update(attribute_new_cookies(
                 jar, set(cookie_observations),
-                batch_page_urls=[u for (u, _v), r in zip(batch, results, strict=True) if r["status"] == "success"]
-                or [u for u, _v in batch],
-                header_events=[e for r in results for e in r.get("set_cookie_events", [])],
+                batch_page_urls=[u for u, _v, r in results if r["status"] == "success"]
+                or [u for u, _v, _r in results],
+                header_events=[e for _u, _v, r in results for e in r.get("set_cookie_events", [])],
                 observed_at=_now_iso(), consent_state="pre_consent",
             ))
 
-        for (url, via), result in zip(batch, results, strict=True):
-            page_local_id = f"page-{len(pages)}"
+        for url, via, result in results:
+            _record_result(url, via, result)
 
-            if result["status"] != "success":
-                # Never silently skip: a secondary page that failed after bounded
-                # retries still gets an explicit PageRecord, distinguishing "timeout"
-                # from any other "failed" -- never left out of the pages list.
-                pages.append(PageRecord(
-                    local_id=page_local_id, url=url, title=None, http_status=None,
-                    discovered_via=result["status"],  # "failed" | "timeout"
-                ))
-                diagnostics["pages_timeout" if result["status"] == "timeout" else "pages_failed"] += 1
-                continue
-
-            diagnostics["pages_scanned"] += 1
-            parsed = result["parsed"]
-            detected_global_vars.update(result["global_vars"])
-            pages.append(PageRecord(
-                local_id=page_local_id, url=url, title=result["title"], http_status=result["http_status"],
-                discovered_via=via,
-            ))
-            forms.extend(detect_forms(page_local_id, parsed.forms))
-            scripts_by_page[page_local_id] = parsed.scripts + result["iframe_scripts"]
-            network_requests_by_page[page_local_id] = result["request_records"]
-            all_links.extend(parsed.links)
-            crawled_page_text[url] = parsed.visible_text
-            # rendered_text (document.body.innerText + every open shadow root's text,
-            # see _SHADOW_DOM_TEXT_JS) is a strict superset of parsed.visible_text for
-            # THIS purpose -- used only for consent-signal keyword detection, not for
-            # crawled_page_text/policy_detector above, which is unaffected.
-            all_visible_text_parts.append(result["rendered_text"] or parsed.visible_text)
-            # Consent detection reads ONLY this -- see detect_consent_signal.
-            all_control_text_parts.append(
-                result.get("rendered_control_text") or parsed.control_text
-            )
-            if result.get("iframe_control_text"):
-                all_control_text_parts.append(result["iframe_control_text"])
-            if result["iframe_text"]:
-                all_visible_text_parts.append(result["iframe_text"])
-            all_scripts_flat.extend(parsed.scripts)
-            all_scripts_flat.extend(result["iframe_scripts"])
-            diagnostics["total_scroll_steps"] += result["scroll_steps"]
-
-            for link in parsed.links:
-                _discover(link.href, "link")
+        _fill_pool()
 
     diagnostics["pages_not_attempted_budget_exhausted"] = len(queue)
 
