@@ -8,6 +8,7 @@ regression here is caught automatically."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+from app.config import get_settings
 from app.jobs import queue
 
 
@@ -103,3 +104,56 @@ async def test_dequeue_one_is_the_single_job_form_of_dequeue_batch():
 
 async def test_dequeue_one_returns_none_on_an_empty_queue():
     assert await queue.dequeue_one(_db_returning([]), worker_id="w-1") is None
+
+
+# ── The reaper must not declare a healthy job dead ──────────────────────────────
+# _STALE_THRESHOLD was hardcoded at 10 minutes while crawler.py would let one crawl
+# run for scan_budget_seconds -- 870s at the default 25-page limit. Every scan between
+# 10 and 14.5 minutes was reaped and re-run while still going. These pin the invariant
+# that broke, rather than the number it currently produces.
+
+def test_the_threshold_exceeds_the_longest_a_scan_may_legitimately_run():
+    settings = get_settings()
+    assert queue._stale_threshold().total_seconds() > settings.scan_budget_seconds, (
+        "a scan that runs to its full crawl budget would be reaped and duplicated "
+        "while still in progress"
+    )
+
+
+def test_the_threshold_exceeds_the_longest_an_analysis_may_legitimately_run():
+    settings = get_settings()
+    assert queue._stale_threshold().total_seconds() > settings.llm_deadline_seconds, (
+        "an analysis that uses its whole LLM deadline would be reaped mid-flight"
+    )
+
+
+def test_the_threshold_tracks_the_page_limit_instead_of_being_fixed():
+    """The regression that motivated this: raising SCANNER_MAX_PAGES raises the crawl
+    budget, so a fixed threshold silently becomes wrong. It has to move with it."""
+    def threshold_at(max_pages: int) -> float:
+        wider = get_settings().model_copy(update={"scanner_max_pages": max_pages})
+        return max(wider.scan_budget_seconds, wider.llm_deadline_seconds)
+
+    assert threshold_at(50) > threshold_at(25), "the budget did not grow with the page limit"
+    assert threshold_at(50) > 10 * 60, (
+        "at 50 pages the crawl budget already exceeds the old fixed 10-minute threshold"
+    )
+
+
+def test_the_crawler_and_the_queue_read_the_same_budget():
+    """Two modules needed this number and each had its own copy. One definition now."""
+    from app.scanner.crawler import _scan_budget_seconds
+
+    settings = get_settings()
+    assert _scan_budget_seconds(settings) == settings.scan_budget_seconds
+
+
+async def test_the_reaped_error_names_the_threshold_actually_applied():
+    """The message used to quote a module constant. A derived threshold has to report
+    the value really applied, or the audit trail misstates why a job was requeued."""
+    job = _stale_job(attempts=1)
+    db = _db_returning([job])
+
+    await queue.reap_stale_jobs(db)
+
+    assert str(queue._stale_threshold()) in job.error

@@ -35,6 +35,7 @@ already instantiate NvidiaLLMClient directly and are deliberately left untouched
 import functools
 import json
 import logging
+import re
 import time
 from typing import Literal, TypeVar
 
@@ -215,6 +216,19 @@ class BaseLLMClient:
         self._supports_grammar = supports_grammar
         self._client = AsyncOpenAI(
             base_url=base_url, api_key=api_key, timeout=timeout,
+            # The openai SDK retries internally (default max_retries=2), and those
+            # retries are INVISIBLE to the tenacity loop in _chat: one `await
+            # .create()` becomes up to 3 HTTP requests, so a tenacity "attempt"
+            # bounded to a 60s call_timeout could really burn 180s. stop_after_delay
+            # only re-checks BETWEEN attempts, so it cannot interrupt that, and the
+            # shared deadline_epoch silently overruns. Measured live: a request
+            # surfaced APITimeoutError at seconds_since_start=181.62 -- 3x60s -- and
+            # the tenacity retry then added a second one, making one llm_analysis
+            # stage take 365.7s. This is the same multiplied-timeout failure _chat's
+            # docstring describes fixing at the application layer; the SDK layer
+            # underneath it was still multiplying. Retry policy belongs in exactly
+            # one place, and _chat is the layer that knows the remaining budget.
+            max_retries=0,
             # A clear, honest, self-identifying User-Agent -- normal practice for a
             # backend service calling an API, not stealth/evasion (this does NOT
             # touch the openai SDK's own x-stainless-* diagnostic headers, which
@@ -716,6 +730,26 @@ def get_reasoning_llm_client(settings: Settings | None = None) -> BaseLLMClient:
     return NvidiaLLMClient(settings)
 
 
+def _context_overflow(exc: Exception) -> tuple[int, int] | None:
+    """`(prompt_tokens, context_tokens)` when `exc` is a context-size rejection, else None.
+
+    llama.cpp reports this as a structured 400 carrying both numbers, e.g.
+    "request (10577 tokens) exceeds the available context size (4096 tokens)" with
+    `n_prompt_tokens` and `n_ctx` alongside. Read from the message text rather than the
+    JSON body because the body shape differs per server build while this sentence has
+    been stable, and because a miss here only costs the more generic log line below --
+    it is a diagnostic, never a control-flow decision.
+    """
+    text = str(exc)
+    if "context size" not in text and "n_ctx" not in text:
+        return None
+    prompt = re.search(r"'?n_prompt_tokens'?[:=]\s*(\d+)", text) or re.search(r"request \((\d+) tokens\)", text)
+    ctx = re.search(r"'?n_ctx'?[:=]\s*(\d+)", text) or re.search(r"context size \((\d+) tokens\)", text)
+    if not prompt or not ctx:
+        return None
+    return int(prompt.group(1)), int(ctx.group(1))
+
+
 async def generate_structured_with_fallback(
     *, system: str, user: str, schema: type[T], settings: Settings | None = None,
     max_attempts: int = 3, usage_sink: dict | None = None, deadline_epoch: float | None = None,
@@ -775,10 +809,35 @@ async def generate_structured_with_fallback(
             fallback_meta["primary_status"] = "failed"
             fallback_meta["fallback_triggered"] = True
             fallback_meta["fallback_reason"] = f"{type(exc).__name__}: {exc}"
-            logger.warning(
-                "Primary LLM (%s/%s) failed, falling back to %s: %s",
-                primary_client.provider, primary_client.model_name, settings.llm_provider, exc,
-            )
+            overflow = _context_overflow(exc)
+            fallback_meta["primary_failure_kind"] = "context_exceeded" if overflow else "other"
+            if overflow:
+                # A permanent, self-inflicted misconfiguration, not a bad day upstream:
+                # the prompt cannot fit and every future call will fail identically
+                # until somebody resizes the server. Worth separating from a transient
+                # failure, because in the metadata the two were indistinguishable --
+                # `primary_status: "failed"` reads the same whether the self-hosted
+                # model blipped once or has not served a single request in weeks. It
+                # was the latter: llama-server ran `-c 32768 --parallel 8`, and
+                # llama.cpp divides context across slots, so each slot held 4096
+                # tokens against an ~11k-token prompt. Every analysis silently paid
+                # for a remote round trip instead, and nothing in the run said so.
+                prompt_tokens, ctx_tokens = overflow
+                fallback_meta["primary_prompt_tokens"] = prompt_tokens
+                fallback_meta["primary_context_tokens"] = ctx_tokens
+                logger.error(
+                    "Primary LLM (%s/%s) CANNOT serve this prompt: %s tokens against a "
+                    "%s-token context. This is a server configuration fault and will "
+                    "recur on every request until the context is raised (llama.cpp "
+                    "divides -c across --parallel slots). Falling back to %s.",
+                    primary_client.provider, primary_client.model_name,
+                    prompt_tokens, ctx_tokens, settings.llm_provider,
+                )
+            else:
+                logger.warning(
+                    "Primary LLM (%s/%s) failed, falling back to %s: %s",
+                    primary_client.provider, primary_client.model_name, settings.llm_provider, exc,
+                )
 
     fallback_client = get_reasoning_llm_client(settings)
     fallback_meta["fallback_provider"] = fallback_client.provider

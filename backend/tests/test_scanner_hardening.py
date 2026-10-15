@@ -264,9 +264,13 @@ async def test_linux_scan_path_is_bounded_by_the_scan_budget(monkeypatch):
 
 def test_scan_budget_matches_the_configured_page_and_timeout_caps():
     """The budget is derived, not hardcoded, so raising scanner_max_pages cannot
-    silently make every large scan abort mid-way."""
-    from types import SimpleNamespace
+    silently make every large scan abort mid-way.
 
+    A real Settings rather than a stand-in: the formula moved onto
+    Settings.scan_budget_seconds so jobs/queue.py could derive its stale-job threshold
+    from the same number, which makes the property part of the contract being tested --
+    and a SimpleNamespace stand-in cannot carry a property.
+    """
     from app.config import get_settings
     from app.scanner.crawler import _scan_budget_seconds
 
@@ -276,5 +280,29 @@ def test_scan_budget_matches_the_configured_page_and_timeout_caps():
     assert _scan_budget_seconds(None) == (
         configured.scanner_max_pages * configured.scanner_timeout_seconds + 120
     )
-    settings = SimpleNamespace(scanner_max_pages=10, scanner_timeout_seconds=20)
+    settings = configured.model_copy(
+        update={"scanner_max_pages": 10, "scanner_timeout_seconds": 20}
+    )
     assert _scan_budget_seconds(settings) == 10 * 20 + 120
+    assert settings.scan_budget_seconds == 10 * 20 + 120
+
+
+def test_the_budget_tracks_configuration_when_no_settings_are_passed(monkeypatch):
+    """The `None` case is not just fixtures -- it is the production path. The worker
+    reaches the crawler through scan_service.execute_scan_and_persist, which calls
+    run_scan_isolated(url) with no Settings at all.
+
+    So `None` has to resolve the real settings, as run_scan() does one frame down. A
+    hardcoded 25-page fallback would leave the two disagreeing about the same scan:
+    run_scan() crawling to the configured limit while the enclosing wait_for aborted
+    it at the default budget -- every large scan cut off part-way, which is exactly
+    what the assertion above is meant to rule out. It would also drop the ceiling
+    under the stale-job threshold jobs/queue.py derives from the same property.
+    """
+    from app.config import get_settings
+    from app.scanner import crawler
+
+    wider = get_settings().model_copy(update={"scanner_max_pages": 50})
+    monkeypatch.setattr(crawler, "get_settings", lambda: wider)
+
+    assert crawler._scan_budget_seconds(None) == 50 * 30 + 120

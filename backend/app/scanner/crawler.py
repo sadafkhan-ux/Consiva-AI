@@ -1035,17 +1035,21 @@ async def run_scan(root_url: str, settings: Settings | None = None) -> ScanResul
 def _scan_budget_seconds(settings: Settings | None) -> float:
     """Overall wall-clock ceiling for one scan, shared by BOTH platform paths.
 
-    Derived from the per-page navigation timeout times the page cap, plus headroom for
-    browser startup and the two consent-interaction passes. Previously this expression
+    The formula lives on Settings.scan_budget_seconds, because jobs/queue.py needs the
+    same number to keep its stale-job threshold above it -- see that property's
+    docstring. It is still the per-page navigation timeout times the page cap, plus
+    headroom for browser startup and the two consent-interaction passes; it previously
     lived inline in the Windows subprocess call only, which is exactly how the Linux
-    path ended up with no ceiling at all."""
-    # None means "the configured settings" -- exactly what run_scan() itself falls back
-    # to. A separate hardcoded default here once gave scan_service's run_scan_isolated(url)
-    # a 25-page budget for a crawl configured to fetch 100, aborting every large scan.
-    settings = settings or get_settings()
-    max_pages = settings.scanner_max_pages
-    per_page = settings.scanner_timeout_seconds
-    return max_pages * per_page + 120
+    path ended up with no ceiling at all.
+
+    `None` means "the configured settings" -- exactly what run_scan() itself falls back
+    to one frame down -- never a hardcoded default. A separate hardcoded default here
+    once gave scan_service's run_scan_isolated(url) a 25-page budget for a crawl
+    configured to fetch 100, aborting every large scan part-way through: the production
+    path passes no settings at all, so that branch is not the fixture case it looked
+    like. It would also pin the ceiling below the reaper threshold jobs/queue.py derives
+    from the same property, putting back the drift that moved the formula here."""
+    return (settings or get_settings()).scan_budget_seconds
 
 
 async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> ScanResult:

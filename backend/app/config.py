@@ -239,6 +239,21 @@ class Settings(BaseSettings):
         return self.app_env == "development" or self.open_access
 
     @property
+    def scan_budget_seconds(self) -> float:
+        """Overall wall-clock ceiling for one scan: how long scanner/crawler.py lets a
+        single crawl run before aborting it.
+
+        Derived from the per-page navigation timeout times the page cap, plus headroom
+        for browser startup and the two consent-interaction passes. It lives here, on
+        the settings both sides already read, because two unrelated modules need the
+        same number: crawler.py enforces it, and jobs/queue.py has to set its
+        stale-job threshold ABOVE it. Those two had drifted -- a hardcoded 10-minute
+        threshold against an 870-second budget -- and a duplicated formula is how they
+        would drift again.
+        """
+        return self.scanner_max_pages * self.scanner_timeout_seconds + 120
+
+    @property
     def psycopg_database_url(self) -> str:
         """`database_url` uses SQLAlchemy's `postgresql+asyncpg://` driver syntax —
         psycopg (used directly by the LangGraph checkpointer, not through SQLAlchemy)
