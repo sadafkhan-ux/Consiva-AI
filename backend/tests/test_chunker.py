@@ -46,3 +46,32 @@ def test_section_carries_into_later_chunk_of_same_page():
     chunks = chunk_pages([{"page_number": 1, "text": body}], max_chars=300, overlap_chars=50)
     assert len(chunks) > 1
     assert all(c.metadata["section"] is not None and c.metadata["section"].startswith("Rule 12") for c in chunks)
+
+
+# ── A mid-sentence cross-reference is not a section heading ─────────────────────
+# These reach the customer-facing report as a finding's cited DPDP reference, so a
+# real-looking but wrong one is worse than none. Measured across the whole ingested
+# corpus: all 15 capitalised matches are genuine headings, all 21 lower-case ones are
+# body text a PDF line-wrap pushed to the start of a line.
+
+def test_a_lowercase_cross_reference_is_not_captured_as_a_heading():
+    from app.rag.chunker import chunk_pages
+
+    page_text = (
+        "a Consent Manager shall be registered with the Board in the manner specified in\n"
+        "section 35;] and shall comply with such obligations as may be prescribed.\n"
+    )
+    [chunk] = chunk_pages([{"page_number": 1, "text": page_text}])
+
+    assert chunk.metadata["section"] is None, (
+        "a mid-sentence reference was cited as the section supporting a finding"
+    )
+
+
+def test_a_real_capitalised_heading_is_still_captured():
+    from app.rag.chunker import chunk_pages
+
+    page_text = "CHAPTER II\nOBLIGATIONS OF DATA FIDUCIARY\nEvery Data Fiduciary shall.\n"
+    [chunk] = chunk_pages([{"page_number": 1, "text": page_text}])
+
+    assert chunk.metadata["section"] == "CHAPTER II"
