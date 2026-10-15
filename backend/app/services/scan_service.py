@@ -14,6 +14,7 @@ from app.jobs import queue
 from app.lookup import repository as lookup_repository
 from app.observability.stage_tracker import track_stage
 from app.rules.consent_rules import classify_scan, cookie_consent_state_counts, tracker_consent_state_counts
+from app.scanner._domain import site_host
 from app.scanner.crawler import run_scan_isolated
 from app.scanner.url_safety import assert_safe_url
 from app.services import audit_service
@@ -34,9 +35,19 @@ async def request_scan(
             "Scanning requires an explicit authorization attestation for this domain."
         )
 
-    domain = urlparse(url).netloc
-    if not domain:
+    # site_host(), not urlparse().netloc: netloc carries the port and the "www." and
+    # was stored verbatim, so https://example.com and https://www.example.com became
+    # two separate websites rows -- two ownership verifications to pass, and a
+    # monitoring baseline that never saw half its own history. It is deliberately NOT
+    # the eTLD+1 either; see site_host's docstring for why folding subdomains would be
+    # worse than the problem it fixes.
+    # The absolute-URL guard stays exactly as it was: site_host() alone would accept
+    # "not-a-url" as a hostname, because a schemeless string is a perfectly good host
+    # to it. This is the lower-level entry point -- the API validator above it is not
+    # the only caller -- so it keeps rejecting anything that is not an absolute URL.
+    if not urlparse(url).netloc:
         raise InvalidUrlError(f"Could not parse a domain from url: {url}")
+    domain = site_host(url)
 
     settings = get_settings()
     recent_count = await scan_repository.count_scans_since(
