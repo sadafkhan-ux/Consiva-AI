@@ -26,7 +26,8 @@ class ScanOptions(BaseModel):
 
     max_pages: int | None = Field(
         default=None, ge=1, le=100,
-        description="Pages to crawl. Clamped to the server's configured maximum.",
+        description="Pages to crawl. A request can only LOWER the limit: it is clamped to the "
+                    "scan profile's own maximum, so a larger value never widens a web scan.",
     )
     scan_consent_states: bool = Field(
         default=True,
@@ -81,6 +82,19 @@ class CreateScanResponse(BaseModel):
         default=False,
         description="True when this request matched a previous Idempotency-Key and "
                     "returned the existing scan instead of starting a new one.",
+    )
+    profile: str | None = Field(
+        default=None,
+        description="The scan profile the SERVER applied: `web` or `application`.",
+    )
+    max_pages: int | None = Field(
+        default=None,
+        description="Unique-page limit that will apply. Null means this profile has no fixed "
+                    "page-count cap (it is still bounded by `max_seconds`).",
+    )
+    max_seconds: int | None = Field(
+        default=None,
+        description="Wall-clock budget for the page-crawl phase.",
     )
 
 

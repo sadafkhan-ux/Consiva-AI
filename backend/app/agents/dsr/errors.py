@@ -128,6 +128,18 @@ class VerificationFailedError(DsrError):
 
 # ── Lifecycle (§12) ──────────────────────────────────────────────────────────────
 
+class EncryptionNotConfiguredError(DsrError):
+    """The server has no credential-encryption key, so nothing sensitive can be stored.
+
+    503, not 500: nothing is wrong with the request and nothing crashed -- the deployment is
+    missing configuration an administrator can add. The message names the setting, never a
+    value, so it is safe to show to the caller.
+    """
+
+    status_code = 503
+    code = "ENCRYPTION_NOT_CONFIGURED"
+
+
 class InvalidCaseTransitionError(DsrError):
     """A DSR case was asked to move to a status it cannot legally reach from where it
     is. 409, not 500 -- it means the caller (or a stale UI) acted on an out-of-date

@@ -241,7 +241,8 @@ def test_max_pages_is_clamped_to_the_server_ceiling():
         scan_options=ScanOptions(max_pages=100),
     )
     from app.config import get_settings
-    assert route._clamp_options(body)["max_pages"] == get_settings().scanner_max_pages
+    # The ceiling is the WEB profile's, not the old deployment-wide scanner_max_pages.
+    assert route._clamp_options(body)["max_pages"] == get_settings().consent_web_max_pages
 
 
 def test_turning_off_consent_state_testing_turns_off_its_sub_options():
@@ -262,7 +263,7 @@ def test_the_effective_options_are_what_get_stored():
     body = CreateScanRequest(website_url="https://example.test", authorized=True)
     options = route._clamp_options(body)
     assert set(options) == {
-        "max_pages", "scan_consent_states", "scan_before_consent",
+        "profile", "max_pages", "max_seconds", "scan_consent_states", "scan_before_consent",
         "scan_after_accept", "scan_after_reject",
     }
 
@@ -342,7 +343,7 @@ def test_the_api_does_not_let_request_scan_queue_its_own_crawl():
     3-finding site. Everything was correct -- just done twice, at double the browser
     time and double the LLM spend."""
     import inspect
-    body = inspect.getsource(route.create_scan)
+    body = inspect.getsource(route._submit_scan)
     assert "enqueue_job=False" in body
 
 
@@ -466,7 +467,7 @@ def test_create_scan_validates_and_stores_the_agent_callback_override():
     -- this route shares the exact same prepare_callback_override/
     resolve_callback_secret functions that test already exercises for real.)"""
     import inspect
-    body = inspect.getsource(route.create_scan)
+    body = inspect.getsource(route._submit_scan)
     assert "agent_webhook_service.prepare_callback_override" in body
     assert "scan.agent_callback_url = callback_url" in body
     assert "scan.agent_callback_secret_ciphertext = callback_secret_ciphertext" in body

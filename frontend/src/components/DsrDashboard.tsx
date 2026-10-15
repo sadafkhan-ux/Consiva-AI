@@ -322,6 +322,11 @@ export function DsrDashboard() {
                 <span className={`pill pill-${STATUS_TONE[selected.status] ?? "muted"}`}>
                   {selected.status}
                 </span>
+                {selected.public_status && selected.public_status.toLowerCase() !== selected.status && (
+                  <span className="pill" title="How this case appears to the requester and the portal">
+                    {selected.public_status}
+                  </span>
+                )}
                 <span className="pill">{selected.request_type}</span>
                 <span className={`pill pill-${identityOk ? "ok" : "warn"}`}>
                   identity: {selected.identity_status ?? "pending"}
@@ -332,6 +337,12 @@ export function DsrDashboard() {
 
             {/* A stopped case always says why. The backend guarantees an error code
                 accompanies every bad ending, so this is never an empty box. */}
+            {selected.status_message && !selected.is_terminal && (
+              <div className="banner banner-info">
+                <strong>{selected.status_message}</strong>
+                {selected.next_step && <> {selected.next_step}</>}
+              </div>
+            )}
             {selected.error_code && (
               <div className="banner banner-warn">
                 <strong>{selected.error_code}</strong>
@@ -378,6 +389,19 @@ export function DsrDashboard() {
               >
                 Execute approved actions
               </button>
+              {selected.retryable && selected.error_code === "ACTION_FAILED" && (
+                <button
+                  disabled={busy}
+                  title="Reopen the failed actions for another attempt; then press Execute"
+                  onClick={() =>
+                    void act("Failed actions reopened -- review, then execute.", () =>
+                      dsrApi.retryExecution(selected.id),
+                    )
+                  }
+                >
+                  Retry failed actions
+                </button>
+              )}
               <button
                 disabled={busy}
                 onClick={() =>

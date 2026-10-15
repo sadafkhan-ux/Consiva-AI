@@ -15,6 +15,7 @@ from app.lookup import repository as lookup_repository
 from app.observability.stage_tracker import track_stage
 from app.rules.consent_rules import classify_scan
 from app.scanner.crawler import run_scan_isolated
+from app.scanner.scan_profiles import ScanProfile, profile_for_scan_options
 from app.scanner.url_safety import assert_safe_url
 from app.services import audit_service
 
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 async def request_scan(
     db: AsyncSession, *, org_id: uuid.UUID, user_id: uuid.UUID, url: str, authorized: bool,
-    enqueue_job: bool = True,
+    enqueue_job: bool = True, profile: ScanProfile | None = None,
 ) -> ConsentScan:
     """Creates the scan record and enqueues the crawl job. `authorized` is a required,
     explicit self-attestation from the caller that they own/are permitted to scan this
@@ -54,7 +55,14 @@ async def request_scan(
     # have passed DNS-TXT ownership verification (websites.verified_at, see
     # services/verification_service.py). Off by default so the development demo flow
     # keeps working; flip on before any production pilot.
-    if settings.scanner_require_domain_verification and website.verified_at is None:
+    #
+    # A profile that asks for it (the application profile -- no fixed page cap) requires the
+    # verification regardless of that deployment-wide flag: a scan this large is only ever run
+    # against a domain the organisation has proven it controls.
+    must_verify = settings.scanner_require_domain_verification or bool(
+        profile is not None and profile.requires_verified_domain
+    )
+    if must_verify and website.verified_at is None:
         raise ScanAuthorizationError(
             f"Domain {domain} has not passed ownership verification. Get your TXT record from "
             "GET /api/v1/consent/websites/verification-token, publish it in the domain's DNS, "
@@ -104,15 +112,30 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
     """Called by jobs/worker.py. Owns its own DB sessions rather than one long-lived
     transaction, since the crawl itself (Playwright, network-bound) can take a while."""
     async with async_session_factory() as db:
+        row = await db.get(ConsentScan, scan_id)
+        if row is not None and row.status == "cancelled":
+            # Cancelled while still queued: do not flip it back to "running".
+            logger.info("Scan %s was cancelled before it started; not crawling", scan_id)
+            return
+        # The profile was decided by the server when the scan was requested and stored on the
+        # row. It is read back from there -- never from the job payload, which a caller of the
+        # queue could in principle have written -- and a row with no profile (every console and
+        # scheduled scan) is a web scan.
+        profile = profile_for_scan_options(row.scan_options if row is not None else None)
         await scan_repository.mark_scan_running(db, scan_id)
         await db.commit()
+
+    async def _cancelled() -> bool:
+        async with async_session_factory() as poll_db:
+            current = await poll_db.get(ConsentScan, scan_id)
+            return current is None or current.status == "cancelled"
 
     try:
         async with async_session_factory() as db:
             lookup_entries = await lookup_repository.load_all(db)
 
         async with track_stage(scan_id, "website_scan") as meta:
-            scan_result = await run_scan_isolated(url)
+            scan_result = await run_scan_isolated(url, profile=profile, should_cancel=_cancelled)
             meta["pages_found"] = len(scan_result.pages)
             meta["cookies_found"] = len(scan_result.cookies)
             meta["trackers_found"] = len(scan_result.trackers)
@@ -197,6 +220,18 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
                 logger.warning(
                     "Scan %s: evidence found and evidence persisted disagree: %s", scan_id, gaps
                 )
+
+        # A scan cancelled mid-crawl stopped starting pages and returned what it had. That
+        # evidence is kept (the cancel contract), but save_scan_result marks the scan
+        # "completed", which would quietly undo the cancel -- and the chain job would then
+        # analyse it. Put the status back.
+        if scan_result.scan_diagnostics.get("stop_reason") == "cancelled":
+            async with async_session_factory() as db:
+                row = await db.get(ConsentScan, scan_id)
+                if row is not None:
+                    row.status = "cancelled"
+                    await db.commit()
+            logger.info("Scan %s was cancelled while crawling; partial evidence kept", scan_id)
     except Exception as exc:
         logger.exception("Failed to persist scan result for %s", url)
         async with async_session_factory() as db:

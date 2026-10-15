@@ -29,8 +29,10 @@ import asyncio
 import heapq
 import itertools
 import logging
+import os
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -56,6 +58,7 @@ from app.scanner.cookie_detector import (
 from app.scanner.form_detector import detect_forms
 from app.scanner.page_parser import ParsedScript, parse_page
 from app.scanner.policy_detector import detect_policies
+from app.scanner.scan_profiles import ScanProfile, resolve_profile
 from app.scanner.schemas import (
     ConsentSignalRecord,
     CookieRecord,
@@ -509,6 +512,10 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
 async def _crawl_full_site(
     context: BrowserContext, root_url: str, settings: Settings, disallowed_prefixes: set[str],
     sitemap_urls: list[str] | None = None,
+    *,
+    profile: ScanProfile | None = None,
+    deadline_monotonic: float | None = None,
+    should_stop: Callable[[], Awaitable[bool]] | None = None,
 ) -> tuple[list[PageRecord], list[FormRecord], list[CookieRecord], list[TrackerRecord],
            list[PolicyRecord], ConsentSignalRecord, dict]:
     """Pass 1 (pre_consent): the full multi-page crawl and main evidence-gathering pass.
@@ -530,7 +537,21 @@ async def _crawl_full_site(
     The diagnostics keep discovered / attempted / scanned apart: pages_discovered is
     every distinct same-site URL seen, pages_attempted is what cost a navigation,
     pages_scanned is what loaded, and pages_not_attempted_budget_exhausted is what was
-    still queued when the budget ran out."""
+    still queued when the budget ran out.
+
+    `profile` (scan_profiles.ScanProfile) replaces the deployment-wide page budget with the
+    profile's own: a number for the web profile, or None for "no fixed page-count cap". It does
+    NOT remove any other protection -- every page still passes the same-site test, the robots
+    check, URL de-duplication, the SSRF guard on each navigation, the per-navigation timeout
+    and the concurrency bound. `deadline_monotonic` (a time.monotonic() value) is what keeps a
+    scan with no page cap finite: once it passes, no new batch is started and the scan
+    completes with what it has, recording `stop_reason="deadline"`. With no profile the
+    historical behaviour (settings.scanner_max_pages, no crawl deadline) is unchanged.
+
+    `should_stop` is polled between batches (never mid-navigation): when it returns True the
+    crawl starts no further pages, finishes the batch in flight, and returns what it collected
+    with `stop_reason="cancelled"`. That is how a scan cancelled through the API stops, without
+    killing a browser mid-page -- which is what leaves orphaned Chromium processes."""
     site_domain = urlparse(root_url).netloc
     site_registered = _registered_domain(site_domain)
 
@@ -544,9 +565,13 @@ async def _crawl_full_site(
     all_control_text_parts = []
     all_scripts_flat = []
     detected_global_vars: set[str] = set()
-    budget = settings.scanner_max_pages
+    budget = settings.scanner_max_pages if profile is None else profile.max_pages
     diagnostics = {
         "page_limit": budget,
+        "page_limit_mode": "capped" if budget is not None else "uncapped",
+        "scan_profile": profile.name if profile is not None else None,
+        "stop_reason": None,
+        "pages_not_attempted_deadline_exceeded": 0,
         "pages_discovered": 0,
         "pages_attempted": 0,
         "pages_scanned": 0,
@@ -601,9 +626,24 @@ async def _crawl_full_site(
     # still comes from the single jar read after the crawl, exactly as before.
     cookie_observations: dict = {}
 
-    while queue and diagnostics["pages_attempted"] < budget:
+    stop_reason = "queue_exhausted"
+    while queue:
+        if budget is not None and diagnostics["pages_attempted"] >= budget:
+            stop_reason = "page_limit"
+            break
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            # Checked between batches, never inside one: a batch already started finishes
+            # (each page is bounded by its own navigation timeout), and no new one starts.
+            stop_reason = "deadline"
+            break
+        if should_stop is not None and await should_stop():
+            stop_reason = "cancelled"
+            break
         batch: list[tuple[str, str]] = []
-        while queue and len(batch) < max_concurrent and diagnostics["pages_attempted"] + len(batch) < budget:
+        while (
+            queue and len(batch) < max_concurrent
+            and (budget is None or diagnostics["pages_attempted"] + len(batch) < budget)
+        ):
             _rank, _n, url, via = heapq.heappop(queue)
             batch.append((url, via))
 
@@ -679,7 +719,12 @@ async def _crawl_full_site(
             for link in parsed.links:
                 _discover(link.href, "link")
 
-    diagnostics["pages_not_attempted_budget_exhausted"] = len(queue)
+    diagnostics["stop_reason"] = stop_reason
+    if stop_reason == "deadline":
+        diagnostics["pages_not_attempted_deadline_exceeded"] = len(queue)
+        diagnostics["pages_not_attempted_budget_exhausted"] = 0
+    else:
+        diagnostics["pages_not_attempted_budget_exhausted"] = len(queue)
 
     raw_cookies = await context.cookies()
     cookies = detect_cookies(raw_cookies, site_domain)
@@ -917,7 +962,10 @@ async def _run_interaction_pass(
         await context.close()
 
 
-async def run_scan(root_url: str, settings: Settings | None = None) -> ScanResult:
+async def run_scan(
+    root_url: str, settings: Settings | None = None, profile: ScanProfile | None = None,
+    should_stop: Callable[[], Awaitable[bool]] | None = None,
+) -> ScanResult:
     settings = settings or get_settings()
     safe_ips = await assert_safe_url(root_url)  # fail fast; _guard_navigation re-checks every hop below
     launch_args = _host_resolver_pin_args(urlparse(root_url).hostname, safe_ips)
@@ -934,8 +982,15 @@ async def run_scan(root_url: str, settings: Settings | None = None) -> ScanResul
                     context, root_url, robots_sitemaps,
                     same_site=lambda url: _is_same_site(url, site_registered),
                 )
+                # The crawl deadline starts here, when the crawl does -- browser start-up and
+                # robots/sitemap discovery above are covered by the profile's separate
+                # allowance inside its overall timeout, not by this number.
+                crawl_deadline = (
+                    time.monotonic() + profile.crawl_deadline_seconds if profile is not None else None
+                )
                 pages, forms, cookies, trackers, policies, consent_signal, pre_consent_diagnostics = await _crawl_full_site(
-                    context, root_url, settings, disallowed_prefixes, sitemap_urls=sitemap_urls
+                    context, root_url, settings, disallowed_prefixes, sitemap_urls=sitemap_urls,
+                    profile=profile, deadline_monotonic=crawl_deadline, should_stop=should_stop,
                 )
             finally:
                 await context.close()
@@ -1007,7 +1062,18 @@ def _scan_budget_seconds(settings: Settings | None) -> float:
     return max_pages * per_page + 120
 
 
-async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> ScanResult:
+#: How often the parent checks whether a scan running in the Windows child process was cancelled.
+CANCEL_POLL_SECONDS = 2.0
+
+#: Environment variable carrying the path of the cancel-signal file to the child process. The
+#: child has no database access, so a cancel reaches it as the appearance of this file.
+CANCEL_FILE_ENV = "CONSIVA_SCAN_CANCEL_FILE"
+
+
+async def run_scan_isolated(
+    root_url: str, settings: Settings | None = None, profile: ScanProfile | str | None = None,
+    should_cancel: Callable[[], Awaitable[bool]] | None = None,
+) -> ScanResult:
     """The entrypoint services should call instead of `run_scan()` directly.
 
     On Windows, spawns `run_single_scan.py` as a separate process so Playwright gets
@@ -1020,9 +1086,15 @@ async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> 
 
     On other platforms this conflict doesn't exist, so it just calls `run_scan()`
     directly — no subprocess overhead — but still under the SAME overall time budget
-    the Windows subprocess gets (see _scan_budget_seconds).
+    the Windows subprocess gets.
+
+    `profile` is a ScanProfile (or its name) from scan_profiles; with none given the
+    historical deployment-wide budget applies. `should_cancel` is polled while the scan runs;
+    when it returns True the crawl stops starting pages and returns what it has (see
+    `_crawl_full_site`) -- the browser is never killed mid-page.
     """
-    budget = _scan_budget_seconds(settings)
+    profile_obj = resolve_profile(profile, settings) if isinstance(profile, str) else profile
+    budget = profile_obj.hard_timeout_seconds if profile_obj is not None else _scan_budget_seconds(settings)
 
     if sys.platform != "win32":
         # The budget is NOT optional here. Without it a scan that hangs inside
@@ -1033,8 +1105,13 @@ async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> 
         # and five later scans never started, on every machine sharing the queue.
         # Windows was already bounded by subprocess.run(timeout=...); Linux was not,
         # which is why this only ever bit the deployed container.
+        kwargs: dict = {}
+        if profile_obj is not None:
+            kwargs["profile"] = profile_obj
+        if should_cancel is not None:
+            kwargs["should_stop"] = should_cancel
         try:
-            return await asyncio.wait_for(run_scan(root_url, settings), timeout=budget)
+            return await asyncio.wait_for(run_scan(root_url, settings, **kwargs), timeout=budget)
         except TimeoutError as exc:
             raise ScanTimeoutError(
                 f"Scan of {root_url} exceeded its {budget:.0f}s budget and was aborted "
@@ -1042,10 +1119,19 @@ async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> 
             ) from exc
 
     backend_dir = Path(__file__).resolve().parent.parent.parent
+    cmd = [sys.executable, "-m", "app.scanner.run_single_scan", root_url]
+    if profile_obj is not None:
+        # Only the NAME crosses the process boundary. The child resolves it against the same
+        # environment, so no page count or deadline is ever passed on a command line.
+        cmd.append(profile_obj.name)
+
+    cancel_dir = tempfile.mkdtemp(prefix="consiva-scan-")
+    cancel_file = os.path.join(cancel_dir, "cancel")
+    env = {**os.environ, CANCEL_FILE_ENV: cancel_file}
 
     def _run_subprocess() -> subprocess.CompletedProcess:
         return subprocess.run(
-            [sys.executable, "-m", "app.scanner.run_single_scan", root_url],
+            cmd,
             cwd=str(backend_dir),
             capture_output=True,
             text=True,
@@ -1059,10 +1145,34 @@ async def run_scan_isolated(root_url: str, settings: Settings | None = None) -> 
             encoding="utf-8",
             check=False,
             timeout=budget,
+            env=env,
         )
 
     loop = asyncio.get_running_loop()
-    completed = await loop.run_in_executor(None, _run_subprocess)
+    future = loop.run_in_executor(None, _run_subprocess)
+    try:
+        while True:
+            done, _pending = await asyncio.wait({future}, timeout=CANCEL_POLL_SECONDS)
+            if done:
+                break
+            if should_cancel is not None and not os.path.exists(cancel_file) and await should_cancel():
+                # Signal, don't kill: the child sees the file between batches, stops starting
+                # pages and returns its partial result normally.
+                with open(cancel_file, "w", encoding="utf-8") as handle:
+                    handle.write("cancel")
+        completed = future.result()
+    except subprocess.TimeoutExpired as exc:
+        raise ScanTimeoutError(
+            f"Scan of {root_url} exceeded its {budget:.0f}s budget and was aborted "
+            "so the worker could continue with other jobs."
+        ) from exc
+    finally:
+        try:
+            if os.path.exists(cancel_file):
+                os.remove(cancel_file)
+            os.rmdir(cancel_dir)
+        except OSError:
+            pass
 
     if completed.returncode != 0:
         raise RuntimeError(f"Isolated scan process failed for {root_url}: {completed.stderr.strip()}")

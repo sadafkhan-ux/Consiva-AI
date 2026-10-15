@@ -84,6 +84,11 @@ _PHRASES: tuple[tuple[str, str], ...] = (
     (r"(export|download|portab)", case.EXPORT),
     (r"machine[- ]readable", case.EXPORT),
     (r"transfer my data to", case.EXPORT),
+    # Withdrawal of consent -- a different request from erasure, see case.WITHDRAW_CONSENT.
+    (r"(withdraw|revoke|retract|rescind) (my |the |all )?(consent|permission)", case.WITHDRAW_CONSENT),
+    (r"opt[- ]?out", case.WITHDRAW_CONSENT),
+    # A complaint is not a lookup. See case.GRIEVANCE.
+    (r"\b(grievance|grievances|complaint|complain)\b", case.GRIEVANCE),
     # Information about processing, as distinct from the data itself.
     (r"(why|how) (do|are) you (process|use|collect|share)", case.INFORMATION),
     (r"who (do you share|have you shared|else has)", case.INFORMATION),
@@ -115,6 +120,10 @@ _KEYWORDS: dict[str, str] = {
     "portability": case.EXPORT,
     "retention": case.INFORMATION,
     "purpose": case.INFORMATION,
+    "withdraw": case.WITHDRAW_CONSENT,
+    "revoke": case.WITHDRAW_CONSENT,
+    "grievance": case.GRIEVANCE,
+    "complaint": case.GRIEVANCE,
 }
 
 _COMPILED_PHRASES = tuple((re.compile(pattern), rtype) for pattern, rtype in _PHRASES)
@@ -142,8 +151,27 @@ _MULTI_INTENT = re.compile(
 )
 
 
+# An erasure verb the requester explicitly DECLINES: "do not delete my data", "please don't
+# erase my account", "without deleting anything", "no deletion". Matching the verb alone
+# read all of these as a deletion request -- the opposite of what was asked -- and at the
+# highest confidence band. The span is removed before any rule runs, so a declined erasure
+# can never be classified as one. Up to two words may sit between the negator and the verb
+# ("do not want to delete" is NOT matched: three words), which keeps this from swallowing
+# an unrelated "not ... delete" further along the sentence.
+_DECLINED_ERASURE = re.compile(
+    r"\b(?:do not|don't|dont|do n't|never|not|without|no)\s+(?:\w+\s+){0,2}?"
+    r"(?:delete|deleting|deletion|erase|erasing|erasure|remove|removing)\b"
+)
+
+
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _strip_declined_erasure(normalized: str) -> tuple[str, bool]:
+    """The text with any declined erasure removed, and whether anything was removed."""
+    stripped, count = _DECLINED_ERASURE.subn(" ", normalized)
+    return re.sub(r"\s+", " ", stripped).strip(), bool(count)
 
 
 def classify(raw_request: str) -> ClassificationResult:
@@ -153,10 +181,13 @@ def classify(raw_request: str) -> ClassificationResult:
     `ambiguous=True`, which routes to the model or a human.
     """
     normalized = _normalize(raw_request or "")
+    normalized, erasure_declined = _strip_declined_erasure(normalized)
+    declined_note = ("an erasure was explicitly declined and was not counted as a deletion request",)
+    note = declined_note if erasure_declined else ()
     if not normalized:
         return ClassificationResult(
             request_type=case.OTHER, confidence=CONF_AMBIGUOUS, method=METHOD_DETERMINISTIC,
-            evidence=("empty request text",),
+            evidence=note or ("empty request text",),
         )
 
     phrase_hits: list[tuple[str, str]] = []
@@ -170,7 +201,7 @@ def classify(raw_request: str) -> ClassificationResult:
     if phrase_hits:
         types = {t for t, _ in phrase_hits}
         resolved = _resolve(types, joined=joined)
-        evidence = tuple(f"matched phrase {matched!r} -> {t}" for t, matched in phrase_hits[:5])
+        evidence = tuple(f"matched phrase {matched!r} -> {t}" for t, matched in phrase_hits[:5]) + note
         if resolved is None:
             return ClassificationResult(
                 request_type=None, confidence=CONF_AMBIGUOUS, method=METHOD_DETERMINISTIC,
@@ -187,7 +218,9 @@ def classify(raw_request: str) -> ClassificationResult:
     if keyword_hits:
         types = {t for t, _ in keyword_hits}
         resolved = _resolve(types, joined=joined)
-        evidence = tuple(f"keyword {w!r} -> {t}" for t, w in sorted(keyword_hits, key=lambda h: h[1])[:5])
+        evidence = tuple(
+            f"keyword {w!r} -> {t}" for t, w in sorted(keyword_hits, key=lambda h: h[1])[:5]
+        ) + note
         if resolved is None:
             return ClassificationResult(
                 request_type=None, confidence=CONF_AMBIGUOUS, method=METHOD_DETERMINISTIC,
@@ -203,7 +236,7 @@ def classify(raw_request: str) -> ClassificationResult:
     # and not a guess.
     return ClassificationResult(
         request_type=case.OTHER, confidence=CONF_AMBIGUOUS, method=METHOD_DETERMINISTIC,
-        evidence=("no deterministic rule matched the request text",),
+        evidence=("no deterministic rule matched the request text",) + note,
     )
 
 

@@ -15,9 +15,10 @@ fine under Agent 2, so it must resolve just as well here; otherwise DSR would fa
 every such source with a misleading "no credential_ref" error for a credential that
 in fact exists and resolves.
 
-The WRITE credential has no ciphertext counterpart: `dsr_source_authorizations.
-write_credential_ref` is DSR's own column (no `write_credential_ciphertext` field
-exists), so it resolves only via the environment-entry path.
+The WRITE credential mirrors that: `dsr_source_authorizations.write_credential_
+ciphertext` (migration 0037, set once through PUT /config/sources) is tried first, then
+`write_credential_ref` (the NAME of an environment entry) as the fallback, so a source
+configured the old way keeps working.
 
 What is different here, and deliberately so: a DSR connector may be built in two
 modes. `for_search` resolves only the READ credential. `for_execution` additionally
@@ -33,11 +34,12 @@ import os
 from typing import Any
 
 from app.agents.ropa.connectors.base import ConnectorError as RopaConnectorError
-from app.agents.ropa.connectors.factory import decrypt_credential
+from app.agents.ropa.connectors.factory import CredentialEncryptionNotConfigured, decrypt_credential
+from app.agents.ropa.connectors.factory import encrypt_credential as _ropa_encrypt_credential
 
 from app.agents.dsr.connectors.authorization import SourceGrant, resolve
 from app.agents.dsr.connectors.postgres import PostgresDsrConfig, PostgresDsrConnector
-from app.agents.dsr.errors import SourceNotAuthorizedError
+from app.agents.dsr.errors import EncryptionNotConfiguredError, SourceNotAuthorizedError
 
 # The single source of truth for "can DSR actually search this source at all" --
 # build_connector's own if/elif below is the only code that would otherwise encode
@@ -48,6 +50,23 @@ from app.agents.dsr.errors import SourceNotAuthorizedError
 SUPPORTED_CONNECTORS = frozenset({"postgres"})
 
 _MAX_CREDENTIAL_REF_LEN = 128
+
+
+def encrypt_credential(secret: str) -> str:
+    """Encrypt a secret for storage, with the same key every other stored secret uses.
+
+    A thin DSR-side wrapper: ROPA's helper raises its own connector exception when the key is
+    unset, which surfaced through DSR routes as an opaque 500. Here it becomes a 503 that says
+    what to configure. Neither the secret nor the key appears in the message.
+    """
+    try:
+        return _ropa_encrypt_credential(secret)
+    except CredentialEncryptionNotConfigured:
+        raise EncryptionNotConfiguredError(
+            "Credential encryption is not configured on this server "
+            "(ROPA_CREDENTIAL_ENCRYPTION_KEY is unset), so this cannot be stored. "
+            "An administrator must set it and restart the service."
+        ) from None
 
 
 def _resolve_secret(
@@ -125,7 +144,12 @@ def build_connector(
             # The write role may be a different user, or the same user with elevated
             # rights. `write_user` falls back to the read user only when the
             # configuration explicitly says so.
-            write_password = _resolve_secret(grant.write_credential_ref, purpose="write")
+            write_password = _resolve_secret(
+                grant.write_credential_ref, purpose="write",
+                # Stored-and-encrypted wins over an environment entry, same order as
+                # the read credential above.
+                credential_ciphertext=getattr(authorization, "write_credential_ciphertext", None),
+            )
             write_user = config.get("write_user") or config["user"]
 
         return PostgresDsrConnector(

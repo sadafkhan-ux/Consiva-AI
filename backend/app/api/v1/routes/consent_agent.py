@@ -41,10 +41,11 @@ from app.core.exceptions import ConsivaError, InvalidUrlError, NotFoundError, Ra
 # password every twelve hours and a login token that never expired would be a password
 # nobody could rotate. Both paths produce the same CurrentUser, so nothing below reads
 # the caller differently. See core/integration_auth.get_caller.
-from app.core.integration_auth import get_caller
+from app.core.integration_auth import get_application_scan_caller, get_caller
 from app.core.security import CurrentUser
 from app.db.session import get_db
 from app.jobs import queue
+from app.scanner import scan_profiles
 from app.services import (
     agent_webhook_service,
     audit_service,
@@ -77,6 +78,17 @@ class ScanConflictError(ConsivaError):
     status_code = 409
 
 
+class ApplicationScanNotPermittedError(ConsivaError):
+    """The caller may use the web profile but not the application profile.
+
+    403: authenticated, but not allowed. The application profile has no fixed page cap, so it is
+    limited to organisation administrators and to service keys explicitly granted
+    `consent:scan:application`.
+    """
+
+    status_code = 403
+
+
 class WebhookNotConfiguredError(ConsivaError):
     """A webhook was requested on a deployment that cannot sign one.
 
@@ -103,20 +115,22 @@ async def _load_scan(db: AsyncSession, scan_id: uuid.UUID, user: CurrentUser):
     return scan
 
 
-def _clamp_options(body: CreateScanRequest) -> dict:
+def _clamp_options(body: CreateScanRequest, profile: scan_profiles.ScanProfile | None = None) -> dict:
     """The caller's requested options, reduced to what the server will actually do.
 
-    Clamped rather than rejected: an integrator asking for 100 pages on a deployment
-    configured for 25 wants a scan, not a 400. The effective values are stored on the
-    scan and returned in the result, so the response always says what really ran
-    instead of echoing back what was asked for.
+    Clamped rather than rejected: an integrator asking for 100 pages on a web scan wants a
+    scan, not a 400. The effective values are stored on the scan and returned in the result,
+    so the response always says what really ran instead of echoing back what was asked for.
+
+    The page limit comes from the PROFILE the server chose, never from the request: the
+    request's `max_pages` can only lower it (ScanProfile.effective_max_pages). `profile=None`
+    is the web profile, so any caller that does not name one gets the small limit.
     """
-    settings = get_settings()
+    profile = profile or scan_profiles.resolve_profile(scan_profiles.WEB)
     requested = body.scan_options
-    max_pages = min(requested.max_pages or settings.scanner_max_pages, settings.scanner_max_pages)
     states = requested.scan_consent_states
     return {
-        "max_pages": max_pages,
+        **profile.as_options(requested.max_pages),
         "scan_consent_states": states,
         # The three per-state flags are only meaningful when consent-state testing is
         # on at all; an option set that says "don't test consent states, but do test
@@ -128,38 +142,51 @@ def _clamp_options(body: CreateScanRequest) -> dict:
     }
 
 
-@router.post(
-    "/scans",
-    response_model=CreateScanResponse,
-    status_code=202,
-    summary="Start a consent scan",
-    description=(
-        "Queues a scan and returns immediately with a `scan_id`. The browser crawl and "
-        "the analysis both run in the background on the existing job worker -- this "
-        "request never waits for them.\n\n"
-        "Send an `Idempotency-Key` header to make retries safe: a repeat with the same "
-        "key returns the original scan instead of paying for a second crawl.\n\n"
-        "`authorized` must be true. It is an explicit attestation that you own or are "
-        "permitted to scan the domain."
-    ),
-)
-async def create_scan(
+def _require_application_permission(user: CurrentUser) -> None:
+    """Server-side authorization for the application profile.
+
+    A service key has already been checked for `consent:scan:application` by the dependency
+    (core/integration_auth.get_application_scan_caller); holding it is what stands in for an
+    admin role, because a key has none. A signed-in person must be an administrator -- a token
+    with no role is not one. Nothing in the request is consulted.
+    """
+    if user.key_name is None and user.role != "admin":
+        raise ApplicationScanNotPermittedError(
+            "Application scans have no fixed page limit and are restricted to organisation "
+            "administrators and to service keys granted the consent:scan:application scope. "
+            "Use POST /api/v1/consent-agent/scans/web for a standard scan."
+        )
+
+
+async def _submit_scan(
+    profile_name: str,
     body: CreateScanRequest,
     response: Response,
-    request: Request,
-    idempotency_key: str | None = Header(
-        default=None, alias="Idempotency-Key",
-        description="Opaque caller-chosen string, unique per intended scan. Scoped to "
-                    "your organisation.",
-    ),
-    user: CurrentUser = Depends(get_caller),
-    db: AsyncSession = Depends(get_db),
+    idempotency_key: str | None,
+    user: CurrentUser,
+    db: AsyncSession,
 ) -> CreateScanResponse:
+    """Queue a scan under `profile_name`. Shared by every scan-creating endpoint.
+
+    The profile is an argument chosen by WHICH ENDPOINT was called -- it is never read from the
+    request body -- and the application profile is gated by the caller of this function before
+    it gets here.
+    """
     org_id = uuid.UUID(user.org_id)
+    settings = get_settings()
+    profile = scan_profiles.resolve_profile(profile_name, settings)
 
     if idempotency_key is not None:
         existing = await api_service.find_by_idempotency_key(db, org_id=org_id, key=idempotency_key)
         if existing is not None:
+            existing_profile = scan_profiles.profile_for_scan_options(existing.scan_options, settings).name
+            if existing_profile != profile.name:
+                # The same key must not be able to turn a small scan into a large one (or the
+                # reverse) by being replayed against the other endpoint.
+                raise ScanConflictError(
+                    f"This Idempotency-Key was already used for a {existing_profile} scan; it "
+                    f"cannot be reused for a {profile.name} scan."
+                )
             # 200, not 202: nothing was accepted for processing by THIS request.
             response.status_code = 200
             status = await api_service.get_status(db, existing)
@@ -167,13 +194,14 @@ async def create_scan(
                 "consent_agent.scan.idempotent_replay scan_id=%s org_id=%s key=%s",
                 existing.id, org_id, idempotency_key,
             )
+            stored = existing.scan_options or {}
             return CreateScanResponse(
                 scan_id=existing.id, status=status["status"],
                 message="Existing scan returned for this Idempotency-Key.",
-                idempotent_replay=True,
+                idempotent_replay=True, profile=existing_profile,
+                max_pages=stored.get("max_pages"), max_seconds=stored.get("max_seconds"),
             )
 
-    settings = get_settings()
     # Hourly quota, on top of the per-day ceiling scan_service already enforces. A
     # browser crawl plus an LLM call is expensive enough that an integrator looping on
     # this endpoint is a capacity problem long before the daily limit notices.
@@ -212,7 +240,7 @@ async def create_scan(
     except ValueError as exc:
         raise InvalidUrlError(str(exc)) from exc
 
-    options = _clamp_options(body)
+    options = _clamp_options(body, profile)
 
     # The existing service. It owns the authorization attestation, the per-day rate
     # limit, domain-verification policy, the SSRF check on the target URL, the audit
@@ -224,6 +252,9 @@ async def create_scan(
         # request_scan must not also queue its own crawl -- that ran the whole scan
         # twice on the first live call.
         enqueue_job=False,
+        # The application profile also requires a DNS-verified domain, whatever the
+        # deployment-wide verification flag says.
+        profile=profile,
     )
 
     scan.idempotency_key = idempotency_key
@@ -236,21 +267,122 @@ async def create_scan(
     # not set it and is unaffected.
     await queue.enqueue(
         db, org_id=org_id, job_type="consent_api_chain",
-        payload={"scan_id": str(scan.id), "org_id": str(org_id), "user_id": str(user.user_id)},
+        # `scan_profile` is read by the stale-job reaper only, to give an application scan the
+        # longer lease its budget needs. The worker takes the profile from the scan row.
+        payload={
+            "scan_id": str(scan.id), "org_id": str(org_id), "user_id": str(user.user_id),
+            "scan_profile": profile.name,
+        },
     )
     await audit_service.record(
         db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
         action="consent_api.scan.requested", entity_type="consent_scan", entity_id=scan.id,
+        after={"profile": profile.name, "max_pages": options["max_pages"],
+               "max_seconds": options["max_seconds"]},
     )
     await db.commit()
 
     logger.info(
-        "consent_agent.scan.queued scan_id=%s org_id=%s user_id=%s url=%s max_pages=%s webhook=%s",
-        scan.id, org_id, user.user_id, body.website_url, options["max_pages"], bool(body.webhook_url),
+        "consent_agent.scan.queued scan_id=%s org_id=%s user_id=%s url=%s profile=%s "
+        "max_pages=%s max_seconds=%s webhook=%s",
+        scan.id, org_id, user.user_id, body.website_url, profile.name,
+        profile.page_cap_label if options["max_pages"] is None else options["max_pages"],
+        options["max_seconds"], bool(body.webhook_url),
     )
     return CreateScanResponse(
         scan_id=scan.id, status="queued", message="Scan queued successfully",
+        profile=profile.name, max_pages=options["max_pages"], max_seconds=options["max_seconds"],
     )
+
+
+_SCAN_DESCRIPTION = (
+    "Queues a scan and returns immediately with a `scan_id`. The browser crawl and "
+    "the analysis both run in the background on the existing job worker -- this "
+    "request never waits for them.\n\n"
+    "Send an `Idempotency-Key` header to make retries safe: a repeat with the same "
+    "key returns the original scan instead of paying for a second crawl.\n\n"
+    "`authorized` must be true. It is an explicit attestation that you own or are "
+    "permitted to scan the domain."
+)
+
+
+@router.post(
+    "/scans/web",
+    response_model=CreateScanResponse,
+    status_code=202,
+    summary="Start a web scan (maximum 5 pages)",
+    description=(
+        "Public website scan. The server limits it to `CONSENT_WEB_MAX_PAGES` unique pages "
+        "(default 5) whatever `scan_options.max_pages` says -- a request can only lower the "
+        "limit.\n\n" + _SCAN_DESCRIPTION
+    ),
+)
+async def create_web_scan(
+    body: CreateScanRequest,
+    response: Response,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key",
+        description="Opaque caller-chosen string, unique per intended scan. Scoped to "
+                    "your organisation.",
+    ),
+    user: CurrentUser = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> CreateScanResponse:
+    return await _submit_scan(scan_profiles.WEB, body, response, idempotency_key, user, db)
+
+
+@router.post(
+    "/scans",
+    response_model=CreateScanResponse,
+    status_code=202,
+    summary="Start a consent scan (web profile)",
+    description=(
+        "The original endpoint, kept for existing integrations. It is the WEB profile: the same "
+        "as `POST /scans/web`, with the same page limit. It can never start an application "
+        "scan.\n\n" + _SCAN_DESCRIPTION
+    ),
+)
+async def create_scan(
+    body: CreateScanRequest,
+    response: Response,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key",
+        description="Opaque caller-chosen string, unique per intended scan. Scoped to "
+                    "your organisation.",
+    ),
+    user: CurrentUser = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> CreateScanResponse:
+    return await _submit_scan(scan_profiles.WEB, body, response, idempotency_key, user, db)
+
+
+@router.post(
+    "/scans/application",
+    response_model=CreateScanResponse,
+    status_code=202,
+    summary="Start an application scan (no fixed page-count cap)",
+    description=(
+        "Authorized application scan: no fixed page-count cap when `CONSENT_APP_MAX_PAGES` is 0, "
+        "bounded instead by `CONSENT_APP_MAX_SECONDS`.\n\n"
+        "Requires an organisation administrator, or a service key with the "
+        "`consent:scan:application` scope, AND a domain that has passed DNS ownership "
+        "verification. The target is still checked against the same SSRF rules as every scan, so "
+        "private and loopback addresses are refused.\n\n" + _SCAN_DESCRIPTION
+    ),
+)
+async def create_application_scan(
+    body: CreateScanRequest,
+    response: Response,
+    idempotency_key: str | None = Header(
+        default=None, alias="Idempotency-Key",
+        description="Opaque caller-chosen string, unique per intended scan. Scoped to "
+                    "your organisation.",
+    ),
+    user: CurrentUser = Depends(get_application_scan_caller),
+    db: AsyncSession = Depends(get_db),
+) -> CreateScanResponse:
+    _require_application_permission(user)
+    return await _submit_scan(scan_profiles.APPLICATION, body, response, idempotency_key, user, db)
 
 
 @router.get(

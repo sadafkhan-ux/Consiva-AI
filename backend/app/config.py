@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load backend/.env into the PROCESS environment, once, before anything reads it.
@@ -117,6 +118,29 @@ class Settings(BaseSettings):
     # Pages FETCHED in the pre_consent crawl. Robots-disallowed and duplicate-spelling
     # URLs do not spend it (crawler._crawl_full_site).
     scanner_max_pages: int = 25
+    # ── Consent scan profiles ───────────────────────────────────────────────────────
+    # Two profiles share one scanning engine and differ only in the budget they get. The
+    # profile is chosen by the SERVER from which endpoint was called and who called it --
+    # never from a number in the request body. See app/scanner/scan_profiles.py.
+    #
+    # Every bound below is validated when settings load, so a typo, an empty value, a
+    # negative number or a non-integer stops the process from starting instead of quietly
+    # turning a limit into "no limit". A MISSING variable takes the documented default; it
+    # never means "disabled".
+    #
+    # CONSENT_WEB_MAX_PAGES -- public website scans. At most this many unique pages per
+    # scan. Must be 1..25: the upper bound is a hard ceiling in code (the old global
+    # default), so no environment value can turn the public profile into an unbounded one.
+    consent_web_max_pages: int = Field(default=5, ge=1, le=25)
+    # CONSENT_APP_MAX_PAGES -- authorized application scans. 0 means "no fixed page-count
+    # cap" (the scan is still bounded by CONSENT_APP_MAX_SECONDS); a positive value is an
+    # explicit cap for deployments that want one. Negative values are rejected.
+    consent_app_max_pages: int = Field(default=0, ge=0, le=1_000_000)
+    # CONSENT_APP_MAX_SECONDS -- wall-clock budget for the page-crawl phase of an
+    # application scan. This is what makes "no page cap" safe: the crawl stops starting new
+    # pages when it is spent and the scan finishes with what it has. Required to be
+    # positive (60 s..24 h); there is no "0 = forever".
+    consent_app_max_seconds: int = Field(default=3600, ge=60, le=86_400)
     scanner_timeout_seconds: int = 30
     scanner_user_agent: str = "ConsivaConsentAgent/0.1"
     scanner_max_scans_per_org_per_day: int = 50

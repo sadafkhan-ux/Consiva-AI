@@ -3,9 +3,10 @@ import { getProfile } from "../api/auth";
 import { DsrConfig } from "./DsrConfig";
 import { DsrDashboard } from "./DsrDashboard";
 import { DsrEmailFirst } from "./DsrEmailFirst";
+import { DsrSetupWizard } from "./DsrSetupWizard";
 
 /**
- * Agent 3's three views over the SAME cases and the same API.
+ * Agent 3's four views over the SAME cases and the same API.
  *
  * "New request" is the email-first flow a person is walked through. "All cases" is
  * the operator's list -- it is how you pick up a case that is mid-flight, waiting on
@@ -15,7 +16,7 @@ import { DsrEmailFirst } from "./DsrEmailFirst";
  * all read and write the same DSR state.
  */
 export function DsrConsole() {
-  const [view, setView] = useState<"new" | "cases" | "config">("new");
+  const [view, setView] = useState<"new" | "cases" | "setup" | "config">("new");
   const isAdmin = getProfile()?.role === "admin";
   return (
     <div className="dsr-console">
@@ -26,12 +27,16 @@ export function DsrConsole() {
         <button className={view === "cases" ? "active" : ""} onClick={() => setView("cases")}>
           All cases
         </button>
+        <button className={view === "setup" ? "active" : ""} onClick={() => setView("setup")}>
+          Setup
+        </button>
         <button className={view === "config" ? "active" : ""} onClick={() => setView("config")}>
           Configuration
         </button>
       </nav>
       {view === "new" && <DsrEmailFirst />}
       {view === "cases" && <DsrDashboard />}
+      {view === "setup" && <DsrSetupWizard isAdmin={isAdmin} />}
       {view === "config" && <DsrConfig isAdmin={isAdmin} />}
     </div>
   );

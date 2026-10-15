@@ -26,6 +26,7 @@ from app.agents.dsr.rules import constraints as rules
 from app.agents.dsr.schemas import case
 from app.agents.dsr.schemas.evidence_push import EvidencePush
 from app.agents.dsr.services import (
+    approval_service,
     case_service,
     evidence_push_service,
     execution_service,
@@ -49,6 +50,17 @@ async def execute_queued_search(request_id: uuid.UUID, org_id: uuid.UUID, job_id
     """
     async with async_session_factory() as db:
         request = await case_service.get_case_or_raise(db, request_id, org_id)
+        if request.status != case.SEARCHING:
+            # A retried or duplicate `dsr_search` job. POST /search moves the case to
+            # SEARCHING before it enqueues, so any other status means this job's work
+            # was already finished or already recorded as failed. Searching again
+            # would re-query the customer's source and then die on an illegal
+            # FAILED -> SEARCH_COMPLETED move, burning every retry for no result.
+            logger.info(
+                "DSR search job for case %s arrived while the case was %s; nothing to "
+                "search, treating this job as a no-op", request.reference, request.status,
+            )
+            return
         try:
             summary = await search_service.run_search(
                 db, request, job_id=job_id, correlation_id=str(request_id),
@@ -109,6 +121,13 @@ async def execute_queued_search(request_id: uuid.UUID, org_id: uuid.UUID, job_id
         await case_service.transition(
             db, request, next_status_after_planning(plan, actions),
             audit_action=case.AUDIT_ACTION_PLANNED,
+            # transition() REPLACES error_code/error_detail, so omitting them here
+            # silently erased the search outcome (a source that could not be searched,
+            # or NO_MATCH) the moment the plan was built. It is carried forward so the
+            # case row keeps saying the search was incomplete; a clean search carries
+            # None, which is the correct "nothing to report".
+            error_code=summary.outcome_code,
+            error_detail=_search_detail(summary),
             detail={"plan_id": str(plan.id), "action_count": len(actions)},
         )
         await db.commit()
@@ -176,11 +195,18 @@ async def execute_queued_actions(request_id: uuid.UUID, org_id: uuid.UUID, job_i
         succeeded, failed = 0, 0
         for action in runnable:
             try:
-                await execution_service.execute_action(
+                execution = await execution_service.execute_action(
                     db, request, action.id, job_id=job_id, correlation_id=str(request_id),
                     retention_rules=rules_at_execution,
                 )
-                succeeded += 1
+                # execute_action returns an already-recorded execution WITHOUT raising
+                # (idempotent replay), so a return is not proof of success: only a
+                # verified outcome counts. A replayed failed/running/pending row is not
+                # a success and must not be reported as one.
+                if execution.status in ("verified", "succeeded"):
+                    succeeded += 1
+                else:
+                    failed += 1
             except DsrError as exc:
                 # Recorded on the execution row by execute_action itself; this only
                 # decides how the CASE ends.
@@ -201,6 +227,29 @@ async def execute_queued_actions(request_id: uuid.UUID, org_id: uuid.UUID, job_i
         await db.flush()
 
         counts = {"succeeded": succeeded, "failed": failed, "blocked": blocked}
+
+        # Pushed-evidence actions have no connector this worker can use; the portal
+        # carries them out and reports back via POST /execution-report. While any is
+        # still unreported the case is NOT finished -- moving it to RESPONSE_PENDING
+        # here is what let a mixed plan close COMPLETED with an approved action that
+        # never ran. Leave it EXECUTING; record_execution_report closes it once every
+        # action, connector-driven or pushed, has an outcome.
+        awaiting_report = [
+            a for a in actions
+            if a.data_source_id is None
+            and (a.status == "approved" or (a.status == "proposed" and not a.requires_approval))
+        ]
+        if awaiting_report:
+            await audit_service.record(
+                db, org_id=request.org_id, actor_user_id=None,
+                action=case.AUDIT_EXECUTION_MANIFEST_ISSUED,
+                entity_type=case.AUDIT_ENTITY, entity_id=request.id,
+                after={"action_ids": [str(a.id) for a in awaiting_report],
+                       "count": len(awaiting_report), **counts},
+            )
+            await db.commit()
+            return
+
         status, code = status_after_execution(succeeded=succeeded, failed=failed, blocked=blocked)
         await case_service.transition(
             db, request, status,
@@ -589,8 +638,16 @@ async def record_execution_report(
             executed_by_user_id=actor_user_id,
         )
         if not is_new:
-            recorded.append(execution)
-            continue
+            # A report is final EXCEPT for a recorded failure: the portal may retry a
+            # failed action and report the new outcome, and refusing to record it left
+            # the agent saying "failed" for work the portal had since completed. A
+            # recorded success is never overwritten -- a later 'failed' for an action
+            # that already verified is a stale or duplicate message, not new evidence.
+            # "approved" covers an action a reviewer reopened for retry.
+            if execution.status != "failed" or action.status not in ("failed", "approved"):
+                recorded.append(execution)
+                continue
+            execution.attempts = (execution.attempts or 1) + 1
 
         execution.status = _EXECUTION_STATUS_FOR_REPORT[item.status]
         execution.verification_status = _VERIFICATION_STATUS_FOR_REPORT[item.status]
@@ -600,7 +657,7 @@ async def record_execution_report(
         execution.verified_at = moment if item.status == "done" else None
         execution.started_at = execution.started_at or moment
         execution.completed_at = item.occurred_at or moment
-        execution.attempts = 1
+        execution.attempts = execution.attempts or 1
         action.status = _ACTION_STATUS_FOR_REPORT[item.status]
         await db.flush()
         recorded.append(execution)
@@ -660,3 +717,60 @@ async def record_execution_report(
                 )
 
     return {"executions": recorded, "closed": closed, "case": request}
+
+
+# ── Retry after a failed execution ─────────────────────────────────────────────
+
+async def reopen_failed_execution(
+    db, request: DsrRequest, *, actor_user_id: uuid.UUID | None
+) -> DsrRequest:
+    """Put a case that FAILED during execution back on the path to execution.
+
+    Uses only moves the state machine already allows -- FAILED -> REVIEW_REQUIRED ->
+    APPROVED (or APPROVAL_REQUIRED) -- so the structural rule that EXECUTING is
+    reachable only from APPROVED is untouched, and a retry is itself an audited,
+    human-triggered act rather than something that happens by itself.
+
+    Each failed action returns to "approved" only if its approval is still current; one
+    whose approval lapsed goes back to "proposed" and needs a fresh decision, so a retry
+    can never execute on an expired authorization. The action's failed execution row is
+    reused for the next attempt (see execution_service.execute_action), so the
+    idempotency ledger still shows exactly one execution per action.
+    """
+    if not (request.status == case.FAILED and request.error_code == case.ERR_ACTION_FAILED):
+        raise CaseNotReadyError(
+            f"case {request.reference} is {request.status!r} "
+            f"({request.error_code or 'no error code'}); only a case that failed during "
+            "execution can be retried this way"
+        )
+    plan = await dsr_repository.get_current_plan(db, request.id, request.org_id)
+    if plan is None:
+        raise CaseNotReadyError(f"case {request.reference} has no current action plan")
+
+    actions = await dsr_repository.list_actions(db, plan.id, request.org_id)
+    failed_actions = [a for a in actions if a.status == "failed"]
+    if not failed_actions:
+        raise CaseNotReadyError(f"case {request.reference} has no failed action to retry")
+
+    needs_decision = 0
+    for action in failed_actions:
+        approval = await dsr_repository.latest_approval_for_action(db, action.id, request.org_id)
+        if action.requires_approval and not approval_service.is_approval_current(approval):
+            action.status = "proposed"
+            needs_decision += 1
+        else:
+            action.status = "approved"
+    plan.status = "approved"
+    await db.flush()
+
+    await case_service.transition(
+        db, request, case.REVIEW_REQUIRED, actor_user_id=actor_user_id,
+        audit_action=case.AUDIT_REVIEW_REQUESTED,
+        detail={"reason": "retry after failed execution", "actions": len(failed_actions)},
+    )
+    await case_service.transition(
+        db, request, case.APPROVAL_REQUIRED if needs_decision else case.APPROVED,
+        actor_user_id=actor_user_id, audit_action=case.AUDIT_ACTION_PLANNED,
+        detail={"retry": True, "awaiting_new_approval": needs_decision},
+    )
+    return request

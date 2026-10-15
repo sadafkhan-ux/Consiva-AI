@@ -112,7 +112,16 @@ def test_status_constants_match_the_migration_check_constraint():
 
 
 def test_request_type_constants_match_the_migration():
-    assert _check_values("dsr_requests", "request_type") == set(case.REQUEST_TYPES)
+    """The newest migration that (re)defines the request_type CHECK is the one in force:
+    0011 created it and 0038 replaced it to add withdraw_consent and grievance."""
+    migrations = sorted(MIGRATION.parent.glob("*.sql"))
+    in_force = None
+    for path in migrations:
+        sql = path.read_text(encoding="utf-8")
+        found = re.search(r"request_type\s+in \(([^)]*)\)", sql, re.DOTALL)
+        if found and "dsr_requests" in sql:
+            in_force = set(re.findall(r"'([a-z_]+)'", found.group(1)))
+    assert in_force == set(case.REQUEST_TYPES)
 
 
 def test_identity_status_constants_match_the_migration():

@@ -49,6 +49,12 @@ class _FakeAsyncSession:
     async def commit(self):
         pass
 
+    async def get(self, model, ident):
+        # execute_scan_and_persist now reads the scan row once to learn which scan profile
+        # (page limit and deadline) it was requested under. No row == the default web profile,
+        # which is exactly what these tests -- about persistence failures -- should run with.
+        return None
+
 
 def _fake_session_factory():
     return _FakeAsyncSession()

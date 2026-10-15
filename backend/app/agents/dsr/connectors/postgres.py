@@ -341,6 +341,96 @@ class PostgresDsrConnector:
         which means `distinct_subjects` cannot be trusted to detect ambiguity."""
         return bool(self._grant.identity_tables)
 
+    # ── Health ───────────────────────────────────────────────────────────────────
+
+    async def check_health(self) -> dict[str, Any]:
+        """Can this source actually be searched as configured? Read-only.
+
+        Connects with the READ credential and, for each allowlisted table, selects every
+        column the grant names with LIMIT 0 -- it proves the table and columns exist and
+        are selectable without reading a single row of personal data. A failure carries a
+        code, never the driver's text (which can echo the host or user).
+
+        What this does NOT prove, and says so: the write credential is only reported as
+        resolved or not -- no write is attempted -- and a passing check says nothing about
+        whether a real search, a verified execution, or the portal sync work end to end.
+        """
+        conn = await self._connect(write=False)  # raises a classified DsrError on failure
+        tables: list[dict[str, Any]] = []
+        try:
+            for table in self._grant.searchable_tables:
+                columns = (
+                    set(self._grant.identifier_columns.get(table, {}).values())
+                    | set(self._grant.returnable_columns.get(table, ()))
+                    | set(self._grant.erasable_columns.get(table, ()))
+                    | set(self._grant.key_columns(table))
+                )
+                projection = ", ".join(
+                    quote_identifier(c, kind="column") for c in sorted(columns)
+                )
+                quoted_table = self._qualified(table)
+                try:
+                    await conn.fetch(f"SELECT {projection} FROM {quoted_table} LIMIT 0")
+                    tables.append({"table": table, "ok": True, "columns_checked": len(columns)})
+                except asyncpg.PostgresError as exc:
+                    tables.append({
+                        "table": table, "ok": False,
+                        "error_code": getattr(exc, "sqlstate", None) or type(exc).__name__,
+                    })
+        finally:
+            await conn.close()
+        return {
+            "reachable": True,
+            "tables": tables,
+            "all_tables_ok": bool(tables) and all(t["ok"] for t in tables),
+            "write_credential_resolved": bool(
+                self._config.write_user and self._config.write_password
+            ),
+            "write_path_verified": False,
+        }
+
+    # ── Schema (setup wizard) ────────────────────────────────────────────────────
+
+    async def list_schema(
+        self, *, max_tables: int = 300, max_columns_per_table: int = 200
+    ) -> dict[str, Any]:
+        """Table and column NAMES (with types) the read role can see, for the setup wizard's
+        pick-lists. No row is read and no value is returned.
+
+        information_schema.columns only lists columns the connecting role has a privilege on,
+        so this reflects the least-privilege role the administrator actually created rather
+        than everything in the database. The schema name is a bound parameter.
+        """
+        schema = self._config.schema or "public"
+        conn = await self._connect(write=False)
+        try:
+            rows = await conn.fetch(
+                "SELECT table_name, column_name, data_type FROM information_schema.columns "
+                "WHERE table_schema = $1 AND table_name !~ '^pg_' "
+                "ORDER BY table_name, ordinal_position",
+                schema,
+            )
+        finally:
+            await conn.close()
+        tables: dict[str, list[dict[str, str]]] = {}
+        truncated = False
+        for row in rows:
+            name = row["table_name"]
+            if name not in tables:
+                if len(tables) >= max_tables:
+                    truncated = True
+                    continue
+                tables[name] = []
+            if len(tables[name]) >= max_columns_per_table:
+                truncated = True
+                continue
+            tables[name].append({"name": row["column_name"], "type": row["data_type"]})
+        return {
+            "schema": schema,
+            "tables": [{"name": t, "columns": cols} for t, cols in tables.items()],
+            "truncated": truncated,
+        }
+
     # ── Execution (§24) ──────────────────────────────────────────────────────────
 
     async def execute_action(

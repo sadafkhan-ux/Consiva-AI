@@ -501,6 +501,21 @@ async def list_source_authorizations(db: AsyncSession, org_id: uuid.UUID) -> lis
     return list(result.scalars().all())
 
 
+async def list_all_source_authorizations(
+    db: AsyncSession, org_id: uuid.UUID
+) -> list[DsrSourceAuthorization]:
+    """Every authorization this org has, INCLUDING revoked/disabled ones.
+
+    Only for display (the setup wizard's "revoked" state). Anything that searches or executes
+    must keep using `list_source_authorizations`, which returns enabled rows only -- a revoked
+    authorization must never be usable.
+    """
+    result = await db.execute(
+        select(DsrSourceAuthorization).where(DsrSourceAuthorization.org_id == org_id)
+    )
+    return list(result.scalars().all())
+
+
 async def get_source_authorization(
     db: AsyncSession, data_source_id: uuid.UUID, org_id: uuid.UUID
 ) -> DsrSourceAuthorization | None:
@@ -612,6 +627,8 @@ async def upsert_source_authorization(
     erasable_columns: dict,
     allow_execution: bool,
     write_credential_ref: str | None,
+    write_credential_ciphertext: str | None = None,
+    clear_write_credential: bool = False,
 ) -> DsrSourceAuthorization:
     """Create or replace a source's DSR authorization.
 
@@ -631,6 +648,13 @@ async def upsert_source_authorization(
     existing.erasable_columns = erasable_columns
     existing.allow_execution = allow_execution
     existing.write_credential_ref = write_credential_ref
+    # The allowlists above are replaced wholesale, but a stored secret is NOT: a PUT that
+    # only edits tables must not silently wipe a credential the caller never sees. It
+    # changes only when a new one is supplied, or when clearing is asked for explicitly.
+    if clear_write_credential:
+        existing.write_credential_ciphertext = None
+    elif write_credential_ciphertext is not None:
+        existing.write_credential_ciphertext = write_credential_ciphertext
     existing.enabled = True
     await db.flush()
     return existing
@@ -728,3 +752,48 @@ async def list_case_audit(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+# ── Setup wizard: domains and revocation ─────────────────────────────────────────
+
+async def find_website(db: AsyncSession, org_id: uuid.UUID, domain: str):
+    """The org's `websites` row for `domain`, if any. READ-ONLY: that table belongs to the
+    Consent agent, and the DSR setup flow only ever reads its verification stamp."""
+    from app.db.models import Website
+
+    result = await db.execute(
+        select(Website).where(Website.org_id == org_id, func.lower(Website.domain) == domain.lower())
+    )
+    return result.scalars().first()
+
+
+async def list_org_websites(db: AsyncSession, org_id: uuid.UUID) -> list:
+    """Every `websites` row this org has, verified or not. Read-only (see find_website)."""
+    from app.db.models import Website
+
+    result = await db.execute(
+        select(Website).where(Website.org_id == org_id).order_by(Website.domain)
+    )
+    return list(result.scalars().all())
+
+
+async def revoke_source_authorization(
+    db: AsyncSession, *, org_id: uuid.UUID, data_source_id: uuid.UUID
+) -> DsrSourceAuthorization | None:
+    """Switch a source's DSR authorization off and withdraw everything that lets it write.
+
+    Disables the authorization, clears execution permission and BOTH write credentials (the
+    stored ciphertext and the environment-variable name). The read allowlists are kept so an
+    administrator can see what was authorized and re-authorize deliberately -- re-authorizing
+    goes through PUT /config/sources, which sets everything afresh. Returns None if there is
+    no authorization to revoke.
+    """
+    existing = await get_source_authorization(db, data_source_id, org_id)
+    if existing is None:
+        return None
+    existing.enabled = False
+    existing.allow_execution = False
+    existing.write_credential_ref = None
+    existing.write_credential_ciphertext = None
+    await db.flush()
+    return existing

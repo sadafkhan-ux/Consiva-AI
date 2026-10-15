@@ -163,7 +163,9 @@ def evaluate(
             source="source_authorization",
             requester_explanation=REFERRED_TO_TEAM,
         ))
-    elif not grant.write_credential_ref and not getattr(grant, "external_execution", False):
+    elif not (
+        grant.write_credential_ref or getattr(grant, "write_credential_stored", False)
+    ) and not getattr(grant, "external_execution", False):
         found.append(Constraint(
             code=case.ERR_SOURCE_NOT_AUTHORIZED, kind=KIND_SYSTEM, effect=EFFECT_BLOCK,
             reason=(

@@ -145,6 +145,13 @@ def require_scope(principal: IntegrationPrincipal, scope: str) -> None:
 #: Scope a service key needs to drive the Consent Agent's integration API.
 SCOPE_CONSENT_SCAN = "consent:scan"
 
+#: Scope a service key needs to start an APPLICATION-profile scan -- the profile with no fixed
+#: page-count cap (scanner/scan_profiles.py). Deliberately separate from `consent:scan`, which
+#: only ever reaches the 5-page web profile: a key minted for a public-site integration must not
+#: be able to start an unbounded-by-pages crawl just because it can start a small one. A signed-in
+#: PERSON needs the admin role instead; that check is the route's own.
+SCOPE_CONSENT_SCAN_APPLICATION = "consent:scan:application"
+
 #: Scope a service key needs to read ROPA results (runs/records/findings/changes)
 #: and promote a baseline -- separate from "evidence:write" so a push-only adapter
 #: isn't implicitly handed read access, and an integrator asking for read access
@@ -163,7 +170,8 @@ SCOPE_DSR_CONFIG = "dsr:config"
 #: Every scope a key may be granted. Enumerated so a typo at mint time is refused
 #: rather than stored as a scope that can never match anything.
 KNOWN_SCOPES = (
-    "evidence:write", SCOPE_CONSENT_SCAN, SCOPE_EVIDENCE_READ, SCOPE_DSR_OPERATE, SCOPE_DSR_CONFIG,
+    "evidence:write", SCOPE_CONSENT_SCAN, SCOPE_CONSENT_SCAN_APPLICATION,
+    SCOPE_EVIDENCE_READ, SCOPE_DSR_OPERATE, SCOPE_DSR_CONFIG,
 )
 
 
@@ -238,6 +246,23 @@ async def get_caller(
     holding `consent:scan` -- the Consent Agent's integration API."""
     return await _authenticate_with_scope(
         required_scope=SCOPE_CONSENT_SCAN, credentials=credentials, db=db, settings=settings,
+    )
+
+
+async def get_application_scan_caller(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CurrentUser:
+    """Authenticate a request to the application-profile scan endpoint.
+
+    A service key must hold `consent:scan:application` (a `consent:scan` key is refused with
+    403). A signed-in person authenticates here too, but is only an ADMIN if their token says so;
+    the route checks that, exactly as the DSR configuration routes do.
+    """
+    return await _authenticate_with_scope(
+        required_scope=SCOPE_CONSENT_SCAN_APPLICATION, credentials=credentials, db=db,
+        settings=settings,
     )
 
 

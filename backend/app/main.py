@@ -77,6 +77,7 @@ _API_ERROR_CODES = {
     "InvalidUrlError": "INVALID_URL",
     "ScanAuthorizationError": "NOT_AUTHORIZED",
     "ScanTimeoutError": "SCAN_TIMEOUT",
+    "ApplicationScanNotPermittedError": "APPLICATION_SCAN_NOT_PERMITTED",
     "RateLimitExceededError": "RATE_LIMIT_EXCEEDED",
     "ScanNotReadyError": "SCAN_NOT_READY",
     "ScanConflictError": "SCAN_CONFLICT",

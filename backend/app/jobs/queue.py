@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AgentJob
+from app.scanner import scan_profiles
 
 _MAX_ATTEMPTS = 3
 
@@ -20,6 +21,29 @@ _MAX_ATTEMPTS = 3
 # workers from double-processing the same job, but does nothing for one that dies
 # mid-job and never calls mark_done/mark_failed to release it.
 _STALE_THRESHOLD = timedelta(minutes=10)
+
+# Slack added on top of an application scan's own hard timeout before the reaper may treat its
+# job as lost. The scan aborts itself at that timeout, so this only has to cover the persistence
+# and analysis work that follows it in the same job.
+_APPLICATION_LEASE_MARGIN = timedelta(minutes=15)
+
+
+def stale_threshold_for(job: AgentJob) -> timedelta:
+    """How long `job` may sit at "running" before the reaper assumes its worker died.
+
+    10 minutes for everything, which is generous for a web scan (a few pages, bounded by its own
+    timeout). An APPLICATION scan has no page cap and is allowed to run for CONSENT_APP_MAX_SECONDS
+    -- up to hours -- so a flat 10 minutes would reclaim a healthy scan mid-crawl and start a
+    second crawl of the same site alongside it. Such a job (marked by the `scan_profile` the API
+    puts in its payload) gets the profile's own hard timeout plus a margin instead. Everything
+    else, including jobs created before profiles existed, keeps the 10 minutes.
+    """
+    payload = getattr(job, "payload", None)
+    payload = payload if isinstance(payload, dict) else {}
+    if payload.get("scan_profile") == scan_profiles.APPLICATION:
+        profile = scan_profiles.resolve_profile(scan_profiles.APPLICATION)
+        return max(_STALE_THRESHOLD, timedelta(seconds=profile.hard_timeout_seconds) + _APPLICATION_LEASE_MARGIN)
+    return _STALE_THRESHOLD
 
 
 async def enqueue(db: AsyncSession, *, org_id: uuid.UUID, job_type: str, payload: dict) -> AgentJob:
@@ -100,9 +124,15 @@ async def reap_stale_jobs(db: AsyncSession) -> int:
         .where(AgentJob.status == "running", AgentJob.locked_at < cutoff)
         .with_for_update(skip_locked=True)
     )
-    stale_jobs = (await db.execute(stmt)).scalars().all()
+    now = datetime.now(UTC)
+    # The query above selects everything older than the BASE threshold; a job with a longer
+    # lease (an application scan) is only stale once ITS threshold has passed too.
+    stale_jobs = [
+        j for j in (await db.execute(stmt)).scalars().all()
+        if getattr(j, "locked_at", None) is None or j.locked_at < now - stale_threshold_for(j)
+    ]
     for job in stale_jobs:
-        job.error = f"Reaped: worker {job.locked_by!r} held this job past {_STALE_THRESHOLD} without completing it"
+        job.error = f"Reaped: worker {job.locked_by!r} held this job past {stale_threshold_for(job)} without completing it"
         if job.attempts >= _MAX_ATTEMPTS:
             job.status = "failed"
         else:

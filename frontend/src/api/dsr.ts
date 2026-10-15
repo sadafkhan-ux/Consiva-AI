@@ -24,6 +24,16 @@ export interface DsrCase {
   id: string;
   reference: string;
   status: string;
+  /** Customer/portal-facing name projected from `status` (PENDING, VERIFICATION_REQUIRED,
+   *  SEARCHING, AWAITING_APPROVAL, EXECUTING, COMPLETED, PARTIALLY_COMPLETED, FAILED, ...).
+   *  Display only -- `status` and `allowed_transitions` stay the source of truth. */
+  public_status?: string;
+  /** True when POST /retry-execution can recover this failed case. */
+  retryable?: boolean;
+  /** Plain-language "what happened" and "what to do next", from the backend, so screens
+   *  show words instead of status codes. */
+  status_message?: string;
+  next_step?: string | null;
   request_type: string;
   classification_method: string | null;
   classification_confidence: number | null;
@@ -174,6 +184,108 @@ export interface SourceAuthorizationInput {
   erasable_columns: Record<string, string[]>;
   allow_execution: boolean;
   write_credential_ref?: string | null;
+  /** The write password, supplied ONCE and stored encrypted by the backend. Write-only: no
+   *  response ever returns it, and callers must clear it from state after saving. */
+  write_secret?: string;
+  /** Delete the stored write credential. Leave unset to keep it. */
+  clear_write_secret?: boolean;
+}
+
+// ── Setup wizard ─────────────────────────────────────────────────────────────────
+
+export type SourceReadiness =
+  | "authorized"
+  | "ready_to_authorize"
+  | "needs_credential"
+  | "connector_not_supported"
+  | "disabled"
+  | "revoked";
+
+export interface DsrSetupSource {
+  data_source_id: string;
+  name: string;
+  connector: string;
+  readiness: SourceReadiness;
+  next_step: string;
+  allow_execution: boolean;
+  write_credential_stored: boolean;
+}
+
+export interface DsrIntegrationPath {
+  id: string;
+  title: string;
+  status: "supported" | "not_available";
+  summary: string;
+  requires?: string[];
+  alternative?: string;
+}
+
+export interface DsrOwnership {
+  proven: boolean;
+  method: "existing_verification" | "dns_txt" | null;
+  stale: boolean;
+  verified_at: string | null;
+  detail: string;
+}
+
+export interface DsrDomainCheck {
+  domain: string;
+  ownership: DsrOwnership;
+  txt_record: { type: string; host: string; value: string } | null;
+  /** Always false: proving a domain authorises no data source. */
+  grants_access: boolean;
+  note: string;
+}
+
+export interface DsrManifestConnector {
+  type: string;
+  base_url: string;
+  docs_url: string | null;
+  description: string | null;
+  supported_by_consiva: boolean;
+}
+
+export interface DsrDiscovery {
+  domain: string;
+  ownership: DsrOwnership;
+  manifest: {
+    found: boolean;
+    reason: string | null;
+    declared_by_customer: boolean;
+    connectors?: DsrManifestConnector[];
+  };
+  paths: DsrIntegrationPath[];
+  sources: DsrSetupSource[];
+  grants_access: boolean;
+}
+
+export interface DsrSetupOverview {
+  domains: { domain: string; verified: boolean; stale: boolean; verified_at: string | null }[];
+  sources: DsrSetupSource[];
+  paths: DsrIntegrationPath[];
+  verification_max_age_days: number;
+}
+
+export interface DsrSchemaListing {
+  available: boolean;
+  source_name: string;
+  tables: { name: string; columns: { name: string; type: string }[] }[];
+  truncated?: boolean;
+  error_code?: string;
+  message?: string;
+}
+
+export interface DsrConnectionTest {
+  source_name: string;
+  healthy: boolean;
+  error_code: string | null;
+  reachable: boolean;
+  tables: { table: string; ok: boolean; columns_checked?: number; error_code?: string }[];
+  write_credential_resolved?: boolean;
+  write_path_verified?: boolean;
+  /** What a pass does and does not establish -- shown verbatim, never hidden. */
+  proves: string;
+  does_not_prove: string;
 }
 
 export interface DsrRetentionRule {
@@ -285,7 +397,12 @@ export const dsrApi = {
   startSearch(id: string): Promise<{ job_id: string; case: DsrCase }> {
     return request(`/api/v1/dsr/requests/${id}/search`, { method: "POST" });
   },
-  getResults(id: string): Promise<{ search_runs: DsrSearchRun[]; evidence: DsrEvidence[] }> {
+  getResults(id: string): Promise<{
+    search_runs: DsrSearchRun[];
+    evidence: DsrEvidence[];
+    /** Set when records are visible on a case that did not complete: found is not done. */
+    evidence_notice?: string | null;
+  }> {
     return request(`/api/v1/dsr/requests/${id}/results`);
   },
   getPlan(id: string): Promise<DsrPlan> {
@@ -316,6 +433,9 @@ export const dsrApi = {
   execute(id: string): Promise<{ job_id: string; case: DsrCase }> {
     return request(`/api/v1/dsr/requests/${id}/execute`, { method: "POST" });
   },
+  retryExecution(id: string): Promise<DsrCase> {
+    return request(`/api/v1/dsr/requests/${id}/retry-execution`, { method: "POST" });
+  },
   getExecutions(id: string): Promise<DsrExecution[]> {
     return request(`/api/v1/dsr/requests/${id}/executions`);
   },
@@ -337,6 +457,30 @@ export const dsrApi = {
   // "admin" -- the UI mirrors that rather than inventing its own rule.
   listSourceAuthorizations(): Promise<DsrSourceAuthorization[]> {
     return request("/api/v1/dsr/config/sources");
+  },
+  setupOverview(): Promise<DsrSetupOverview> {
+    return request("/api/v1/dsr/setup/overview");
+  },
+  setupCheckDomain(domain: string, verify: boolean): Promise<DsrDomainCheck> {
+    return request("/api/v1/dsr/setup/domain", {
+      method: "POST",
+      body: JSON.stringify({ domain, verify }),
+    });
+  },
+  setupDiscover(domain: string): Promise<DsrDiscovery> {
+    return request("/api/v1/dsr/setup/discover", {
+      method: "POST",
+      body: JSON.stringify({ domain }),
+    });
+  },
+  getSourceSchema(dataSourceId: string): Promise<DsrSchemaListing> {
+    return request(`/api/v1/dsr/config/sources/${dataSourceId}/schema`);
+  },
+  testSourceConnection(dataSourceId: string): Promise<DsrConnectionTest> {
+    return request(`/api/v1/dsr/config/sources/${dataSourceId}/test`, { method: "POST" });
+  },
+  revokeSource(dataSourceId: string): Promise<{ source_name: string; enabled: boolean }> {
+    return request(`/api/v1/dsr/config/sources/${dataSourceId}/revoke`, { method: "POST" });
   },
   putSourceAuthorization(payload: SourceAuthorizationInput): Promise<{ id: string }> {
     return request("/api/v1/dsr/config/sources", { method: "PUT", body: JSON.stringify(payload) });

@@ -116,9 +116,14 @@ def test_is_configured_reports_whether_webhooks_can_be_sent_at_all(monkeypatch):
 def test_the_api_rejects_a_webhook_it_could_not_sign():
     """Told at request time, not by a callback that silently never arrives."""
     from app.api.v1.routes import consent_agent
-    body = inspect.getsource(consent_agent.create_scan)
+    # The check lives in the path every scan-creating endpoint shares (web, application and the
+    # original /scans), so none of them can accept a webhook it could not sign.
+    body = inspect.getsource(consent_agent._submit_scan)
     assert "webhook_service.is_configured()" in body
     assert "WebhookNotConfiguredError" in body
+    for endpoint in (consent_agent.create_scan, consent_agent.create_web_scan,
+                     consent_agent.create_application_scan):
+        assert "_submit_scan" in inspect.getsource(endpoint)
 
 
 def test_that_refusal_is_a_server_capability_error_not_a_client_mistake():

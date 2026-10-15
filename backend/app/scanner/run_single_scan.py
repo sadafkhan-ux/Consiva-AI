@@ -16,15 +16,17 @@ SelectorEventLoop on Windows, which is exactly why this can't be spawned with
 Not needed on non-Windows platforms, where this conflict doesn't exist — see
 `run_scan_isolated()`'s platform check.
 
-Usage: python -m app.scanner.run_single_scan <url>
+Usage: python -m app.scanner.run_single_scan <url> [web|application]
 Prints the ScanResult as JSON to stdout on success. On failure, prints the error to
 stderr and exits non-zero.
 """
 
 import asyncio
+import os
 import sys
 
-from app.scanner.crawler import run_scan
+from app.scanner.crawler import CANCEL_FILE_ENV, run_scan
+from app.scanner.scan_profiles import PROFILE_NAMES, resolve_profile
 
 # Real scanned websites routinely contain non-ASCII Unicode (arrows, em/en dashes,
 # curly quotes, non-Latin scripts) in page titles/form labels/policy link text --
@@ -39,17 +41,31 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
 
-async def _main(url: str) -> None:
-    result = await run_scan(url)
+async def _main(url: str, profile_name: str | None = None) -> None:
+    # The profile NAME is the only thing that arrives on the command line; its page limit and
+    # deadline come from this process's own validated settings, never from argv.
+    profile = resolve_profile(profile_name) if profile_name else None
+    cancel_file = os.environ.get(CANCEL_FILE_ENV)
+
+    async def _should_stop() -> bool:
+        # This process has no database access; the parent signals a cancel by creating a file.
+        return bool(cancel_file) and os.path.exists(cancel_file)
+
+    kwargs: dict = {}
+    if profile is not None:
+        kwargs["profile"] = profile
+    if cancel_file:
+        kwargs["should_stop"] = _should_stop
+    result = await run_scan(url, **kwargs)
     sys.stdout.write(result.model_dump_json())
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("usage: python -m app.scanner.run_single_scan <url>", file=sys.stderr)
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] not in PROFILE_NAMES):
+        print("usage: python -m app.scanner.run_single_scan <url> [web|application]", file=sys.stderr)
         sys.exit(2)
     try:
-        asyncio.run(_main(sys.argv[1]))
+        asyncio.run(_main(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else None))
     except Exception as exc:  # noqa: BLE001 — surfaced to the parent process via stderr
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         sys.exit(1)

@@ -42,6 +42,11 @@ _OPERATION_FOR_TYPE = {
     case.DELETION: case.OP_DELETE_RECORD,
 }
 
+# Types with no entry in _OPERATION_FOR_TYPE above: they plan a harmless no_op, and a person
+# must still decide what the request actually needs. Withdrawal of consent and a grievance
+# are deliberately NOT mapped to delete_record -- that mapping is what an erasure plan is.
+_ALWAYS_HUMAN_TYPES = frozenset({case.OTHER, case.WITHDRAW_CONSENT, case.GRIEVANCE})
+
 _RISK_FOR_OPERATION = {
     case.OP_DISCLOSE: "low",
     case.OP_RETAIN: "low",
@@ -207,7 +212,7 @@ def _plan_one(
         # that nobody actually decided what this request is, which is a human decision
         # this flow must not skip just because there happens to be nothing destructive
         # to approve.
-        or request.request_type == case.OTHER
+        or request.request_type in _ALWAYS_HUMAN_TYPES
     )
     return (
         _action(

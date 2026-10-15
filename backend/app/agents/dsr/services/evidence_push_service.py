@@ -35,6 +35,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.dsr.connectors import base as connector_base
+from app.agents.dsr.connectors import factory as connector_factory
 from app.agents.dsr.connectors.authorization import SourceGrant
 from app.agents.dsr.errors import CaseNotReadyError, EvidenceTooLargeError
 from app.agents.dsr.schemas import case
@@ -218,7 +219,7 @@ def encrypt_push_payload(push: EvidencePush) -> str:
     master key per deployment for anything sensitive at rest, not a new key per
     use case (see app/agents/ropa/connectors/factory.py)."""
     raw = json.dumps([t.model_dump(mode="json") for t in push.tables], default=str)
-    return credential_factory.encrypt_credential(raw)
+    return connector_factory.encrypt_credential(raw)
 
 
 def decrypt_push_payload(ciphertext: str) -> list[dict]:

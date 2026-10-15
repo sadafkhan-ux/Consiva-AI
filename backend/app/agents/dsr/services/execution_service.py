@@ -147,13 +147,23 @@ async def execute_action(
         correlation_id=correlation_id,
     )
     if not is_new:
-        # Somebody already claimed this. Return THEIR outcome; do not redo the work.
-        logger.info(
-            "DSR execution %s already claimed for action %s (status=%s) -- returning the "
-            "recorded result rather than executing again",
-            execution.id, action.id, execution.status,
-        )
-        return execution
+        # A FAILED execution is retried only when a reviewer deliberately reopened the
+        # action (dsr_run_service.reopen_failed_execution puts it back to "approved").
+        # The failed write was rolled back or never issued, so reusing the row for one
+        # more attempt cannot perform the action twice. Anything else -- verified,
+        # running, pending, or a failed row whose action was NOT reopened -- is
+        # somebody else's outcome and is returned untouched.
+        reopened = execution.status == "failed" and action.status == "approved"
+        if not reopened:
+            logger.info(
+                "DSR execution %s already claimed for action %s (status=%s) -- returning the "
+                "recorded result rather than executing again",
+                execution.id, action.id, execution.status,
+            )
+            return execution
+        execution.error_code = None
+        execution.error_detail = None
+        execution.verification_status = "pending"
 
     execution.status = "running"
     execution.attempts += 1

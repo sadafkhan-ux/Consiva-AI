@@ -19,14 +19,15 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.dsr.connectors import authorization
-from app.agents.dsr.connectors.factory import SUPPORTED_CONNECTORS
+from app.agents.dsr.connectors.factory import SUPPORTED_CONNECTORS, build_connector, encrypt_credential
 from app.agents.dsr.errors import (
     AdminRequiredError,
     CaseNotReadyError,
+    DsrError,
     DsrNotFoundError,
     EvidenceTooLargeError,
     SourceNotAuthorizedError,
@@ -39,8 +40,10 @@ from app.agents.dsr.services import (
     evidence_push_service,
     identity_service,
     lifecycle,
+    outcome_service,
     planning_service,
     response_service,
+    setup_service,
     sla_service,
 )
 from app.core import integration_auth
@@ -101,6 +104,12 @@ class SourceAuthorizationIn(BaseModel):
     # The NAME of the environment entry holding the write password -- never the
     # password. Validated as a name, and never echoed back in a response.
     write_credential_ref: str | None = Field(default=None, max_length=128)
+    # The write password itself, supplied ONCE by an administrator and stored encrypted
+    # (migration 0037). Write-only: no response ever carries it, and as a SecretStr it
+    # also stays out of a repr or a validation-error echo. Omit it on a later PUT to
+    # keep the stored one; set `clear_write_secret` to remove it.
+    write_secret: SecretStr | None = Field(default=None, max_length=512)
+    clear_write_secret: bool = False
 
     @field_validator("write_credential_ref")
     @classmethod
@@ -181,6 +190,19 @@ def _case_response(request, *, identity_status: str | None = None) -> dict:
         "id": str(request.id),
         "reference": request.reference,
         "status": request.status,
+        # The customer/portal-facing name, projected from `status` (lifecycle.
+        # public_status). `status` stays the stored truth; this never drives a
+        # transition. `retryable` says whether POST /retry-execution can recover it.
+        "public_status": lifecycle.public_status(request.status, request.error_code),
+        # Plain words for people who should not have to read a status code: what happened,
+        # and what to do about it. Derived from the stored status and error code only.
+        "status_message": lifecycle.plain_status(
+            request.status, request.error_code, request.request_type
+        )[0],
+        "next_step": lifecycle.plain_status(
+            request.status, request.error_code, request.request_type
+        )[1],
+        "retryable": lifecycle.failure_is_retryable(request.status, request.error_code),
         "request_type": request.request_type,
         "classification_method": request.classification_method,
         "classification_confidence": request.classification_confidence,
@@ -365,6 +387,40 @@ async def start_search(
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
     await identity_service.assert_identity_satisfied(db, request)
 
+    # A grievance, or a request the classifier could not place, is read by a person
+    # before anything is searched. It is routed to review rather than failed, and it
+    # leaves the same way any reviewed case does: a person sets the type, then searches.
+    triage_reason = lifecycle.needs_human_triage(
+        request.request_type, request.classification_confidence, request.classification_method,
+    )
+    if triage_reason:
+        if request.status != case_vocab.REVIEW_REQUIRED:
+            await case_service.transition(
+                db, request, case_vocab.REVIEW_REQUIRED,
+                actor_user_id=uuid.UUID(user.user_id),
+                audit_action=case_vocab.AUDIT_REVIEW_REQUESTED,
+                error_detail=triage_reason,
+            )
+        await db.commit()
+        return {
+            "job_id": None, "triaged": True, "reason": triage_reason,
+            "case": await _case_with_identity(db, request),
+        }
+
+    # Refuse up front, and leave the case exactly where it is, when there is nothing to
+    # search. Queueing the job instead produced a FAILED case that looked broken when the
+    # real state was "an administrator has not connected a source yet".
+    enabled_sources = [
+        a for a in await dsr_repository.list_source_authorizations(db, request.org_id)
+        if getattr(a, "enabled", True)
+    ]
+    if not enabled_sources:
+        raise SourceNotAuthorizedError(
+            "Connect a data source first: no source is authorised for DSR in this "
+            "organisation. An administrator can add one in DSR Settings (or push evidence "
+            "with POST /requests/{id}/evidence). This case was left unchanged."
+        )
+
     await case_service.transition(
         db, request, case_vocab.SEARCHING,
         actor_user_id=uuid.UUID(user.user_id),
@@ -389,6 +445,16 @@ async def list_results(
     runs = await dsr_repository.list_search_runs(db, request.id, org_id)
     evidence = await dsr_repository.list_evidence(db, request.id, org_id)
     return {
+        "case_status": request.status,
+        "case_error_code": request.error_code,
+        # Evidence is what a SEARCH found. It says nothing about whether any action on
+        # it succeeded, and it stays listed on a failed case -- so say so explicitly
+        # rather than letting visible data read as "this worked".
+        "evidence_notice": (
+            "Records below were found by search. The case itself did not complete "
+            f"({request.error_code or 'failed'}); no action on them is confirmed."
+            if request.status == case_vocab.FAILED and evidence else None
+        ),
         "search_runs": [
             {
                 "id": str(r.id), "source": r.source_name, "status": r.status,
@@ -793,6 +859,98 @@ async def execute(
     return {"mode": "connector", "job_id": str(job.id), "case": await _case_with_identity(db, request)}
 
 
+@router.get("/requests/{request_id}/outcome")
+async def get_outcome(
+    request_id: uuid.UUID,
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """What actually happened to this case, stage by stage: the search, the approvals, the
+    execution (counting only actions whose read-back PASSED) and one closure verdict.
+
+    This is the endpoint a portal should read before it shows a request as resolved. A found
+    record, a drafted response or an attempted action is never a resolution;
+    `portal_may_show_resolved` is true only for a verified outcome.
+    """
+    org_id = uuid.UUID(user.org_id)
+    request = await case_service.get_case_or_raise(db, request_id, org_id)
+    runs = await dsr_repository.list_search_runs(db, request.id, org_id)
+    evidence = await dsr_repository.list_evidence(db, request.id, org_id)
+    plan = await dsr_repository.get_current_plan(db, request.id, org_id)
+    actions = await dsr_repository.list_actions(db, plan.id, org_id) if plan else []
+    executions = await dsr_repository.list_executions(db, request.id, org_id)
+    verification = await dsr_repository.get_latest_identity_verification(db, request.id, org_id)
+    result = outcome_service.build_outcome(request, runs, len(evidence), actions, executions)
+    result["identity_status"] = identity_service.effective_status(verification)
+    return result
+
+
+class ReconcileItem(BaseModel):
+    #: The portal's own request id -- the idempotency_key the case was imported under.
+    client_reference: str = Field(min_length=1, max_length=200)
+    portal_status: str = Field(min_length=1, max_length=60)
+    portal_identity_verified: bool | None = None
+
+
+class ReconcileRequest(BaseModel):
+    items: list[ReconcileItem] = Field(min_length=1, max_length=200)
+
+
+@router.post("/requests/reconcile")
+async def reconcile_requests(
+    payload: ReconcileRequest,
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Compare a portal's view of its requests with this agent's cases. READ-ONLY.
+
+    Reports every disagreement (status, identity, a case that was never imported) and changes
+    nothing on either side: which system is right is a decision for a person, and overwriting a
+    record would destroy the evidence of the mismatch. See outcome_service.PORTAL_EXPECTATIONS
+    for the status mapping this applies.
+    """
+    org_id = uuid.UUID(user.org_id)
+    results = []
+    for item in payload.items:
+        request = await dsr_repository.find_request_by_idempotency_key(db, org_id, item.client_reference)
+        satisfied = None
+        if request is not None:
+            verification = await dsr_repository.get_latest_identity_verification(db, request.id, org_id)
+            satisfied = identity_service.is_satisfied(verification)
+        results.append(outcome_service.reconcile_item(
+            client_reference=item.client_reference, portal_status=item.portal_status,
+            portal_identity_verified=item.portal_identity_verified,
+            request=request, identity_satisfied=satisfied,
+        ))
+    return {
+        "checked": len(results),
+        "mismatches": sum(1 for r in results if r["agrees"] is False),
+        "not_found": sum(1 for r in results if not r["found"]),
+        "unmapped": sum(1 for r in results if r["found"] and r["agrees"] is None),
+        "results": results,
+    }
+
+
+@router.post("/requests/{request_id}/retry-execution")
+async def retry_execution(
+    request_id: uuid.UUID,
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Reopen a case whose execution failed so its failed actions can run again.
+
+    Moves FAILED -> REVIEW_REQUIRED -> APPROVED (or APPROVAL_REQUIRED when an
+    approval has lapsed) through the normal state machine; call POST /execute
+    afterwards. Refused unless the case failed during execution.
+    """
+    request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
+    await dsr_run_service.reopen_failed_execution(
+        db, request, actor_user_id=uuid.UUID(user.user_id)
+    )
+    await db.commit()
+    return await _case_with_identity(db, request)
+
+
 @router.get("/requests/{request_id}/executions")
 async def list_executions(
     request_id: uuid.UUID,
@@ -894,6 +1052,21 @@ async def complete_case(
     if response is None:
         raise CaseNotReadyError(
             f"case {request.reference} has no response; generate one before completing it"
+        )
+    current_plan = await dsr_repository.get_current_plan(db, request.id, org_id)
+    unresolved = [
+        a for a in (
+            await dsr_repository.list_actions(db, current_plan.id, org_id) if current_plan else []
+        )
+        # Approved/executing means authorized work that has no recorded outcome. It is
+        # neither done nor deliberately skipped, so the case is not finished.
+        if a.status in ("approved", "executing")
+        or (a.status == "proposed" and not a.requires_approval)
+    ]
+    if unresolved:
+        raise CaseNotReadyError(
+            f"case {request.reference} still has {len(unresolved)} approved action(s) with "
+            "no recorded outcome; execute them (or report their result) before completing"
         )
     response.status = "sent"
     response.sent_at = datetime.now(UTC)
@@ -997,7 +1170,10 @@ async def list_source_authorizations(
             "record_key_columns": a.record_key_columns,
             "erasable_columns": a.erasable_columns,
             "allow_execution": a.allow_execution,
-            "write_credential_configured": bool(a.write_credential_ref),
+            "write_credential_configured": bool(
+                a.write_credential_ref or getattr(a, "write_credential_ciphertext", None)
+            ),
+            "write_credential_stored": bool(getattr(a, "write_credential_ciphertext", None)),
             "enabled": a.enabled,
         })
     return out
@@ -1037,8 +1213,15 @@ async def put_source_authorization(
         erasable_columns=payload.erasable_columns,
         allow_execution=payload.allow_execution,
         write_credential_ref=payload.write_credential_ref,
+        write_credential_ciphertext=None,
     )
     authorization.resolve(candidate, source_name=source.name)  # raises on anything invalid
+    # Encrypted here, at the boundary: the plaintext lives only as long as this call and
+    # is never put on the row, in the audit trail, or in the response.
+    write_ciphertext = (
+        encrypt_credential(payload.write_secret.get_secret_value())
+        if payload.write_secret and payload.write_secret.get_secret_value() else None
+    )
 
     row = await dsr_repository.upsert_source_authorization(
         db, org_id=org_id, data_source_id=payload.data_source_id,
@@ -1050,6 +1233,8 @@ async def put_source_authorization(
         erasable_columns=payload.erasable_columns,
         allow_execution=payload.allow_execution,
         write_credential_ref=payload.write_credential_ref,
+        write_credential_ciphertext=write_ciphertext,
+        clear_write_credential=payload.clear_write_secret,
     )
     await audit_service.record(
         db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
@@ -1059,12 +1244,278 @@ async def put_source_authorization(
             "source": source.name,
             "searchable_tables": payload.searchable_tables,
             "allow_execution": payload.allow_execution,
-            # The NAME only. The secret itself never enters the audit trail.
+            # The NAME only. The secret itself never enters the audit trail -- only the
+            # fact that one was stored or cleared.
             "write_credential_ref": payload.write_credential_ref,
+            "write_secret_changed": bool(write_ciphertext) or payload.clear_write_secret,
         },
     )
     await db.commit()
     return {"id": str(row.id), "source_name": source.name, "allow_execution": row.allow_execution}
+
+
+@router.post("/config/sources/{data_source_id}/test")
+async def test_source_connection(
+    data_source_id: uuid.UUID,
+    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Check a source's DSR configuration against the real database, read-only.
+
+    Connects with the read credential and confirms every allowlisted table and column
+    exists and is selectable (LIMIT 0 -- no row is read). Reports a per-table result and
+    whether a write credential resolves, never a credential or a row.
+
+    A passing result means the CONFIGURATION is usable. It does not prove a search finds
+    the right person, that an execution verifies, or that anything reached the portal --
+    `proves` and `does_not_prove` say so in the response rather than leaving it implied.
+    """
+    _require_admin(user)
+    org_id = uuid.UUID(user.org_id)
+    source = await ropa_repository.get_data_source(db, data_source_id, org_id)
+    if source is None:
+        raise DsrNotFoundError(f"data source {data_source_id} not found")
+    row = await dsr_repository.get_source_authorization(db, data_source_id, org_id)
+    if row is None:
+        raise SourceNotAuthorizedError(
+            f"source {source.name!r} has no DSR authorization yet; authorize its tables and "
+            "columns with PUT /config/sources first"
+        )
+
+    try:
+        # Built inside the try: a missing credential or malformed config is exactly what
+        # a health check exists to report, so it is a result here, not an error response.
+        connector = build_connector(
+            data_source=source, authorization=row, for_execution=bool(row.allow_execution),
+        )
+        report = await connector.check_health()
+        healthy, failure = report["all_tables_ok"], None
+    except DsrError as exc:
+        report, healthy, failure = {"reachable": False, "tables": []}, False, exc.code
+
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="dsr.source_connection_tested", entity_type="dsr_source_authorization",
+        entity_id=row.id, after={"source": source.name, "healthy": healthy, "error_code": failure},
+    )
+    await db.commit()
+    return {
+        "source_name": source.name,
+        "healthy": healthy,
+        "error_code": failure,
+        **report,
+        "proves": "the source is reachable and every allowlisted table and column is selectable",
+        "does_not_prove": (
+            "that a search matches the right person, that an execution verifies, or that the "
+            "result reaches the portal"
+        ),
+    }
+
+
+# ── Setup wizard: domain -> ownership -> discovery -> (PUT /config/sources) -> test ──
+#
+# A verified domain proves the organisation controls a website's DNS. It authorises NOTHING:
+# no source, table, column or operation is enabled by anything in this block. See
+# setup_service for what is reused from the existing domain verification, and why.
+
+class DomainIn(BaseModel):
+    domain: str = Field(min_length=1, max_length=2048)
+    #: Run a live DNS check for the verification record now. Off by default so merely typing a
+    #: domain never causes an outbound lookup.
+    verify: bool = False
+
+
+async def _ownership_for(db: AsyncSession, org_id: uuid.UUID, domain: str, *, check_dns: bool):
+    website = await dsr_repository.find_website(db, org_id, domain)
+    return await setup_service.establish_ownership(
+        org_id=org_id, domain=domain,
+        verified_at=website.verified_at if website is not None else None,
+        check_dns=check_dns,
+    )
+
+
+def _ownership_dict(ownership) -> dict:
+    return {
+        "proven": ownership.proven, "method": ownership.method, "stale": ownership.stale,
+        "verified_at": ownership.verified_at.isoformat() if ownership.verified_at else None,
+        "detail": ownership.detail,
+    }
+
+
+@router.get("/setup/overview")
+async def setup_overview(
+    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Where onboarding stands: the domains already verified for this organisation (reusable,
+    read-only), each registered source and what it needs next, and the integration paths that
+    exist. Changes nothing."""
+    org_id = uuid.UUID(user.org_id)
+    now = datetime.now(UTC)
+    domains = []
+    for site in await dsr_repository.list_org_websites(db, org_id):
+        fresh = setup_service._is_fresh(site.verified_at, now)  # noqa: SLF001 -- same module family
+        domains.append({
+            "domain": site.domain,
+            "verified": fresh,
+            "stale": site.verified_at is not None and not fresh,
+            "verified_at": site.verified_at.isoformat() if site.verified_at else None,
+        })
+    sources = await ropa_repository.list_data_sources(db, org_id)
+    authorizations = await dsr_repository.list_all_source_authorizations(db, org_id)
+    return {
+        "domains": domains,
+        "sources": setup_service.assess_sources(sources, authorizations),
+        "paths": list(setup_service.INTEGRATION_PATHS),
+        "verification_max_age_days": setup_service.DOMAIN_VERIFICATION_MAX_AGE_DAYS,
+    }
+
+
+@router.post("/setup/domain")
+async def setup_check_domain(
+    payload: DomainIn,
+    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Validate a domain and say whether the organisation has proven it controls it.
+
+    Returns the DNS record to publish. With `verify: true` it also checks DNS now. Nothing is
+    stored: a successful check here does not add the site to any other agent's list.
+    """
+    _require_admin(user)
+    org_id = uuid.UUID(user.org_id)
+    domain = setup_service.normalize_domain(payload.domain)
+    ownership = await _ownership_for(db, org_id, domain, check_dns=payload.verify)
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="dsr.domain_checked", entity_type="dsr_setup", entity_id=org_id,
+        after={"domain": domain, "proven": ownership.proven, "method": ownership.method,
+               "dns_checked": payload.verify},
+    )
+    await db.commit()
+    return {
+        "domain": domain,
+        "ownership": _ownership_dict(ownership),
+        "txt_record": None if ownership.proven else setup_service.txt_record_for(org_id, domain),
+        "grants_access": False,
+        "note": (
+            "Proving a domain shows you control the website. It does not give Consiva access to "
+            "any database: connecting and authorising a source is a separate step."
+        ),
+    }
+
+
+@router.post("/setup/discover")
+async def setup_discover(
+    payload: DomainIn,
+    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """What Consiva can connect to for this domain, and what each option still needs.
+
+    Requires proven ownership of the domain (a fresh existing verification, or a live DNS
+    check). Reads the customer's published manifest, if any, as an unverified claim and calls
+    nothing it lists. Authorises nothing.
+    """
+    _require_admin(user)
+    org_id = uuid.UUID(user.org_id)
+    domain = setup_service.normalize_domain(payload.domain)
+    ownership = await _ownership_for(db, org_id, domain, check_dns=True)
+    if not ownership.proven:
+        raise setup_service.DomainNotVerifiedError(
+            f"{domain} is not verified for your organisation: {ownership.detail}"
+        )
+    manifest = await setup_service.fetch_manifest(domain)
+    sources = await ropa_repository.list_data_sources(db, org_id)
+    authorizations = await dsr_repository.list_all_source_authorizations(db, org_id)
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="dsr.integration_discovered", entity_type="dsr_setup", entity_id=org_id,
+        after={"domain": domain, "manifest_found": manifest["found"],
+               "manifest_reason": manifest.get("reason")},
+    )
+    await db.commit()
+    return {
+        "domain": domain,
+        "ownership": _ownership_dict(ownership),
+        "manifest": manifest,
+        "paths": list(setup_service.INTEGRATION_PATHS),
+        "sources": setup_service.assess_sources(sources, authorizations),
+        "grants_access": False,
+    }
+
+
+@router.get("/config/sources/{data_source_id}/schema")
+async def get_source_schema(
+    data_source_id: uuid.UUID,
+    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """The tables and columns (names and types only) the source's READ role can see, to fill
+    the setup wizard's pick-lists. Reads no row. Works before any authorization exists."""
+    _require_admin(user)
+    org_id = uuid.UUID(user.org_id)
+    source = await ropa_repository.get_data_source(db, data_source_id, org_id)
+    if source is None:
+        raise DsrNotFoundError(f"data source {data_source_id} not found")
+    if source.connector not in SUPPORTED_CONNECTORS:
+        raise SourceNotAuthorizedError(
+            f"source {source.name!r} uses connector {source.connector!r}, which DSR cannot "
+            f"search -- supported connectors are {sorted(SUPPORTED_CONNECTORS)}"
+        )
+    # An empty authorization: it permits nothing, which is all a schema listing needs -- it
+    # builds a READ-only connection and never touches an allowlist.
+    nothing = SimpleNamespace(
+        enabled=True, searchable_tables=[], identity_tables=[], identifier_columns={},
+        returnable_columns={}, record_key_columns={}, erasable_columns={},
+        allow_execution=False, write_credential_ref=None, write_credential_ciphertext=None,
+    )
+    try:
+        connector = build_connector(data_source=source, authorization=nothing, for_execution=False)
+        listing = await connector.list_schema()
+        result = {"available": True, "source_name": source.name, **listing}
+    except DsrError as exc:
+        result = {
+            "available": False, "source_name": source.name, "error_code": exc.code,
+            "message": exc.message, "tables": [],
+        }
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="dsr.source_schema_listed", entity_type="ropa_data_source", entity_id=source.id,
+        after={"source": source.name, "available": result["available"],
+               "table_count": len(result["tables"])},
+    )
+    await db.commit()
+    return result
+
+
+@router.post("/config/sources/{data_source_id}/revoke")
+async def revoke_source(
+    data_source_id: uuid.UUID,
+    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Withdraw a source from DSR: disable its authorization, switch execution off and delete
+    its stored write credential. The read allowlists are kept for the administrator to review.
+    Cases already in flight that depend on this source will stop at their next search or
+    execution rather than use a revoked authorization."""
+    _require_admin(user)
+    org_id = uuid.UUID(user.org_id)
+    source = await ropa_repository.get_data_source(db, data_source_id, org_id)
+    if source is None:
+        raise DsrNotFoundError(f"data source {data_source_id} not found")
+    row = await dsr_repository.revoke_source_authorization(
+        db, org_id=org_id, data_source_id=data_source_id
+    )
+    if row is None:
+        raise DsrNotFoundError(f"source {source.name!r} has no DSR authorization to revoke")
+    await audit_service.record(
+        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
+        action="dsr.source_authorization_revoked", entity_type="dsr_source_authorization",
+        entity_id=row.id, after={"source": source.name, "write_credentials_cleared": True},
+    )
+    await db.commit()
+    return {"source_name": source.name, "enabled": False, "allow_execution": False}
 
 
 @router.get("/config/retention")

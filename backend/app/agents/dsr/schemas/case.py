@@ -54,16 +54,42 @@ CORRECTION = "correction"
 DELETION = "deletion"
 EXPORT = "export"
 INFORMATION = "information"
+# Withdrawing consent is NOT erasure: the person is ending a permission, and often says in
+# the same breath that they want their data kept. Folding it into DELETION is how a case
+# ended up planning an erasure nobody asked for. Neither this type nor GRIEVANCE ever maps
+# to a mutating operation (planning_service has no entry for them), and both go to a
+# person before any search (see needs_human_triage).
+WITHDRAW_CONSENT = "withdraw_consent"
+# A complaint about how data was handled is not a lookup request; there is nothing to
+# search for and nothing to execute.
+GRIEVANCE = "grievance"
 OTHER = "other"
 
-REQUEST_TYPES = frozenset({UNCLASSIFIED, ACCESS, CORRECTION, DELETION, EXPORT, INFORMATION, OTHER})
+REQUEST_TYPES = frozenset({
+    UNCLASSIFIED, ACCESS, CORRECTION, DELETION, EXPORT, INFORMATION,
+    WITHDRAW_CONSENT, GRIEVANCE, OTHER,
+})
 # The types the classifier may choose. `unclassified` is the pre-classification
 # default and is never a classification OUTCOME -- a classifier that cannot decide
 # returns `other` with low confidence, which routes to human review rather than
 # leaving the case looking unprocessed.
-CLASSIFIABLE_TYPES = frozenset({ACCESS, CORRECTION, DELETION, EXPORT, INFORMATION, OTHER})
+CLASSIFIABLE_TYPES = frozenset({
+    ACCESS, CORRECTION, DELETION, EXPORT, INFORMATION, WITHDRAW_CONSENT, GRIEVANCE, OTHER,
+})
 
-RequestType = Literal["access", "correction", "deletion", "export", "information", "other"]
+RequestType = Literal[
+    "access", "correction", "deletion", "export", "information",
+    "withdraw_consent", "grievance", "other",
+]
+
+# Below this a classification is a guess, and a guess must not start a search of someone's
+# records. Deterministic phrase matches are 0.95 and keyword matches 0.75, so only an
+# unmatched/ambiguous request (0.0) falls under it today.
+MIN_CONFIDENCE_TO_SEARCH = 0.5
+
+# Types whose handling is a human's from the start: nothing in the customer's systems is
+# searched on their behalf automatically.
+HUMAN_TRIAGE_TYPES = frozenset({GRIEVANCE})
 
 # Types that change data at the source, and therefore always require an approved
 # action plan before anything is executed.

@@ -56,6 +56,14 @@ class SourceGrant:
     # reports back via POST /requests/{id}/execution-report -- so the constraint
     # engine must not demand a write_credential_ref this process will never use.
     external_execution: bool = False
+    # True when the administrator stored an encrypted write credential on the
+    # authorization itself. Equivalent to naming one for the purposes of the gates
+    # below; the value is never carried in the grant, only the fact that it exists.
+    write_credential_stored: bool = False
+
+    @property
+    def has_write_credential(self) -> bool:
+        return bool(self.write_credential_ref or self.write_credential_stored)
 
     # ── Search-side checks ───────────────────────────────────────────────────────
 
@@ -109,7 +117,7 @@ class SourceGrant:
                 f"source {self.source_name!r} is authorized for DSR search but not for "
                 f"execution; {operation!r} is refused"
             )
-        if not self.write_credential_ref:
+        if not self.has_write_credential:
             raise SourceNotAuthorizedError(
                 f"source {self.source_name!r} allows execution but names no write "
                 "credential; refusing to write with a read credential"
@@ -222,4 +230,5 @@ def resolve(authorization: Any, *, source_name: str) -> SourceGrant:
         erasable_columns=erasable,
         allow_execution=bool(authorization.allow_execution),
         write_credential_ref=authorization.write_credential_ref,
+        write_credential_stored=bool(getattr(authorization, "write_credential_ciphertext", None)),
     )
