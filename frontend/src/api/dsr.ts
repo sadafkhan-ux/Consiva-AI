@@ -67,6 +67,8 @@ export interface DsrSearchRun {
 
 export interface DsrEvidence {
   id: string;
+  /** The search run that found this record. A record is only ever shown under a search that ran. */
+  search_run_id?: string;
   source: string;
   table: string;
   matched_column: string;
@@ -184,108 +186,6 @@ export interface SourceAuthorizationInput {
   erasable_columns: Record<string, string[]>;
   allow_execution: boolean;
   write_credential_ref?: string | null;
-  /** The write password, supplied ONCE and stored encrypted by the backend. Write-only: no
-   *  response ever returns it, and callers must clear it from state after saving. */
-  write_secret?: string;
-  /** Delete the stored write credential. Leave unset to keep it. */
-  clear_write_secret?: boolean;
-}
-
-// ── Setup wizard ─────────────────────────────────────────────────────────────────
-
-export type SourceReadiness =
-  | "authorized"
-  | "ready_to_authorize"
-  | "needs_credential"
-  | "connector_not_supported"
-  | "disabled"
-  | "revoked";
-
-export interface DsrSetupSource {
-  data_source_id: string;
-  name: string;
-  connector: string;
-  readiness: SourceReadiness;
-  next_step: string;
-  allow_execution: boolean;
-  write_credential_stored: boolean;
-}
-
-export interface DsrIntegrationPath {
-  id: string;
-  title: string;
-  status: "supported" | "not_available";
-  summary: string;
-  requires?: string[];
-  alternative?: string;
-}
-
-export interface DsrOwnership {
-  proven: boolean;
-  method: "existing_verification" | "dns_txt" | null;
-  stale: boolean;
-  verified_at: string | null;
-  detail: string;
-}
-
-export interface DsrDomainCheck {
-  domain: string;
-  ownership: DsrOwnership;
-  txt_record: { type: string; host: string; value: string } | null;
-  /** Always false: proving a domain authorises no data source. */
-  grants_access: boolean;
-  note: string;
-}
-
-export interface DsrManifestConnector {
-  type: string;
-  base_url: string;
-  docs_url: string | null;
-  description: string | null;
-  supported_by_consiva: boolean;
-}
-
-export interface DsrDiscovery {
-  domain: string;
-  ownership: DsrOwnership;
-  manifest: {
-    found: boolean;
-    reason: string | null;
-    declared_by_customer: boolean;
-    connectors?: DsrManifestConnector[];
-  };
-  paths: DsrIntegrationPath[];
-  sources: DsrSetupSource[];
-  grants_access: boolean;
-}
-
-export interface DsrSetupOverview {
-  domains: { domain: string; verified: boolean; stale: boolean; verified_at: string | null }[];
-  sources: DsrSetupSource[];
-  paths: DsrIntegrationPath[];
-  verification_max_age_days: number;
-}
-
-export interface DsrSchemaListing {
-  available: boolean;
-  source_name: string;
-  tables: { name: string; columns: { name: string; type: string }[] }[];
-  truncated?: boolean;
-  error_code?: string;
-  message?: string;
-}
-
-export interface DsrConnectionTest {
-  source_name: string;
-  healthy: boolean;
-  error_code: string | null;
-  reachable: boolean;
-  tables: { table: string; ok: boolean; columns_checked?: number; error_code?: string }[];
-  write_credential_resolved?: boolean;
-  write_path_verified?: boolean;
-  /** What a pass does and does not establish -- shown verbatim, never hidden. */
-  proves: string;
-  does_not_prove: string;
 }
 
 export interface DsrRetentionRule {
@@ -318,6 +218,26 @@ export interface IdentityChallenge {
   /** Returned exactly once. Stored only as a hash; never retrievable again. */
   challenge: string;
   delivery_note: string;
+  /** False today: no email provider is configured, so the operator passes the code on. */
+  emailed?: boolean;
+  max_attempts?: number;
+}
+
+/** How a person was verified by hand. The backend requires all three and records them
+ *  separately on the audit trail. */
+export type ManualVerificationMethod =
+  | "id_document"
+  | "account_login"
+  | "known_fact_match"
+  | "in_person"
+  | "other";
+
+export interface ActiveCaseSummary {
+  id: string;
+  reference: string;
+  status: string;
+  request_type: string;
+  created_at: string | null;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -373,8 +293,14 @@ export const dsrApi = {
     requester_email?: string | null;
     requester_phone?: string | null;
     requester_reference?: string | null;
+    /** Required by the backend to open a second case while one is open for the same requester. */
+    duplicate_override_reason?: string | null;
   }): Promise<DsrCase> {
     return request("/api/v1/dsr/requests", { method: "POST", body: JSON.stringify(payload) });
+  },
+  /** Open cases for one requester email, so a screen can point at the existing one. */
+  activeCases(email: string): Promise<ActiveCaseSummary[]> {
+    return request(`/api/v1/dsr/requests/active?email=${encodeURIComponent(email)}`);
   },
   classify(id: string, overrideType?: string): Promise<DsrCase> {
     return request(`/api/v1/dsr/requests/${id}/classify`, {
@@ -387,19 +313,42 @@ export const dsrApi = {
   },
   verifyIdentity(
     id: string,
-    payload: { challenge?: string; manual?: boolean; evidence_note?: string },
-  ): Promise<{ status: string; satisfied: boolean; attempts: number; case: DsrCase }> {
+    payload: {
+      challenge?: string;
+      manual?: boolean;
+      evidence_note?: string;
+      method?: ManualVerificationMethod;
+      reference?: string;
+    },
+  ): Promise<{
+    status: string;
+    satisfied: boolean;
+    attempts: number;
+    /** Null for a manual verification, which has no attempt counter. */
+    max_attempts?: number | null;
+    attempts_remaining?: number | null;
+    case: DsrCase;
+  }> {
     return request(`/api/v1/dsr/requests/${id}/identity/verify`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
   },
-  startSearch(id: string): Promise<{ job_id: string; case: DsrCase }> {
+  startSearch(id: string): Promise<{
+    job_id: string | null;
+    /** True when the case was sent to a person instead of searched (a complaint, or a request
+     *  the system could not classify). `job_id` is null and `case.status_message` says why. */
+    triaged?: boolean;
+    reason?: string;
+    case: DsrCase;
+  }> {
     return request(`/api/v1/dsr/requests/${id}/search`, { method: "POST" });
   },
   getResults(id: string): Promise<{
     search_runs: DsrSearchRun[];
     evidence: DsrEvidence[];
+    case_status?: string;
+    case_error_code?: string | null;
     /** Set when records are visible on a case that did not complete: found is not done. */
     evidence_notice?: string | null;
   }> {
@@ -457,30 +406,6 @@ export const dsrApi = {
   // "admin" -- the UI mirrors that rather than inventing its own rule.
   listSourceAuthorizations(): Promise<DsrSourceAuthorization[]> {
     return request("/api/v1/dsr/config/sources");
-  },
-  setupOverview(): Promise<DsrSetupOverview> {
-    return request("/api/v1/dsr/setup/overview");
-  },
-  setupCheckDomain(domain: string, verify: boolean): Promise<DsrDomainCheck> {
-    return request("/api/v1/dsr/setup/domain", {
-      method: "POST",
-      body: JSON.stringify({ domain, verify }),
-    });
-  },
-  setupDiscover(domain: string): Promise<DsrDiscovery> {
-    return request("/api/v1/dsr/setup/discover", {
-      method: "POST",
-      body: JSON.stringify({ domain }),
-    });
-  },
-  getSourceSchema(dataSourceId: string): Promise<DsrSchemaListing> {
-    return request(`/api/v1/dsr/config/sources/${dataSourceId}/schema`);
-  },
-  testSourceConnection(dataSourceId: string): Promise<DsrConnectionTest> {
-    return request(`/api/v1/dsr/config/sources/${dataSourceId}/test`, { method: "POST" });
-  },
-  revokeSource(dataSourceId: string): Promise<{ source_name: string; enabled: boolean }> {
-    return request(`/api/v1/dsr/config/sources/${dataSourceId}/revoke`, { method: "POST" });
   },
   putSourceAuthorization(payload: SourceAuthorizationInput): Promise<{ id: string }> {
     return request("/api/v1/dsr/config/sources", { method: "PUT", body: JSON.stringify(payload) });

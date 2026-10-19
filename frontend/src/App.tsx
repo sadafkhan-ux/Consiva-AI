@@ -8,6 +8,7 @@ import { LoginScreen } from "./components/LoginScreen";
 import { PurposeConsole } from "./components/PurposeConsole";
 import { RegWatchConsole } from "./components/RegWatchConsole";
 import { RopaDashboard } from "./components/RopaDashboard";
+import { agentFromHash, writeHash } from "./components/dsrRoute";
 
 type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch" | "purpose";
 
@@ -17,7 +18,12 @@ type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch" | "purpose";
  */
 export default function App() {
   const [profile, setProfile] = useState<Profile | null>(() => getProfile());
-  const [agent, setAgent] = useState<Agent>("consent");
+  // The active agent lives in the address (#/dsr/...), so a reload returns to it instead of to Consent.
+  const [agent, setAgentState] = useState<Agent>(() => agentFromHash(window.location.hash) ?? "consent");
+  function setAgent(next: Agent) {
+    setAgentState(next);
+    writeHash(`#/${next}`);
+  }
   // Only meaningful while AUTH_BYPASSED is true. `null` means "not tried yet", which
   // is different from "tried and failed" -- without that distinction the login screen
   // flashes on every load before the token arrives.
@@ -133,7 +139,7 @@ export default function App() {
         <div className="shell-content">
           {agent === "consent" && <ConsentAgentView />}
           {agent === "ropa" && <RopaDashboard />}
-          {agent === "dsr" && <DsrConsole />}
+          {agent === "dsr" && <DsrConsole onOpenRopa={() => setAgent("ropa")} />}
           {agent === "breach" && <BreachConsole />}
           {agent === "regwatch" && <RegWatchConsole />}
           {agent === "purpose" && <PurposeConsole />}

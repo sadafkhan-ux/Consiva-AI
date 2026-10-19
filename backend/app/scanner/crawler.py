@@ -47,7 +47,12 @@ from app.config import Settings, get_settings
 from app.core.exceptions import ScanAuthorizationError, ScanTimeoutError
 from app.rules.tracker_catalog import CMP_CATALOG
 from app.scanner._domain import registered_domain as _registered_domain
-from app.scanner.consent_interactor import click_accept, click_reject, confirm_interaction_completed
+from app.scanner.consent_interactor import (
+    click_accept,
+    click_reject,
+    confirm_interaction_completed,
+    pass_consent_gate,
+)
 from app.scanner.consent_signal_detector import detect_consent_signal
 from app.scanner.cookie_detector import (
     attribute_new_cookies,
@@ -411,6 +416,13 @@ async def _progressive_scroll(page: Page, request_count: Callable[[], int] | Non
     return steps_taken
 
 
+#: Seconds one iframe's HTML may take to read. Playwright's Frame.content() has no timeout of its
+#: own, and a frame that is busy, detached or served by a stalled third party can leave it waiting
+#: until something above cancels it -- which, on a real scan, was the whole-scan timeout. This is a
+#: per-call safeguard, not a scan time limit: a slow frame is skipped, the page is not failed.
+_IFRAME_READ_TIMEOUT_SECONDS = 15
+
+
 async def _collect_iframe_signal_evidence(page: Page) -> tuple[list[ParsedScript], str, str]:
     """Extends detect_consent_signal's inputs to also see same-page iframe content --
     page.content() (the crawler's only HTML source otherwise) returns ONLY the main
@@ -425,9 +437,14 @@ async def _collect_iframe_signal_evidence(page: Page) -> tuple[list[ParsedScript
     child_frames = [f for f in page.frames if f != page.main_frame][:_MAX_IFRAMES_FOR_SIGNAL_DETECTION]
     for frame in child_frames:
         try:
-            html = await frame.content()
+            html = await asyncio.wait_for(frame.content(), timeout=_IFRAME_READ_TIMEOUT_SECONDS)
         except PlaywrightError as exc:
             logger.debug("Could not read iframe content at %r: %s", frame.url, exc)
+            continue
+        except TimeoutError:
+            logger.warning(
+                "Skipping iframe %r: its content did not load within %ss", frame.url, _IFRAME_READ_TIMEOUT_SECONDS
+            )
             continue
         parsed = parse_page(html, frame.url or page.url)
         scripts.extend(parsed.scripts)
@@ -581,6 +598,9 @@ async def _crawl_full_site(
         "pages_skipped_duplicate": 0,
         "pages_from_sitemap": 0,
         "pages_not_attempted_budget_exhausted": 0,
+        # <script src> tags present in the DOM that the browser does not run (a CMP's type="text/plain"
+        # block). Not counted as trackers; recorded so a reviewer can see the CMP did block something.
+        "script_tags_not_executed": 0,
         "total_scroll_steps": 0,
     }
 
@@ -714,6 +734,7 @@ async def _crawl_full_site(
                 all_visible_text_parts.append(result["iframe_text"])
             all_scripts_flat.extend(parsed.scripts)
             all_scripts_flat.extend(result["iframe_scripts"])
+            diagnostics["script_tags_not_executed"] += sum(1 for sc in parsed.scripts if sc.src and not sc.executes)
             diagnostics["total_scroll_steps"] += result["scroll_steps"]
 
             for link in parsed.links:
@@ -763,13 +784,14 @@ async def _crawl_single_page_with_interaction(
     disallowed_prefixes: set[str],
     consent_state: str,
     click_fn: Callable[[Page], Awaitable[str]],
-) -> tuple[list[CookieRecord], list[TrackerRecord], str, bool, int]:
+) -> tuple[list[CookieRecord], list[TrackerRecord], str, bool, int, dict | None]:
     """Pass 2/3 (post_accept / post_reject): homepage only, in a fresh context --
     establish the state (click), collect baseline evidence (settle), scroll (bounded),
     then capture evidence again so trackers that only fire post-scroll are attributed
     to this consent state too, not missed entirely.
 
-    Returns (cookies, trackers, interaction_status, confirmed, scroll_steps).
+    Returns (cookies, trackers, interaction_status, confirmed, scroll_steps, gate) -- `gate` is
+    consent_interactor.pass_consent_gate's record, or None when the page showed no gate.
     `confirmed` is True only when the click was dispatched AND the banner's control is
     observably gone afterwards (consent_interactor.confirm_interaction_completed).
     interaction_status
@@ -785,7 +807,7 @@ async def _crawl_single_page_with_interaction(
                             caller can't mistake "we never even looked" for "we looked
                             and there's genuinely no banner here"."""
     if _is_robots_disallowed(root_url, disallowed_prefixes):
-        return [], [], "page_unreachable", 0
+        return [], [], "page_unreachable", False, 0, None
 
     site_domain = urlparse(root_url).netloc
     request_records: list[tuple[str, str]] = []
@@ -799,6 +821,7 @@ async def _crawl_single_page_with_interaction(
     interaction_status = "page_unreachable"
     confirmed = False
     scroll_steps = 0
+    gate: dict | None = None
     try:
         _, nav_status, exc, attempts = await _navigate_with_retry(
             browser_page, root_url, settings.scanner_timeout_seconds * 1000
@@ -810,6 +833,7 @@ async def _crawl_single_page_with_interaction(
             )
         else:
             await browser_page.wait_for_timeout(_TRACKER_SETTLE_MS)  # see _TRACKER_SETTLE_MS docstring above
+            gate = await pass_consent_gate(browser_page)
             interaction_status = await click_fn(browser_page)
             if interaction_status == "clicked":
                 await browser_page.wait_for_timeout(2000)  # let post-click network activity settle -- separate from
@@ -846,7 +870,7 @@ async def _crawl_single_page_with_interaction(
 
     cookies = [c.model_copy(update={"consent_states": [consent_state]}) for c in cookies]
     trackers = [t.model_copy(update={"consent_states": [consent_state]}) for t in trackers]
-    return cookies, trackers, interaction_status, confirmed, scroll_steps
+    return cookies, trackers, interaction_status, confirmed, scroll_steps, gate
 
 
 def _merge_cookie_pass(base: list[CookieRecord], new: list[CookieRecord]) -> list[CookieRecord]:
@@ -945,7 +969,7 @@ def _final_interaction_status(raw_status: str, mechanism_type: str) -> str:
 async def _run_interaction_pass(
     browser, root_url: str, settings: Settings, disallowed_prefixes: set[str],
     consent_state: str, click_fn: Callable[[Page], Awaitable[str]],
-) -> tuple[list[CookieRecord], list[TrackerRecord], str, bool, int]:
+) -> tuple[list[CookieRecord], list[TrackerRecord], str, bool, int, dict | None]:
     """Owns one interaction pass's whole context lifecycle (create, route-guard,
     close) so two of these can run concurrently via asyncio.gather() in run_scan()
     without sharing any state -- each gets its own fresh browser context, same as
@@ -960,6 +984,18 @@ async def _run_interaction_pass(
         )
     finally:
         await context.close()
+
+
+def _reconcile_reject_presence(signal: ConsentSignalRecord, reject_status: str, reject_confirmed: bool) -> None:
+    """The pre-consent crawl reads the banner's text as a first-time visitor sees it. When a gate comes
+    first (an age gate), "Reject All" is not on screen yet, so has_reject_all was recorded False and rule
+    R-005 reported "no reject-all option" -- while the post-reject pass went on to find that very control,
+    click it, and watch the banner record the choice. A Reject control that was found AND operated (clicked,
+    with the banner observably responding) is evidence one exists; it is not left contradicted. Nothing is
+    changed unless both hold, and an unconfirmed click never overrides what the page text showed."""
+    if signal.has_reject_all is False and reject_status == "clicked" and reject_confirmed:
+        signal.has_reject_all = True
+        signal.evidence = {**signal.evidence, "reject_control_seen_via": "interaction_pass"}
 
 
 async def run_scan(
@@ -986,7 +1022,9 @@ async def run_scan(
                 # robots/sitemap discovery above are covered by the profile's separate
                 # allowance inside its overall timeout, not by this number.
                 crawl_deadline = (
-                    time.monotonic() + profile.crawl_deadline_seconds if profile is not None else None
+                    time.monotonic() + profile.crawl_deadline_seconds
+                    if profile is not None and profile.crawl_deadline_seconds is not None
+                    else None
                 )
                 pages, forms, cookies, trackers, policies, consent_signal, pre_consent_diagnostics = await _crawl_full_site(
                     context, root_url, settings, disallowed_prefixes, sitemap_urls=sitemap_urls,
@@ -1001,8 +1039,8 @@ async def run_scan(
             # instead of sequentially is a pure wall-clock win with no correctness
             # change: same navigations, same click attempts, same detection logic.
             (
-                (accept_cookies, accept_trackers, accept_status, accept_confirmed, accept_scroll_steps),
-                (reject_cookies, reject_trackers, reject_status, reject_confirmed, reject_scroll_steps),
+                (accept_cookies, accept_trackers, accept_status, accept_confirmed, accept_scroll_steps, accept_gate),
+                (reject_cookies, reject_trackers, reject_status, reject_confirmed, reject_scroll_steps, reject_gate),
             ) = await asyncio.gather(
                 _run_interaction_pass(browser, root_url, settings, disallowed_prefixes, "post_accept", click_accept),
                 _run_interaction_pass(browser, root_url, settings, disallowed_prefixes, "post_reject", click_reject),
@@ -1023,7 +1061,15 @@ async def run_scan(
         # effect was never observed does not establish the consent state.
         "accept_click_confirmed": accept_confirmed,
         "reject_click_confirmed": reject_confirmed,
+        # The one page Accept and Reject were tried on. The mechanism is detected across every crawled page, but the
+        # interaction passes only exercise this one -- so "not automatable" can mean "no banner on THIS page".
+        "interaction_page_url": root_url,
+        # What the scanner answered before the consent choice could be shown (an age gate), per pass.
+        # Absent when no gate was on the page.
+        **({"consent_gate": {"post_accept": accept_gate, "post_reject": reject_gate}} if (accept_gate or reject_gate) else {}),
     }
+
+    _reconcile_reject_presence(consent_signal, reject_status, reject_confirmed)
 
     scan_diagnostics = {
         **pre_consent_diagnostics,

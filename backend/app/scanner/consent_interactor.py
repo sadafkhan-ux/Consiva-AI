@@ -15,6 +15,7 @@ does against the main frame — this isn't limited by same-origin JS restriction
 way a page's own script would be.
 """
 
+import asyncio
 import logging
 
 from playwright.async_api import Error as PlaywrightError
@@ -31,6 +32,44 @@ _MAX_FRAMES = 20  # bounds a pathological many-iframe (ad-heavy) page from ballo
 _CLICKABLE_SELECTOR = "button, a[role='button'], [role='button'], input[type='button'], input[type='submit']"
 
 
+#: Seconds a child frame gets to answer a trivial script before it is treated as unresponsive, and
+#: seconds one locator query may take. Playwright's Locator.count() and Frame.content() have no timeout
+#: of their own; on a real site (smartians.ai) one child frame never answered, and every query to it
+#: waited until the whole-scan timeout killed the scan. These are per-call safeguards, not scan limits.
+_FRAME_PROBE_TIMEOUT_SECONDS = 3
+_FRAME_OP_TIMEOUT_SECONDS = 10
+
+
+async def _bounded(awaitable):
+    """`awaitable`, or a PlaywrightError if it does not finish in time -- which every caller here
+    already handles as "this frame is not usable", so a hung frame costs seconds, not the scan."""
+    try:
+        return await asyncio.wait_for(awaitable, timeout=_FRAME_OP_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise PlaywrightError(f"the frame did not respond within {_FRAME_OP_TIMEOUT_SECONDS}s") from exc
+
+
+async def _probe_frames(page: Page) -> tuple[list[Page | Frame], list[Frame]]:
+    """(frames that answer, frames that do not). The first frame is the page itself and is always
+    searched; every child frame must answer a trivial script within a few seconds. They are probed
+    together, so any number of hung frames costs one timeout, not one each."""
+    frames = _frames_to_search(page)
+    children = frames[1:]
+
+    async def answers(frame) -> bool:
+        try:
+            await asyncio.wait_for(frame.evaluate("1"), timeout=_FRAME_PROBE_TIMEOUT_SECONDS)
+            return True
+        except (TimeoutError, PlaywrightError) as exc:
+            logger.warning("Frame %r is not responding and is skipped: %s", getattr(frame, "url", ""), type(exc).__name__)
+            return False
+
+    verdicts = await asyncio.gather(*(answers(f) for f in children)) if children else []
+    responsive = frames[:1] + [f for f, ok in zip(children, verdicts) if ok]
+    unresponsive = [f for f, ok in zip(children, verdicts) if not ok]
+    return responsive, unresponsive
+
+
 def _frames_to_search(page: Page) -> list[Page | Frame]:
     """`page.frames` includes the main frame first, then every nested iframe attached
     right now (consent banners are typically injected early, so this snapshot at
@@ -40,6 +79,46 @@ def _frames_to_search(page: Page) -> list[Page | Frame]:
     return list(page.frames[:_MAX_FRAMES])
 
 
+_GATE_CLICK_TIMEOUT_MS = 3000
+_GATE_BANNER_WAIT_MS = 8000
+
+
+async def pass_consent_gate(page: Page) -> dict | None:
+    """Answers a gate a CMP shows before its consent choice (Consiva's age gate), if one is on the page.
+
+    Returns None when there is no gate, else a record of what was done --
+    {"kind", "cmp", "answer": "adult", "outcome"} with outcome "passed" (the consent banner then appeared),
+    "click_failed", or "banner_not_shown_after_gate". The scanner answers as an adult visitor would; that
+    is an assertion the test visitor makes, so it is RECORDED in the scan evidence and never done silently.
+    Nothing else about the page is touched, and a gate that is not there costs one bounded probe.
+    """
+    responsive, _ = await _probe_frames(page)
+    for frame in responsive:
+        for cmp in CMP_CATALOG:
+            if not cmp.gate_selector:
+                continue
+            locator = frame.locator(cmp.gate_selector)
+            try:
+                if await _bounded(locator.count()) == 0 or not await _bounded(locator.first.is_visible()):
+                    continue
+            except PlaywrightError:
+                continue
+            record = {"kind": cmp.gate_kind, "cmp": cmp.cmp_vendor, "answer": "adult"}
+            try:
+                await locator.first.click(timeout=_GATE_CLICK_TIMEOUT_MS)
+            except PlaywrightError as exc:
+                logger.debug("Gate control %r matched but click failed: %s", cmp.gate_selector, exc)
+                return {**record, "outcome": "click_failed"}
+            target = cmp.accept_selector or cmp.reject_selector
+            if target:
+                try:
+                    await frame.locator(target).first.wait_for(state="visible", timeout=_GATE_BANNER_WAIT_MS)
+                except PlaywrightError:
+                    return {**record, "outcome": "banner_not_shown_after_gate"}
+            return {**record, "outcome": "passed"}
+    return None
+
+
 async def _try_cmp_selectors(page: Page, *, accept: bool) -> str:
     """Returns "clicked" | "click_failed" | "not_found". "click_failed" is distinct
     from "not_found": a real, matching element existed (count() > 0) but the click
@@ -47,14 +126,14 @@ async def _try_cmp_selectors(page: Page, *, accept: bool) -> str:
     genuinely different, more informative outcome than "there was nothing here to
     click" and must not be reported the same way (scanner-hardening audit, section 8)."""
     found_but_failed = False
-    for frame in _frames_to_search(page):
+    for frame in (await _probe_frames(page))[0]:
         for cmp in CMP_CATALOG:
             selector = cmp.accept_selector if accept else cmp.reject_selector
             if not selector:
                 continue
             locator = frame.locator(selector)
             try:
-                if await locator.count() > 0:
+                if await _bounded(locator.count()) > 0:
                     try:
                         await locator.first.click(timeout=3000)
                         return "clicked"
@@ -70,10 +149,10 @@ async def _try_text_match(page: Page, *, hints: tuple[str, ...]) -> str:
     """Returns "clicked" | "click_failed" | "not_found" -- same distinction as
     _try_cmp_selectors above, for the generic text-match fallback path."""
     found_but_failed = False
-    for frame in _frames_to_search(page):
+    for frame in (await _probe_frames(page))[0]:
         candidates = frame.locator(_CLICKABLE_SELECTOR)
         try:
-            count = await candidates.count()
+            count = await _bounded(candidates.count())
         except PlaywrightError as exc:
             logger.debug("Could not enumerate clickable elements in frame %r: %s", frame.url, exc)
             continue
@@ -152,20 +231,26 @@ async def confirm_interaction_completed(page: Page, *, accept: bool) -> bool:
     """
     hints = _ACCEPT_HINTS if accept else _REJECT_HINTS
     try:
-        for frame in _frames_to_search(page):
+        responsive, unresponsive = await _probe_frames(page)
+        if unresponsive:
+            # A frame that will not answer might be the one still showing the banner. Skipping it
+            # would let "confirmed" be claimed without having looked there, so it is unconfirmed.
+            logger.debug("Cannot confirm the consent interaction: %d frame(s) not responding", len(unresponsive))
+            return False
+        for frame in responsive:
             for cmp in CMP_CATALOG:
                 selector = cmp.accept_selector if accept else cmp.reject_selector
                 if not selector:
                     continue
                 locator = frame.locator(selector)
-                if await locator.count() > 0 and await locator.first.is_visible():
+                if await _bounded(locator.count()) > 0 and await _bounded(locator.first.is_visible()):
                     return False
 
             candidates = frame.locator(_CLICKABLE_SELECTOR)
-            count = await candidates.count()
+            count = await _bounded(candidates.count())
             for i in range(min(count, _MAX_CANDIDATES)):
                 element = candidates.nth(i)
-                if not await element.is_visible():
+                if not await _bounded(element.is_visible()):
                     continue
                 text = (await element.inner_text(timeout=1000)).strip().lower()
                 if any(hint in text for hint in hints):

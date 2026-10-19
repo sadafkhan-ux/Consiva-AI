@@ -389,48 +389,6 @@ class PostgresDsrConnector:
             "write_path_verified": False,
         }
 
-    # ── Schema (setup wizard) ────────────────────────────────────────────────────
-
-    async def list_schema(
-        self, *, max_tables: int = 300, max_columns_per_table: int = 200
-    ) -> dict[str, Any]:
-        """Table and column NAMES (with types) the read role can see, for the setup wizard's
-        pick-lists. No row is read and no value is returned.
-
-        information_schema.columns only lists columns the connecting role has a privilege on,
-        so this reflects the least-privilege role the administrator actually created rather
-        than everything in the database. The schema name is a bound parameter.
-        """
-        schema = self._config.schema or "public"
-        conn = await self._connect(write=False)
-        try:
-            rows = await conn.fetch(
-                "SELECT table_name, column_name, data_type FROM information_schema.columns "
-                "WHERE table_schema = $1 AND table_name !~ '^pg_' "
-                "ORDER BY table_name, ordinal_position",
-                schema,
-            )
-        finally:
-            await conn.close()
-        tables: dict[str, list[dict[str, str]]] = {}
-        truncated = False
-        for row in rows:
-            name = row["table_name"]
-            if name not in tables:
-                if len(tables) >= max_tables:
-                    truncated = True
-                    continue
-                tables[name] = []
-            if len(tables[name]) >= max_columns_per_table:
-                truncated = True
-                continue
-            tables[name].append({"name": row["column_name"], "type": row["data_type"]})
-        return {
-            "schema": schema,
-            "tables": [{"name": t, "columns": cols} for t, cols in tables.items()],
-            "truncated": truncated,
-        }
-
     # ── Execution (§24) ──────────────────────────────────────────────────────────
 
     async def execute_action(

@@ -34,7 +34,10 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function pollUntil<T>(fn: () => Promise<T>, isDone: (v: T) => boolean, timeoutMs: number, intervalMs: number): Promise<T> {
+/** Polls `fn` until `isDone`. `timeoutMs` may be `Infinity`: the scan-status poll has no client-side
+ *  ceiling, because the BACKEND bounds a scan (its own safety ceiling, and a bounded number of job
+ *  retries) and reports a terminal status when it is over. A request that fails still ends the loop. */
+export async function pollUntil<T>(fn: () => Promise<T>, isDone: (v: T) => boolean, timeoutMs: number, intervalMs: number): Promise<T> {
   const start = Date.now();
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -45,6 +48,42 @@ async function pollUntil<T>(fn: () => Promise<T>, isDone: (v: T) => boolean, tim
     }
     await sleep(intervalMs);
   }
+}
+
+/** True when the scan failed and collected NO pages, so nothing about the site was measured.
+ *
+ *  This is the case in which "0 cookies", "No trackers were detected" and "No findings" would be
+ *  false reassurance: they read as a verified clean result when the truth is "we never looked". A
+ *  scan that failed LATER (the analysis, say) after pages were collected is not this case -- its
+ *  evidence is real and is still shown. */
+export function scanEvidenceUnavailable(
+  state: Pick<ConsentScanState, "phase" | "scan" | "stages">,
+): boolean {
+  if (state.phase !== "failed") return false;
+  if ((state.scan?.evidence_counts.pages ?? 0) > 0) return false;
+  return true;
+}
+
+/** The pipeline stage a failed scan stopped at, for the "not scanned" notice. */
+export function failedStageName(stages: StageResponse[]): string | null {
+  return stages.find((s) => s.status === "failed")?.stage ?? null;
+}
+
+/** Whether the analysis pipeline has reached an end the UI should stop polling at.
+ *
+ *  A failed `llm_analysis` or `rag_retrieval` is NOT an end: the graph routes either to the rule-derived
+ *  findings, which are written a moment later. Stopping at the failure would show "failed" and miss them. A
+ *  failure in any other stage is terminal. */
+export function analysisStagesAreDone(stages: StageResponse[]): boolean {
+  const byName = Object.fromEntries(stages.map((s) => [s.stage, s]));
+  return (
+    byName.audit_saved?.status === "completed" ||
+    byName.audit_saved?.status === "failed" ||
+    byName.findings_generated?.status === "completed" ||
+    // The fallback's own terminal stage.
+    byName.rule_findings_generated?.status === "completed" ||
+    stages.some((s) => s.status === "failed" && s.stage !== "llm_analysis" && s.stage !== "rag_retrieval")
+  );
 }
 
 export function deriveFailureReason(scanError: string | null, meta: WebsiteScanMetadata | null): string | null {
@@ -139,25 +178,7 @@ export function useConsentScan() {
           setState((s) => ({ ...s, stages, websiteScanMeta: (stages.find((x) => x.stage === "website_scan")?.metadata as WebsiteScanMetadata) ?? s.websiteScanMeta }));
           return stages;
         },
-        (stages) => {
-          const byName = Object.fromEntries(stages.map((s) => [s.stage, s]));
-          return (
-            byName.audit_saved?.status === "completed" ||
-            byName.audit_saved?.status === "failed" ||
-            byName.findings_generated?.status === "completed" ||
-            // The fallback's own terminal stage. A failed llm_analysis no longer
-            // ends the run -- the graph routes to create_rule_findings, which
-            // writes findings and then this stage.
-            byName.rule_findings_generated?.status === "completed" ||
-            // Deliberately NOT "any stage failed". That condition stopped polling
-            // the instant llm_analysis was marked failed, which is the moment
-            // BEFORE the fallback runs -- so the UI gave up a second early and
-            // never saw the findings that appeared right after. Only llm_analysis
-            // has a downstream recovery path; a failure anywhere else is terminal
-            // and should still stop the poll immediately.
-            stages.some((s) => s.status === "failed" && s.stage !== "llm_analysis")
-          );
-        },
+        analysisStagesAreDone,
         // 600s: the NVIDIA LLM analysis stage has been directly observed taking ~550s
         // under real, live endpoint degradation (its own retry/backoff riding out
         // repeated timeouts) -- a shorter ceiling would report "timed out" over a
@@ -191,20 +212,24 @@ export function useConsentScan() {
             }));
             return s;
           },
-          (s) => s.status === "completed" || s.status === "failed",
-          // 600s, matching the analysis ceiling below -- 120s here was less than a
-          // single observed website_scan, so this loop reported "timed out" over
-          // scans that were still running and did complete. Two real measurements
-          // from one session: website_scan alone took 120s and 78s, and because the
-          // worker takes one job per poll (app/jobs/worker.py dequeue_one, single
-          // replica) a scan started while another is mid-Chromium also waits out the
-          // first -- 73s of queue time was observed, for 151s end-to-end against the
-          // old 120s budget. The queue wait scales with whatever else is in flight,
-          // so the ceiling has to cover queue time + scan, not just scan.
-          600_000,
+          // "cancelled" is terminal too: with no client ceiling below, a state that is not listed
+          // here would be polled forever.
+          (s) => s.status === "completed" || s.status === "failed" || s.status === "cancelled",
+          // No client-side ceiling. This used to give up after 600 s with "Timed out waiting for the
+          // backend" -- but a slow site's scan (and the queue wait before it) can take longer than that
+          // and still finish, and the user was told it had failed while it was still running. The
+          // backend decides when a scan is over: it aborts a hung scan at its own ceiling, retries a
+          // bounded number of times, and then reports "failed" with the reason -- which is shown.
+          Number.POSITIVE_INFINITY,
           1_200
         );
         if (runIdRef.current !== myRunId) return;
+
+        if (finalScan.status === "cancelled") {
+          await loadEvidenceRegardless(scan.id, myRunId);
+          setState((s) => ({ ...s, phase: "failed", error: "The scan was cancelled.", completedAt: Date.now() }));
+          return;
+        }
 
         if (finalScan.status === "failed") {
           // Load whatever evidence the crawl DID persist before giving up. A failed
@@ -214,7 +239,9 @@ export function useConsentScan() {
           // that the pipeline broke. Measured on a real hubspot.com scan: 840
           // trackers, 124 cookies, 50 forms and 175 policies were in the database
           // while the report said none of them existed.
-          await loadEvidenceRegardless(scan.id, myRunId);
+          // The audit list too: it now carries the `scan.failed` entry (stage and reason), and the
+          // Audit Timeline read "No audit events recorded yet" for a scan that had in fact failed.
+          await refreshFindingsAuditEvidence(scan.id, myRunId);
           setState((s) => ({ ...s, phase: "failed", error: finalScan.error, completedAt: Date.now() }));
           return;
         }

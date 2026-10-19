@@ -83,6 +83,13 @@ export interface WebsiteScanMetadata {
   reject_scroll_steps?: number;
   policies_found?: number;
   third_party_services_found?: number;
+  // The crawl's own page accounting (crawler._crawl_full_site diagnostics), merged into this stage.
+  page_limit?: number | null;
+  stop_reason?: string | null; // "queue_exhausted" | "page_limit" | "deadline" | "cancelled"
+  pages_discovered?: number;
+  pages_attempted?: number;
+  pages_scanned?: number;
+  pages_not_attempted_budget_exhausted?: number;
 }
 
 export interface AuditLogResponse {
@@ -154,6 +161,8 @@ export interface EvidenceTrackerItem {
   category: string | null;
   source: string | null;
   consent_states: string[];
+  /** Page the request/script was observed on; absent/null when the scan did not record it. */
+  page_url?: string | null;
 }
 
 export interface EvidenceThirdPartyItem {

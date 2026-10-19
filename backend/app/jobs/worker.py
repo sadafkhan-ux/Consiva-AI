@@ -86,7 +86,11 @@ from app.services import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 2
+# How long an idle worker waits before looking for queued work again. This is the floor on the hand-off between
+# the steps of one scan (the console enqueues the analysis the moment the crawl is seen to finish, and nothing
+# runs it until the next poll). Measured on scan ac537cef: ~2.1s from crawl-complete to analysis start. 0.5s costs
+# the database two trivially cheap indexed SELECTs per second per idle worker (status, run_after index).
+POLL_INTERVAL_SECONDS = 0.5
 # The maintenance loop's own cadence, now that it no longer shares the job loop. 2s was
 # never a requirement of the work -- a DSR deadline is measured in days and a monitoring
 # interval in hours -- it was just whatever the job poll happened to be. 30s also keeps

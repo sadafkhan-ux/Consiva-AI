@@ -31,7 +31,6 @@ from app.agents.dsr.schemas.evidence_push import EvidencePush, PushedSubject
 from app.agents.dsr.services import evidence_push_service
 from app.api.v1.routes import dsr as dsr_routes
 from app.config import get_settings
-from app.core import integration_auth
 from app.db.models import DsrAction, DsrActionPlan, DsrEvidence, DsrRequest, DsrSearchRun
 from app.services import dsr_run_service
 
@@ -284,16 +283,17 @@ def _deps(route) -> set:
     return {d.call for d in route.dependant.dependencies}
 
 
-def test_push_evidence_routes_use_the_same_dsr_operate_scope_as_search():
+def test_push_evidence_routes_use_the_same_session_authentication_as_search():
+    from app.core.security import get_current_user
+
     by_path = {r.path: _deps(r) for r in dsr_routes.router.routes}
     for path in (
         "/api/v1/dsr/requests/{request_id}/evidence",
         "/api/v1/dsr/requests/{request_id}/execution-report",
         "/api/v1/dsr/requests/{request_id}/evidence/purge",
     ):
-        assert integration_auth.get_dsr_operator in by_path[path], path
-        # No new scope: dsr:operate is the only scope involved, same as /search.
-        assert integration_auth.get_dsr_config_writer not in by_path[path]
+        # The signed-in user, exactly like /search: no separate key, token or scope for pushing.
+        assert get_current_user in by_path[path], path
 
 
 # ── harness for the orchestration (dsr_run_service) ──────────────────────────────
@@ -420,7 +420,6 @@ async def test_ingest_builds_a_plan_from_pushed_evidence(world):
     request = make_request(request_type=case.DELETION)
     run, plan, actions = await dsr_run_service.ingest_pushed_evidence(
         _DB(), request, make_push(),
-        integration_key_id=uuid.uuid4(), integration_key_name="consiva-adapter",
         actor_user_id=USER, now=NOW,
     )
     assert run.ingest_mode == "push"
@@ -442,13 +441,13 @@ async def test_a_retried_push_with_the_same_client_reference_is_a_no_op(world):
     request = make_request()
     push = make_push(client_reference="consiva-job-42")
     run1, _plan1, actions1 = await dsr_run_service.ingest_pushed_evidence(
-        _DB(), request, push, integration_key_id=None, integration_key_name=None,
+        _DB(), request, push,
         actor_user_id=USER, now=NOW,
     )
     run_count_after_first = len(world.search_runs)
 
     run2, _plan2, actions2 = await dsr_run_service.ingest_pushed_evidence(
-        _DB(), request, push, integration_key_id=None, integration_key_name=None,
+        _DB(), request, push,
         actor_user_id=USER, now=NOW,
     )
     assert run2.id == run1.id
@@ -461,7 +460,7 @@ async def test_truncated_evidence_routes_to_review_required_without_a_plan(world
     request = make_request()
     push = make_push(truncated=True)
     _run, plan, actions = await dsr_run_service.ingest_pushed_evidence(
-        _DB(), request, push, integration_key_id=None, integration_key_name=None,
+        _DB(), request, push,
         actor_user_id=USER, now=NOW,
     )
     assert plan is None
@@ -475,7 +474,7 @@ async def test_no_matched_rows_still_reaches_an_explicit_outcome(world):
     request = make_request(request_type=case.ACCESS)
     push = make_push(tables=[])
     run, _plan, actions = await dsr_run_service.ingest_pushed_evidence(
-        _DB(), request, push, integration_key_id=None, integration_key_name=None,
+        _DB(), request, push,
         actor_user_id=USER, now=NOW,
     )
     assert run.status == "no_match"
@@ -492,7 +491,7 @@ async def test_recovers_a_case_stuck_failed_by_source_not_authorized(world):
     request = make_request(status=case.FAILED, request_type=case.ACCESS)
     request.error_code = case.ERR_SOURCE_NOT_AUTHORIZED
     run, plan, _actions = await dsr_run_service.ingest_pushed_evidence(
-        _DB(), request, make_push(), integration_key_id=None, integration_key_name=None,
+        _DB(), request, make_push(),
         actor_user_id=USER, now=NOW,
     )
     assert run.status == "completed"
@@ -504,7 +503,7 @@ async def test_recovers_a_case_stuck_failed_by_source_not_authorized(world):
 async def _approved_push_case(world, *, operation=case.OP_DELETE_RECORD) -> tuple[DsrRequest, DsrAction]:
     request = make_request(request_type=case.DELETION, status=case.IDENTITY_VERIFIED)
     _, _plan, actions = await dsr_run_service.ingest_pushed_evidence(
-        _DB(), request, make_push(), integration_key_id=None, integration_key_name=None,
+        _DB(), request, make_push(),
         actor_user_id=USER, now=NOW,
     )
     action = actions[0]
@@ -627,7 +626,7 @@ async def test_pushed_row_values_never_reach_a_log_line(world, caplog):
     }])
     with caplog.at_level(logging.INFO):
         await dsr_run_service.ingest_pushed_evidence(
-            _DB(), request, push, integration_key_id=None, integration_key_name=None,
+            _DB(), request, push,
             actor_user_id=USER, now=NOW,
         )
     for record in caplog.records:

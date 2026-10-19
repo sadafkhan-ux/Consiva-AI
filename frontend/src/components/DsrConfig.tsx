@@ -7,6 +7,7 @@ import {
   type SourceAuthorizationInput,
 } from "../api/dsr";
 import { ropaApi, type RopaDataSource } from "../api/ropa";
+import { Notice } from "./dsrShared";
 
 /**
  * Agent 3's admin config screen: what each data source is allowed to do
@@ -75,7 +76,7 @@ function parseList(raw: string): string[] {
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-export function DsrConfig({ isAdmin }: { isAdmin: boolean }) {
+export function DsrConfig({ isAdmin, onOpenRopa }: { isAdmin: boolean; onOpenRopa?: () => void }) {
   const [sources, setSources] = useState<RopaDataSource[]>([]);
   const [authorizations, setAuthorizations] = useState<DsrSourceAuthorization[]>([]);
   const [rules, setRules] = useState<DsrRetentionRule[]>([]);
@@ -123,6 +124,7 @@ export function DsrConfig({ isAdmin }: { isAdmin: boolean }) {
         sources={sources}
         authorizations={authorizations}
         isAdmin={isAdmin}
+        onOpenRopa={onOpenRopa}
         onSaved={(msg) => {
           setNotice(msg);
           void load();
@@ -148,12 +150,14 @@ function SourceAuthorizationSection({
   sources,
   authorizations,
   isAdmin,
+  onOpenRopa,
   onSaved,
   onError,
 }: {
   sources: RopaDataSource[];
   authorizations: DsrSourceAuthorization[];
   isAdmin: boolean;
+  onOpenRopa?: () => void;
   onSaved: (message: string) => void;
   onError: (message: string) => void;
 }) {
@@ -301,7 +305,12 @@ function SourceAuthorizationSection({
       {isAdmin && sources.length === 0 && (
         <div className="info-box">
           No ROPA data sources exist yet — add one from the ROPA agent first, then
-          authorize it here.
+          authorize it here.{" "}
+          {onOpenRopa && (
+            <button type="button" className="linkish" onClick={onOpenRopa}>
+              Open the ROPA agent
+            </button>
+          )}
         </div>
       )}
 
@@ -566,7 +575,10 @@ function RetentionSection({
       )}
 
       {rules.length === 0 ? (
-        <div className="info-box">No retention rules configured yet — erasures proceed unblocked by one.</div>
+        <Notice tone="warn">
+          <strong>No retention rules configured yet — erasures proceed unblocked by one.</strong>{" "}
+          Add a rule for any table whose records must be kept for a legal period.
+        </Notice>
       ) : (
         <table className="data">
           <thead>

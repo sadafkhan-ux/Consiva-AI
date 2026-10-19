@@ -48,7 +48,9 @@ def detect_trackers(
 
     for page_local_id, scripts in scripts_by_page.items():
         for script in scripts:
-            if script.src:
+            # A tag the browser does not run (a CMP's type="text/plain" block) is not a tracker that
+            # fired. If it later runs, its network request is recorded below like any other.
+            if script.src and script.executes:
                 _maybe_add(page_local_id, script.src, "script")
 
     for page_local_id, requests in network_requests_by_page.items():

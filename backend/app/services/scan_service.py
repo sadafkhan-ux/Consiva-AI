@@ -108,6 +108,24 @@ async def request_scan(
     return scan
 
 
+async def _audit_scan_failure(scan_id: uuid.UUID, org_id: uuid.UUID | None, stage: str, exc: Exception) -> None:
+    """Writes the failure to the audit trail, which is where a reviewer looks. The stage row says WHERE the
+    scan stopped; this says that it did, and why, next to `scan.created`. Never raises: an audit write that
+    failed must not replace the scan's own error."""
+    if org_id is None:
+        return
+    try:
+        async with async_session_factory() as audit_db:
+            await audit_service.record(
+                audit_db, org_id=org_id, actor_user_id=None, action="scan.failed",
+                entity_type="consent_scan", entity_id=scan_id,
+                after={"stage": stage, "error_type": type(exc).__name__, "error": str(exc)[:500]},
+            )
+            await audit_db.commit()
+    except Exception:
+        logger.exception("Could not write the scan.failed audit entry for scan %s", scan_id)
+
+
 async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
     """Called by jobs/worker.py. Owns its own DB sessions rather than one long-lived
     transaction, since the crawl itself (Playwright, network-bound) can take a while."""
@@ -130,6 +148,7 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
             current = await poll_db.get(ConsentScan, scan_id)
             return current is None or current.status == "cancelled"
 
+    failing_stage = "website_scan"
     try:
         async with async_session_factory() as db:
             lookup_entries = await lookup_repository.load_all(db)
@@ -160,6 +179,7 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
                         by_state[state] = by_state.get(state, 0) + 1
                 meta[f"{kind}_by_consent_state"] = by_state
 
+        failing_stage = "classification"
         async with track_stage(scan_id, "classification") as meta:
             classification = classify_scan(scan_result, lookup_entries)
             sources = [c.source for c in classification.cookies if c.source] + [
@@ -185,6 +205,7 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
         async with async_session_factory() as db:
             await scan_repository.mark_scan_failed(db, scan_id, str(exc))
             await db.commit()
+        await _audit_scan_failure(scan_id, getattr(row, "org_id", None), failing_stage, exc)
         raise
 
     try:
@@ -237,4 +258,5 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
         async with async_session_factory() as db:
             await scan_repository.mark_scan_failed(db, scan_id, str(exc))
             await db.commit()
+        await _audit_scan_failure(scan_id, getattr(row, "org_id", None), "data_structuring", exc)
         raise

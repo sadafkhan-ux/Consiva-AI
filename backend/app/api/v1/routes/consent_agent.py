@@ -19,7 +19,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.schemas.consent_agent import (
@@ -313,7 +313,7 @@ _SCAN_DESCRIPTION = (
     summary="Start a web scan (maximum 5 pages)",
     description=(
         "Public website scan. The server limits it to `CONSENT_WEB_MAX_PAGES` unique pages "
-        "(default 5) whatever `scan_options.max_pages` says -- a request can only lower the "
+        "(default 5; the scan report says when the limit was reached) whatever `scan_options.max_pages` says -- a request can only lower the "
         "limit.\n\n" + _SCAN_DESCRIPTION
     ),
 )
@@ -363,7 +363,8 @@ async def create_scan(
     summary="Start an application scan (no fixed page-count cap)",
     description=(
         "Authorized application scan: no fixed page-count cap when `CONSENT_APP_MAX_PAGES` is 0, "
-        "bounded instead by `CONSENT_APP_MAX_SECONDS`.\n\n"
+        "no crawl deadline when `CONSENT_APP_MAX_SECONDS` is 0 (the default); a fixed 24 hour "
+        "ceiling still aborts a scan that is hung.\n\n"
         "Requires an organisation administrator, or a service key with the "
         "`consent:scan:application` scope, AND a domain that has passed DNS ownership "
         "verification. The target is still checked against the same SSRF rules as every scan, so "

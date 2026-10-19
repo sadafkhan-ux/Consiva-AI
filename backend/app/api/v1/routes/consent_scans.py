@@ -151,6 +151,8 @@ class EvidenceTrackerItem(BaseModel):
     category: str | None
     source: str | None
     consent_states: list[str]
+    # The page this was observed on; None when the scan did not record one.
+    page_url: str | None = None
 
 
 class EvidenceThirdPartyItem(BaseModel):

@@ -15,3 +15,15 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-key")
 os.environ.setdefault("DATABASE_URL", PLACEHOLDER_DSN)
 os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret")
 os.environ.setdefault("APP_ENV", "development")
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _fresh_query_embedding_cache():
+    """The retrieval layer caches query embeddings per process; a test must never see another test's."""
+    from app.rag.retriever import clear_query_embedding_cache
+
+    clear_query_embedding_cache()
+    yield
+    clear_query_embedding_cache()

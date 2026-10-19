@@ -36,7 +36,7 @@ from app.scanner.scan_profiles import APPLICATION, WEB, resolve_profile
 from app.services import scan_service
 
 from tests.test_error_modes_db_partial import _fake_scan_result
-from tests.test_scanner_coverage import ROOT, _FakeContext, _FakePage, _crawl, _links
+from tests.test_scanner_coverage import ROOT, _FakeContext, _crawl, _links
 
 ORG = uuid.uuid4()
 USER = uuid.uuid4()
@@ -57,7 +57,7 @@ def _settings(**overrides) -> Settings:
     ("consent_web_max_pages", None),
     ("consent_app_max_pages", -1),            # 0 is the documented "no cap"; negatives are not
     ("consent_app_max_pages", "lots"),
-    ("consent_app_max_seconds", 0),           # there is no "0 = forever"
+    ("consent_app_max_seconds", 1),           # 0 means "no deadline"; 1..59 is neither
     ("consent_app_max_seconds", -60),
     ("consent_app_max_seconds", 59),
     ("consent_app_max_seconds", 10**9),
@@ -90,7 +90,7 @@ def test_missing_variables_take_the_documented_defaults_not_unlimited(monkeypatc
     fields = Settings.model_fields
     assert fields["consent_web_max_pages"].default == 5
     assert fields["consent_app_max_pages"].default == 0
-    assert fields["consent_app_max_seconds"].default == 3600
+    assert fields["consent_app_max_seconds"].default == 0, "no crawl deadline unless one is set"
     assert resolve_profile(WEB, Settings.model_validate(
         {**get_settings().model_dump(), "consent_web_max_pages": 5}
     )).max_pages == 5
@@ -100,7 +100,7 @@ def test_the_example_env_documents_all_three_variables_without_secrets():
     from pathlib import Path
 
     text = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
-    for line in ("CONSENT_WEB_MAX_PAGES=5", "CONSENT_APP_MAX_PAGES=0", "CONSENT_APP_MAX_SECONDS=3600"):
+    for line in ("CONSENT_WEB_MAX_PAGES=5", "CONSENT_APP_MAX_PAGES=0", "CONSENT_APP_MAX_SECONDS=0"):
         assert line in text
     block = text[text.index("Consent scan profiles"):text.index("CONSENT_APP_MAX_SECONDS=")]
     assert "no fixed page-count cap" in block, "0 must be documented as 'no fixed page-count cap'"
@@ -146,13 +146,63 @@ def test_a_request_can_only_lower_a_page_limit_never_raise_it():
     assert capped_app.effective_max_pages(500) == 40
 
 
-def test_both_profiles_have_a_finite_deadline_and_the_hard_timeout_outlasts_the_crawl():
+def test_an_application_profile_with_a_deadline_has_a_finite_one_and_the_hard_timeout_outlasts_the_crawl():
     settings = _settings(consent_web_max_pages=5, consent_app_max_seconds=3600, scanner_timeout_seconds=30)
-    for name in (WEB, APPLICATION):
-        profile = resolve_profile(name, settings)
-        assert 0 < profile.crawl_deadline_seconds < float("inf")
-        assert profile.hard_timeout_seconds > profile.crawl_deadline_seconds
-    assert resolve_profile(APPLICATION, settings).crawl_deadline_seconds == 3600
+    profile = resolve_profile(APPLICATION, settings)
+
+    assert 0 < profile.crawl_deadline_seconds < float("inf")
+    assert profile.hard_timeout_seconds > profile.crawl_deadline_seconds
+    assert profile.crawl_deadline_seconds == 3600
+
+
+def test_an_application_scan_has_no_crawl_deadline_by_default():
+    profile = resolve_profile(APPLICATION, _settings(consent_app_max_seconds=0))
+
+    assert profile.crawl_deadline_seconds is None
+    assert profile.as_options()["max_seconds"] is None, "stored and returned as 'no deadline', not 0"
+
+
+def test_with_no_crawl_deadline_the_whole_scan_still_has_a_finite_ceiling():
+    from app.scanner.scan_profiles import _APP_HARD_CEILING_SECONDS
+
+    profile = resolve_profile(APPLICATION, _settings(consent_app_max_seconds=0))
+
+    assert profile.hard_timeout_seconds == _APP_HARD_CEILING_SECONDS == 86_400
+    assert 0 < profile.hard_timeout_seconds < float("inf"), (
+        "the outer timeout and the job lease both need a finite number, or a hung scan holds a worker forever"
+    )
+
+
+def test_the_web_profile_has_no_crawl_deadline_and_outlasts_the_old_330_second_limit():
+    """A slow site (a real one took longer than 330 s) used to be aborted at "5 pages x 30 s + 2 x 30 s
+    + 120 s", then retried, then aborted again. The web crawl is bounded by its page limit instead."""
+    web = resolve_profile(WEB, _settings(consent_web_max_pages=5, scanner_timeout_seconds=30))
+
+    assert web.crawl_deadline_seconds is None
+    assert web.as_options()["max_seconds"] is None
+    assert web.max_pages == 5, "removing the time bound must not touch the page bound"
+    assert web.hard_timeout_seconds == 1_800 > 330
+    assert 0 < web.hard_timeout_seconds < float("inf"), "a hung scan must still be aborted eventually"
+
+
+def test_the_web_ceiling_is_a_fixed_number_not_derived_from_the_page_limit():
+    few = resolve_profile(WEB, _settings(consent_web_max_pages=1))
+    many = resolve_profile(WEB, _settings(consent_web_max_pages=25))
+
+    assert few.hard_timeout_seconds == many.hard_timeout_seconds == 1_800
+
+
+def test_an_explicit_deadline_still_works_for_deployments_that_want_one():
+    profile = resolve_profile(APPLICATION, _settings(consent_app_max_seconds=1800))
+
+    assert profile.crawl_deadline_seconds == 1800
+    assert profile.hard_timeout_seconds < 86_400
+
+
+@pytest.mark.parametrize("seconds", [0, 60, 3600, 86_400])
+def test_valid_application_deadline_values_load(seconds):
+    loaded = Settings.model_validate({**get_settings().model_dump(), "consent_app_max_seconds": seconds})
+    assert loaded.consent_app_max_seconds == seconds
 
 
 @pytest.mark.parametrize("options,expected", [
@@ -891,7 +941,7 @@ async def test_a_scan_cancelled_mid_crawl_keeps_its_evidence_and_stays_cancelled
 
 # ── The reaper: a long application scan is not reclaimed (and crawled twice) ─────
 
-def _job(profile=None, age_minutes=0):
+def _job(profile=None, age_minutes=0, job_type="scan"):
     from datetime import UTC, datetime, timedelta
 
     payload = {"scan_id": "x"}
@@ -899,7 +949,7 @@ def _job(profile=None, age_minutes=0):
         payload["scan_profile"] = profile
     return SimpleNamespace(
         payload=payload, locked_at=datetime.now(UTC) - timedelta(minutes=age_minutes),
-        status="running", attempts=1, locked_by="w", error=None, run_after=None,
+        status="running", attempts=1, locked_by="w", error=None, run_after=None, job_type=job_type,
     )
 
 
@@ -908,7 +958,12 @@ def test_the_reaper_gives_application_scans_a_lease_longer_than_their_own_timeou
 
     web, app = queue.stale_threshold_for(_job()), queue.stale_threshold_for(_job(APPLICATION))
 
-    assert web == timedelta(minutes=10)
+    assert queue.stale_threshold_for(_job(job_type="analyze")) == timedelta(minutes=10), "other jobs are unchanged"
+    web_profile = resolve_profile(WEB)
+    assert web > timedelta(seconds=web_profile.hard_timeout_seconds), (
+        "a web scan must be allowed to run to its own ceiling before its job can be called lost, or the "
+        "reaper would start a second crawl of the same site alongside it"
+    )
     profile = resolve_profile(APPLICATION)
     assert app > timedelta(seconds=profile.hard_timeout_seconds), (
         "the job must be allowed to run to its own timeout before it can be called lost"
@@ -917,17 +972,40 @@ def test_the_reaper_gives_application_scans_a_lease_longer_than_their_own_timeou
 
 async def test_a_healthy_long_application_scan_is_not_reaped_but_a_web_job_is(monkeypatch):
     healthy_app = _job(APPLICATION, age_minutes=45)       # past 10 min, well inside its lease
-    stuck_web = _job(None, age_minutes=45)
-    dead_app = _job(APPLICATION, age_minutes=60 * 24)     # long past even the application lease
+    slow_web = _job(None, age_minutes=20)                 # past the old 10 min, inside the web ceiling
+    stuck_web = _job(None, age_minutes=60)                # past the 30 min ceiling plus its margin
+    stale_analysis = _job(job_type="analyze", age_minutes=20)   # not a scan: still 10 minutes
+    dead_app = _job(APPLICATION, age_minutes=60 * 26)     # past even the 24 hour ceiling plus its margin
 
     class _Result:
         def scalars(self):
-            return SimpleNamespace(all=lambda: [healthy_app, stuck_web, dead_app])
+            return SimpleNamespace(all=lambda: [healthy_app, slow_web, stuck_web, stale_analysis, dead_app])
 
     db = SimpleNamespace(execute=AsyncMock(return_value=_Result()), flush=AsyncMock())
 
     reaped = await queue.reap_stale_jobs(db)
 
-    assert reaped == 2
+    assert reaped == 3
     assert healthy_app.status == "running", "an in-budget application scan keeps its lease"
-    assert stuck_web.status == "queued" and dead_app.status == "queued"
+    assert slow_web.status == "running", "a slow web scan is not reclaimed and crawled a second time"
+    assert stuck_web.status == "queued" and dead_app.status == "queued" and stale_analysis.status == "queued"
+
+
+# ── A retried scan is running again: the previous attempt's failure must not still be on the row ──
+
+async def test_a_scan_that_starts_again_after_a_failed_attempt_no_longer_shows_that_failure():
+    from datetime import UTC, datetime
+
+    from app.db.repositories import scan_repository
+
+    scan = SimpleNamespace(
+        status="failed", error="Scan of https://x/ exceeded its 330s budget and was aborted",
+        completed_at=datetime.now(UTC), started_at=None,
+    )
+    db = SimpleNamespace(get=AsyncMock(return_value=scan), flush=AsyncMock())
+
+    await scan_repository.mark_scan_running(db, uuid.uuid4())
+
+    assert scan.status == "running"
+    assert scan.error is None and scan.completed_at is None
+    assert scan.started_at is not None

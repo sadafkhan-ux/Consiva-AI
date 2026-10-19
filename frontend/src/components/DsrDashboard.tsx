@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   dsrApi,
+  type ActiveCaseSummary,
   type DsrAction,
   type DsrAuditEntry,
   type DsrCase,
@@ -9,7 +10,37 @@ import {
   type DsrPlan,
   type DsrResponseDoc,
   type DsrSearchRun,
+  type IdentityChallenge,
+  type ManualVerificationMethod,
 } from "../api/dsr";
+import {
+  CaseId,
+  CodeEntry,
+  CodePanel,
+  DuplicateNotice,
+  ManualVerifyForm,
+  Notice,
+  SourceWarning,
+  TypeSelector,
+  WhyDisabled,
+} from "./dsrShared";
+import {
+  REQUEST_TYPE_OPTIONS,
+  canDraftResponse,
+  caseStatusLabel,
+  formatDate,
+  identityLabel,
+  identityVerified,
+  maskEmail,
+  needsTypeSelection,
+  plainStatus,
+  requestTypeLabel,
+  searchState,
+  statusTone,
+  useSourceStatus,
+  visibleEvidence,
+  wrongCodeMessage,
+} from "./dsrLogic";
 
 /**
  * Agent 3 (DSR Fulfillment) operator console.
@@ -29,20 +60,6 @@ import {
  */
 
 type Tab = "evidence" | "plan" | "executions" | "response" | "audit";
-
-const STATUS_TONE: Record<string, string> = {
-  completed: "ok",
-  execution_verified: "ok",
-  identity_verified: "ok",
-  failed: "bad",
-  rejected: "bad",
-  expired: "bad",
-  partially_completed: "warn",
-  escalated: "warn",
-  review_required: "warn",
-  approval_required: "warn",
-  cancelled: "muted",
-};
 
 // How often to re-poll the case list while one is still open/in-flight. Same
 // cadence as ROPA's run poll (RopaDashboard.tsx) -- fast enough to feel live,
@@ -71,7 +88,15 @@ function slaTone(sla: DsrCase["sla"]): string {
   return "ok";
 }
 
-export function DsrDashboard() {
+interface Props {
+  /** A case to open on arrival (from the address after a reload). Read once, on mount. */
+  initialCaseId?: string | null;
+  /** Reports the open case so the address can follow it. */
+  onCaseChange?: (id: string | null) => void;
+  onOpenConfig?: () => void;
+}
+
+export function DsrDashboard({ initialCaseId = null, onCaseChange, onOpenConfig }: Props = {}) {
   const [cases, setCases] = useState<DsrCase[]>([]);
   const [selected, setSelected] = useState<DsrCase | null>(null);
   const [query, setQuery] = useState("");
@@ -99,6 +124,12 @@ export function DsrDashboard() {
   // Intake form
   const [rawRequest, setRawRequest] = useState("");
   const [email, setEmail] = useState("");
+  // "" means let the system classify the words; a chosen type is recorded as a person's decision.
+  const [requestType, setRequestType] = useState("");
+  const [duplicates, setDuplicates] = useState<ActiveCaseSummary[] | null>(null);
+  const [issued, setIssued] = useState<IdentityChallenge | null>(null);
+  const [showManual, setShowManual] = useState(false);
+  const sources = useSourceStatus();
 
   const loadCases = useCallback(async () => {
     try {
@@ -122,6 +153,17 @@ export function DsrDashboard() {
     void loadCases();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reopen the case named in the address (a reload), then keep the address in step with the
+  // case that is open. Both read from the backend: the address holds only an id.
+  useEffect(() => {
+    if (initialCaseId) void loadCase(initialCaseId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    onCaseChange?.(selected?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
 
   // Live status: while any case is still open, keep polling so SLA countdowns
   // and in-flight status (searching, executing, ...) advance without the
@@ -173,6 +215,8 @@ export function DsrDashboard() {
         dsrApi.getResponse(id).catch(() => null),
         dsrApi.getAudit(id).catch(() => []),
       ]);
+      // A code or form belongs to the case it was made for.
+      if (selectedRef.current?.id !== fresh.id) { setIssued(null); setShowManual(false); }
       setSelected(fresh);
       setSearchRuns(results.search_runs);
       setEvidence(results.evidence);
@@ -205,21 +249,36 @@ export function DsrDashboard() {
     }
   }
 
-  async function createCase(e: React.FormEvent) {
+  async function createCase(e: React.FormEvent, overrideReason?: string) {
     e.preventDefault();
     if (!rawRequest.trim() || !email.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const created = await dsrApi.createCase({
+      // Same rule as the New request tab: one open case per requester unless a person says why.
+      if (!overrideReason) {
+        const open = await dsrApi.activeCases(email.trim().toLowerCase()).catch(() => [] as ActiveCaseSummary[]);
+        if (open.length > 0) { setDuplicates(open); return; }
+      }
+      setDuplicates(null);
+      let created = await dsrApi.createCase({
         raw_request: rawRequest.trim(),
         requester_email: email.trim(),
+        ...(overrideReason ? { duplicate_override_reason: overrideReason } : {}),
       });
+      let typeError: string | null = null;
+      if (requestType) {
+        // A type chosen here is a person's decision, recorded as such by the backend.
+        try { created = await dsrApi.classify(created.id, requestType); }
+        catch (err) { typeError = err instanceof Error ? err.message : "could not set the type"; }
+      }
       setRawRequest("");
       setEmail("");
+      setRequestType("");
       await loadCases();
       await loadCase(created.id);
-      setNotice(`Case ${created.reference} created and classified as "${created.request_type}".`);
+      if (typeError) setError(`The case was opened, but its type could not be set: ${typeError}`);
+      else setNotice(`Case ${created.reference} created and classified as "${created.request_type}".`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create the case.");
     } finally {
@@ -227,15 +286,60 @@ export function DsrDashboard() {
     }
   }
 
+  async function applyType(type: string) {
+    if (!selected) return;
+    await act("Request type set.", () => dsrApi.classify(selected.id, type));
+  }
+
+  async function submitCode(code: string) {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const out = await dsrApi.verifyIdentity(selected.id, { challenge: code });
+      await loadCase(selected.id);
+      await loadCases();
+      if (out.satisfied) { setIssued(null); setNotice("Identity verified."); }
+      else setError(wrongCodeMessage(out));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not check the code.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyManually(v: { method: ManualVerificationMethod; reference: string; note: string }) {
+    if (!selected) return;
+    await act("Identity verified manually.", () =>
+      dsrApi.verifyIdentity(selected.id, {
+        manual: true, method: v.method, reference: v.reference, evidence_note: v.note,
+      }),
+    );
+    setShowManual(false);
+  }
+
   const can = (status: string) => selected?.allowed_transitions.includes(status) ?? false;
-  const identityOk =
-    selected?.identity_status === "verified" || selected?.identity_status === "manually_verified";
+  const identityOk = identityVerified(selected);
+  const codeReady = issued !== null || selected?.identity_status === "in_progress";
+  const drafting = selected ? canDraftResponse(selected, searchRuns) : false;
+  // Why each unavailable action is unavailable, written out on the page.
+  const reasons: string[] = [];
+  if (selected && !selected.is_terminal) {
+    if (!identityOk) reasons.push("Start search is off until the requester's identity is verified.");
+    else if (!can("searching")) reasons.push(`Start search is not available while the case is "${caseStatusLabel(selected)}".`);
+    if (!can("executing")) reasons.push("Execute approved actions needs an approved plan.");
+    if (!drafting) reasons.push("Generate response is off until the requester is verified and a search has finished.");
+    if (!response) reasons.push("Mark sent & close needs a drafted response first.");
+    else if (!can("completed")) reasons.push("Mark sent & close is off until every approved action has an outcome.");
+  }
 
   return (
     <div className="dsr">
       <section className="card">
         <h2>New data subject request</h2>
-        <form className="dsr-intake" onSubmit={createCase}>
+        <SourceWarning status={sources} onOpenConfig={onOpenConfig} />
+        <form className="dsr-intake" onSubmit={(e) => void createCase(e)}>
           <label>
             The requester's own words
             <textarea
@@ -251,17 +355,35 @@ export function DsrDashboard() {
               type="email"
               value={email}
               placeholder="person@example.com"
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => { setEmail(e.target.value); setDuplicates(null); }}
             />
+          </label>
+          <label>
+            Request type
+            <select value={requestType} onChange={(e) => setRequestType(e.target.value)}>
+              <option value="">Detect from the words</option>
+              {REQUEST_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
           </label>
           <button type="submit" disabled={busy || !rawRequest.trim() || !email.trim()}>
             Create case
           </button>
         </form>
+        {duplicates && (
+          <DuplicateNotice
+            existing={duplicates}
+            busy={busy}
+            onOpen={(id) => { setDuplicates(null); void loadCase(id); }}
+            onProceed={(reason) => void createCase({ preventDefault() {} } as React.FormEvent, reason)}
+            onCancel={() => setDuplicates(null)}
+          />
+        )}
       </section>
 
-      {error && <div className="banner banner-error">{error}</div>}
-      {notice && <div className="banner banner-ok">{notice}</div>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {notice && <Notice tone="ok">{notice}</Notice>}
 
       <div className="dsr-layout">
         <aside className="card dsr-list">
@@ -280,7 +402,7 @@ export function DsrDashboard() {
               <option value="all">All statuses</option>
               {statusOptions.map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {plainStatus(s)}
                 </option>
               ))}
             </select>
@@ -302,8 +424,13 @@ export function DsrDashboard() {
                     <span className={`pill pill-${slaTone(c.sla)}`}>{formatSla(c.sla)}</span>
                   </div>
                   <div className="dsr-list-row">
-                    <span className={`pill pill-${STATUS_TONE[c.status] ?? "muted"}`}>{c.status}</span>
-                    <span className="muted small">{c.request_type}</span>
+                    <span className={`pill pill-${statusTone(c.status, c.error_code)}`} title={c.status}>
+                      {caseStatusLabel(c)}
+                    </span>
+                    <span className="muted small">{requestTypeLabel(c.request_type)}</span>
+                  </div>
+                  <div className="dsr-list-meta muted small">
+                    {maskEmail(c.requester_email)} · Created {formatDate(c.created_at)} · Due {formatDate(c.sla.due_at)}
                   </div>
                 </button>
               </li>
@@ -316,75 +443,74 @@ export function DsrDashboard() {
             <header className="dsr-head">
               <div>
                 <h2>{selected.reference}</h2>
+                <CaseId id={selected.id} />
                 <p className="muted">{selected.raw_request}</p>
               </div>
               <div className="dsr-badges">
-                <span className={`pill pill-${STATUS_TONE[selected.status] ?? "muted"}`}>
-                  {selected.status}
+                {/* One plain label. The stored status is in the tooltip; the portal's own name for
+                    it is in the API, not a second pill here that reads differently. */}
+                <span
+                  className={`pill pill-${statusTone(selected.status, selected.error_code)}`}
+                  title={`${selected.status} / ${selected.public_status ?? ""}`}
+                >
+                  {caseStatusLabel(selected)}
                 </span>
-                {selected.public_status && selected.public_status.toLowerCase() !== selected.status && (
-                  <span className="pill" title="How this case appears to the requester and the portal">
-                    {selected.public_status}
-                  </span>
-                )}
-                <span className="pill">{selected.request_type}</span>
+                <span className="pill">{requestTypeLabel(selected.request_type)}</span>
                 <span className={`pill pill-${identityOk ? "ok" : "warn"}`}>
-                  identity: {selected.identity_status ?? "pending"}
+                  Identity: {identityLabel(selected.identity_status)}
                 </span>
                 <span className={`pill pill-${slaTone(selected.sla)}`}>{formatSla(selected.sla)}</span>
+                <span className="pill pill-muted">Due {formatDate(selected.sla.due_at)}</span>
               </div>
             </header>
 
             {/* A stopped case always says why. The backend guarantees an error code
                 accompanies every bad ending, so this is never an empty box. */}
             {selected.status_message && !selected.is_terminal && (
-              <div className="banner banner-info">
+              <Notice tone="info">
                 <strong>{selected.status_message}</strong>
                 {selected.next_step && <> {selected.next_step}</>}
-              </div>
+              </Notice>
             )}
             {selected.error_code && (
-              <div className="banner banner-warn">
+              <Notice tone="warn">
                 <strong>{selected.error_code}</strong>
                 {selected.error_detail && <> — {selected.error_detail}</>}
-              </div>
+              </Notice>
+            )}
+
+            {needsTypeSelection(selected) && (
+              <TypeSelector busy={busy} onApply={(t) => void applyType(t)} />
             )}
 
             <div className="dsr-actions">
               <button
                 disabled={busy || identityOk}
                 onClick={() =>
-                  void act("Identity challenge issued.", async () => {
-                    const c = await dsrApi.startChallenge(selected.id);
-                    // No email provider is configured, so the operator delivers it.
-                    window.prompt(c.delivery_note, c.challenge);
+                  void act("Code generated. No email was sent -- give it to the requester.", async () => {
+                    // No email provider is configured, so the operator passes the code on. It is
+                    // shown inline (below), once -- never in a browser prompt.
+                    setIssued(await dsrApi.startChallenge(selected.id));
                   })
                 }
               >
-                Issue identity challenge
+                Generate code
               </button>
               <button
                 disabled={busy || identityOk}
-                onClick={() => {
-                  const note = window.prompt("What did you check to verify this person?");
-                  if (!note) return;
-                  void act("Identity verified manually.", () =>
-                    dsrApi.verifyIdentity(selected.id, { manual: true, evidence_note: note }),
-                  );
-                }}
+                aria-expanded={showManual}
+                onClick={() => setShowManual((v) => !v)}
               >
                 Verify manually
               </button>
               <button
                 disabled={busy || !identityOk || !can("searching")}
-                title={!identityOk ? "Identity must be verified before any search" : undefined}
                 onClick={() => void act("Search queued.", () => dsrApi.startSearch(selected.id))}
               >
                 Start search
               </button>
               <button
                 disabled={busy || !can("executing")}
-                title={!can("executing") ? "Execution requires an approved plan" : undefined}
                 onClick={() => void act("Execution queued.", () => dsrApi.execute(selected.id))}
               >
                 Execute approved actions
@@ -403,7 +529,7 @@ export function DsrDashboard() {
                 </button>
               )}
               <button
-                disabled={busy}
+                disabled={busy || !drafting}
                 onClick={() =>
                   void act("Response generated.", () => dsrApi.generateResponse(selected.id))
                 }
@@ -412,7 +538,6 @@ export function DsrDashboard() {
               </button>
               <button
                 disabled={busy || !can("completed") || !response}
-                title={!response ? "Generate a response before completing" : undefined}
                 onClick={() => void act("Case completed.", () => dsrApi.complete(selected.id))}
               >
                 Mark sent &amp; close
@@ -421,22 +546,48 @@ export function DsrDashboard() {
                 Refresh
               </button>
             </div>
+            <WhyDisabled reasons={reasons} />
 
-            <nav className="tabs">
+            {!identityOk && !selected.is_terminal && (
+              <>
+                {issued && (
+                  <CodePanel
+                    challenge={issued.challenge} expiresAt={issued.expires_at} emailed={issued.emailed}
+                    onDismiss={() => setIssued(null)}
+                  />
+                )}
+                <CodeEntry enabled={codeReady} busy={busy} onSubmit={(c) => void submitCode(c)} />
+                {showManual && (
+                  <ManualVerifyForm
+                    busy={busy}
+                    onSubmit={(v) => void verifyManually(v)}
+                    onCancel={() => setShowManual(false)}
+                  />
+                )}
+              </>
+            )}
+
+            <div role="tablist" aria-label="Case details" className="tabs">
               {(["evidence", "plan", "executions", "response", "audit"] as Tab[]).map((t) => (
-                <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
+                <button
+                  key={t}
+                  id={`case-tab-${t}`}
+                  role="tab"
+                  type="button"
+                  aria-selected={tab === t}
+                  aria-controls="case-panel"
+                  tabIndex={tab === t ? 0 : -1}
+                  className={tab === t ? "active" : ""}
+                  onClick={() => setTab(t)}
+                >
                   {t}
                 </button>
               ))}
-            </nav>
+            </div>
 
+            <div role="tabpanel" id="case-panel" aria-labelledby={`case-tab-${tab}`}>
             {tab === "evidence" && (
-              <EvidenceTab
-                runs={searchRuns}
-                evidence={evidence}
-                caseStatus={selected.status}
-                errorCode={selected.error_code}
-              />
+              <EvidenceTab runs={searchRuns} evidence={evidence} kase={selected} />
             )}
             {tab === "plan" && (
               <PlanTab
@@ -458,6 +609,7 @@ export function DsrDashboard() {
             {tab === "executions" && <ExecutionsTab executions={executions} />}
             {tab === "response" && <ResponseTab response={response} />}
             {tab === "audit" && <AuditTab entries={audit} />}
+            </div>
           </section>
         )}
       </div>
@@ -465,91 +617,90 @@ export function DsrDashboard() {
   );
 }
 
-/** The evidence-empty message must never read like a successful zero-match search
- *  when the case's own search actually failed to run at all -- "no records found"
- *  and "the search errored out" are different claims, and conflating them is how an
- *  operator ends up telling a requester "you have no data" when the truth is "we
- *  never managed to check" (§47's same principle, applied to this screen). */
-function evidenceEmptyMessage(
-  runs: DsrSearchRun[],
-  caseStatus: string,
-  errorCode: string | null,
-): { text: string; tone: "muted" | "warn" } | null {
-  if (runs.length === 0) {
-    // The Searches table above already says "No search has run yet." -- repeating
-    // the identical sentence here would be noise, not a second distinct state.
-    return null;
-  }
-  if (caseStatus === "failed") {
-    return {
-      text:
-        `The search did not complete -- it failed with ${errorCode ?? "an unrecorded error"}. ` +
-        "This is not the same as finding no data: see the error above, resolve it, and retry the search.",
-      tone: "warn",
-    };
-  }
-  return {
-    text: "No records matched. The search completed and found no data for this person in the systems searched.",
-    tone: "muted",
-  };
-}
-
+/** What the Evidence tab says, decided by the search runs the backend recorded. An empty
+ *  evidence list is "no match" only when a search actually finished -- with no run, or only failed
+ *  runs, it is "nothing was searched", which is a different (and opposite) claim for an operator to
+ *  pass on to a requester. */
 function EvidenceTab({
   runs,
   evidence,
-  caseStatus,
-  errorCode,
+  kase,
 }: {
   runs: DsrSearchRun[];
   evidence: DsrEvidence[];
-  caseStatus: string;
-  errorCode: string | null;
+  kase: DsrCase;
 }) {
-  const emptyMessage = evidenceEmptyMessage(runs, caseStatus, errorCode);
+  const state = searchState(runs, evidence, kase.status);
+  const shown = visibleEvidence(runs, evidence);
   return (
     <>
       <h3>Searches</h3>
-      {runs.length === 0 && <p className="muted">No search has run yet.</p>}
-      <table className="data">
-        <thead>
-          <tr>
-            <th>Source</th><th>Status</th><th>Matches</th><th>Subjects</th><th>Tables</th><th>Problem</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((r) => (
-            <tr key={r.id}>
-              <td>{r.source}</td>
-              <td><span className={`pill pill-${r.status === "completed" ? "ok" : r.status === "failed" ? "bad" : "warn"}`}>{r.status}</span></td>
-              <td>{r.matches}</td>
-              <td>{r.distinct_subjects}</td>
-              <td className="muted small">{r.tables_searched.join(", ") || "—"}</td>
-              <td className="small">{r.error_code ? `${r.error_code}: ${r.error_detail ?? ""}` : "—"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <h3>Evidence ({evidence.length})</h3>
-      {evidence.length === 0 && emptyMessage && (
-        <p className={emptyMessage.tone === "warn" ? "banner banner-warn" : "muted"}>{emptyMessage.text}</p>
+      {state === "not_run" && (
+        <Notice tone="warn">
+          <strong>No search has been run for this case.</strong> {kase.status_message}
+          {kase.next_step && <> <strong>Next step:</strong> {kase.next_step}</>}
+        </Notice>
       )}
-      <table className="data">
-        <thead>
-          <tr><th>Where</th><th>Matched on</th><th>Type</th><th>Record</th><th>Data held</th></tr>
-        </thead>
-        <tbody>
-          {evidence.map((e) => (
-            <tr key={e.id}>
-              <td>{e.source}/{e.table}</td>
-              <td>{e.matched_column} <span className="muted small">({e.identifier_kind})</span></td>
-              <td><span className="pill">{e.match_type}</span></td>
-              <td className="mono small">{JSON.stringify(e.record_reference)}</td>
-              <td className="mono small">{e.record_snapshot ? JSON.stringify(e.record_snapshot) : "—"}</td>
+      {state === "running" && <Notice tone="info">A search is in progress. Results appear here when it finishes.</Notice>}
+      {state === "failed" && (
+        <Notice tone="warn">
+          The search did not complete -- it failed with {kase.error_code ?? "an unrecorded error"}. This is
+          not the same as finding no data: see the error above, resolve it, and retry the search.
+        </Notice>
+      )}
+      {state === "partial" && (
+        <Notice tone="warn">
+          Some sources could not be searched, so the results below are incomplete. This is not the same as
+          finding no data in those sources: retry the search.
+        </Notice>
+      )}
+      {runs.length > 0 && (
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Source</th><th>Status</th><th>Matches</th><th>Subjects</th><th>Tables</th><th>Problem</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {runs.map((r) => (
+              <tr key={r.id}>
+                <td>{r.source}</td>
+                <td><span className={`pill pill-${r.status === "completed" ? "ok" : r.status === "failed" ? "bad" : "warn"}`}>{r.status}</span></td>
+                <td>{r.matches}</td>
+                <td>{r.distinct_subjects}</td>
+                <td className="muted small">{r.tables_searched.join(", ") || "—"}</td>
+                <td className="small">{r.error_code ? `${r.error_code}: ${r.error_detail ?? ""}` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <h3>Evidence ({shown.length})</h3>
+      {state === "no_match" && (
+        <p className="muted">
+          No matching records found. The search completed and found no data for this person in the
+          systems searched.
+        </p>
+      )}
+      {shown.length > 0 && (
+        <table className="data">
+          <thead>
+            <tr><th>Where</th><th>Matched on</th><th>Type</th><th>Record</th><th>Data held</th></tr>
+          </thead>
+          <tbody>
+            {shown.map((e) => (
+              <tr key={e.id}>
+                <td>{e.source}/{e.table}</td>
+                <td>{e.matched_column} <span className="muted small">({e.identifier_kind})</span></td>
+                <td><span className="pill">{e.match_type}</span></td>
+                <td className="mono small">{JSON.stringify(e.record_reference)}</td>
+                <td className="mono small">{e.record_snapshot ? JSON.stringify(e.record_snapshot) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </>
   );
 }

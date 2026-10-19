@@ -21,8 +21,10 @@ Finding data, drafting a response, or attempting an action is never a resolution
 
 ## Endpoints
 
-All require an integration key with `dsr:operate` (or a signed-in user). Tenancy comes from the
-credential; nothing accepts an org id from the caller.
+All require the caller's signed-in bearer token (`POST /api/v1/auth/login`) -- the same login every
+other Consiva screen uses, scoped to the caller's organisation. DSR has no key, token or scope of its own.
+A system calling these endpoints (for example the portal) authenticates the same way, with an ordinary
+login of the organisation; tokens last 12 hours. Nothing accepts an org id from the caller.
 
 | Purpose | Call |
 |---|---|
@@ -34,12 +36,44 @@ credential; nothing accepts an org id from the caller.
 | Report what was done | `POST /api/v1/dsr/requests/{id}/execution-report` |
 | Close the case | `POST /api/v1/dsr/requests/{id}/complete` |
 | Retry after a failed execution | `POST /api/v1/dsr/requests/{id}/retry-execution`, then `/execute` |
+| Open cases for one requester | `GET /api/v1/dsr/requests/active?email=…` |
 
 ### Importing
 
 Use the portal's request id as `idempotency_key`. A second import with the same key returns the
 existing case, so a retry never creates a duplicate, and `reconcile` can match records by it.
 Do not import a request the portal has already closed.
+
+A request created **without** an `idempotency_key` (what the screens do) is refused with `409` when
+another case for the same requester email is still open, unless the body carries
+`duplicate_override_reason` (at least 5 characters). The reason, and the references of the cases it
+duplicates, are written to that case's audit entry. Imports that carry an `idempotency_key` are not
+subject to this: the key already says which request it is.
+
+### Identity verification
+
+* `POST /requests/{id}/identity/challenge` generates a code, shown once, in the form `K7QM-4TXR-9BWD`
+  (letters and digits without look-alikes; case, spaces and dashes are ignored when it is typed back).
+  **No email is sent** -- the response says `"emailed": false`, and whoever called it passes the code
+  on. Only a hash is stored.
+* Limits, so that asking again is no way round a lockout (`429` when exceeded; every refusal is
+  recorded on the case's audit trail as `dsr.identity_challenge_refused`):
+  3 codes per case in total; 60 seconds between codes; 15 minutes after a code is locked by wrong
+  answers; 6 codes per requester email in 24 hours across all of that requester's cases.
+* `POST /requests/{id}/identity/verify` with `{"challenge": "…"}` answers a code. The response carries
+  `attempts`, `max_attempts` and `attempts_remaining`; five wrong answers lock that code.
+* `POST /requests/{id}/identity/verify` with `{"manual": true, "method": "…", "reference": "…",
+  "evidence_note": "…"}` records a verification by a person. `method` is one of `id_document`,
+  `account_login`, `known_fact_match`, `in_person`, `other`; `reference` says what was checked;
+  `evidence_note` is at least 10 characters. A body without `method` and `reference` is refused
+  (`422`). All of it is written to the audit trail as separate fields.
+
+### Responses
+
+`POST /requests/{id}/response` is refused until the requester's identity is verified (`403`) and at
+least one search has finished (`409`) -- a letter that says "we searched" or "we found nothing" is
+a statement about a search, so there must have been one. A complaint (`grievance`) is the exception:
+nothing is searched for it and its letter says so.
 
 ### `outcome` — the fields that matter
 
@@ -105,6 +139,13 @@ The portal and the agent each store an identity status. `reconcile` flags a diff
    action has no recorded outcome.
 4. Show **Resolved** only when `portal_may_show_resolved` is true.
 5. Poll `outcome` (or run `reconcile`) — the agent does not call the portal back.
+
+### Reading cases
+
+`GET /requests` and `GET /requests/{id}` return the same `identity_status` for a case. `GET
+/requests/{id}/results` returns each evidence record with the `search_run_id` of the search that
+found it; a record is only meaningful under a search that ran, and an empty `search_runs` list means
+**no search has run** -- never "searched and found nothing".
 
 ## Known limits
 

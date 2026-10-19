@@ -73,7 +73,7 @@ async def test_a_case_that_lost_its_source_waits_for_setup_and_recovers_when_one
     assert request.status == case.FAILED and request.error_code == case.ERR_SOURCE_NOT_AUTHORIZED
     assert lifecycle.public_status(request.status, request.error_code) == "WAITING_FOR_SETUP"
     message, step = lifecycle.plain_status(request.status, request.error_code)
-    assert "no data source is connected" in message and "DSR Settings" in step
+    assert "no data source is connected" in message and "Configuration" in step
 
     monkeypatch.setattr(dsr_repository, "list_source_authorizations", real)
     await dsr_routes.start_search(request_id=request.id, user=ADMIN, db=FakeDB())
@@ -192,5 +192,9 @@ async def test_every_case_response_carries_a_status_a_message_and_a_next_step(wo
     async def only_this(db, org_id, **kw):
         return [request]
     monkeypatch.setattr(dsr_repository, "list_requests", only_this)
+
+    async def no_verifications(db, org_id, request_ids):
+        return {}
+    monkeypatch.setattr(dsr_repository, "latest_identity_verifications", no_verifications)
     listed = await dsr_routes.list_requests(status_filter=None, limit=10, user=ADMIN, db=FakeDB())
     assert all(c["public_status"] and c["status_message"] for c in listed)

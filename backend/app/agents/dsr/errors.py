@@ -45,6 +45,21 @@ class IdentityFailedError(DsrError):
     code = case.ERR_IDENTITY_FAILED
 
 
+class IdentityLimitError(DsrError):
+    """Too many verification challenges for this case or requester, or one was asked for
+    too soon after a lockout. Without this, a locked-out case could be reset by simply
+    asking for another code. 429: the caller is not wrong, only early or over the limit."""
+
+    status_code = 429
+    code = case.ERR_IDENTITY_FAILED
+
+
+class DuplicateActiveCaseError(DsrError):
+    """An open case already exists for this requester and no override reason was given."""
+
+    status_code = 409
+
+
 # ── Sources and connectors (§15, §16, §38) ───────────────────────────────────────
 
 class SourceNotAuthorizedError(DsrError):

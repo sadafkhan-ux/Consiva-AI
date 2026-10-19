@@ -192,20 +192,19 @@ def public_status(status: str, error_code: str | None = None) -> str:
 _PLAIN_BY_ERROR = {
     case.ERR_SOURCE_NOT_AUTHORIZED: (
         "The search could not run because no data source is connected for this organisation.",
-        "An administrator needs to connect and authorise a data source in DSR Settings, "
-        "then press Retry search.",
+        "An administrator needs to connect a data source under DSR → Configuration, then start the search again.",
     ),
     case.ERR_CONNECTOR_UNAVAILABLE: (
         "A connected data source could not be reached.",
-        "Check the source's connection in DSR Settings, then press Retry search.",
+        "Check the source's connection under DSR \u2192 Configuration, then start the search again.",
     ),
     case.ERR_CONNECTOR_TIMEOUT: (
         "A connected data source took too long to answer.",
-        "Try again; if it keeps happening, check the source's health in DSR Settings.",
+        "Try again; if it keeps happening, check the source's health under DSR \u2192 Configuration.",
     ),
     case.ERR_SEARCH_FAILED: (
         "The search did not complete in every connected source.",
-        "Review which source failed in the results, then press Retry search.",
+        "Review which source failed in the results, then start the search again.",
     ),
     case.ERR_NO_MATCH: (
         "No record matching the requester's details was found.",

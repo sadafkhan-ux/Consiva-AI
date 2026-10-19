@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from app.agents.consent_agent.state import AgentState
@@ -5,7 +6,9 @@ from app.config import get_settings
 from app.db.session import async_session_factory
 from app.llm.client import NvidiaLLMClient
 from app.observability.stage_tracker import track_stage
-from app.rag.retriever import retrieve
+from app.rag.retriever import has_text, retrieve_many, text_only_query
+
+logger = logging.getLogger(__name__)
 
 # Was reduced 6->4 in an earlier optimization pass to shrink the LLM prompt, but that
 # was later measured to yield no reliable wall-clock benefit (NVIDIA endpoint variance
@@ -58,31 +61,61 @@ async def retrieve_rag(state: AgentState) -> dict:
     """Step 7 — pgvector similarity search over approved DPDP knowledge, run once per
     distinct rule finding so each violation type is scoped to its own retrieval rather
     than one query blended across all of them."""
-    queries = _queries(state.rule_findings)
+    raw_queries = _queries(state.rule_findings)
+    # The embedding model rejects an image as a query (rag.retriever.text_only_query). Each query is sent
+    # as text; a query that was only an image is dropped, and if that leaves none the general query runs,
+    # so retrieval never silently returns nothing because of an image.
+    queries = [q for q in (text_only_query(q) for q in raw_queries) if has_text(q)]
+    if not queries:
+        queries = _queries([])
+    sanitised = sum(1 for q in raw_queries if text_only_query(q) != q)
     llm_client = NvidiaLLMClient()
 
-    async with track_stage(uuid.UUID(state.scan_id), "rag_retrieval", agent_run_id=uuid.UUID(state.agent_run_id)) as meta:
-        meta["queries"] = queries
-        max_distance = get_settings().rag_max_distance
-        merged: dict[str, object] = {}
-        async with async_session_factory() as db:
-            for query in queries:
-                for chunk in await retrieve(
-                    query, db=db, llm_client=llm_client, top_k=_TOP_K_PER_QUERY, max_distance=max_distance
-                ):
+    try:
+        async with track_stage(uuid.UUID(state.scan_id), "rag_retrieval", agent_run_id=uuid.UUID(state.agent_run_id)) as meta:
+            meta["queries"] = queries
+            if sanitised:
+                meta["queries_text_only"] = sanitised  # how many had an inline image replaced by a text marker
+            max_distance = get_settings().rag_max_distance
+            merged: dict[str, object] = {}
+            stats: dict = {}
+            async with async_session_factory() as db:
+                # One embedding request for all the queries, each still searched on its own.
+                try:
+                    per_query = await retrieve_many(
+                        queries, db=db, llm_client=llm_client, top_k=_TOP_K_PER_QUERY,
+                        max_distance=max_distance, stats=stats,
+                    )
+                finally:
+                    meta["timings"] = {k: stats[k] for k in ("embed_calls", "embed_ms", "search_ms", "cache_hits") if k in stats}
+            if stats.get("knowledge_base_empty"):
+                meta["knowledge_base_empty"] = True   # visible on the stage: no provisions exist to cite
+            for chunks_for_query in per_query:
+                for chunk in chunks_for_query:
                     existing = merged.get(chunk.chunk_id)
                     if existing is None or chunk.distance < existing.distance:
                         merged[chunk.chunk_id] = chunk
-        chunks = sorted(merged.values(), key=lambda c: c.distance)[:_MAX_TOTAL_CHUNKS]
+            chunks = sorted(merged.values(), key=lambda c: c.distance)[:_MAX_TOTAL_CHUNKS]
 
-        meta["chunks_retrieved"] = len(chunks)
-        meta["max_distance"] = max_distance
-        meta["results"] = [
-            {
-                "chunk_id": c.chunk_id, "source_document": c.document_title,
-                "section": c.section, "distance": round(c.distance, 4),
-            }
-            for c in chunks
-        ]
+            meta["chunks_retrieved"] = len(chunks)
+            meta["max_distance"] = max_distance
+            meta["results"] = [
+                {
+                    "chunk_id": c.chunk_id, "source_document": c.document_title,
+                    "section": c.section, "distance": round(c.distance, 4),
+                }
+                for c in chunks
+            ]
+
+    except Exception as exc:
+        # The stage row already says it failed, with the error (track_stage records it before re-raising).
+        # Letting it propagate ended the whole analysis with no findings at all, although the rules had
+        # already matched. Retrieval only supplies citations, so the run continues without the model and
+        # writes the rule-derived findings, each flagged for human review and citing nothing.
+        logger.exception("RAG retrieval failed for scan %s; continuing with rule-derived findings", state.scan_id)
+        return {
+            "rag_chunks": [], "rag_failed": True,
+            "error": f"retrieval of regulatory provisions failed ({type(exc).__name__}: {str(exc)[:240]})",
+        }
 
     return {"rag_chunks": [c.as_state_dict() for c in chunks]}

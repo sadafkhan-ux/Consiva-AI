@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   dsrApi,
+  type ActiveCaseSummary,
   type DsrAction,
   type DsrAuditEntry,
   type DsrCase,
@@ -10,7 +11,34 @@ import {
   type DsrResponseDoc,
   type DsrSearchRun,
   type DsrSelection,
+  type IdentityChallenge,
+  type ManualVerificationMethod,
 } from "../api/dsr";
+import {
+  CaseId,
+  CodeEntry,
+  CodePanel,
+  DuplicateNotice,
+  ManualVerifyForm,
+  Notice,
+  SourceWarning,
+  TypeSelector,
+  WhyDisabled,
+} from "./dsrShared";
+import {
+  canDraftResponse,
+  caseStatusLabel,
+  identityLabel,
+  identityVerified,
+  needsTypeSelection,
+  searchState,
+  statusTone,
+  stepForCase,
+  useSourceStatus,
+  visibleEvidence,
+  wrongCodeMessage,
+  type WizardStep,
+} from "./dsrLogic";
 
 /**
  * Agent 3 — email-first data subject request.
@@ -26,7 +54,14 @@ import {
  * every artefact (evidence, plan, approvals, executions, audit) still hangs off it.
  */
 
-type Step = "email" | "verify" | "searching" | "data" | "review" | "approval" | "result";
+type Step = WizardStep;
+
+/** What "Find my data" asks for. The wording is recorded on the case; the TYPE is set explicitly
+ *  afterwards (see findMyData), because this sentence is not something the keyword classifier is
+ *  meant to recognise -- it classified as "other" and sent every case to review. */
+const FIND_MY_DATA_TEXT =
+  "Self-service data request: the requester asked to see what personal data is " +
+  "held about them and will choose an action for each record found.";
 
 const SELECTIONS: { value: DsrSelection; label: string; tone: string; hint: string }[] = [
   { value: "keep", label: "Keep", tone: "ok", hint: "Leave this record exactly as it is" },
@@ -49,7 +84,17 @@ function mask(value: unknown): string {
   return `${"•".repeat(Math.max(text.length - 4, 4))}${text.slice(-4)}`;
 }
 
-export function DsrEmailFirst() {
+interface Props {
+  /** A case to resume (from the address after a reload). Read once, on mount. */
+  initialCaseId?: string | null;
+  /** Reports the open case so the address can follow it. */
+  onCaseChange?: (id: string | null) => void;
+  onOpenConfig?: () => void;
+  /** Open an existing case in the All cases view. */
+  onOpenCase?: (id: string) => void;
+}
+
+export function DsrEmailFirst({ initialCaseId = null, onCaseChange, onOpenConfig, onOpenCase }: Props = {}) {
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
   const [kase, setKase] = useState<DsrCase | null>(null);
@@ -66,6 +111,12 @@ export function DsrEmailFirst() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [showAudit, setShowAudit] = useState(false);
+  const [issued, setIssued] = useState<IdentityChallenge | null>(null);
+  const [showManual, setShowManual] = useState(false);
+  const [duplicates, setDuplicates] = useState<ActiveCaseSummary[] | null>(null);
+  // The refusal the backend gave when a search could not start (no source, identity, ...).
+  const [searchBlock, setSearchBlock] = useState<string | null>(null);
+  const sources = useSourceStatus();
   const poll = useRef<number | null>(null);
 
   useEffect(() => () => { if (poll.current) window.clearInterval(poll.current); }, []);
@@ -83,6 +134,28 @@ export function DsrEmailFirst() {
     return c;
   }, []);
 
+  // The address follows the open case, so a reload can come back to it.
+  useEffect(() => { onCaseChange?.(kase?.id ?? null); }, [kase?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Resume a case named in the address. The position comes from what the backend says about it.
+  useEffect(() => {
+    if (!initialCaseId) return;
+    let alive = true;
+    (async () => {
+      try {
+        const c = await refresh(initialCaseId);
+        if (!alive) return;
+        const resumeAt = stepForCase(c);
+        setStep(resumeAt);
+        if (resumeAt === "searching") watchSearch(initialCaseId);
+      } catch (err) {
+        if (alive) setError(err instanceof Error ? err.message : "Could not reopen that case.");
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCaseId]);
+
   async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
     setBusy(true); setError(null); setNote(null);
     try { const out = await fn(); setNote(label); return out; }
@@ -91,62 +164,90 @@ export function DsrEmailFirst() {
   }
 
   // ── 1. Email ───────────────────────────────────────────────────────────────
-  async function findMyData(e: React.FormEvent) {
+  async function findMyData(e: React.FormEvent, overrideReason?: string) {
     e.preventDefault();
     const address = email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
       setError("Enter a valid email address."); return;
     }
-    const created = await run("Case opened.", () =>
-      dsrApi.createCase({
+    setBusy(true); setError(null); setNote(null);
+    try {
+      // One open case per requester unless a person says otherwise. A failed lookup does not
+      // block intake: the backend refuses a duplicate itself, so this only saves a round trip.
+      if (!overrideReason) {
+        const open = await dsrApi.activeCases(address).catch(() => [] as ActiveCaseSummary[]);
+        if (open.length > 0) { setDuplicates(open); return; }
+      }
+      setDuplicates(null);
+      const created = await dsrApi.createCase({
         // The case still records what was asked for, in words -- the email is the
         // lookup key, not a replacement for the request itself.
-        raw_request:
-          "Self-service data request: the requester asked to see what personal data is " +
-          "held about them and will choose an action for each record found.",
+        raw_request: FIND_MY_DATA_TEXT,
         requester_email: address,
-      }),
-    );
-    if (created) { setKase(created); setStep("verify"); }
+        ...(overrideReason ? { duplicate_override_reason: overrideReason } : {}),
+      });
+      // "Find my data" IS an access request, so say so through the classification endpoint rather
+      // than leaving the case as "other" (which routes it to review and blocks the flow). This
+      // does not bypass identity verification or source authorisation -- both still apply.
+      let opened = created;
+      try {
+        opened = await dsrApi.classify(created.id, "access");
+        setNote("Case opened as an access request.");
+      } catch (err) {
+        setError(
+          `The case was opened, but it could not be set as an access request: ${
+            err instanceof Error ? err.message : "unknown error"
+          }. You can set the type from All cases.`,
+        );
+      }
+      setKase(opened); setStep("verify");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Case opened failed.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ── 2. Verify ──────────────────────────────────────────────────────────────
-  async function verifyManually() {
+  function afterIdentityChecked(out: { satisfied: boolean; case: DsrCase }) {
+    setKase(out.case);
+    if (out.satisfied) {
+      setIssued(null); setShowManual(false);
+      void startSearch(out.case.id);
+    }
+  }
+
+  async function verifyManually(v: { method: ManualVerificationMethod; reference: string; note: string }) {
     if (!kase) return;
-    const evidenceNote = window.prompt(
-      "What did you check to confirm this person's identity?\n(Recorded on the case — required.)",
-    );
-    if (!evidenceNote) return;
     const out = await run("Identity verified.", () =>
-      dsrApi.verifyIdentity(kase.id, { manual: true, evidence_note: evidenceNote }),
+      dsrApi.verifyIdentity(kase.id, {
+        manual: true, method: v.method, reference: v.reference, evidence_note: v.note,
+      }),
     );
-    if (out?.satisfied) { setKase(out.case); startSearch(out.case.id); }
-    else if (out) setKase(out.case);
+    if (out) afterIdentityChecked(out);
   }
 
-  async function sendChallenge() {
+  async function generateCode() {
     if (!kase) return;
-    const out = await run("Challenge issued.", () => dsrApi.startChallenge(kase.id));
-    if (out) window.prompt(out.delivery_note, out.challenge);
-    await refresh(kase.id);
+    const out = await run("Code generated. No email was sent -- give it to the requester.", () =>
+      dsrApi.startChallenge(kase.id),
+    );
+    if (out) setIssued(out);
+    await refresh(kase.id).catch(() => null);
   }
 
-  async function submitChallenge() {
+  async function submitCode(code: string) {
     if (!kase) return;
-    const code = window.prompt("Enter the code the requester received:");
-    if (!code) return;
-    const out = await run("Code checked.", () =>
-      dsrApi.verifyIdentity(kase.id, { challenge: code }),
-    );
-    if (out?.satisfied) { setKase(out.case); startSearch(out.case.id); }
-    else if (out) { setKase(out.case); setError("That code did not match."); }
+    const out = await run("Code checked.", () => dsrApi.verifyIdentity(kase.id, { challenge: code }));
+    if (!out) return;
+    afterIdentityChecked(out);
+    if (out.satisfied) return;
+    setNote(null);
+    setError(wrongCodeMessage(out));
   }
 
   // ── 3. Search ──────────────────────────────────────────────────────────────
-  async function startSearch(id: string) {
-    setStep("searching");
-    const ok = await run("Searching connected systems…", () => dsrApi.startSearch(id));
-    if (!ok) { setStep("verify"); return; }
+  function watchSearch(id: string) {
     if (poll.current) window.clearInterval(poll.current);
     poll.current = window.setInterval(async () => {
       const c = await refresh(id).catch(() => null);
@@ -155,9 +256,40 @@ export function DsrEmailFirst() {
       if (c.status !== "searching") {
         if (poll.current) window.clearInterval(poll.current);
         poll.current = null;
+        setNote(null);
         setStep("data");
       }
     }, 2000);
+  }
+
+  async function startSearch(id: string) {
+    setSearchBlock(null); setError(null); setNote(null); setStep("searching");
+    setBusy(true);
+    try {
+      const out = await dsrApi.startSearch(id);
+      setKase(out.case);
+      if (out.triaged || !out.job_id) {
+        // Sent to a person instead of searched. Nothing was searched, and the data step says so.
+        await refresh(id).catch(() => null);
+        setStep("data");
+        return;
+      }
+      watchSearch(id);
+    } catch (err) {
+      // The backend refused (no source connected, identity, ...). That refusal IS the result:
+      // show it as it is on the data step, where it is not mistaken for "searched, found nothing".
+      setSearchBlock(err instanceof Error ? err.message : "The search could not be started.");
+      await refresh(id).catch(() => null);
+      setStep("data");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyType(type: string) {
+    if (!kase) return;
+    const out = await run("Request type set.", () => dsrApi.classify(kase.id, type));
+    if (out) { setKase(out); setSearchBlock(null); await refresh(kase.id); }
   }
 
   // ── 4/5. Data + per-record action ──────────────────────────────────────────
@@ -174,7 +306,7 @@ export function DsrEmailFirst() {
   // ── 6. Review → build the plan on the server ───────────────────────────────
   async function submitForApproval() {
     if (!kase) return;
-    const payload = evidence
+    const payload = shownEvidence
       .filter((e) => choices[e.id])
       .map((e) => ({
         evidence_id: e.id,
@@ -233,13 +365,17 @@ export function DsrEmailFirst() {
     setStep("email"); setEmail(""); setKase(null); setEvidence([]); setRuns([]);
     setPlan(null); setExecutions([]); setResponse(null); setChoices({});
     setCorrections({}); setRevealed({}); setShowAudit(false); setError(null); setNote(null);
+    setIssued(null); setShowManual(false); setDuplicates(null); setSearchBlock(null);
   }
 
-  const identityOk =
-    kase?.identity_status === "verified" || kase?.identity_status === "manually_verified";
+  const identityOk = identityVerified(kase);
+  const outcome = searchState(runs, evidence, kase?.status ?? "");
+  const shownEvidence = visibleEvidence(runs, evidence);
+  const drafting = kase ? canDraftResponse(kase, runs) : false;
+  const codeReady = issued !== null || kase?.identity_status === "in_progress";
 
   // Grouped source → table → record, which is how a reviewer reads it.
-  const grouped = evidence.reduce<Record<string, Record<string, DsrEvidence[]>>>((acc, e) => {
+  const grouped = shownEvidence.reduce<Record<string, Record<string, DsrEvidence[]>>>((acc, e) => {
     (acc[e.source] ??= {});
     (acc[e.source][e.table] ??= []).push(e);
     return acc;
@@ -250,25 +386,31 @@ export function DsrEmailFirst() {
       <ol className="stepper" aria-label="Progress">
         {(["email", "verify", "searching", "data", "review", "approval", "result"] as Step[])
           .map((s, i) => (
-            <li key={s} className={step === s ? "now" : ""}>
+            <li key={s} className={step === s ? "now" : ""} aria-current={step === s ? "step" : undefined}>
               <span className="n">{i + 1}</span>
               <span>{s === "searching" ? "search" : s}</span>
             </li>
           ))}
       </ol>
 
-      {error && <div className="banner banner-error">{error}</div>}
-      {note && !error && <div className="banner banner-ok">{note}</div>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {note && !error && <Notice tone="ok">{note}</Notice>}
 
       {kase && (
         <div className="case-strip">
           <span className="mono"><strong>{kase.reference}</strong></span>
-          <span className={`pill pill-${kase.is_terminal ? "ok" : "muted"}`}>{kase.status}</span>
+          <span className={`pill pill-${statusTone(kase.status, kase.error_code)}`} title={kase.status}>
+            {caseStatusLabel(kase)}
+          </span>
           <span className={`pill pill-${identityOk ? "ok" : "warn"}`}>
-            identity: {kase.identity_status ?? "pending"}
+            Identity: {identityLabel(kase.identity_status)}
           </span>
           {kase.error_code && <span className="pill pill-warn">{kase.error_code}</span>}
+          {onOpenCase && (
+            <button className="linkish" onClick={() => onOpenCase(kase.id)}>Open case details</button>
+          )}
           <button className="linkish" onClick={startOver}>Start a new request</button>
+          <CaseId id={kase.id} />
         </div>
       )}
 
@@ -280,15 +422,25 @@ export function DsrEmailFirst() {
             Enter the email address the person gave you. Nothing is searched until their
             identity has been verified.
           </p>
-          <form className="email-form" onSubmit={findMyData}>
+          <SourceWarning status={sources} onOpenConfig={onOpenConfig} />
+          <form className="email-form" onSubmit={(e) => void findMyData(e)}>
             <label htmlFor="dsr-email">Email address</label>
             <input
               id="dsr-email" type="email" value={email} autoComplete="off"
               placeholder="person@example.com"
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => { setEmail(e.target.value); setDuplicates(null); }}
             />
             <button type="submit" disabled={busy || !email.trim()}>Find my data</button>
           </form>
+          {duplicates && (
+            <DuplicateNotice
+              existing={duplicates}
+              busy={busy}
+              onOpen={(id) => (onOpenCase ? onOpenCase(id) : void refresh(id).then((c) => setStep(stepForCase(c))))}
+              onProceed={(reason) => void findMyData({ preventDefault() {} } as React.FormEvent, reason)}
+              onCancel={() => setDuplicates(null)}
+            />
+          )}
         </section>
       )}
 
@@ -299,15 +451,27 @@ export function DsrEmailFirst() {
           <p className="muted">
             This is a security boundary, not a formality. No record is read until it passes.
           </p>
+          {needsTypeSelection(kase) && <TypeSelector busy={busy} onApply={(t) => void applyType(t)} />}
           <div className="dsr-actions">
-            <button disabled={busy} onClick={sendChallenge}>Email a code</button>
-            <button disabled={busy} onClick={submitChallenge}>Enter their code</button>
-            <button disabled={busy} onClick={verifyManually}>Verify manually</button>
+            <button disabled={busy} onClick={() => void generateCode()}>Generate code</button>
+            <button disabled={busy} aria-expanded={showManual} onClick={() => setShowManual((v) => !v)}>
+              Verify manually
+            </button>
           </div>
           <p className="small muted">
-            No outbound email provider is configured, so a code is shown to you to deliver.
-            Manual verification records who checked what.
+            No email provider is configured, so no email is sent: generate a code, then give it to the
+            requester yourself. Manual verification records who checked what.
           </p>
+          {issued && (
+            <CodePanel
+              challenge={issued.challenge} expiresAt={issued.expires_at} emailed={issued.emailed}
+              onDismiss={() => setIssued(null)}
+            />
+          )}
+          <CodeEntry enabled={codeReady} busy={busy} onSubmit={(c) => void submitCode(c)} />
+          {showManual && (
+            <ManualVerifyForm busy={busy} onSubmit={(v) => void verifyManually(v)} onCancel={() => setShowManual(false)} />
+          )}
         </section>
       )}
 
@@ -327,7 +491,7 @@ export function DsrEmailFirst() {
       {step === "data" && (
         <>
           <section className="card">
-            <h2>Data found</h2>
+            <h2>Search results</h2>
             {runs.map((r) => (
               <p key={r.id} className="small muted">
                 {r.source}: <strong>{r.status}</strong> · {r.matches} record(s) ·
@@ -335,25 +499,76 @@ export function DsrEmailFirst() {
                 {r.error_code && <> · <span className="pill pill-warn">{r.error_code}</span> {r.error_detail}</>}
               </p>
             ))}
-            {evidence.length === 0 && kase?.status === "failed" && (
+
+            {outcome === "not_run" && kase && (
               <>
-                <p className="banner banner-warn">
+                <Notice tone="warn">
+                  <strong>No search has been run for this case.</strong>{" "}
+                  {searchBlock ?? kase.status_message}
+                  {searchBlock && kase.status_message ? <> {kase.status_message}</> : null}
+                  {kase.next_step && <> <strong>Next step:</strong> {kase.next_step}</>}
+                </Notice>
+                {needsTypeSelection(kase) && <TypeSelector busy={busy} onApply={(t) => void applyType(t)} />}
+                <div className="dsr-actions">
+                  <button
+                    disabled={busy || !identityOk || !kase.allowed_transitions.includes("searching")}
+                    onClick={() => void startSearch(kase.id)}
+                  >
+                    Start search
+                  </button>
+                </div>
+                <WhyDisabled
+                  reasons={[
+                    !identityOk ? "Start search is off until the requester's identity is verified." : "",
+                    identityOk && !kase.allowed_transitions.includes("searching")
+                      ? "Start search is off while the case is in this state." : "",
+                  ].filter(Boolean)}
+                />
+              </>
+            )}
+
+            {outcome === "running" && (
+              <Notice tone="info">A search is in progress. Results appear here when it finishes.</Notice>
+            )}
+
+            {outcome === "failed" && kase && (
+              <>
+                <Notice tone="warn">
                   The search did not complete -- it failed with{" "}
                   {kase.error_code ?? "an unrecorded error"}
                   {kase.error_detail ? `: ${kase.error_detail}` : ""}. This is not the same as
                   finding no data; resolve the error above and start the search again.
-                </p>
+                </Notice>
                 <div className="dsr-actions">
-                  <button disabled={busy} onClick={() => kase && startSearch(kase.id)}>
-                    Retry search
-                  </button>
+                  <button disabled={busy} onClick={() => void startSearch(kase.id)}>Retry search</button>
                 </div>
               </>
             )}
-            {evidence.length === 0 && kase?.status !== "failed" && (
-              <p className="muted">
-                No record matched that email in the systems we searched. Nothing will be changed.
-              </p>
+
+            {outcome === "partial" && kase && (
+              <>
+                <Notice tone="warn">
+                  Some sources could not be searched, so these results are incomplete
+                  {" "}({runs.filter((r) => r.status === "failed").map((r) => r.source).join(", ")}).
+                  {" "}This is not the same as finding no data elsewhere.
+                </Notice>
+                <div className="dsr-actions">
+                  <button disabled={busy} onClick={() => void startSearch(kase.id)}>Retry search</button>
+                </div>
+              </>
+            )}
+
+            {outcome === "no_match" && (
+              <>
+                <p className="muted">
+                  No matching records found. The search completed in{" "}
+                  {[...new Set(runs.map((r) => r.source))].join(", ")} and found no record for this email.
+                  Nothing will be changed.
+                </p>
+                <div className="dsr-actions">
+                  <button disabled={busy} onClick={() => setStep("result")}>Continue to the response</button>
+                </div>
+              </>
             )}
           </section>
 
@@ -434,7 +649,7 @@ export function DsrEmailFirst() {
             </section>
           ))}
 
-          {evidence.length > 0 && (
+          {shownEvidence.length > 0 && (
             <section className="card summary-bar">
               <div className="tallies">
                 {SELECTIONS.map((s) => (
@@ -444,7 +659,7 @@ export function DsrEmailFirst() {
                 ))}
               </div>
               <div className="grow" />
-              <span className="small muted">{decided} of {evidence.length} decided</span>
+              <span className="small muted">{decided} of {shownEvidence.length} decided</span>
               <button disabled={busy || decided === 0} onClick={() => setStep("review")}>
                 Review actions
               </button>
@@ -461,7 +676,7 @@ export function DsrEmailFirst() {
           <table className="data">
             <thead><tr><th>Where</th><th>Record</th><th>Action</th></tr></thead>
             <tbody>
-              {evidence.filter((e) => choices[e.id]).map((e) => (
+              {shownEvidence.filter((e) => choices[e.id]).map((e) => (
                 <tr key={e.id}>
                   <td>{e.source}/{e.table}</td>
                   <td className="mono small">{JSON.stringify(e.record_reference)}</td>
@@ -526,13 +741,18 @@ export function DsrEmailFirst() {
           <div className="dsr-actions">
             <button
               disabled={busy || !kase?.allowed_transitions.includes("executing")}
-              title={!kase?.allowed_transitions.includes("executing") ? "Every action must be decided first" : undefined}
+              aria-describedby={!kase?.allowed_transitions.includes("executing") ? "dsr-exec-why" : undefined}
               onClick={execute}
             >
               Execute approved actions
             </button>
             <button disabled={busy} onClick={() => kase && refresh(kase.id)}>Refresh</button>
           </div>
+          {!kase?.allowed_transitions.includes("executing") && (
+            <p id="dsr-exec-why" className="small muted">
+              Execution stays off until every action has been approved or rejected.
+            </p>
+          )}
         </section>
       )}
 
@@ -571,9 +791,21 @@ export function DsrEmailFirst() {
               ? <pre className="response-body">{response.body_text}</pre>
               : <p className="muted">No response drafted yet.</p>}
             <div className="dsr-actions">
-              <button disabled={busy} onClick={generateResponse}>Generate response</button>
+              <button
+                disabled={busy || !drafting}
+                aria-describedby={!drafting ? "dsr-draft-why" : undefined}
+                onClick={generateResponse}
+              >
+                Generate response
+              </button>
               <button disabled={busy} onClick={loadAudit}>View audit</button>
             </div>
+            {!drafting && (
+              <p id="dsr-draft-why" className="small muted">
+                A response can only be drafted once the requester is verified and a search has finished —
+                until then there is nothing true to say about what was found.
+              </p>
+            )}
             {showAudit && (
               <ol className="timeline">
                 {audit.map((a) => (

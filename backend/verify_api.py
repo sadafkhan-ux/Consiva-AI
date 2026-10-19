@@ -145,8 +145,7 @@ def main() -> int:
         note("This server is running, but does not have these endpoints. Deploy the")
         note("current build, then re-run. On the GB10:")
         note("  cd /opt/consiva && git pull")
-        note("  docker compose -f docker-compose.prod.yml up -d --build")
-        note("  docker compose -f docker-compose.prod.yml run --rm backend python migrate.py")
+        note("  bash scripts/deploy.sh      # builds, migrates automatically, starts, verifies")
         return _summary()
 
     # ── Authentication ──────────────────────────────────────────────────────────

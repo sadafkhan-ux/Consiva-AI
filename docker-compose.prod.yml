@@ -1,21 +1,39 @@
-# Consiva Consent Agent — production compose.
+# Consiva Consent Agent -- production compose.
 #
-#   docker compose -f docker-compose.prod.yml build
-#   docker compose -f docker-compose.prod.yml up -d
+# DEPLOY (this one command builds, migrates, starts, and waits until everything is healthy):
 #
-# Services:
-#   frontend — nginx serving the built SPA, and the ONLY published entrypoint
-#   backend  — FastAPI API
-#   worker   — app.jobs.worker, which drains the agent_jobs queue
-#   db       — local Postgres + pgvector (see below)
+#   docker compose -f docker-compose.prod.yml up -d --build --wait
+#
+# or `scripts/deploy.sh`, which wraps it with pre-flight checks and prints what failed.
+# There is NO separate migration command: the `migrate` service below runs first, on every
+# deployment, and nothing that serves traffic starts until it has succeeded.
+#
+# Services, in start order:
+#   db       -- local Postgres + pgvector (see below)
+#   migrate  -- ONE-SHOT. Runs `python migrate.py` from the same image as the API, then exits.
+#               Exit 0 = schema is current (or already was). Non-zero = a migration failed and
+#               was rolled back; compose then refuses to start backend/worker/frontend, and
+#               `up` returns non-zero. See docs/DEPLOYMENT.md for how to read and recover from it.
+#   backend  -- FastAPI API.            Starts only after `migrate` completed successfully.
+#   worker   -- app.jobs.worker.        Starts only after `migrate` AND a healthy backend.
+#   frontend -- nginx serving the SPA, and the ONLY published entrypoint. After a healthy backend.
+#
+# Requires Docker Compose >= 2.20 (`depends_on: condition: service_completed_successfully`).
+# scripts/deploy.sh checks this and refuses to continue on an older one.
 #
 # `worker` is not optional: scans and analyses are enqueued by the API and executed by
 # that separate polling process. Without it every scan sits at status "pending"
 # forever (the exact "Timed out waiting for the backend" symptom seen in development).
 #
-# There is deliberately NO scheduler service — the only other __main__ entrypoints in
-# the project (app.rag.ingest, app.lookup.loader, migrate.py) are one-shot CLI tools,
-# not daemons.
+# There is deliberately NO scheduler service -- the periodic sweeps (DSR/incident SLA,
+# regulatory due-sources, monitoring, stale-job reaping) run inside `worker`. The other
+# __main__ entrypoints in the project (app.rag.ingest, app.lookup.loader, create_user.py)
+# are one-shot CLI tools, not daemons.
+#
+# WHY `migrate` IS A SEPARATE SERVICE and not a step in backend/worker's command: the API and
+# the worker are the same image started together, and any container that ran migrations on
+# its own startup would race the other (and every restart would re-run them). One service,
+# one lock (migrate.py takes a Postgres advisory lock), one place a failure is reported.
 #
 # `db` (2026-09-09): moved off the external Supabase project onto this local Postgres
 # container -- the shared Supabase session-mode pooler caps the whole project at 15
@@ -26,25 +44,24 @@
 # out of the box, on both amd64 and arm64 (GB10 is aarch64) -- no separate extension
 # build/install step, unlike a plain postgres image.
 #
+# A FRESH `db` volume needs nothing by hand any more. The `auth.jwt()` stub this header used to
+# ask for is obsolete: migration 0001 no longer references the Supabase `auth` schema (CI builds
+# the whole schema from an empty vanilla Postgres), so `migrate` creates everything itself.
+#
 # DATABASE_URL is forced via `environment:` below (overriding whatever is in
 # backend/.env, which still carries the old Supabase URL as a commented fallback) so
-# no per-host .env edit is needed -- just this file plus POSTGRES_PASSWORD.
+# no per-host .env edit is needed -- just this file plus POSTGRES_PASSWORD. The SAME value is
+# used by migrate, backend and worker (one anchor, below), so a migration can never run against a
+# different database than the one the application then reads.
 #
-# First-time setup on a fresh `db` volume (schema does not exist yet):
-#   docker compose -f docker-compose.prod.yml up -d db
-#   docker compose -f docker-compose.prod.yml exec db psql -U consiva -d consiva -c \
-#     "create schema if not exists auth; create or replace function auth.jwt() returns jsonb language sql stable as \$\$ select null::jsonb \$\$;"
-#     # ^ stub for Supabase's auth.jwt(), which current_org_id() references in RLS
-#     #   policies (migrations/0001_init.sql) -- Postgres validates the function body,
-#     #   including this schema-qualified call, at CREATE FUNCTION time. The app itself
-#     #   never calls it (connects with a superuser/service-role connection that
-#     #   bypasses RLS entirely -- see migrations/0006's own note), so a null-returning
-#     #   stub is sufficient; this mirrors exactly what the Windows local-dev setup
-#     #   needed for the same reason.
-#   docker compose -f docker-compose.prod.yml run --rm backend python migrate.py
-#   docker compose -f docker-compose.prod.yml up -d
+# Existing database whose migration history is empty (built by hand, or from a dump)? `migrate`
+# REFUSES to run rather than guess -- see docs/DEPLOYMENT.md, "Existing databases".
 
 name: consiva
+
+# The one database URL (the OWNER role) that migrate, backend and worker all use. Defined once so
+# the three cannot drift. Never put a literal password here: it comes from /opt/consiva/.env.
+x-database-url: &database_url postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
 
 services:
   db:
@@ -66,6 +83,37 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # One-shot schema migration. Same image as backend/worker (no second image to keep in sync), run
+  # with no command override so it is exactly `python migrate.py`. It receives ONLY the database
+  # URL and its own tuning knobs -- not backend/.env -- because it needs nothing else and should
+  # not carry the application's secrets.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: consiva-backend:latest
+    # "no": a one-shot job must never be restarted by the engine -- a failed migration is a
+    # deployment failure to be read and fixed, not something to retry in a loop.
+    restart: "no"
+    command: ["python", "migrate.py"]
+    environment:
+      DATABASE_URL: *database_url
+      # How long to keep retrying if Postgres is up but not yet accepting connections.
+      MIGRATE_WAIT_FOR_DB_SECONDS: "${MIGRATE_WAIT_FOR_DB_SECONDS:-120}"
+      # How long to wait for a concurrent migration run (another deployment) to finish.
+      MIGRATE_LOCK_TIMEOUT_SECONDS: "${MIGRATE_LOCK_TIMEOUT_SECONDS:-300}"
+      # Per-migration Postgres lock_timeout: fail clearly rather than hang behind a long query.
+      MIGRATE_DDL_LOCK_TIMEOUT_SECONDS: "${MIGRATE_DDL_LOCK_TIMEOUT_SECONDS:-60}"
+    networks:
+      - consiva
+    depends_on:
+      db:
+        condition: service_healthy
+    # The image defines an HTTP HEALTHCHECK for the API; a job that runs and exits has no server to
+    # probe, and the container is not "unhealthy" for being finished.
+    healthcheck:
+      disable: true
 
   backend:
     build:
@@ -120,7 +168,7 @@ services:
       # then swap the two lines below and drop ALLOW_PRIVILEGED_DB_ROLE:
       #   DATABASE_URL: postgresql+asyncpg://consiva_app:${CONSIVA_APP_PASSWORD}@db:5432/consiva
       #   WORKER_DATABASE_URL stays on the owner -- see the worker service.
-      DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
+      DATABASE_URL: *database_url
       # Deliberate, temporary, and loud: without it this stack will not boot, because
       # the role above cannot enforce RLS. Remove it the moment the cutover above is
       # done. Every boot logs at ERROR while this is set.
@@ -170,6 +218,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # The API must never serve traffic against a schema that is still changing, or one a failed
+      # migration left behind. `service_completed_successfully` means exit code 0 -- anything
+      # else (a failed migration, an unreachable database, a refused unsafe state) keeps this
+      # service from being created at all.
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status==200 else sys.exit(1)"]
       interval: 30s
@@ -199,7 +253,7 @@ services:
       # scope to. On the restricted role they would correctly see nothing and stop
       # sweeping silently -- the worst way for a compliance sweep to stop. After the
       # cutover, set WORKER_DATABASE_URL to this same value; worker.py prefers it.
-      DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/consiva/.env}@db:5432/consiva
+      DATABASE_URL: *database_url
       # How many queued jobs this worker runs at once. Before this existed the worker
       # took one job per poll and ran it inline, so a second scan waited out the
       # first: two scans started 48s apart were measured at 73s of pure queue time
@@ -231,6 +285,11 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      # Stated explicitly even though backend already implies it: the worker is the process that
+      # runs the cross-tenant sweeps, and it must not start on a schema that failed to migrate
+      # regardless of how backend's own dependencies are ever changed.
+      migrate:
+        condition: service_completed_successfully
     # The worker launches Chromium for every scan. Chromium's sandbox needs more than
     # Docker's default 64MB /dev/shm or it crashes on content-heavy pages -- and with
     # WORKER_CONCURRENCY scans now overlapping, several Chromiums share this one

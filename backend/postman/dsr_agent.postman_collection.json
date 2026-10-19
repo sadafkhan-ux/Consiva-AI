@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "Consiva - DSR Fulfillment (Agent 3)",
-    "description": "API contract for the DSR Fulfillment agent, covering all 25 endpoints defined in backend/app/api/v1/routes/dsr.py (requests CRUD, classify, identity challenge/verify, search, results, evidence push/purge, execution-report, plan, action decision, execute, executions, response, complete, config/sources, config/retention x3, audit). Built ENTIRELY from static code reading -- the route handlers themselves, app/agents/dsr/services/*.py, app/agents/dsr/schemas/{case,evidence_push}.py, app/agents/dsr/errors.py, app/core/integration_auth.py, and app/main.py's exception handlers. NOT EXECUTED LIVE against any server: the only running stack on this box is production (docker-compose.prod.yml), which is strictly off-limits, so no request in this collection has been fired. To actually run it: point baseUrl at a non-production test deployment, obtain a real bearer token (a signed-in person's JWT, or a service key minted with dsr:operate / dsr:config scope -- app/core/integration_auth.py), and replace every placeholder id variable with a real one from that environment, in the order the folders run (most later folders depend on state created by earlier ones in the SAME case).\n\nAuth: EITHER a signed-in person's bearer JWT OR an org-scoped service key (csv_...) holding `dsr:operate` (cases, config reads) or `dsr:config` (config writes) -- app/core/integration_auth.py's _authenticate_with_scope. The org comes from the verified credential in both cases; nothing accepts an org_id from the caller.\n\nError envelope: DSR is NOT under the `/api/v1/consent-agent` prefix, so it gets the plain `{\"detail\": ...}` envelope (app/main.py consiva_error_handler / validation_error_handler, default branch), same as Purpose Classifier -- for a ConsivaError subclass, `detail` is a string; for a FastAPI RequestValidationError, `detail` is the default list of {loc, msg, type} objects.\n\nNon-disclosure: every route keyed by {request_id} resolves it through case_service.get_case_or_raise, which treats a case in another org exactly like one that does not exist -> 404 for both, never 403/403-like disclosure (\u00a737). The same pattern applies to {rule_id} and {action_id}.\n\nFindings surfaced while building this collection (full detail in the agent's task report): (1) POST /requests/{id}/response creates a new row every call but returns 200, while POST /requests/{id}/evidence (also row-creating) returns 201 -- an inconsistency within this same file (folder 17). (2) GET /requests?limit=N silently clamps >200 rather than 422ing, unlike every other limit param in this codebase (folder 2). (3) _require_admin's role check returns 409 (CaseNotReadyError) for what is really an authorization failure, where 403 is used for the equivalent case everywhere else in this same file (folders 21/23/24). (4) Two AUDIT_* constants in schemas/case.py (AUDIT_IDENTITY_FAILED, AUDIT_RESULTS_FOUND) are defined but never actually recorded anywhere -- a failed identity-verification attempt leaves no audit trail at all (folder 6).",
+    "description": "API contract for the DSR Fulfillment agent, covering all 25 endpoints defined in backend/app/api/v1/routes/dsr.py (requests CRUD, classify, identity challenge/verify, search, results, evidence push/purge, execution-report, plan, action decision, execute, executions, response, complete, config/sources, config/retention x3, audit). Built ENTIRELY from static code reading -- the route handlers themselves, app/agents/dsr/services/*.py, app/agents/dsr/schemas/{case,evidence_push}.py, app/agents/dsr/errors.py, app/core/integration_auth.py, and app/main.py's exception handlers. NOT EXECUTED LIVE against any server: the only running stack on this box is production (docker-compose.prod.yml), which is strictly off-limits, so no request in this collection has been fired. To actually run it: point baseUrl at a non-production test deployment, obtain a real bearer token (a signed-in user's JWT from POST /api/v1/auth/login -- there is no separate DSR key), and replace every placeholder id variable with a real one from that environment, in the order the folders run (most later folders depend on state created by earlier ones in the SAME case).\n\nAuth: the signed-in user's bearer JWT (app/core/security.get_current_user); the configuration writes additionally require the administrator role. There is no DSR key. The org comes from the verified token; nothing accepts an org_id from the caller.\n\nError envelope: DSR is NOT under the `/api/v1/consent-agent` prefix, so it gets the plain `{\"detail\": ...}` envelope (app/main.py consiva_error_handler / validation_error_handler, default branch), same as Purpose Classifier -- for a ConsivaError subclass, `detail` is a string; for a FastAPI RequestValidationError, `detail` is the default list of {loc, msg, type} objects.\n\nNon-disclosure: every route keyed by {request_id} resolves it through case_service.get_case_or_raise, which treats a case in another org exactly like one that does not exist -> 404 for both, never 403/403-like disclosure (\u00a737). The same pattern applies to {rule_id} and {action_id}.\n\nFindings surfaced while building this collection (full detail in the agent's task report): (1) POST /requests/{id}/response creates a new row every call but returns 200, while POST /requests/{id}/evidence (also row-creating) returns 201 -- an inconsistency within this same file (folder 17). (2) GET /requests?limit=N silently clamps >200 rather than 422ing, unlike every other limit param in this codebase (folder 2). (3) _require_admin's role check returns 409 (CaseNotReadyError) for what is really an authorization failure, where 403 is used for the equivalent case everywhere else in this same file (folders 21/23/24). (4) Two AUDIT_* constants in schemas/case.py (AUDIT_IDENTITY_FAILED, AUDIT_RESULTS_FOUND) are defined but never actually recorded anywhere -- a failed identity-verification attempt leaves no audit trail at all (folder 6).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -236,7 +236,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/requests",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{\"raw_request\": \"x\", \"requester_email\": \"a@b.com\"}"
@@ -340,7 +340,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -464,7 +464,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -626,7 +626,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/classify",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{}"
@@ -731,7 +731,7 @@
             "method": "POST",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/challenge",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -768,7 +768,7 @@
             "description": "MUTATES STATE: inserts a dsr_identity_verifications row (status=manually_verified) and -- because satisfied=true -- transitions the case to IDENTITY_VERIFIED with a dsr.identity_verified audit entry (routes/dsr.py:314-347).",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"manual\": true,\n  \"evidence_note\": \"Checked a government ID over a video call.\"\n}"
+              "raw": "{\n  \"manual\": true,\n  \"method\": \"id_document\",\n  \"reference\": \"PP-4471\",\n  \"evidence_note\": \"Checked a government ID over a video call.\"\n}"
             }
           },
           "event": [
@@ -883,7 +883,7 @@
           ]
         },
         {
-          "name": "Validation error - manual=true with no evidence_note",
+          "name": "Validation error - manual=true with no method or reference",
           "request": {
             "method": "POST",
             "header": [
@@ -897,7 +897,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/verify",
-            "description": "SAFE / no state changed. identity_service.verify_manually requires a substantive evidence_note (\u00a713: 'verification is never claimed without evidence') -> CaseNotReadyError (409).",
+            "description": "SAFE / no state changed. A manual verification must say how (method), against what (reference) and what was checked (evidence_note, at least 10 characters) -- all three are recorded separately on the audit trail. A body without them is refused by request validation (422) before the case is read.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"manual\": true\n}"
@@ -908,8 +908,8 @@
               "listen": "test",
               "script": {
                 "exec": [
-                  "pm.test('status is 409', () => pm.response.to.have.status(409));",
-                  "pm.test('detail cites the evidence-note requirement', () => pm.expect(pm.response.json().detail).to.match(/evidence/i));"
+                  "pm.test('status is 422', () => pm.response.to.have.status(422));",
+                  "pm.test('detail cites the method requirement', () => pm.expect(JSON.stringify(pm.response.json().detail)).to.match(/method/i));"
                 ]
               }
             }
@@ -959,7 +959,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/identity/verify",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{\"manual\": true, \"evidence_note\": \"x\"}"
@@ -1088,7 +1088,7 @@
             "method": "POST",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/search",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -1163,7 +1163,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/results",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -1355,7 +1355,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"source_name\": \"crm_export\",\n  \"subject\": {\n    \"email\": \"person@example.com\"\n  },\n  \"tables\": [\n    {\n      \"table_name\": \"customers\",\n      \"match_count\": 1,\n      \"columns\": [\n        \"id\",\n        \"email\",\n        \"full_name\"\n      ],\n      \"identifier_columns\": {\n        \"email\": \"email\"\n      },\n      \"record_key_columns\": [\n        \"id\"\n      ],\n      \"rows\": [\n        {\n          \"id\": \"1\",\n          \"email\": \"person@example.com\",\n          \"full_name\": \"Test Person\"\n        }\n      ],\n      \"truncated\": false\n    }\n  ],\n  \"truncated\": false,\n  \"client_reference\": \"push-demo-001\"\n}"
@@ -1519,7 +1519,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execution-report",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{\"items\": [{\"action_id\": \"{{actionId}}\", \"status\": \"done\"}]}"
@@ -1623,7 +1623,7 @@
             "method": "POST",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/evidence/purge",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -1722,7 +1722,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -1915,7 +1915,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/plan",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{\"selections\": []}"
@@ -2111,7 +2111,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/actions/{{actionId}}/decision",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{\"decision\": \"approved\"}"
@@ -2240,7 +2240,7 @@
             "method": "POST",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/execute",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -2315,7 +2315,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/executions",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -2390,7 +2390,7 @@
             "method": "POST",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/response",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -2489,7 +2489,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/response",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -2588,7 +2588,7 @@
             "method": "POST",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/complete",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -2618,7 +2618,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/config/sources",
-            "description": "READ-ONLY, safe to re-run. Open to any `dsr:operate` caller, not admin-gated (only the PUT below is) -- never returns a credential, only `write_credential_configured: bool`."
+            "description": "READ-ONLY, safe to re-run. Open to any signed-in user of the organisation, not admin-gated (only the PUT below is) -- never returns a credential, only `write_credential_configured: bool`."
           },
           "event": [
             {
@@ -2638,7 +2638,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/config/sources",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -2672,7 +2672,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/config/sources",
-            "description": "MUTATES STATE: upserts the dsr_source_authorizations row for this data source, validated through connectors/authorization.resolve BEFORE being stored (so a malformed config fails here, not at search time), and writes a dsr.source_authorization_changed audit entry whose `after` payload includes only the write_credential_ref NAME, never a secret. Requires `requires_scope=dsr:config` AND (for a person token) role=admin.",
+            "description": "MUTATES STATE: upserts the dsr_source_authorizations row for this data source, validated through connectors/authorization.resolve BEFORE being stored (so a malformed config fails here, not at search time), and writes a dsr.source_authorization_changed audit entry whose `after` payload includes only the write_credential_ref NAME, never a secret. Requires the administrator role.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"data_source_id\": \"{{dataSourceId}}\",\n  \"searchable_tables\": [\n    \"customers\"\n  ],\n  \"identity_tables\": [\n    \"customers\"\n  ],\n  \"identifier_columns\": {\n    \"customers\": {\n      \"email\": \"email\"\n    }\n  },\n  \"returnable_columns\": {\n    \"customers\": [\n      \"id\",\n      \"email\",\n      \"full_name\"\n    ]\n  },\n  \"record_key_columns\": {\n    \"customers\": [\n      \"id\"\n    ]\n  },\n  \"erasable_columns\": {\n    \"customers\": [\n      \"full_name\"\n    ]\n  },\n  \"allow_execution\": false,\n  \"write_credential_ref\": null\n}"
@@ -2796,7 +2796,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/config/sources",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{\"data_source_id\": \"{{dataSourceId}}\", \"searchable_tables\": [], \"identity_tables\": [], \"identifier_columns\": {}, \"returnable_columns\": {}, \"record_key_columns\": {}, \"erasable_columns\": {}, \"allow_execution\": false}"
@@ -2830,7 +2830,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/config/retention",
-            "description": "READ-ONLY, safe to re-run. Open to any dsr:operate caller."
+            "description": "READ-ONLY, safe to re-run. Open to any signed-in user of the organisation."
           },
           "event": [
             {
@@ -2850,7 +2850,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/config/retention",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -3040,7 +3040,7 @@
               }
             ],
             "url": "{{baseUrl}}/api/v1/dsr/config/retention",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it).",
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses).",
             "body": {
               "mode": "raw",
               "raw": "{\"table_name\": \"invoices\", \"date_column\": \"issued_at\", \"retention_days\": 30, \"authority\": \"test\"}"
@@ -3142,7 +3142,7 @@
             "method": "DELETE",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/config/retention/{{retentionRuleId}}",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {
@@ -3224,7 +3224,7 @@
             "method": "GET",
             "header": [],
             "url": "{{baseUrl}}/api/v1/dsr/requests/{{requestId}}/audit",
-            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> integration_auth._authenticate_with_scope raises HTTPException(401, 'Missing bearer token') before the handler runs (same path every DSR route takes -- get_dsr_operator/get_dsr_config_writer both call it)."
+            "description": "SAFE / no state changed. credentials is None on the HTTPBearer(auto_error=False) dependency -> security.get_current_user raises HTTPException(401, 'Missing bearer token') before the handler runs (the same sign-in check every DSR route uses)."
           },
           "event": [
             {

@@ -13,9 +13,10 @@ cannot be made to reliably produce a robots-disallowed path or a 40-page link gr
 on demand. Live verification of the real end-to-end numbers is a separate exercise.
 """
 
+import asyncio
 import io
-import re
 import tokenize
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
@@ -113,10 +114,18 @@ async def _crawl(context, settings=None, disallowed=None, sitemap=None):
 
 # ── 1-4. the limit is configuration, is honoured, and 25 is not it ───────────────
 
-def test_the_shipped_default_page_limit_is_no_longer_25():
-    """The regression this whole change exists for. 25 was a config value, not a
-    technical bound, but it was the effective ceiling on every deployment."""
-    assert get_settings().scanner_max_pages > 25
+def test_every_page_limit_setting_agrees_on_five():
+    """There used to be two that disagreed: SCANNER_MAX_PAGES (25) and CONSENT_WEB_MAX_PAGES (5). A scan
+    is limited to 5 pages per scan, and nothing may say otherwise."""
+    from pathlib import Path
+
+    from app.config import Settings
+
+    assert Settings.model_fields["scanner_max_pages"].default == 5
+    assert Settings.model_fields["consent_web_max_pages"].default == 5
+    example = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
+    assert "SCANNER_MAX_PAGES=5" in example and "CONSENT_WEB_MAX_PAGES=5" in example
+    assert "SCANNER_MAX_PAGES=25" not in example
 
 
 def test_no_hidden_second_page_cap_exists_in_the_fetch_path():
@@ -157,19 +166,103 @@ async def test_the_configured_page_limit_is_what_actually_bounds_the_crawl(limit
     assert diagnostics["page_limit"] == limit
 
 
-async def test_more_than_twenty_five_pages_are_actually_crawled():
-    """The end the whole change is for: a site with enough pages gets more than 25 of
-    them fetched, with real PageRecords to show for it."""
-    pages = {f"{ROOT}/": _links(*[f"/p{i}" for i in range(80)])}
-    for i in range(80):
-        pages[f"{ROOT}/p{i}"] = _links()
-    context = _FakeContext(pages)
+def _site(n_pages: int) -> dict:
+    """A site whose home page links to n_pages - 1 others: n_pages pages in all."""
+    others = [f"/p{i}" for i in range(1, n_pages)]
+    pages = {f"{ROOT}/": _links(*others)}
+    for path in others:
+        pages[f"{ROOT}{path}"] = _links()
+    return pages
 
-    records, *_rest, diagnostics = await _crawl(context)
 
-    assert diagnostics["pages_scanned"] > 25
-    scanned = [p for p in records if p.discovered_via in ("seed", "link", "sitemap")]
-    assert len(scanned) == diagnostics["pages_scanned"] > 25
+async def _crawl_web_profile(n_pages: int):
+    """Through the profile the real scans run under, not a hand-set limit."""
+    from app.scanner.scan_profiles import WEB, resolve_profile
+
+    settings = get_settings()
+    return await _crawl_full_site(
+        _FakeContext(_site(n_pages)), ROOT, settings, disallowed_prefixes=set(),
+        profile=resolve_profile(WEB, settings), deadline_monotonic=None,
+    )
+
+
+async def test_a_one_page_site_scans_its_one_page():
+    records, *_rest, diagnostics = await _crawl_web_profile(1)
+
+    assert diagnostics["pages_scanned"] == 1
+    assert diagnostics["stop_reason"] == "queue_exhausted", "nothing was cut off"
+    assert diagnostics["pages_not_attempted_budget_exhausted"] == 0
+
+
+async def test_a_five_page_site_scans_all_five_pages():
+    records, *_rest, diagnostics = await _crawl_web_profile(5)
+
+    assert diagnostics["pages_scanned"] == 5
+    assert diagnostics["page_limit"] == 5
+    assert diagnostics["stop_reason"] == "queue_exhausted", "exactly at the limit is not 'cut off'"
+    assert len([p for p in records if p.discovered_via in ("seed", "link", "sitemap")]) == 5
+
+
+async def test_a_site_with_more_than_five_pages_scans_only_the_first_five_and_says_so():
+    records, *_rest, diagnostics = await _crawl_web_profile(9)
+
+    assert diagnostics["pages_scanned"] == 5
+    assert diagnostics["page_limit"] == 5
+    assert diagnostics["stop_reason"] == "page_limit"
+    assert diagnostics["pages_discovered"] == 9
+    assert diagnostics["pages_not_attempted_budget_exhausted"] == 4, "the pages left unscanned are counted"
+    assert len([p for p in records if p.discovered_via in ("seed", "link", "sitemap")]) == 5
+
+
+async def test_the_page_limit_is_not_a_time_limit_a_slow_crawl_still_reaches_all_five_pages():
+    """The crawl has no deadline of its own now: slow pages do not shrink it below the page limit."""
+    from app.scanner.scan_profiles import WEB, resolve_profile
+
+    class _SlowContext(_FakeContext):
+        async def new_page(self):
+            page = await super().new_page()
+            original = page.goto
+
+            async def slow_goto(*a, **kw):
+                await asyncio.sleep(0.02)
+                return await original(*a, **kw)
+
+            page.goto = slow_goto
+            return page
+
+    settings = get_settings()
+    _records, *_rest, diagnostics = await _crawl_full_site(
+        _SlowContext(_site(5)), ROOT, settings, disallowed_prefixes=set(),
+        profile=resolve_profile(WEB, settings), deadline_monotonic=None,
+    )
+
+    assert diagnostics["pages_scanned"] == 5 and diagnostics["stop_reason"] == "queue_exhausted"
+
+
+# ── an iframe that never answers must not consume the whole scan ─────────────────
+
+async def test_an_iframe_that_never_finishes_loading_is_skipped_not_waited_for(monkeypatch):
+    from app.scanner import crawler as crawler_module
+
+    class _HungFrame:
+        url = "https://ads.example/hung"
+
+        async def content(self):
+            await asyncio.sleep(3600)
+
+    class _GoodFrame:
+        url = "https://widget.example/ok"
+
+        async def content(self):
+            return "<html><body><p>Manage cookies</p></body></html>"
+
+    main = _FakeFrame()
+    page = SimpleNamespace(main_frame=main, frames=[main, _HungFrame(), _GoodFrame()], url=f"{ROOT}/")
+    monkeypatch.setattr(crawler_module, "_IFRAME_READ_TIMEOUT_SECONDS", 0.05)
+
+    scripts, text, controls = await asyncio.wait_for(crawler_module._collect_iframe_signal_evidence(page), timeout=5)
+
+    assert "Manage cookies" in text, "the readable frame after the hung one was still read"
 
 
 # ── 5-6. failed and blocked pages are reported, and reported SEPARATELY ──────────

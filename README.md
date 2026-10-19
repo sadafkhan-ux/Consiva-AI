@@ -67,6 +67,17 @@ cp .env.example .env                               # then fill in real values
 python migrate.py
 ```
 
+### Deploying with Docker
+
+On a server, deploy (and update) with one command; pending database migrations are applied
+automatically and the application only starts once they have succeeded:
+
+```bash
+bash scripts/deploy.sh      # = docker compose -f docker-compose.prod.yml up -d --build --remove-orphans --wait
+```
+
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the flow, failure handling and local verification.
+
 Create the first admin — there is no public signup, and the API can't create a user
 without an authenticated admin already existing:
 

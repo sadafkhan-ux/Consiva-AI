@@ -187,7 +187,7 @@ async def test_search_with_no_connected_source_is_refused_and_the_case_is_left_a
     await _verify(request)
     before = request.status
 
-    with pytest.raises(SourceNotAuthorizedError, match="Connect a data source first"):
+    with pytest.raises(SourceNotAuthorizedError, match="No data source is connected"):
         await dsr_routes.start_search(request_id=request.id, user=_user(), db=FakeDB())
 
     assert request.status == before, "the case must stay open exactly where it was"
@@ -216,7 +216,7 @@ def test_a_case_failed_for_want_of_a_source_reads_as_waiting_for_setup_not_faile
     assert lifecycle.public_status(case.FAILED, case.ERR_ACTION_FAILED) == "FAILED"
     message, step = lifecycle.plain_status(case.FAILED, case.ERR_SOURCE_NOT_AUTHORIZED, case.ACCESS)
     assert "no data source is connected" in message
-    assert "DSR Settings" in step and "Retry search" in step
+    assert "Configuration" in step and "start the search again" in step
 
 
 def test_every_status_has_a_plain_message():

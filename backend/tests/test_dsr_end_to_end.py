@@ -172,6 +172,31 @@ def _install(monkeypatch, w: World):
         rows = [v for v in w.verifications if v.request_id == request_id and v.org_id == org_id]
         return rows[-1] if rows else None
 
+    async def list_verifications(db, request_id, org_id):
+        return [v for v in w.verifications if v.request_id == request_id and v.org_id == org_id]
+
+    async def count_challenges(db, org_id, requester_email, since):
+        by_id = {r.id: r for r in w.requests.values()}
+        return len([
+            v for v in w.verifications
+            if v.org_id == org_id and v.method == "email_challenge"
+            and getattr(by_id.get(v.request_id), "requester_email", None) == requester_email
+        ])
+
+    async def latest_verifications(db, org_id, request_ids):
+        out = {}
+        for v in w.verifications:
+            if v.org_id == org_id and v.request_id in request_ids:
+                out[v.request_id] = v
+        return out
+
+    async def active_by_email(db, org_id, email):
+        return [
+            r for r in w.requests.values()
+            if r.org_id == org_id and r.requester_email == email.strip().lower()
+            and r.status not in case.TERMINAL_STATUSES
+        ]
+
     async def list_source_auth(db, org_id):
         return [AUTHORIZATION]
 
@@ -257,6 +282,10 @@ def _install(monkeypatch, w: World):
         ("reference_exists", reference_exists),
         ("create_identity_verification", create_verification),
         ("get_latest_identity_verification", latest_verification),
+        ("list_identity_verifications", list_verifications),
+        ("count_requester_challenges", count_challenges),
+        ("latest_identity_verifications", latest_verifications),
+        ("find_active_requests_by_email", active_by_email),
         ("list_source_authorizations", list_source_auth),
         ("get_source_authorization", get_source_auth),
         ("create_search_run", create_search_run), ("list_search_runs", list_search_runs),
@@ -695,7 +724,7 @@ async def test_zero_ropa_sources_and_unauthorized_ropa_source_are_both_source_no
         await search_service.run_search(FakeDB(), request_a)
 
     assert "ROPA" in exc_a.value.message
-    assert "config/sources" in exc_a.value.message
+    assert "Configuration" in exc_a.value.message, "points at where an administrator connects one"
 
     # Scenario B: no ROPA source exists at all.
     async def no_ropa_sources(db, org_id):

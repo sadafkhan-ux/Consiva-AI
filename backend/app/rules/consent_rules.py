@@ -10,6 +10,8 @@ Two distinct stages, matching docs/architecture §D/§E:
   evidence back out of the database as plain dicts.
 """
 
+from urllib.parse import urlparse
+
 import tldextract
 from pydantic import BaseModel, Field
 
@@ -127,6 +129,26 @@ def _has_personal_data_fields(fields: list[dict]) -> bool:
     )
 
 
+def _hosts_of(items: list[dict], limit: int = 5) -> list[str]:
+    """Distinct page hosts the items were observed on (trackers carry `page_url`; cookies carry
+    `observations[].page_url`). Items that cannot name a page contribute nothing -- never a guess."""
+    hosts: list[str] = []
+    for item in items:
+        urls = [item.get("page_url")] + [
+            o.get("page_url") for o in item.get("observations") or [] if o.get("consent_state") == "pre_consent"
+        ]
+        for url in urls:
+            host = urlparse(url).hostname if url else None
+            if host and host not in hosts:
+                hosts.append(host)
+    return hosts[:limit]
+
+
+def _observed_on(items: list[dict]) -> str:
+    hosts = _hosts_of(items)
+    return f" Observed on: {', '.join(hosts)}." if hosts else ""
+
+
 def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     """`evidence` is the dict shape produced by
     scan_repository.get_scan_evidence_summary() — real DB ids, already vendor/category
@@ -156,6 +178,7 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     # (consent_interactor.confirm_interaction_completed). Absent -- scans and fixtures
     # predating the flag -- reads as unconfirmed, never as "assume it worked".
     reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
+    interaction_page = interaction_evidence.get("interaction_page_url")
 
     # R-001 / R-003 depend on the three-pass consent-state scan (crawler.py). Both stay
     # silent (not "no violation found") until an item is actually observed in that state —
@@ -168,7 +191,7 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             risk_level="high",
             summary=(
                 f"{len(pre_consent_hits)} analytics/marketing cookie(s)/script(s) fired BEFORE any "
-                "consent interaction — the most common real DPDP violation."
+                "consent interaction — the most common real DPDP violation." + _observed_on(pre_consent_hits)
             ),
             evidence_ids=[e["id"] for e in pre_consent_hits],
             confidence="high",
@@ -264,13 +287,20 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
         ))
 
     unclassified = [t for t in trackers if t["category"] is None] + [c for c in cookies if c["category"] is None]
+    pre_unclassified = [e for e in unclassified if "pre_consent" in e.get("consent_states", [])]
     if unclassified:
         findings.append(RuleFinding(
             rule_id="R-008",
             category="other",
             risk_level="medium",
             summary=f"{len(unclassified)} script(s)/cookie(s) did not match any known vendor signature "
-                    "and could not be automatically classified.",
+                    "and could not be automatically classified"
+                    + (
+                        f"; {len(pre_unclassified)} of them fired BEFORE any consent interaction, "
+                        "so a reviewer must decide whether they are non-essential."
+                        if pre_unclassified else "."
+                    )
+                    + _observed_on(unclassified),
             evidence_ids=[e["id"] for e in unclassified],
             confidence="low",
         ))
@@ -289,6 +319,11 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
                 + (f", {signals.get('cmp_vendor')}" if signals.get("cmp_vendor") else "")
                 + f") was detected, but its Reject control could not be automated ({reject_outcome}) -- "
                 "either a non-standard/bespoke banner, or Reject is genuinely harder to reach than Accept."
+                + (
+                    f" Accept and Reject were only tried on {interaction_page}; if the banner appears only on other "
+                    "pages of the site, scan one of those pages directly to test it."
+                    if interaction_page else ""
+                )
             ),
             confidence="low",  # a scanner automation limitation, not confirmed non-compliance -- routes to human review
         ))

@@ -22,6 +22,15 @@ function trackerRisk(t: EvidenceTrackerItem): "high" | "medium" | "low" {
   return "low";
 }
 
+function pageLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.hostname + (u.pathname === "/" ? "" : u.pathname);
+  } catch {
+    return url;
+  }
+}
+
 export function TrackersTable({ trackers }: { trackers: EvidenceTrackerItem[] }) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("consent_states");
@@ -78,6 +87,7 @@ export function TrackersTable({ trackers }: { trackers: EvidenceTrackerItem[] })
               <th onClick={() => toggleSort("category")}>Type / Purpose</th>
               <th onClick={() => toggleSort("source")}>Source</th>
               <th onClick={() => toggleSort("consent_states")}>Consent State</th>
+              <th>Seen on page</th>
               <th>Risk</th>
               <th>Evidence</th>
             </tr>
@@ -93,6 +103,9 @@ export function TrackersTable({ trackers }: { trackers: EvidenceTrackerItem[] })
                   {t.consent_states.map((s) => (
                     <span key={s} className="badge neutral" style={{ marginRight: 4 }}>{s.replace("_", " ")}</span>
                   ))}
+                </td>
+                <td className="mono" style={{ fontSize: 11 }} title={t.page_url ?? undefined}>
+                  {t.page_url ? pageLabel(t.page_url) : <span className="muted">not recorded</span>}
                 </td>
                 <td><span className={`badge ${trackerRisk(t)}`}>{trackerRisk(t)}</span></td>
                 <td className="mono" style={{ fontSize: 11 }}>{t.id.slice(0, 8)}</td>

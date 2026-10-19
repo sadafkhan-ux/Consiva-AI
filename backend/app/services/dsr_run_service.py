@@ -415,8 +415,6 @@ async def ingest_pushed_evidence(
     request: DsrRequest,
     push: EvidencePush,
     *,
-    integration_key_id: uuid.UUID | None,
-    integration_key_name: str | None,
     actor_user_id: uuid.UUID | None,
     now: datetime | None = None,
 ) -> tuple[DsrSearchRun, DsrActionPlan | None, list[DsrAction]]:
@@ -459,7 +457,7 @@ async def ingest_pushed_evidence(
     ciphertext = evidence_push_service.encrypt_push_payload(push)
     await dsr_repository.create_evidence_push(
         db, org_id=request.org_id, request_id=request.id, search_run_id=run.id,
-        integration_key_id=integration_key_id, source_name=push.source_name,
+        integration_key_id=None, source_name=push.source_name,
         searched_at=push.searched_at, subject=push.subject.model_dump(exclude_none=True),
         payload_ciphertext=ciphertext, table_count=len(push.tables), row_count=total_rows,
         truncated=ambiguous, client_reference=push.client_reference,
@@ -503,7 +501,7 @@ async def ingest_pushed_evidence(
             "search_run_id": str(run.id), "source_name": push.source_name,
             "table_names": [t.table_name for t in push.tables], "table_count": len(push.tables),
             "row_count": total_rows, "truncated": ambiguous,
-            "integration_key_name": integration_key_name, "client_reference": push.client_reference,
+            "client_reference": push.client_reference,
         },
     )
 

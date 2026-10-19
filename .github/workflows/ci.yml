@@ -151,6 +151,15 @@ jobs:
         # rather than on somebody's first fresh deployment.
         run: python migrate.py --database-url "$DATABASE_URL"
 
+      - name: Re-running the migrations must be a no-op
+        working-directory: backend
+        # What every repeated deployment does. A migration that is not safe to have recorded and
+        # skipped, or a runner that re-applies recorded files, fails here instead of in production.
+        run: |
+          python migrate.py --database-url "$DATABASE_URL" | tee /tmp/second-run.txt
+          grep -q "Nothing to do" /tmp/second-run.txt
+          python migrate.py --database-url "$DATABASE_URL" --check
+
       - name: Confirm the schema the migrations produced
         working-directory: backend
         run: |

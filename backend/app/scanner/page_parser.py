@@ -14,6 +14,10 @@ from bs4 import BeautifulSoup
 class ParsedScript:
     src: str | None
     inline_snippet: str | None  # first 200 chars, for CMP global-var heuristics only
+    # False for a tag the browser will not execute: a CMP that blocks a tag until consent rewrites it
+    # to type="text/plain" (and restores it after consent). The tag is still in the DOM, so counting it
+    # as a tracker that fired reported a blocked script as pre-consent tracking.
+    executes: bool = True
 
 
 @dataclass
@@ -50,6 +54,18 @@ class ParsedPage:
     control_text: str = ""
 
 
+# MIME types a browser runs as script. Anything else (text/plain, text/template, ...) is inert.
+_EXECUTABLE_SCRIPT_TYPES = frozenset({
+    "", "module", "text/javascript", "application/javascript", "application/x-javascript",
+    "text/ecmascript", "application/ecmascript", "text/jscript", "text/livescript", "text/x-javascript",
+})
+
+
+def script_executes(type_attr: str | None) -> bool:
+    """Whether a <script type=...> is run by the browser."""
+    return (type_attr or "").split(";")[0].strip().lower() in _EXECUTABLE_SCRIPT_TYPES
+
+
 def parse_page(html: str, page_url: str) -> ParsedPage:
     soup = BeautifulSoup(html, "lxml")
 
@@ -59,6 +75,7 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
         ParsedScript(
             src=urljoin(page_url, tag["src"]) if tag.get("src") else None,
             inline_snippet=(tag.get_text() or "")[:200] or None,
+            executes=script_executes(tag.get("type")),
         )
         for tag in soup.find_all("script")
     ]

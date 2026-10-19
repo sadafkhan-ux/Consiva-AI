@@ -27,11 +27,48 @@ from collections import Counter
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.dsr.errors import CaseNotReadyError, IdentityRequiredError
 from app.agents.dsr.rules import constraints as rules
 from app.agents.dsr.schemas import case
+from app.agents.dsr.services import identity_service
 from app.db.models import DsrRequest, DsrResponse
 from app.db.repositories import dsr_repository
 from app.services import audit_service
+
+# A search run in one of these states finished and says something true about the source. A run
+# that is pending, running or failed says nothing about whether data is held.
+SEARCH_FINISHED_STATUSES = frozenset({"completed", "no_match", "multiple_matches"})
+
+
+async def assert_ready_to_draft(db: AsyncSession, request: DsrRequest) -> None:
+    """Refuse to draft a letter that would make a claim nothing established.
+
+    The letter says what was searched and what was found. With no verified requester there
+    was no search, and with no finished search "we found no record" is a statement about a
+    search that never happened -- a false answer to someone exercising a right. So both are
+    required first. A complaint is the exception: nothing is searched for it, and its letter
+    says so instead of reporting a search.
+    """
+    if request.request_type == case.GRIEVANCE:
+        return
+    verification = await dsr_repository.get_latest_identity_verification(db, request.id, request.org_id)
+    if not identity_service.is_satisfied(verification):
+        raise IdentityRequiredError(
+            f"Case {request.reference} has not had the requester's identity verified, so no "
+            "search has been run and a response cannot say what was or was not found. "
+            "Verify the requester, run the search, then draft the response."
+        )
+    runs = await dsr_repository.list_search_runs(db, request.id, request.org_id)
+    if not any(r.status in SEARCH_FINISHED_STATUSES for r in runs):
+        if not runs:
+            raise CaseNotReadyError(
+                f"No search has been run for case {request.reference}, so a response cannot say "
+                "what was or was not found. Run the search first."
+            )
+        raise CaseNotReadyError(
+            f"The search for case {request.reference} did not complete, so a response cannot say "
+            "what was or was not found. Retry the search first."
+        )
 
 
 async def build_response(
@@ -138,7 +175,16 @@ def _compose(request: DsrRequest, evidence, runs, executions, actions) -> str:
         "",
     ]
 
-    searched = [r for r in runs if r.status in ("completed", "no_match", "multiple_matches")]
+    if request.request_type == case.GRIEVANCE:
+        # A complaint is read by a person; no search is run for it, so none is reported.
+        lines.append(
+            "We have received your complaint. A member of our team will review it and "
+            "respond to you directly."
+        )
+        lines.append("No search of your data was performed for this request, and no data was changed.")
+        return "\n".join(lines)
+
+    searched = [r for r in runs if r.status in SEARCH_FINISHED_STATUSES]
     failed = [r for r in runs if r.status == "failed"]
 
     # What was searched. Stated before what was found, because the scope of the
@@ -159,10 +205,17 @@ def _compose(request: DsrRequest, evidence, runs, executions, actions) -> str:
 
     if not evidence:
         lines.append("")
-        lines.append(
-            "We did not find any record matching the details you provided in the systems "
-            "we searched. No data was changed."
-        )
+        if searched:
+            lines.append(
+                "We did not find any record matching the details you provided in the systems "
+                "we searched. No data was changed."
+            )
+        else:
+            # Never "we found nothing" when nothing was searched or the search did not finish.
+            lines.append(
+                "No search of our systems has been completed for this request, so this letter "
+                "does not say whether we hold any data about you. No data was changed."
+            )
         return "\n".join(lines)
 
     by_source = Counter((e.source_name, e.table_name) for e in evidence)

@@ -33,13 +33,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from app.agents.ropa.connectors.base import ConnectorError as RopaConnectorError
-from app.agents.ropa.connectors.factory import CredentialEncryptionNotConfigured, decrypt_credential
-from app.agents.ropa.connectors.factory import encrypt_credential as _ropa_encrypt_credential
-
 from app.agents.dsr.connectors.authorization import SourceGrant, resolve
 from app.agents.dsr.connectors.postgres import PostgresDsrConfig, PostgresDsrConnector
 from app.agents.dsr.errors import EncryptionNotConfiguredError, SourceNotAuthorizedError
+from app.agents.ropa.connectors.base import ConnectorError as RopaConnectorError
+from app.agents.ropa.connectors.factory import CredentialEncryptionNotConfigured, decrypt_credential
+from app.agents.ropa.connectors.factory import encrypt_credential as _ropa_encrypt_credential
 
 # The single source of truth for "can DSR actually search this source at all" --
 # build_connector's own if/elif below is the only code that would otherwise encode

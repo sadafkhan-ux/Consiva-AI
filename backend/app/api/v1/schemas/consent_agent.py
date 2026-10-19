@@ -90,11 +90,11 @@ class CreateScanResponse(BaseModel):
     max_pages: int | None = Field(
         default=None,
         description="Unique-page limit that will apply. Null means this profile has no fixed "
-                    "page-count cap (it is still bounded by `max_seconds`).",
+                    "page-count cap.",
     )
     max_seconds: int | None = Field(
         default=None,
-        description="Wall-clock budget for the page-crawl phase.",
+        description="Wall-clock budget for the page-crawl phase. Null means no crawl deadline.",
     )
 
 

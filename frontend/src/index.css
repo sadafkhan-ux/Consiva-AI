@@ -729,3 +729,70 @@ button.reject { background: var(--red); }
 .dsr-config .source-form { max-width: 620px; }
 .dsr-config .sources-header { align-items: flex-start; }
 .dsr-config .sources-header select { margin-top: 2px; }
+
+/* ── DSR audit fixes (16 Oct 2026) ─────────────────────────────────────────────────
+   Additions only; every colour is a token from the top of this file. */
+
+.banner-info { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+.banner .linkish { color: inherit; }
+
+/* The console tabs sit outside `.dsr`, so they never picked up the case-tab styling and the
+   active tab was barely distinguishable. Same look as the case tabs, with a clear active state. */
+.dsr-console-tabs {
+  display: flex; gap: 4px; border-bottom: 1px solid var(--border);
+  overflow-x: auto; white-space: nowrap;
+}
+.dsr-console-tabs button {
+  background: transparent; border: none; border-bottom: 2px solid transparent;
+  color: var(--muted); padding: 8px 14px; font-size: 13px; cursor: pointer; font-family: var(--font-ui);
+}
+.dsr-console-tabs button.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.dsr-console-tabs button:focus-visible, .dsr .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.dsr .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+
+/* Inline forms and the verification code -- replacements for browser prompts. */
+.inline-form { display: flex; flex-direction: column; gap: 6px; max-width: 560px; margin: 10px 0; }
+.inline-form label { font-size: 12px; color: var(--muted); }
+.inline-form input, .inline-form select, .inline-form textarea {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); padding: 8px; font: inherit;
+}
+.inline-form input:disabled { opacity: .5; cursor: not-allowed; }
+.inline-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.inline-row input, .inline-row select { flex: 1 1 220px; min-width: 0; }
+.inline-form button, .code-row button {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: 6px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+}
+.inline-form button:disabled { opacity: .4; cursor: not-allowed; }
+.inline-form button:hover:not(:disabled), .code-row button:hover { border-color: var(--accent); }
+.code-panel {
+  border: 1px solid var(--accent); border-radius: 8px; padding: 12px; margin: 10px 0;
+  background: var(--panel-2); max-width: 560px;
+}
+.code-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.code-value {
+  font-family: var(--mono); font-size: 20px; letter-spacing: .1em; padding: 8px 12px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px; user-select: all;
+}
+
+/* Why an action is unavailable, written on the page rather than in a tooltip. */
+.why-disabled { margin: 0 0 12px; padding-left: 18px; }
+.duplicate-list { margin: 6px 0; padding-left: 18px; }
+.dsr-list-meta { width: 100%; text-align: left; margin-top: 2px; }
+
+/* Narrow screens: the agent navigation scrolls sideways in one row instead of collapsing into a
+   tall vertical list inside the header. */
+@media (max-width: 768px) {
+  .shell-sidebar { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 16px; }
+  .shell-brand { padding: 0; }
+  .shell-nav {
+    flex: none; flex-direction: row; flex-wrap: nowrap; gap: 4px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px;
+  }
+  .shell-nav button { flex: none; white-space: nowrap; }
+  .shell-session { margin: 0; padding: 0; border: none; flex-direction: row; justify-content: space-between; align-items: center; }
+  .shell-content { padding: 16px; }
+}
+
+.case-id { margin: 0; width: 100%; word-break: break-all; }

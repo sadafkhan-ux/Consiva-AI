@@ -1,7 +1,8 @@
 """Scan profiles: the budget a scan is allowed, decided by the server and nothing else.
 
 Two profiles, one engine. They differ ONLY in how many pages the pre-consent crawl may fetch
-and how long it may run -- every other protection (SSRF checks, same-site restriction,
+-- neither has a crawl deadline by default, and both keep a fixed whole-scan safety ceiling so a
+hung browser cannot hold a worker. Every other protection (SSRF checks, same-site restriction,
 robots.txt, per-navigation timeout, bounded concurrency, URL de-duplication) lives in the
 crawler and applies to both identically.
 
@@ -11,9 +12,10 @@ crawler and applies to both identically.
                  so a missing or unrecognised profile can only ever resolve to the SMALL one.
 
     application  authorized application scans. No fixed page-count cap when
-                 CONSENT_APP_MAX_PAGES is 0. "No page cap" is not "no limit": the crawl is
-                 bounded by CONSENT_APP_MAX_SECONDS, after which it stops starting new pages and
-                 the scan finishes with what it has.
+                 CONSENT_APP_MAX_PAGES is 0, and no crawl deadline when CONSENT_APP_MAX_SECONDS
+                 is 0 (the default): the crawl runs until it has visited what it can reach. A
+                 positive CONSENT_APP_MAX_SECONDS opts back in to a deadline. Either way the whole
+                 scan keeps a fixed 24 hour ceiling, only so a hung browser cannot hold a worker.
 
 WHO DECIDES
 -----------
@@ -39,6 +41,15 @@ PROFILE_NAMES = (WEB, APPLICATION)
 _PASS_ALLOWANCE_NAV_TIMEOUTS = 2
 _STARTUP_ALLOWANCE_SECONDS = 120
 
+#: Whole-scan ceilings for a profile with no crawl deadline. They are not scan budgets: the job
+#: lease (jobs/queue.stale_threshold_for) and the outer asyncio timeout both need a finite number,
+#: and a scan that is genuinely hung must eventually be aborted so the worker can take other jobs.
+#: A healthy crawl is never expected to reach them. The web crawl is bounded to a handful of pages,
+#: so its ceiling is 30 minutes (the old derived limit was 330 seconds, which a slow site exceeded);
+#: an application scan has no page cap, so its ceiling is 24 hours.
+_WEB_HARD_CEILING_SECONDS = 1_800.0
+_APP_HARD_CEILING_SECONDS = 86_400.0
+
 
 @dataclass(frozen=True)
 class ScanProfile:
@@ -46,10 +57,10 @@ class ScanProfile:
     #: Unique pages the pre-consent crawl may fetch. None means "no fixed page-count cap".
     max_pages: int | None
     #: Wall-clock seconds the crawl may keep STARTING new pages. After this it stops and the
-    #: scan completes with what it has. Always finite, for every profile.
-    crawl_deadline_seconds: float
+    #: scan completes with what it has. None means no crawl deadline (application scans only).
+    crawl_deadline_seconds: float | None
     #: Wall-clock seconds for the whole scan, crawl and consent passes together. The scan is
-    #: aborted at this point regardless of what it is doing.
+    #: aborted at this point regardless of what it is doing. Always finite, for every profile.
     hard_timeout_seconds: float
     #: An application scan runs against a domain the organisation has proven it controls;
     #: a public web scan follows the existing deployment-wide policy instead.
@@ -77,16 +88,20 @@ class ScanProfile:
         return {
             "profile": self.name,
             "max_pages": self.effective_max_pages(requested_max_pages),
-            "max_seconds": int(self.crawl_deadline_seconds),
+            "max_seconds": None if self.crawl_deadline_seconds is None else int(self.crawl_deadline_seconds),
         }
 
 
-def _profile(name: str, settings: Settings, *, max_pages: int | None, crawl_seconds: float,
+def _profile(name: str, settings: Settings, *, max_pages: int | None, crawl_seconds: float | None,
              requires_verified_domain: bool) -> ScanProfile:
     passes = _PASS_ALLOWANCE_NAV_TIMEOUTS * settings.scanner_timeout_seconds
+    if crawl_seconds is None:
+        hard_timeout = _APP_HARD_CEILING_SECONDS if name == APPLICATION else _WEB_HARD_CEILING_SECONDS
+    else:
+        hard_timeout = crawl_seconds + passes + _STARTUP_ALLOWANCE_SECONDS
     return ScanProfile(
         name=name, max_pages=max_pages, crawl_deadline_seconds=crawl_seconds,
-        hard_timeout_seconds=crawl_seconds + passes + _STARTUP_ALLOWANCE_SECONDS,
+        hard_timeout_seconds=hard_timeout,
         requires_verified_domain=requires_verified_domain,
     )
 
@@ -103,14 +118,15 @@ def resolve_profile(name: str | None, settings: Settings | None = None) -> ScanP
         cap = settings.consent_app_max_pages or None  # 0 -> no fixed page-count cap
         return _profile(
             APPLICATION, settings, max_pages=cap,
-            crawl_seconds=float(settings.consent_app_max_seconds), requires_verified_domain=True,
+            crawl_seconds=float(settings.consent_app_max_seconds) or None,  # 0 -> no crawl deadline
+            requires_verified_domain=True,
         )
-    pages = settings.consent_web_max_pages
-    # The web crawl budget keeps the historical shape (pages x per-page timeout) so the
-    # deadline scales with the page limit rather than being a second number to tune.
+    # The web profile is bounded by its PAGE limit, not by time: the old "pages x per-page timeout"
+    # deadline stopped the crawl starting new pages after 150 s and aborted the whole scan at 330 s,
+    # which a slow site exceeded. Each navigation still has its own per-page timeout.
     return _profile(
-        WEB, settings, max_pages=pages,
-        crawl_seconds=float(pages * settings.scanner_timeout_seconds),
+        WEB, settings, max_pages=settings.consent_web_max_pages,
+        crawl_seconds=None,
         requires_verified_domain=False,
     )
 

@@ -58,6 +58,32 @@ class ClassificationResult:
         return self.ambiguous or self.request_type == case.OTHER
 
 
+_ACCESS_WHAT_YOU_HOLD = (
+    r"what (personal )?(data|information|details)? ?(do |does )?(you|your company|the company|this company) "
+    r"(have|hold|holds|store|stores|keep|keeps|collect|collects|process|processes)"
+)
+_ACCESS_SHOW_MY_DATA = (
+    r"(show|display|let me see|give|send|tell|provide) (me )?(all )?(of )?my (personal )?"
+    r"(data|information|details|records)"
+)
+_HINGLISH_SHOW_ME = (
+    r"(mujhe|mujhko|mereko|mujhe apna)?\s?(mera|meri|mere) (personal )?"
+    r"(data|jankari|information|details?|records?)( ko)? "
+    r"(dikhao|dikhaiye|dikha do|dikhayein|dikhana|batao|bataiye|batana|bhejo|bhejiye|dijiye|do)\b"
+)
+_HINGLISH_WHERE_IS_MY_DATA = (
+    r"(mera|meri|mere) (personal )?(data|jankari|information|details?|records?) "
+    r"(kahan|kaha|kidhar|kahaan|kya kya|kitna|kaun kaun)"
+)
+_HINGLISH_DELETE = (
+    r"(mera|meri|mere) (personal )?(data|jankari|information|details?|records?|account) "
+    r"(delete|hata|hatao|mita|mitao|erase)"
+)
+_HINGLISH_CORRECT = (
+    r"(mera|meri|mere) (personal )?(data|jankari|information|details?|records?) "
+    r"(sahi|theek|badal|badlo|update|correct|sudhar)"
+)
+
 # Phrases that state an intent outright. Matched on a word-boundary regex over the
 # normalized text, so "erase my data" hits but "eraser" does not.
 _PHRASES: tuple[tuple[str, str], ...] = (
@@ -79,6 +105,21 @@ _PHRASES: tuple[tuple[str, str], ...] = (
     (r"(copy|copies) of my (personal )?(data|information|records)", case.ACCESS),
     (r"right (of|to) access", case.ACCESS),
     (r"access (my|to my) (personal )?(data|information|records)", case.ACCESS),
+    # "I want to know what data you have about me", "what information does the company hold".
+    (_ACCESS_WHAT_YOU_HOLD, case.ACCESS),
+    # "show me my personal data", "let me see my information", "I want to view my records".
+    (_ACCESS_SHOW_MY_DATA, case.ACCESS),
+    (r"(see|view|know|find out) (all )?(of )?my (personal )?(data|information|details|records)", case.ACCESS),
+    # Hinglish (Hindi in Latin script), the way these are typed: "mujhe mera data dikhao",
+    # "mera data kahan use ho raha hai", "aapke paas mera kya data hai".
+    (_HINGLISH_SHOW_ME, case.ACCESS),
+    (_HINGLISH_WHERE_IS_MY_DATA, case.ACCESS),
+    (r"(aapke|apke|tumhare) (paas|pas) (mera|meri|mere) (kya|kaun|kitna)", case.ACCESS),
+    # Hinglish for the other requests, so they are not read as "unclear" and left unsearched.
+    (_HINGLISH_DELETE, case.DELETION),
+    (_HINGLISH_CORRECT, case.CORRECTION),
+    (r"(mera|meri|mere) (consent|sahmati|permission) (wapas|vapas|withdraw|hata)", case.WITHDRAW_CONSENT),
+    (r"\b(shikayat|shikayaat)\b", case.GRIEVANCE),
     # Export / portability. Checked before ACCESS keywords because an export request
     # is a narrower, more specific form of access and its own controlled type.
     (r"(export|download|portab)", case.EXPORT),
@@ -148,6 +189,7 @@ _SUBSUMES: dict[frozenset[str], str] = {
 _MULTI_INTENT = re.compile(
     r"\band then\b|\band also\b|\balso,? please\b|\bas well as\b|\band i (also )?want\b"
     r"|\bafter that\b|\bsecondly\b|;"
+    r"|\baur phir\b|\baur bhi\b|\buske baad\b"
 )
 
 
@@ -164,6 +206,12 @@ _DECLINED_ERASURE = re.compile(
 )
 
 
+# The Hinglish forms of the same refusal: "delete mat karo", "mera data delete nahi karna".
+_DECLINED_ERASURE_AFTER = re.compile(
+    r"\b(?:delete|erase|hata|hatao|mita|mitao)\s+(?:\w+\s+)?(?:mat|nahi|nahin|na)\b"
+)
+
+
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
@@ -171,7 +219,8 @@ def _normalize(text: str) -> str:
 def _strip_declined_erasure(normalized: str) -> tuple[str, bool]:
     """The text with any declined erasure removed, and whether anything was removed."""
     stripped, count = _DECLINED_ERASURE.subn(" ", normalized)
-    return re.sub(r"\s+", " ", stripped).strip(), bool(count)
+    stripped, count_after = _DECLINED_ERASURE_AFTER.subn(" ", stripped)
+    return re.sub(r"\s+", " ", stripped).strip(), bool(count or count_after)
 
 
 def classify(raw_request: str) -> ClassificationResult:
@@ -200,6 +249,10 @@ def classify(raw_request: str) -> ClassificationResult:
 
     if phrase_hits:
         types = {t for t, _ in phrase_hits}
+        if joined:
+            # "send me my data and then delete it": the second clause may only be a bare keyword.
+            # Dropping it would honour half of what was asked and say nothing about the rest.
+            types |= {_KEYWORDS[w] for w in set(_WORD.findall(normalized)) & _KEYWORDS.keys()}
         resolved = _resolve(types, joined=joined)
         evidence = tuple(f"matched phrase {matched!r} -> {t}" for t, matched in phrase_hits[:5]) + note
         if resolved is None:

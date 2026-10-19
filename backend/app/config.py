@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load backend/.env into the PROCESS environment, once, before anything reads it.
@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # exactly as before.
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-haiku-5-5"
+    # Required by the Messages API when the key is not scoped to a single workspace: without the
+    # `anthropic-workspace-id` header every request is a 400 ("This API key is not scoped to a workspace"),
+    # the primary provider fails on EVERY analysis, and the run falls back to NVIDIA. Seen on a real scan
+    # (llm_analysis metadata: primary_status=failed, fallback_triggered=true) with ANTHROPIC_WORKSPACE_ID set
+    # in the environment but never read.
+    anthropic_workspace_id: str | None = None
 
     # Postgres
     database_url: str
@@ -117,7 +123,10 @@ class Settings(BaseSettings):
     scanner_headless: bool = True
     # Pages FETCHED in the pre_consent crawl. Robots-disallowed and duplicate-spelling
     # URLs do not spend it (crawler._crawl_full_site).
-    scanner_max_pages: int = 25
+    # Fallback page limit for code that calls the crawler WITHOUT a scan profile. Console, scheduled
+    # and API scans all run under a profile (scan_profiles), where CONSENT_WEB_MAX_PAGES decides.
+    # Kept equal to that default so the two can never disagree about "how many pages".
+    scanner_max_pages: int = Field(default=5, ge=1, le=25)
     # ── Consent scan profiles ───────────────────────────────────────────────────────
     # Two profiles share one scanning engine and differ only in the budget they get. The
     # profile is chosen by the SERVER from which endpoint was called and who called it --
@@ -133,14 +142,23 @@ class Settings(BaseSettings):
     # default), so no environment value can turn the public profile into an unbounded one.
     consent_web_max_pages: int = Field(default=5, ge=1, le=25)
     # CONSENT_APP_MAX_PAGES -- authorized application scans. 0 means "no fixed page-count
-    # cap" (the scan is still bounded by CONSENT_APP_MAX_SECONDS); a positive value is an
+    # cap" (see CONSENT_APP_MAX_SECONDS for the optional time deadline); a positive value is an
     # explicit cap for deployments that want one. Negative values are rejected.
     consent_app_max_pages: int = Field(default=0, ge=0, le=1_000_000)
-    # CONSENT_APP_MAX_SECONDS -- wall-clock budget for the page-crawl phase of an
-    # application scan. This is what makes "no page cap" safe: the crawl stops starting new
-    # pages when it is spent and the scan finishes with what it has. Required to be
-    # positive (60 s..24 h); there is no "0 = forever".
-    consent_app_max_seconds: int = Field(default=3600, ge=60, le=86_400)
+    # CONSENT_APP_MAX_SECONDS -- optional wall-clock deadline for the page-crawl phase of an
+    # application scan. 0 (the default) means NO crawl deadline: the crawl runs until it has
+    # visited what it can reach. A value of 60..86400 opts back in: the crawl then stops
+    # starting new pages when it is spent and the scan finishes with what it has. Whatever is
+    # set here, the scan as a whole still has a fixed ceiling (scan_profiles._APP_HARD_CEILING_SECONDS)
+    # so a hung browser cannot hold a worker, and its job lease, forever.
+    consent_app_max_seconds: int = Field(default=0, ge=0, le=86_400)
+
+    @field_validator("consent_app_max_seconds")
+    @classmethod
+    def _deadline_is_off_or_sensible(cls, value: int) -> int:
+        if 0 < value < 60:
+            raise ValueError("CONSENT_APP_MAX_SECONDS must be 0 (no deadline) or at least 60")
+        return value
     scanner_timeout_seconds: int = 30
     scanner_user_agent: str = "ConsivaConsentAgent/0.1"
     scanner_max_scans_per_org_per_day: int = 50
@@ -177,6 +195,17 @@ class Settings(BaseSettings):
     # deliberately loose -- it only excludes chunks that are barely related at all.
     # Tune only against test_rag_retrieval_quality.py runs on live infrastructure.
     rag_max_distance: float = 0.95
+
+    # Per-request ceiling and automatic-retry count for EMBEDDING calls (RAG queries). The OpenAI SDK's
+    # defaults are a 60s timeout and 2 silent retries, so ONE hung request to the hosted embedding
+    # endpoint cost up to 3 x 60s. Measured on a real scan (ac537cef): the three queries took 121.9s,
+    # 61.0s and 34.0s, the worker log showing "Retrying request" after each 60s hang -- 216.8s of
+    # waiting for nothing. A healthy embedding call is 0.2-3s (slowest healthy one seen: 7.9s), and a hung
+    # request never answers while the NEXT request succeeds in under a second (live: 20.9s and 21.0s =
+    # a 20s timeout plus a quick success). So a short timeout loses almost nothing and a hang costs ~6s,
+    # not ~21s: 6s with two retries bounds the worst case for the whole batch to ~18s.
+    embed_timeout_seconds: float = Field(default=6.0, ge=1.0, le=120.0)
+    embed_max_retries: int = Field(default=2, ge=0, le=3)
 
     # LLM
     # Shared wall-clock budget for one analysis's ENTIRE LLM effort, across all three

@@ -264,12 +264,17 @@ async def test_retrieve_propagates_db_execute_failure():
     fake_db.execute.assert_awaited_once()
 
 
-async def test_retrieve_rag_node_records_failed_stage_and_propagates(monkeypatch):
+async def test_retrieve_rag_node_records_failed_stage_and_reports_it_to_the_graph(monkeypatch):
     """Traces the same failure one level up into the retrieve_rag node: does
     track_stage's failure-recording or anything upstream swallow it silently?
     Answer, confirmed by this test: no -- the stage is recorded as failed (ok=False,
-    error captured) and the original DB exception still propagates out of the node
-    unchanged, exactly like the llm_reasoning case above."""
+    error captured) with the original error text.
+
+    What changed: the exception no longer ESCAPES the node and ends the whole analysis with no findings
+    (retrieval only supplies citations; the rules had already matched). The node reports the failure to the
+    graph instead -- `rag_failed` and an `error` -- and the graph writes the rule-derived findings. The
+    failure is still never silent: it is on the stage row, in `error`, and therefore in the agent run's audit
+    entry. See tests/test_consent_graph_rag_failure.py for the routing."""
     calls: list[dict] = []
     monkeypatch.setattr(
         "app.agents.consent_agent.nodes.retrieve_rag.track_stage", _RecordingStage(calls)
@@ -286,9 +291,10 @@ async def test_retrieve_rag_node_records_failed_stage_and_propagates(monkeypatch
         "app.agents.consent_agent.nodes.retrieve_rag.async_session_factory", lambda: _FakeSessionCM(fake_db)
     )
 
-    with pytest.raises(OperationalError):
-        await retrieve_rag(_state(rule_findings=[]))
+    out = await retrieve_rag(_state(rule_findings=[]))
 
+    assert out["rag_failed"] is True and out["rag_chunks"] == []
+    assert "connection refused" in out["error"] and "OperationalError" in out["error"]
     assert len(calls) == 1
     assert calls[0]["stage"] == "rag_retrieval"
     assert calls[0]["ok"] is False

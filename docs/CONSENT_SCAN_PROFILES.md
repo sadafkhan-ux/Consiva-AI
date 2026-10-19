@@ -8,7 +8,7 @@ in a request body can choose or widen it.
 |---|---|---|
 | Endpoint | `POST /api/v1/consent-agent/scans/web` (also the original `POST /scans`) | `POST /api/v1/consent-agent/scans/application` |
 | Pages per scan | at most `CONSENT_WEB_MAX_PAGES` unique pages (default **5**, never above 25) | **no fixed page-count cap** when `CONSENT_APP_MAX_PAGES=0` |
-| Wall-clock bound | page limit × per-page timeout | `CONSENT_APP_MAX_SECONDS` (default 3600) for the crawl, plus a hard overall timeout |
+| Wall-clock bound | **no crawl deadline**; per-page timeout only; fixed 30 min ceiling for a hung scan | **no crawl deadline** by default (`CONSENT_APP_MAX_SECONDS=0`); optional deadline if set; fixed 24 h ceiling for a hung scan |
 | Who may call | any signed-in user, or a key with `consent:scan` | an **organisation admin**, or a service key with `consent:scan:application` |
 | Domain | existing deployment policy (`SCANNER_REQUIRE_DOMAIN_VERIFICATION`) | **must have passed DNS ownership verification**, always |
 | SSRF / same-site / robots / de-dup / concurrency / per-navigation timeout | applied | applied, identically |
@@ -22,18 +22,20 @@ Console scans and scheduled monitoring scans also run as `web`.
 ```
 CONSENT_WEB_MAX_PAGES=5      # 1-25. A request can only lower it.
 CONSENT_APP_MAX_PAGES=0      # 0 = no fixed page-count cap; a positive number = an explicit cap
-CONSENT_APP_MAX_SECONDS=3600 # 60-86400. What keeps "no page cap" finite.
+CONSENT_APP_MAX_SECONDS=0    # 0 = no crawl deadline; 60-86400 = an optional deadline.
 ```
 
 All three are validated when settings load. An empty, non-numeric, negative or out-of-range value
-**stops the app from starting**; a missing variable takes the default shown. Nothing here ever
-means "unlimited" by omission or typo. `SCANNER_MAX_PAGES` is now only the fallback for code that
+**stops the app from starting**; a missing variable takes the default shown. `CONSENT_APP_MAX_PAGES=0`
+and `CONSENT_APP_MAX_SECONDS=0` are the explicit "no cap" / "no deadline" values. `SCANNER_MAX_PAGES` is now only the fallback for code that
 calls the crawler directly without a profile.
 
 ## What "no page-count cap" still bounds
 
-- **Time:** the crawl stops *starting* pages after `CONSENT_APP_MAX_SECONDS` and the scan completes
-  with what it found (`stop_reason: "deadline"`); a hard overall timeout aborts anything still running.
+- **Time:** by default there is **no crawl deadline** for an application scan. If you set
+  `CONSENT_APP_MAX_SECONDS` (60-86400) the crawl stops *starting* pages after that and the scan
+  completes with what it found (`stop_reason: "deadline"`). A fixed 24 hour overall ceiling still
+  aborts a scan that is hung, so a worker is never held forever.
 - **Cancellation:** `POST /scans/{id}/cancel` is honoured between batches. The crawl stops starting
   pages, finishes the batch in flight, keeps its evidence, and the scan stays `cancelled`; no
   analysis is queued. The browser is never killed mid-page.
@@ -44,7 +46,8 @@ calls the crawler directly without a profile.
 
 **Not bounded:** memory and database volume grow with the number of pages scanned inside the time
 window, and one application scan occupies a worker slot (`WORKER_CONCURRENCY`) for up to the full
-budget. Size `CONSENT_APP_MAX_SECONDS` for the host, or set `CONSENT_APP_MAX_PAGES` to a number.
+ceiling. With no deadline, a very large site can run a long time: set `CONSENT_APP_MAX_SECONDS` or
+`CONSENT_APP_MAX_PAGES` if you want a bound.
 
 Private, loopback and link-local targets are refused for both profiles. "Internal application"
 means your own application on a routable address.

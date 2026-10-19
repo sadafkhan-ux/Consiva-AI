@@ -22,28 +22,29 @@ _MAX_ATTEMPTS = 3
 # mid-job and never calls mark_done/mark_failed to release it.
 _STALE_THRESHOLD = timedelta(minutes=10)
 
-# Slack added on top of an application scan's own hard timeout before the reaper may treat its
-# job as lost. The scan aborts itself at that timeout, so this only has to cover the persistence
-# and analysis work that follows it in the same job.
+# Slack added on top of a scan's own hard timeout before the reaper may treat its job as lost.
+# The scan aborts itself at that timeout, so this only has to cover the persistence and analysis
+# work that follows it in the same job.
 _APPLICATION_LEASE_MARGIN = timedelta(minutes=15)
 
 
 def stale_threshold_for(job: AgentJob) -> timedelta:
     """How long `job` may sit at "running" before the reaper assumes its worker died.
 
-    10 minutes for everything, which is generous for a web scan (a few pages, bounded by its own
-    timeout). An APPLICATION scan has no page cap and is allowed to run for CONSENT_APP_MAX_SECONDS
-    -- up to hours -- so a flat 10 minutes would reclaim a healthy scan mid-crawl and start a
-    second crawl of the same site alongside it. Such a job (marked by the `scan_profile` the API
-    puts in its payload) gets the profile's own hard timeout plus a margin instead. Everything
-    else, including jobs created before profiles existed, keeps the 10 minutes.
+    10 minutes for everything that is not a scan. A SCAN may legitimately run longer than that --
+    a slow site, or an application scan with no page cap -- so a flat 10 minutes would reclaim a
+    healthy scan mid-crawl and start a second crawl of the same site alongside it. A scan job
+    therefore gets its profile's own whole-scan ceiling plus a margin: 30 minutes + 15 for a web
+    scan, 24 hours + 15 for an application scan. The profile is read the same way scan_service
+    reads it: the `scan_profile` the API put in the job payload, else web.
     """
+    if getattr(job, "job_type", None) != "scan":
+        return _STALE_THRESHOLD
     payload = getattr(job, "payload", None)
     payload = payload if isinstance(payload, dict) else {}
-    if payload.get("scan_profile") == scan_profiles.APPLICATION:
-        profile = scan_profiles.resolve_profile(scan_profiles.APPLICATION)
-        return max(_STALE_THRESHOLD, timedelta(seconds=profile.hard_timeout_seconds) + _APPLICATION_LEASE_MARGIN)
-    return _STALE_THRESHOLD
+    name = scan_profiles.APPLICATION if payload.get("scan_profile") == scan_profiles.APPLICATION else scan_profiles.WEB
+    profile = scan_profiles.resolve_profile(name)
+    return max(_STALE_THRESHOLD, timedelta(seconds=profile.hard_timeout_seconds) + _APPLICATION_LEASE_MARGIN)
 
 
 async def enqueue(db: AsyncSession, *, org_id: uuid.UUID, job_type: str, payload: dict) -> AgentJob:

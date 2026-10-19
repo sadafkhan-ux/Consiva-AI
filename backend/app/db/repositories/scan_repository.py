@@ -75,6 +75,10 @@ async def mark_scan_running(db: AsyncSession, scan_id: uuid.UUID) -> None:
     if scan:
         scan.status = "running"
         scan.started_at = datetime.now(UTC)
+        # A retry of a job whose previous attempt failed lands here again. Leaving that attempt's
+        # error and completion time on the row made a scan that was running look failed.
+        scan.error = None
+        scan.completed_at = None
         await db.flush()
 
 
@@ -254,6 +258,7 @@ def _serialize_evidence(
     pages: list, forms: list, cookies: list, trackers: list, services: list, policies: list, signals: list,
     *, include_cookie_detail: bool = False,
 ) -> dict:
+    page_url_by_id = {p.id: p.url for p in pages}
     return {
         "pages": [{"id": str(p.id), "url": p.url, "title": p.title} for p in pages],
         "forms": [
@@ -268,7 +273,9 @@ def _serialize_evidence(
         ],
         "trackers": [
             {"id": str(t.id), "script_src": t.script_src, "vendor": t.vendor, "category": t.category,
-             "source": t.source, "consent_states": t.consent_states}
+             "source": t.source, "consent_states": t.consent_states,
+             # The page the request/script was seen on, so a finding can say WHERE. None when not recorded.
+             "page_url": page_url_by_id.get(t.page_id)}
             for t in trackers
         ],
         "third_party_services": [

@@ -235,6 +235,12 @@ class CmpSignature:
     # not (yet) catalogued; the generic text-match fallback handles those.
     accept_selector: str | None = None
     reject_selector: str | None = None
+    # A control the CMP asks a visitor to answer BEFORE it shows the consent choice (an age gate: "Yes,
+    # I am 18+"). Without answering it the banner never appears, so Accept/Reject read as "not automatable"
+    # when they were simply not shown yet. scan_interactor answers it as an adult visitor would and records
+    # that it did, so a reviewer can see the state under which the consent test ran.
+    gate_selector: str | None = None
+    gate_kind: str = "age_gate"
 
 
 CMP_CATALOG: tuple[CmpSignature, ...] = (
@@ -323,6 +329,11 @@ CMP_CATALOG: tuple[CmpSignature, ...] = (
         # are left None (not yet catalogued); the generic text-match fallback still
         # fills those in once the vendor is identified here.
         cmp_vendor="Consiva Consent SDK", domain_substrings=("consiva.ai",),
+        # Read from the live SDK on gignaati.com, not guessed: the banner is a modal dialog inside an
+        # open shadow root (#cmp-host), so Playwright's CSS selectors reach it. A site with the age gate
+        # enabled shows #cmp-age-yes / #cmp-age-no first; the choice buttons appear after "Yes".
+        accept_selector="#cmp-accept-all", reject_selector="#cmp-reject-all",
+        gate_selector="#cmp-age-yes",
     ),
 )
 

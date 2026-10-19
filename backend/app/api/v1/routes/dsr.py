@@ -1,10 +1,11 @@
 """Agent 3 (DSR Fulfillment) API.
 
-Every route is authenticated and org-scoped through core/integration_auth, which accepts
-EITHER a signed-in person OR an org-scoped service key (csv_...) holding `dsr:operate`
-(cases, config reads) or `dsr:config` (config writes). The org comes from the verified
-credential in both cases, so tenancy behaves identically across all agents. Nothing here accepts an org_id from the caller -- it comes from
-the verified token and nowhere else, which is what closes the IDOR §37 asks about.
+Every route is authenticated with the signed-in user's own session (core/security.
+get_current_user) and is org-scoped by it. There is no separate DSR key, token or credential to
+create or pass: whoever can sign in can use DSR, within their own organisation, and the
+configuration routes additionally require the administrator role. Nothing here accepts an org_id
+from the caller -- it comes from the verified token and nowhere else, which is what closes the
+IDOR §37 asks about.
 
 The long-running steps (search, execution) are QUEUED on the existing agent_jobs
 queue rather than run inside the request. A DSR search takes as long as the slowest
@@ -13,23 +14,30 @@ case with its new status, and the UI polls -- it never shows progress the backen
 did not report (§33).
 """
 
+import re
 import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationError, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.dsr.connectors import authorization
-from app.agents.dsr.connectors.factory import SUPPORTED_CONNECTORS, build_connector, encrypt_credential
+from app.agents.dsr.connectors.factory import (
+    SUPPORTED_CONNECTORS,
+    build_connector,
+    encrypt_credential,
+)
 from app.agents.dsr.errors import (
     AdminRequiredError,
     CaseNotReadyError,
     DsrError,
     DsrNotFoundError,
+    DuplicateActiveCaseError,
     EvidenceTooLargeError,
+    IdentityLimitError,
     SourceNotAuthorizedError,
 )
 from app.agents.dsr.schemas import case as case_vocab
@@ -43,17 +51,17 @@ from app.agents.dsr.services import (
     outcome_service,
     planning_service,
     response_service,
-    setup_service,
     sla_service,
 )
-from app.core import integration_auth
-from app.core.security import CurrentUser
+from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import dsr_repository, ropa_repository
 from app.db.session import get_db
 from app.jobs import queue
 from app.services import audit_service, dsr_run_service
 
 router = APIRouter(prefix="/api/v1/dsr", tags=["dsr"])
+
+_EMAIL_SHAPE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
 
 
 # ── Request models ───────────────────────────────────────────────────────────────
@@ -64,12 +72,26 @@ class DsrCreate(BaseModel):
     requester_phone: str | None = Field(default=None, max_length=40)
     requester_reference: str | None = Field(default=None, max_length=200)
     idempotency_key: str | None = Field(default=None, max_length=200)
+    # Opening a second case while one is still open for the same requester is allowed only with a
+    # reason, which is written to the audit trail. A case imported with an idempotency_key (the
+    # portal, which has its own request ids) is not subject to this: its key already says which
+    # request it is.
+    duplicate_override_reason: str | None = Field(default=None, max_length=500)
 
     @field_validator("requester_email")
     @classmethod
     def _looks_like_email(cls, value: str | None) -> str | None:
-        if value and "@" not in value:
-            raise ValueError("requester_email must contain '@'")
+        # The same shape the screens check. "@" alone, "a@", or an address with a space was being
+        # saved as the requester, and then could never be matched, challenged or answered.
+        if value is not None and value.strip() and not _EMAIL_SHAPE.fullmatch(value.strip()):
+            raise ValueError("requester_email must look like name@domain.tld")
+        return value
+
+    @field_validator("duplicate_override_reason")
+    @classmethod
+    def _reason_is_meaningful(cls, value: str | None) -> str | None:
+        if value is not None and value.strip() and len(value.strip()) < 5:
+            raise ValueError("duplicate_override_reason must say why in at least 5 characters")
         return value
 
 
@@ -79,6 +101,21 @@ class VerifyIdentity(BaseModel):
     challenge: str | None = Field(default=None, max_length=200)
     manual: bool = False
     evidence_note: str | None = Field(default=None, max_length=1000)
+    # Manual verification says HOW and against WHAT: one of identity_service.MANUAL_METHODS, and
+    # the document number / account / facts compared. Both are recorded on the audit trail.
+    method: str | None = Field(default=None, max_length=40)
+    reference: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _manual_needs_a_method_and_reference(self) -> "VerifyIdentity":
+        if self.manual:
+            if self.method not in identity_service.MANUAL_METHODS:
+                raise ValueError(
+                    f"manual verification needs a method, one of {sorted(identity_service.MANUAL_METHODS)}"
+                )
+            if not (self.reference or "").strip():
+                raise ValueError("manual verification needs a reference for what was checked")
+        return self
 
 
 class ClassifyRequest(BaseModel):
@@ -233,18 +270,36 @@ async def _case_with_identity(db: AsyncSession, request) -> dict:
 @router.post("/requests", status_code=status.HTTP_201_CREATED)
 async def create_request(
     payload: DsrCreate,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    org_id = uuid.UUID(user.org_id)
+    audit_extra = None
+    email = (payload.requester_email or "").strip().lower()
+    if email and not payload.idempotency_key:
+        open_cases = await dsr_repository.find_active_requests_by_email(db, org_id, email)
+        if open_cases:
+            reason = (payload.duplicate_override_reason or "").strip()
+            if not reason:
+                refs = ", ".join(c.reference for c in open_cases[:3])
+                raise DuplicateActiveCaseError(
+                    f"An open case already exists for this requester ({refs}). Open that case "
+                    "instead, or give a reason for opening another."
+                )
+            audit_extra = {
+                "duplicate_override_reason": reason,
+                "duplicate_of": [c.reference for c in open_cases[:5]],
+            }
     request, is_new = await case_service.create_case(
         db,
-        org_id=uuid.UUID(user.org_id),
+        org_id=org_id,
         raw_request=payload.raw_request,
         requester_email=payload.requester_email,
         requester_phone=payload.requester_phone,
         requester_reference=payload.requester_reference,
         idempotency_key=payload.idempotency_key,
         created_by_user_id=uuid.UUID(user.user_id),
+        audit_extra=audit_extra,
     )
     if is_new:
         # Classify immediately: it reads only the requester's own words, so it is not
@@ -258,19 +313,44 @@ async def create_request(
 async def list_requests(
     status_filter: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    rows = await dsr_repository.list_requests(
-        db, uuid.UUID(user.org_id), status=status_filter, limit=limit
-    )
-    return [_case_response(r) for r in rows]
+    org_id = uuid.UUID(user.org_id)
+    rows = await dsr_repository.list_requests(db, org_id, status=status_filter, limit=limit)
+    # The same identity status the detail view shows. The list used to leave it null, so one
+    # case read "none" in the list and "pending" when opened.
+    verifications = await dsr_repository.latest_identity_verifications(db, org_id, [r.id for r in rows])
+    return [
+        _case_response(r, identity_status=identity_service.effective_status(verifications.get(r.id)))
+        for r in rows
+    ]
+
+
+# Declared before /requests/{request_id} so "active" is never read as a case id.
+@router.get("/requests/active")
+async def active_requests_for_requester(
+    email: str = Query(min_length=3, max_length=320),
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Open cases for one requester email in this organisation, so a screen can point at the
+    existing case before another is opened. Read-only; scoped to the caller's organisation."""
+    rows = await dsr_repository.find_active_requests_by_email(db, uuid.UUID(user.org_id), email)
+    return [
+        {
+            "id": str(r.id), "reference": r.reference, "status": r.status,
+            "request_type": r.request_type,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
 
 
 @router.get("/requests/{request_id}")
 async def get_request(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
@@ -281,7 +361,7 @@ async def get_request(
 async def classify(
     request_id: uuid.UUID,
     payload: ClassifyRequest,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
@@ -297,7 +377,7 @@ async def classify(
 @router.post("/requests/{request_id}/identity/challenge")
 async def start_identity_challenge(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Issue an email challenge.
@@ -308,7 +388,19 @@ async def start_identity_challenge(
     and cannot be recovered afterwards.
     """
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
-    verification, challenge = await identity_service.start_challenge(db, request)
+    try:
+        verification, challenge = await identity_service.start_challenge(db, request)
+    except IdentityLimitError as exc:
+        # A refusal is itself evidence: someone keeps asking for codes on a case that is locked
+        # out or over its allowance. Written and committed before the error goes back, so the
+        # case history shows it rather than the request vanishing in a rollback.
+        await audit_service.record(
+            db, org_id=request.org_id, actor_user_id=uuid.UUID(user.user_id),
+            action=case_vocab.AUDIT_IDENTITY_CHALLENGE_REFUSED, entity_type=case_vocab.AUDIT_ENTITY,
+            entity_id=request.id, after={"reason": str(exc)},
+        )
+        await db.commit()
+        raise
     if request.status == case_vocab.RECEIVED:
         await case_service.transition(
             db, request, case_vocab.IDENTITY_PENDING,
@@ -327,8 +419,12 @@ async def start_identity_challenge(
         "status": verification.status,
         "expires_at": verification.expires_at.isoformat(),
         "challenge": challenge,
+        "max_attempts": verification.max_attempts,
+        # No email was sent, and the response says so. The code is shown once, to the signed-in
+        # operator, to pass to the requester.
+        "emailed": False,
         "delivery_note": (
-            "No outbound email provider is configured. Deliver this challenge to the "
+            "No email was sent: no outbound email provider is configured. Give this code to the "
             "requester yourself; it is stored only as a hash and cannot be shown again."
         ),
     }
@@ -338,7 +434,7 @@ async def start_identity_challenge(
 async def verify_identity(
     request_id: uuid.UUID,
     payload: VerifyIdentity,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
@@ -348,6 +444,8 @@ async def verify_identity(
             db, request,
             reviewer_user_id=uuid.UUID(user.user_id),
             evidence_note=payload.evidence_note or "",
+            method=payload.method,
+            reference=payload.reference,
         )
     elif payload.challenge:
         verification = await identity_service.submit_challenge(db, request, payload.challenge)
@@ -362,10 +460,15 @@ async def verify_identity(
             audit_action=case_vocab.AUDIT_IDENTITY_VERIFIED,
         )
     await db.commit()
+    is_challenge = verification.method == "email_challenge"
     return {
-        "status": verification.status,
+        "status": identity_service.effective_status(verification),
         "satisfied": satisfied,
         "attempts": verification.attempts,
+        "max_attempts": verification.max_attempts if is_challenge else None,
+        "attempts_remaining": (
+            max(verification.max_attempts - verification.attempts, 0) if is_challenge else None
+        ),
         "case": await _case_with_identity(db, request),
     }
 
@@ -375,7 +478,7 @@ async def verify_identity(
 @router.post("/requests/{request_id}/search")
 async def start_search(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Queue the subject search.
@@ -416,9 +519,8 @@ async def start_search(
     ]
     if not enabled_sources:
         raise SourceNotAuthorizedError(
-            "Connect a data source first: no source is authorised for DSR in this "
-            "organisation. An administrator can add one in DSR Settings (or push evidence "
-            "with POST /requests/{id}/evidence). This case was left unchanged."
+            "No data source is connected for DSR. An administrator needs to connect one "
+            "under DSR \u2192 Configuration. This request was left unchanged."
         )
 
     await case_service.transition(
@@ -437,7 +539,7 @@ async def start_search(
 @router.get("/requests/{request_id}/results")
 async def list_results(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     org_id = uuid.UUID(user.org_id)
@@ -471,7 +573,8 @@ async def list_results(
         ],
         "evidence": [
             {
-                "id": str(e.id), "source": e.source_name, "table": e.table_name,
+                "id": str(e.id), "search_run_id": str(e.search_run_id) if e.search_run_id else None,
+                "source": e.source_name, "table": e.table_name,
                 "matched_column": e.matched_column, "identifier_kind": e.identifier_kind,
                 "match_type": e.match_type, "confidence": e.confidence,
                 "record_reference": e.record_reference, "record_snapshot": e.record_snapshot or {},
@@ -494,16 +597,16 @@ async def list_results(
 # it -- every case ends in `failed`/SOURCE_NOT_AUTHORIZED. Consiva already holds
 # those credentials; this lets it run the search and hand the agent the matched
 # records instead, following the same push shape ROPA's `/evidence` already uses
-# (app/api/v1/routes/ropa.py's `ingest_evidence`) -- same auth story (an org's
-# integration key, `dsr:operate` -- the SAME scope that already gates /search and
-# every other case-mutating route; no new scope was needed), same idempotency
-# contract (a retried push with the same key returns what the first one produced).
+# (app/api/v1/routes/ropa.py's `ingest_evidence`) -- same auth as every other DSR route (the
+# signed-in user's session; a system pushing evidence signs in as a user, it does not carry a
+# separate key), same idempotency contract (a retried push with the same key returns what the
+# first one produced).
 
 @router.post("/requests/{request_id}/evidence", status_code=status.HTTP_201_CREATED)
 async def push_evidence(
     request_id: uuid.UUID,
     http_request: Request,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Accept evidence Consiva's own lookup produced, analyze it, and leave the
@@ -542,7 +645,6 @@ async def push_evidence(
     request = await case_service.get_case_or_raise(db, request_id, org_id)
     run, plan, _actions = await dsr_run_service.ingest_pushed_evidence(
         db, request, push,
-        integration_key_id=user.key_id, integration_key_name=user.key_name,
         actor_user_id=uuid.UUID(user.user_id),
     )
     await db.commit()
@@ -579,7 +681,7 @@ class ExecutionReport(BaseModel):
 async def execution_report(
     request_id: uuid.UUID,
     payload: ExecutionReport,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Consiva reports what it actually did with the execution manifest
@@ -609,7 +711,7 @@ async def execution_report(
 @router.post("/requests/{request_id}/evidence/purge")
 async def purge_pushed_evidence(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Clear the encrypted raw package(s) POST /evidence stored for this case.
@@ -644,7 +746,7 @@ async def purge_pushed_evidence(
 @router.get("/requests/{request_id}/plan")
 async def get_plan(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     org_id = uuid.UUID(user.org_id)
@@ -690,7 +792,7 @@ async def _plan_response(db: AsyncSession, request, org_id: uuid.UUID) -> dict:
 async def build_plan_from_selections(
     request_id: uuid.UUID,
     payload: PlanSelections,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Build (or rebuild) the action plan from the requester's per-record choices.
@@ -762,7 +864,7 @@ async def decide_action(
     request_id: uuid.UUID,
     action_id: uuid.UUID,
     payload: Decision,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     org_id = uuid.UUID(user.org_id)
@@ -806,7 +908,7 @@ async def decide_action(
 @router.post("/requests/{request_id}/execute")
 async def execute(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Queue execution of the approved actions -- or, when every runnable action
@@ -862,7 +964,7 @@ async def execute(
 @router.get("/requests/{request_id}/outcome")
 async def get_outcome(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """What actually happened to this case, stage by stage: the search, the approvals, the
@@ -899,7 +1001,7 @@ class ReconcileRequest(BaseModel):
 @router.post("/requests/reconcile")
 async def reconcile_requests(
     payload: ReconcileRequest,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Compare a portal's view of its requests with this agent's cases. READ-ONLY.
@@ -934,7 +1036,7 @@ async def reconcile_requests(
 @router.post("/requests/{request_id}/retry-execution")
 async def retry_execution(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Reopen a case whose execution failed so its failed actions can run again.
@@ -954,7 +1056,7 @@ async def retry_execution(
 @router.get("/requests/{request_id}/executions")
 async def list_executions(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     org_id = uuid.UUID(user.org_id)
@@ -981,10 +1083,13 @@ async def list_executions(
 @router.post("/requests/{request_id}/response", status_code=status.HTTP_201_CREATED)
 async def generate_response(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     request = await case_service.get_case_or_raise(db, request_id, uuid.UUID(user.org_id))
+    # Refused, not drafted, until the requester is verified and a search has finished: the letter
+    # states what was found, and before that there is nothing true to state.
+    await response_service.assert_ready_to_draft(db, request)
     response = await response_service.build_response(
         db, request, actor_user_id=uuid.UUID(user.user_id)
     )
@@ -999,7 +1104,7 @@ async def generate_response(
 @router.get("/requests/{request_id}/response")
 async def get_response(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict | None:
     org_id = uuid.UUID(user.org_id)
@@ -1018,7 +1123,7 @@ async def get_response(
 @router.post("/requests/{request_id}/complete")
 async def complete_case(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Mark the response sent and close the case.
@@ -1132,9 +1237,7 @@ async def complete_case(
 def _require_admin(user: CurrentUser) -> None:
     """Configuration changes what the agent is allowed to touch, so they are not
     something an ordinary member may do. A token with no role is not an admin."""
-    # A service key has no role by design; it reaches the write routes only through
-    # get_dsr_config_writer, which has already required its dsr:config scope.
-    if user.key_name is None and user.role != "admin":
+    if user.role != "admin":
         raise AdminRequiredError(
             "changing DSR source authorization or retention policy requires an "
             "administrator"
@@ -1143,7 +1246,7 @@ def _require_admin(user: CurrentUser) -> None:
 
 @router.get("/config/sources")
 async def list_source_authorizations(
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """What each source is permitted to do. Never returns a credential -- the row holds
@@ -1182,7 +1285,7 @@ async def list_source_authorizations(
 @router.put("/config/sources", status_code=status.HTTP_200_OK)
 async def put_source_authorization(
     payload: SourceAuthorizationIn,
-    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Replace a source's DSR authorization.
@@ -1257,7 +1360,7 @@ async def put_source_authorization(
 @router.post("/config/sources/{data_source_id}/test")
 async def test_source_connection(
     data_source_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Check a source's DSR configuration against the real database, read-only.
@@ -1312,187 +1415,10 @@ async def test_source_connection(
     }
 
 
-# ── Setup wizard: domain -> ownership -> discovery -> (PUT /config/sources) -> test ──
-#
-# A verified domain proves the organisation controls a website's DNS. It authorises NOTHING:
-# no source, table, column or operation is enabled by anything in this block. See
-# setup_service for what is reused from the existing domain verification, and why.
-
-class DomainIn(BaseModel):
-    domain: str = Field(min_length=1, max_length=2048)
-    #: Run a live DNS check for the verification record now. Off by default so merely typing a
-    #: domain never causes an outbound lookup.
-    verify: bool = False
-
-
-async def _ownership_for(db: AsyncSession, org_id: uuid.UUID, domain: str, *, check_dns: bool):
-    website = await dsr_repository.find_website(db, org_id, domain)
-    return await setup_service.establish_ownership(
-        org_id=org_id, domain=domain,
-        verified_at=website.verified_at if website is not None else None,
-        check_dns=check_dns,
-    )
-
-
-def _ownership_dict(ownership) -> dict:
-    return {
-        "proven": ownership.proven, "method": ownership.method, "stale": ownership.stale,
-        "verified_at": ownership.verified_at.isoformat() if ownership.verified_at else None,
-        "detail": ownership.detail,
-    }
-
-
-@router.get("/setup/overview")
-async def setup_overview(
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Where onboarding stands: the domains already verified for this organisation (reusable,
-    read-only), each registered source and what it needs next, and the integration paths that
-    exist. Changes nothing."""
-    org_id = uuid.UUID(user.org_id)
-    now = datetime.now(UTC)
-    domains = []
-    for site in await dsr_repository.list_org_websites(db, org_id):
-        fresh = setup_service._is_fresh(site.verified_at, now)  # noqa: SLF001 -- same module family
-        domains.append({
-            "domain": site.domain,
-            "verified": fresh,
-            "stale": site.verified_at is not None and not fresh,
-            "verified_at": site.verified_at.isoformat() if site.verified_at else None,
-        })
-    sources = await ropa_repository.list_data_sources(db, org_id)
-    authorizations = await dsr_repository.list_all_source_authorizations(db, org_id)
-    return {
-        "domains": domains,
-        "sources": setup_service.assess_sources(sources, authorizations),
-        "paths": list(setup_service.INTEGRATION_PATHS),
-        "verification_max_age_days": setup_service.DOMAIN_VERIFICATION_MAX_AGE_DAYS,
-    }
-
-
-@router.post("/setup/domain")
-async def setup_check_domain(
-    payload: DomainIn,
-    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """Validate a domain and say whether the organisation has proven it controls it.
-
-    Returns the DNS record to publish. With `verify: true` it also checks DNS now. Nothing is
-    stored: a successful check here does not add the site to any other agent's list.
-    """
-    _require_admin(user)
-    org_id = uuid.UUID(user.org_id)
-    domain = setup_service.normalize_domain(payload.domain)
-    ownership = await _ownership_for(db, org_id, domain, check_dns=payload.verify)
-    await audit_service.record(
-        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
-        action="dsr.domain_checked", entity_type="dsr_setup", entity_id=org_id,
-        after={"domain": domain, "proven": ownership.proven, "method": ownership.method,
-               "dns_checked": payload.verify},
-    )
-    await db.commit()
-    return {
-        "domain": domain,
-        "ownership": _ownership_dict(ownership),
-        "txt_record": None if ownership.proven else setup_service.txt_record_for(org_id, domain),
-        "grants_access": False,
-        "note": (
-            "Proving a domain shows you control the website. It does not give Consiva access to "
-            "any database: connecting and authorising a source is a separate step."
-        ),
-    }
-
-
-@router.post("/setup/discover")
-async def setup_discover(
-    payload: DomainIn,
-    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """What Consiva can connect to for this domain, and what each option still needs.
-
-    Requires proven ownership of the domain (a fresh existing verification, or a live DNS
-    check). Reads the customer's published manifest, if any, as an unverified claim and calls
-    nothing it lists. Authorises nothing.
-    """
-    _require_admin(user)
-    org_id = uuid.UUID(user.org_id)
-    domain = setup_service.normalize_domain(payload.domain)
-    ownership = await _ownership_for(db, org_id, domain, check_dns=True)
-    if not ownership.proven:
-        raise setup_service.DomainNotVerifiedError(
-            f"{domain} is not verified for your organisation: {ownership.detail}"
-        )
-    manifest = await setup_service.fetch_manifest(domain)
-    sources = await ropa_repository.list_data_sources(db, org_id)
-    authorizations = await dsr_repository.list_all_source_authorizations(db, org_id)
-    await audit_service.record(
-        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
-        action="dsr.integration_discovered", entity_type="dsr_setup", entity_id=org_id,
-        after={"domain": domain, "manifest_found": manifest["found"],
-               "manifest_reason": manifest.get("reason")},
-    )
-    await db.commit()
-    return {
-        "domain": domain,
-        "ownership": _ownership_dict(ownership),
-        "manifest": manifest,
-        "paths": list(setup_service.INTEGRATION_PATHS),
-        "sources": setup_service.assess_sources(sources, authorizations),
-        "grants_access": False,
-    }
-
-
-@router.get("/config/sources/{data_source_id}/schema")
-async def get_source_schema(
-    data_source_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    """The tables and columns (names and types only) the source's READ role can see, to fill
-    the setup wizard's pick-lists. Reads no row. Works before any authorization exists."""
-    _require_admin(user)
-    org_id = uuid.UUID(user.org_id)
-    source = await ropa_repository.get_data_source(db, data_source_id, org_id)
-    if source is None:
-        raise DsrNotFoundError(f"data source {data_source_id} not found")
-    if source.connector not in SUPPORTED_CONNECTORS:
-        raise SourceNotAuthorizedError(
-            f"source {source.name!r} uses connector {source.connector!r}, which DSR cannot "
-            f"search -- supported connectors are {sorted(SUPPORTED_CONNECTORS)}"
-        )
-    # An empty authorization: it permits nothing, which is all a schema listing needs -- it
-    # builds a READ-only connection and never touches an allowlist.
-    nothing = SimpleNamespace(
-        enabled=True, searchable_tables=[], identity_tables=[], identifier_columns={},
-        returnable_columns={}, record_key_columns={}, erasable_columns={},
-        allow_execution=False, write_credential_ref=None, write_credential_ciphertext=None,
-    )
-    try:
-        connector = build_connector(data_source=source, authorization=nothing, for_execution=False)
-        listing = await connector.list_schema()
-        result = {"available": True, "source_name": source.name, **listing}
-    except DsrError as exc:
-        result = {
-            "available": False, "source_name": source.name, "error_code": exc.code,
-            "message": exc.message, "tables": [],
-        }
-    await audit_service.record(
-        db, org_id=org_id, actor_user_id=uuid.UUID(user.user_id),
-        action="dsr.source_schema_listed", entity_type="ropa_data_source", entity_id=source.id,
-        after={"source": source.name, "available": result["available"],
-               "table_count": len(result["tables"])},
-    )
-    await db.commit()
-    return result
-
-
 @router.post("/config/sources/{data_source_id}/revoke")
 async def revoke_source(
     data_source_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Withdraw a source from DSR: disable its authorization, switch execution off and delete
@@ -1520,7 +1446,7 @@ async def revoke_source(
 
 @router.get("/config/retention")
 async def list_retention(
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     rows = await dsr_repository.list_retention_rules(db, uuid.UUID(user.org_id))
@@ -1540,7 +1466,7 @@ async def list_retention(
 @router.put("/config/retention", status_code=status.HTTP_200_OK)
 async def put_retention_rule(
     payload: RetentionRuleIn,
-    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     _require_admin(user)
@@ -1568,7 +1494,7 @@ async def put_retention_rule(
 @router.delete("/config/retention/{rule_id}", status_code=status.HTTP_200_OK)
 async def disable_retention_rule(
     rule_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_config_writer),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Disables rather than deletes. A rule that blocked an erasure last month is part
@@ -1591,7 +1517,7 @@ async def disable_retention_rule(
 @router.get("/requests/{request_id}/audit")
 async def case_audit(
     request_id: uuid.UUID,
-    user: CurrentUser = Depends(integration_auth.get_dsr_operator),
+    user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """The case timeline, read from the SHARED append-only audit_logs table. There is

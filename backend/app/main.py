@@ -14,6 +14,7 @@ from app.api.v1.router import api_router
 from app.config import get_settings
 from app.core.exceptions import ConsivaError
 from app.db.privilege_check import assert_rls_is_enforceable
+from app.rag.health import warn_if_knowledge_base_empty
 
 logging.basicConfig(level=get_settings().log_level)
 
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     # nothing anywhere reported it -- the policies simply were never consulted.
     # Refuses to boot in production; warns loudly elsewhere.
     await assert_rls_is_enforceable()
+    await warn_if_knowledge_base_empty()
     await get_compiled_graph()  # builds the checkpointer pool + compiled graph once
     yield
     await close_graph_resources()

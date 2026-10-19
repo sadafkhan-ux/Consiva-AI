@@ -82,6 +82,7 @@ async def create_case(
     requester_reference: str | None = None,
     idempotency_key: str | None = None,
     created_by_user_id: uuid.UUID | None = None,
+    audit_extra: dict | None = None,
     sla_days: int = DEFAULT_SLA_DAYS,
     now: datetime | None = None,
 ) -> tuple[DsrRequest, bool]:
@@ -136,6 +137,7 @@ async def create_case(
                     ("reference", request.requester_reference),
                 ) if v
             ),
+            **(audit_extra or {}),
         },
     )
     return request, True

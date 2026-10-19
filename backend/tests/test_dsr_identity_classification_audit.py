@@ -168,6 +168,7 @@ async def test_a_new_challenge_can_be_issued_after_expiry(monkeypatch):
     monkeypatch.setattr(
         identity_service.dsr_repository, "create_identity_verification", _stub_create(),
     )
+    _no_prior_challenges(monkeypatch)
     fresh_start = NOW + timedelta(hours=48)  # well past the first challenge's TTL
     verification, plaintext = await identity_service.start_challenge(FakeSession(), request, now=fresh_start)
 
@@ -520,3 +521,15 @@ def test_coerce_model_type_never_admits_an_invented_type():
     assert rc.coerce_model_type("  ACCESS  ") == case.ACCESS
     for t in case.CLASSIFIABLE_TYPES:
         assert rc.coerce_model_type(t) == t
+
+
+def _no_prior_challenges(monkeypatch):
+    """The challenge limits read earlier rows; a fresh case has none."""
+    async def _none(db, request_id, org_id):
+        return []
+
+    async def _zero(db, org_id, requester_email, since):
+        return 0
+
+    monkeypatch.setattr(identity_service.dsr_repository, "list_identity_verifications", _none)
+    monkeypatch.setattr(identity_service.dsr_repository, "count_requester_challenges", _zero)

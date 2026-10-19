@@ -397,7 +397,14 @@ class NvidiaLLMClient(BaseLLMClient):
         )
 
     async def embed(self, texts: list[str], *, input_type: Literal["query", "passage"]) -> list[list[float]]:
-        response = await self._client.embeddings.create(
+        # Bounded per call: see Settings.embed_timeout_seconds for the measurement behind these numbers.
+        # `with_options` is the SDK's own per-request override; anything else (a test double) is used as is.
+        transport = self._client
+        if isinstance(transport, AsyncOpenAI):
+            transport = transport.with_options(
+                timeout=self._settings.embed_timeout_seconds, max_retries=self._settings.embed_max_retries,
+            )
+        response = await transport.embeddings.create(
             model=self._settings.nvidia_embed_model,
             input=texts,
             # `dimensions` matters for Matryoshka-capable models (e.g. llama-3.2-nv-embedqa-1b-v2,
@@ -580,8 +587,15 @@ class ClaudeLLMClient(BaseLLMClient):
         # class default) -- Claude's own max output is far higher, but this project's
         # structured-output completions have never needed more (see BaseLLMClient's
         # _max_output_tokens docstring).
-        self._max_output_tokens = 4000
-        self._client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=self._call_timeout)
+        # Claude's hidden reasoning counts against this ceiling, and it cannot be switched off (see above). A real
+        # scan measured it: attempt 1 produced 4000 output tokens, 3041 of them thinking, and the JSON was cut
+        # off mid-string ("EOF while parsing a string") -- a wasted call and a retry. Headroom for thinking plus
+        # the ~2,600-token answer that attempt 2 needed.
+        self._max_output_tokens = 8000
+        headers = {"anthropic-workspace-id": settings.anthropic_workspace_id} if settings.anthropic_workspace_id else None
+        self._client = AsyncAnthropic(
+            api_key=settings.anthropic_api_key, timeout=self._call_timeout, default_headers=headers,
+        )
 
     async def _chat(
         self, messages: list[dict], *, retry_meta: dict | None = None, deadline_epoch: float | None = None,

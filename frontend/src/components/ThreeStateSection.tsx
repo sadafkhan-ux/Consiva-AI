@@ -32,6 +32,9 @@ export function ThreeStateSection({
       <div className="state-cards">
         {STATES.map(({ key, title }) => {
           const sampleTrackers = trackers.filter((t) => t.consent_states.includes(key)).slice(0, 5);
+          const hosts = [...new Set(
+            trackers.filter((t) => t.consent_states.includes(key) && t.page_url).map((t) => domainOf(t.page_url as string)),
+          )];
           const pill = key === "pre_consent" ? null : key === "post_accept" ? meta.accept_interaction : meta.reject_interaction;
           return (
             <div className="state-card" key={key}>
@@ -41,6 +44,11 @@ export function ThreeStateSection({
                 <div><b>{cByState[key] ?? 0}</b> cookies</div>
                 <div><b>{tByState[key] ?? 0}</b> trackers / third-party requests</div>
               </div>
+              {hosts.length > 0 && (
+                <div className="hint" style={{ margin: "8px 0 0" }} data-testid={`state-pages-${key}`}>
+                  Trackers recorded on: {hosts.join(", ")}
+                </div>
+              )}
               {sampleTrackers.length > 0 && (
                 <div style={{ marginTop: 10 }}>
                   <div className="hint" style={{ margin: "0 0 4px" }}>Sample domains observed in this state:</div>

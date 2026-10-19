@@ -158,20 +158,14 @@ SCOPE_CONSENT_SCAN_APPLICATION = "consent:scan:application"
 #: doesn't have to be granted write too.
 SCOPE_EVIDENCE_READ = "evidence:read"
 
-#: Scope a service key needs to work DSR cases (create, classify, identity, search,
-#: plan, decide, execute, respond, complete, audit) and to READ the DSR configuration.
-SCOPE_DSR_OPERATE = "dsr:operate"
-
-#: Scope a service key needs to CHANGE the DSR configuration (source authorization and
-#: retention rules). Separate from dsr:operate because configuration decides what the
-#: agent may read and erase; a key that only works cases must not be able to widen that.
-SCOPE_DSR_CONFIG = "dsr:config"
+# DSR has no service-key scopes. Its routes accept only a signed-in user (core/security.
+# get_current_user), so there is nothing for a client to mint, copy or configure.
 
 #: Every scope a key may be granted. Enumerated so a typo at mint time is refused
 #: rather than stored as a scope that can never match anything.
 KNOWN_SCOPES = (
     "evidence:write", SCOPE_CONSENT_SCAN, SCOPE_CONSENT_SCAN_APPLICATION,
-    SCOPE_EVIDENCE_READ, SCOPE_DSR_OPERATE, SCOPE_DSR_CONFIG,
+    SCOPE_EVIDENCE_READ,
 )
 
 
@@ -281,29 +275,4 @@ async def get_ropa_reader(
     """
     return await _authenticate_with_scope(
         required_scope=SCOPE_EVIDENCE_READ, credentials=credentials, db=db, settings=settings,
-    )
-
-
-async def get_dsr_operator(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> CurrentUser:
-    """A signed-in person, or a service key holding `dsr:operate` -- every DSR case
-    route and the read-only configuration routes."""
-    return await _authenticate_with_scope(
-        required_scope=SCOPE_DSR_OPERATE, credentials=credentials, db=db, settings=settings,
-    )
-
-
-async def get_dsr_config_writer(
-    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> CurrentUser:
-    """A signed-in person, or a service key holding `dsr:config` -- the DSR configuration
-    write routes. A person must still be an administrator (the route's own check); a key
-    is never an admin, so holding this scope is what stands in for that."""
-    return await _authenticate_with_scope(
-        required_scope=SCOPE_DSR_CONFIG, credentials=credentials, db=db, settings=settings,
     )

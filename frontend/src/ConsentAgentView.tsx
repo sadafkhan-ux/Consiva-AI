@@ -2,7 +2,7 @@
 // could add authentication and a second agent around it. Nothing in this view's
 // behaviour changed -- only the function name and its new home.
 import { useState } from "react";
-import { useConsentScan } from "./hooks/useConsentScan";
+import { failedStageName, scanEvidenceUnavailable, useConsentScan } from "./hooks/useConsentScan";
 import { ScanStatusSection } from "./components/ScanStatusSection";
 import { ConsentSummarySection } from "./components/ConsentSummarySection";
 import { ThreeStateSection } from "./components/ThreeStateSection";
@@ -34,6 +34,9 @@ export function ConsentAgentView() {
   }
 
   const hasRun = state.phase !== "idle";
+  // A failed scan that collected nothing must not render "none detected" sections: see
+  // scanEvidenceUnavailable. The status and diagnostics sections stay -- they carry the failure.
+  const notScanned = scanEvidenceUnavailable(state);
 
   // Offered once the analysis has actually produced findings -- i.e. from the
   // human-review pause (analysis done, audit not yet saved) onward, and still after
@@ -125,6 +128,19 @@ export function ConsentAgentView() {
       {hasRun && (
         <>
           <ScanStatusSection state={state} />
+          {notScanned ? (
+            <section className="section" data-testid="not-scanned">
+              <h2>Results</h2>
+              <div className="error-box">
+                <strong>Not scanned — no result.</strong> The website scan failed
+                {failedStageName(state.stages) ? ` at the "${failedStageName(state.stages)}" stage` : ""} before any
+                page was collected, so nothing is known about this site's consent banner, cookies, trackers, forms
+                or policies. Zero is not shown for any of them, because nothing was measured: this is not a clean
+                result. The reason is under Errors / Diagnostics below; fix it and scan again.
+              </div>
+            </section>
+          ) : (
+        <>
           <ConsentSummarySection meta={state.websiteScanMeta} />
           <ThreeStateSection meta={state.websiteScanMeta} trackers={state.evidence?.trackers ?? []} />
 
@@ -166,6 +182,9 @@ export function ConsentAgentView() {
             <h2>10. Recommendations</h2>
             <RecommendationsSection findings={state.findings} />
           </section>
+
+        </>
+          )}
 
           <section className="section">
             <h2>12. Audit Timeline</h2>

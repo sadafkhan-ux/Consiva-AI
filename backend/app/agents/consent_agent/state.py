@@ -11,6 +11,10 @@ class AgentState(BaseModel):
     scan_evidence: dict | None = None          # get_scan_evidence_summary() output, set by normalize
     rule_findings: list[dict] = Field(default_factory=list)  # RuleFinding dicts, set by classify_rules
     rag_chunks: list[dict] = Field(default_factory=list)
+    # True when retrieval of regulatory provisions failed (the embedding service refused or was unreachable).
+    # The run then skips the model and writes the rule-derived findings, exactly as it does when the model
+    # fails: losing the citations should cost the explanation, not the finding.
+    rag_failed: bool = False
     llm_output: dict | None = None             # serialized ConsentAnalysisResponse
     validation_status: Literal["pending", "valid", "retry", "failed"] = "pending"
     validation_attempts: int = 0

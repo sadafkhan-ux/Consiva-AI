@@ -106,6 +106,23 @@ async def list_requests(
     return list(result.scalars().all())
 
 
+async def find_active_requests_by_email(
+    db: AsyncSession, org_id: uuid.UUID, requester_email: str
+) -> list[DsrRequest]:
+    """Open (non-terminal) cases for the same requester, newest first."""
+    result = await db.execute(
+        select(DsrRequest)
+        .where(
+            DsrRequest.org_id == org_id,
+            DsrRequest.requester_email == requester_email.strip().lower(),
+            DsrRequest.status.not_in(("completed", "rejected", "cancelled", "expired", "partially_completed")),
+        )
+        .order_by(DsrRequest.created_at.desc())
+        .limit(20)
+    )
+    return list(result.scalars().all())
+
+
 async def list_overdue_requests(db: AsyncSession, *, limit: int = 200) -> list[DsrRequest]:
     """SLA sweep support. Deliberately NOT org-scoped: this is called by the worker,
     which acts for every tenant, not on behalf of a signed-in user. It is the one
@@ -154,6 +171,65 @@ async def create_identity_verification(
     db.add(row)
     await db.flush()
     return row
+
+
+async def list_identity_verifications(
+    db: AsyncSession, request_id: uuid.UUID, org_id: uuid.UUID
+) -> list[DsrIdentityVerification]:
+    """Every verification row for a case, oldest first. The challenge limits read this."""
+    result = await db.execute(
+        select(DsrIdentityVerification)
+        .where(
+            DsrIdentityVerification.request_id == request_id,
+            DsrIdentityVerification.org_id == org_id,
+        )
+        .order_by(DsrIdentityVerification.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def count_requester_challenges(
+    db: AsyncSession, org_id: uuid.UUID, requester_email: str, since: datetime
+) -> int:
+    """Email challenges issued since `since` for one requester across ALL of this org's cases.
+
+    Counted per requester rather than per case so that opening a fresh case cannot be used to
+    get a fresh allowance of codes.
+    """
+    result = await db.execute(
+        select(func.count())
+        .select_from(DsrIdentityVerification)
+        .join(DsrRequest, DsrRequest.id == DsrIdentityVerification.request_id)
+        .where(
+            DsrIdentityVerification.org_id == org_id,
+            DsrRequest.org_id == org_id,
+            DsrRequest.requester_email == requester_email,
+            DsrIdentityVerification.method == "email_challenge",
+            DsrIdentityVerification.created_at >= since,
+        )
+    )
+    return int(result.scalar_one() or 0)
+
+
+async def latest_identity_verifications(
+    db: AsyncSession, org_id: uuid.UUID, request_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, DsrIdentityVerification]:
+    """The newest verification row for each of several cases, in one query, so a case LIST can
+    show the same identity status as the case detail."""
+    if not request_ids:
+        return {}
+    result = await db.execute(
+        select(DsrIdentityVerification)
+        .where(
+            DsrIdentityVerification.org_id == org_id,
+            DsrIdentityVerification.request_id.in_(request_ids),
+        )
+        .order_by(DsrIdentityVerification.request_id, DsrIdentityVerification.created_at.desc())
+    )
+    newest: dict[uuid.UUID, DsrIdentityVerification] = {}
+    for row in result.scalars().all():
+        newest.setdefault(row.request_id, row)
+    return newest
 
 
 async def get_latest_identity_verification(
@@ -501,21 +577,6 @@ async def list_source_authorizations(db: AsyncSession, org_id: uuid.UUID) -> lis
     return list(result.scalars().all())
 
 
-async def list_all_source_authorizations(
-    db: AsyncSession, org_id: uuid.UUID
-) -> list[DsrSourceAuthorization]:
-    """Every authorization this org has, INCLUDING revoked/disabled ones.
-
-    Only for display (the setup wizard's "revoked" state). Anything that searches or executes
-    must keep using `list_source_authorizations`, which returns enabled rows only -- a revoked
-    authorization must never be usable.
-    """
-    result = await db.execute(
-        select(DsrSourceAuthorization).where(DsrSourceAuthorization.org_id == org_id)
-    )
-    return list(result.scalars().all())
-
-
 async def get_source_authorization(
     db: AsyncSession, data_source_id: uuid.UUID, org_id: uuid.UUID
 ) -> DsrSourceAuthorization | None:
@@ -754,28 +815,7 @@ async def list_case_audit(
     return list(result.scalars().all())
 
 
-# ── Setup wizard: domains and revocation ─────────────────────────────────────────
-
-async def find_website(db: AsyncSession, org_id: uuid.UUID, domain: str):
-    """The org's `websites` row for `domain`, if any. READ-ONLY: that table belongs to the
-    Consent agent, and the DSR setup flow only ever reads its verification stamp."""
-    from app.db.models import Website
-
-    result = await db.execute(
-        select(Website).where(Website.org_id == org_id, func.lower(Website.domain) == domain.lower())
-    )
-    return result.scalars().first()
-
-
-async def list_org_websites(db: AsyncSession, org_id: uuid.UUID) -> list:
-    """Every `websites` row this org has, verified or not. Read-only (see find_website)."""
-    from app.db.models import Website
-
-    result = await db.execute(
-        select(Website).where(Website.org_id == org_id).order_by(Website.domain)
-    )
-    return list(result.scalars().all())
-
+# ── Revocation ────────────────────────────────────────────────────────────────
 
 async def revoke_source_authorization(
     db: AsyncSession, *, org_id: uuid.UUID, data_source_id: uuid.UUID

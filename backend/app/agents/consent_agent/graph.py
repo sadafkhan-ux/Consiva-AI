@@ -46,6 +46,12 @@ def _route_after_validation(state: AgentState) -> str:
     return _VALIDATION_ROUTES[state.validation_status]
 
 
+def _route_after_retrieval(state: AgentState) -> str:
+    """A failed retrieval skips the model: with no provisions to cite, the deterministic findings are the
+    honest output (same fallback as a failed analysis)."""
+    return "create_rule_findings" if state.rag_failed else "llm_reasoning"
+
+
 def build_graph() -> StateGraph:
     graph = StateGraph(AgentState)
 
@@ -62,7 +68,7 @@ def build_graph() -> StateGraph:
     graph.set_entry_point("normalize")
     graph.add_edge("normalize", "classify_rules")
     graph.add_edge("classify_rules", "retrieve_rag")
-    graph.add_edge("retrieve_rag", "llm_reasoning")
+    graph.add_conditional_edges("retrieve_rag", _route_after_retrieval)
     graph.add_edge("llm_reasoning", "validate_output")
     graph.add_conditional_edges("validate_output", _route_after_validation)
     graph.add_edge("create_findings", "human_review_gate")
