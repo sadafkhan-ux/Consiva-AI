@@ -60,8 +60,33 @@ def test_no_policy_links_returns_empty_list():
         ParsedLink(href="https://example.com/about", text="About us"),
         ParsedLink(href="https://example.com/pricing", text="Pricing"),
     ]
-    records = detect_policies(links, {})
+    records = detect_policies(links, {}, "example.com")
     assert records == []
+
+
+def test_a_policy_link_on_an_unrelated_domain_is_rejected():
+    """A live scan of swaransoft.com accepted https://copilots.in/ as its privacy
+    policy and https://consiva.ai/ as its cookie policy purely because the link
+    text/URL contained "privacy"/"cookie" -- neither domain has anything to do with
+    the scanned site. detect_policies must reject a policy link whose registrable
+    domain does not match the site being scanned."""
+    links = [
+        ParsedLink(href="https://copilots.in/privacy", text="Privacy Policy"),
+        ParsedLink(href="https://consiva.ai/cookies", text="Cookie Policy"),
+    ]
+    records = detect_policies(links, {}, "swaransoft.com")
+    assert records == []
+
+
+def test_a_same_domain_policy_link_is_still_accepted():
+    """The fix above must not reject legitimate same-site policy links, including on a
+    different subdomain of the same registrable domain."""
+    links = [
+        ParsedLink(href="https://www.swaransoft.com/privacy-policy", text="Privacy Policy"),
+        ParsedLink(href="https://swaransoft.com/cookie-policy", text="Cookie Policy"),
+    ]
+    records = detect_policies(links, {}, "swaransoft.com")
+    assert {r.policy_type for r in records} == {"privacy_policy", "cookie_policy"}
 
 
 def test_no_consent_signal_returns_none_mechanism():

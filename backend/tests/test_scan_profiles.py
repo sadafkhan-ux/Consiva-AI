@@ -958,7 +958,7 @@ def test_the_reaper_gives_application_scans_a_lease_longer_than_their_own_timeou
 
     web, app = queue.stale_threshold_for(_job()), queue.stale_threshold_for(_job(APPLICATION))
 
-    assert queue.stale_threshold_for(_job(job_type="analyze")) == timedelta(minutes=10), "other jobs are unchanged"
+    assert queue.stale_threshold_for(_job(job_type="analyze")) == queue._stale_threshold(), "other jobs use the derived base"
     web_profile = resolve_profile(WEB)
     assert web > timedelta(seconds=web_profile.hard_timeout_seconds), (
         "a web scan must be allowed to run to its own ceiling before its job can be called lost, or the "

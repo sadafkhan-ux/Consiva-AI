@@ -7,6 +7,7 @@ from app.db.session import async_session_factory
 from app.llm.client import NvidiaLLMClient
 from app.observability.stage_tracker import track_stage
 from app.rag.retriever import has_text, retrieve_many, text_only_query
+from app.rules.consent_rules import RULE_DPDP_TOPIC_HINTS
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,31 @@ _TOP_K_PER_QUERY = 3
 _MAX_TOTAL_CHUNKS = 8
 
 
+def _query_text(finding: dict) -> str:
+    """The rule's own summary is the base query; where that rule is topically about a
+    specific DPDP Act provision (consent, notice, withdrawal -- see
+    rules/consent_rules.py:RULE_DPDP_TOPIC_HINTS), the provision is appended as an
+    explicit term.
+
+    Why this exists: a live scan's R-001/R-003 findings (tracking before consent /
+    after Reject) retrieved and cited "section 7 (certain legitimate uses)" -- an
+    EXEMPTION from consent, not an obligation about it, and the wrong provision for
+    those findings. The rule's bare summary text ("...fired BEFORE any consent
+    interaction...") is semantically close enough to several unrelated provisions that
+    mention consent in passing that similarity search alone picked the wrong one. This
+    does not itself decide what gets cited -- it only steers which chunks retrieval
+    returns; validate_output.py still has to confirm whatever the model cites was
+    actually retrieved."""
+    hint = RULE_DPDP_TOPIC_HINTS.get(finding.get("rule_id"))
+    return f"{finding['summary']} ({hint})" if hint else finding["summary"]
+
+
 def _queries(rule_findings: list[dict]) -> list[str]:
     if not rule_findings:
         return ["General DPDP Act consent, cookie, and website tracking compliance requirements"]
     # De-duplicated so two rule findings with the literal same summary (e.g. R-001
     # firing identically on two scans merged into one run) don't retrieve twice.
-    return sorted({f["summary"] for f in rule_findings})
+    return sorted({_query_text(f) for f in rule_findings})
 
 
 async def retrieve_rag(state: AgentState) -> dict:

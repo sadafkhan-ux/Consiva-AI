@@ -94,6 +94,21 @@ function when(value: string | null | undefined): string {
   return value ? new Date(value).toLocaleString() : "—";
 }
 
+/** Shown in place of a tab's content when its own fetch failed, instead of
+ *  letting the tab fall back to its ordinary empty state -- "no evidence
+ *  filed yet" and "evidence failed to load" must never render as the same
+ *  thing. */
+function SectionError({ what, onRetry }: { what: string; onRetry: () => void }) {
+  return (
+    <div className="banner banner-error" style={{ marginTop: 14 }}>
+      Could not load {what}.{" "}
+      <button className="secondary" onClick={onRetry}>
+        Try again
+      </button>
+    </div>
+  );
+}
+
 export function BreachConsole() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [selected, setSelected] = useState<Incident | null>(null);
@@ -110,6 +125,12 @@ export function BreachConsole() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Which of the per-tab fetches inside loadIncident failed on the last load.
+   *  Each of those fetches is individually `.catch`-guarded so one bad endpoint
+   *  doesn't take down the whole incident view -- but swallowing the error
+   *  silently made a failed fetch look identical to "nothing recorded yet" in
+   *  every tab. This tracks it so the two can be told apart. */
+  const [sectionErrors, setSectionErrors] = useState<Set<string>>(new Set());
 
   // Intake
   const [title, setTitle] = useState("");
@@ -131,17 +152,26 @@ export function BreachConsole() {
   const loadIncident = useCallback(async (id: string) => {
     setBusy(true);
     setError(null);
+    // Collected fresh on every load rather than patched incrementally, so a
+    // section that failed last time but succeeds this time is cleared, and
+    // nothing ever shows a stale error for a fetch that hasn't even failed yet.
+    const failed = new Set<string>();
+    const section = <T,>(key: string, promise: Promise<T>, fallback: T): Promise<T> =>
+      promise.catch(() => {
+        failed.add(key);
+        return fallback;
+      });
     try {
       const [fresh, ev, tl, imp, rk, plan, cm, rp, ad] = await Promise.all([
         incidentsApi.get(id),
-        incidentsApi.listEvidence(id).catch(() => []),
-        incidentsApi.getTimeline(id).catch(() => []),
-        incidentsApi.getImpact(id).catch(() => null),
-        incidentsApi.getRisk(id).catch(() => null),
-        incidentsApi.getPlan(id).catch(() => null),
-        incidentsApi.listCommunications(id).catch(() => []),
-        incidentsApi.getReport(id).catch(() => null),
-        incidentsApi.getAudit(id).catch(() => []),
+        section("evidence", incidentsApi.listEvidence(id), []),
+        section("timeline", incidentsApi.getTimeline(id), []),
+        section("impact", incidentsApi.getImpact(id), null),
+        section("risk", incidentsApi.getRisk(id), null),
+        section("plan", incidentsApi.getPlan(id), null),
+        section("comms", incidentsApi.listCommunications(id), []),
+        section("report", incidentsApi.getReport(id), null),
+        section("audit", incidentsApi.getAudit(id), []),
       ]);
       setSelected(fresh);
       setEvidence(ev);
@@ -153,6 +183,7 @@ export function BreachConsole() {
       setComms(cm);
       setReport(rp);
       setAudit(ad);
+      setSectionErrors(failed);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load the incident.");
     } finally {
@@ -451,89 +482,121 @@ export function BreachConsole() {
               </nav>
 
               {tab === "evidence" && (
-                <EvidenceTab
-                  incident={selected}
-                  evidence={evidence}
-                  busy={busy}
-                  onAdd={(payload) =>
-                    act("Evidence filed.", () => incidentsApi.addEvidence(selected.id, payload))
-                  }
-                  onReveal={async (evidenceId) => {
-                    const full = await incidentsApi.getEvidenceDetail(selected.id, evidenceId);
-                    setEvidence((rows) => rows.map((r) => (r.id === evidenceId ? { ...r, ...full } : r)));
-                  }}
-                />
+                sectionErrors.has("evidence") ? (
+                  <SectionError what="evidence" onRetry={() => void loadIncident(selected.id)} />
+                ) : (
+                  <EvidenceTab
+                    incident={selected}
+                    evidence={evidence}
+                    busy={busy}
+                    onAdd={(payload) =>
+                      act("Evidence filed.", () => incidentsApi.addEvidence(selected.id, payload))
+                    }
+                    onReveal={async (evidenceId) => {
+                      const full = await incidentsApi.getEvidenceDetail(selected.id, evidenceId);
+                      setEvidence((rows) => rows.map((r) => (r.id === evidenceId ? { ...r, ...full } : r)));
+                    }}
+                  />
+                )
               )}
 
-              {tab === "timeline" && <TimelineTab entries={timeline} />}
+              {tab === "timeline" && (
+                sectionErrors.has("timeline") ? (
+                  <SectionError what="the timeline" onRetry={() => void loadIncident(selected.id)} />
+                ) : (
+                  <TimelineTab entries={timeline} />
+                )
+              )}
 
               {tab === "impact" && (
-                <ImpactTab
-                  impact={impact}
-                  risk={risk}
-                  busy={busy}
-                  onAddSystem={(payload) =>
-                    act("System recorded.", () => incidentsApi.addSystem(selected.id, payload))
-                  }
-                  onAddSubjects={(payload) =>
-                    act("Affected group recorded.", () => incidentsApi.addSubjects(selected.id, payload))
-                  }
-                />
+                sectionErrors.has("impact") || sectionErrors.has("risk") ? (
+                  <SectionError what="impact and risk" onRetry={() => void loadIncident(selected.id)} />
+                ) : (
+                  <ImpactTab
+                    impact={impact}
+                    risk={risk}
+                    busy={busy}
+                    onAddSystem={(payload) =>
+                      act("System recorded.", () => incidentsApi.addSystem(selected.id, payload))
+                    }
+                    onAddSubjects={(payload) =>
+                      act("Affected group recorded.", () => incidentsApi.addSubjects(selected.id, payload))
+                    }
+                  />
+                )
               )}
 
               {tab === "response" && (
-                <ResponseTab
-                  actions={actions}
-                  summary={planSummary}
-                  busy={busy}
-                  onBuild={() => act("Plan built.", () => incidentsApi.buildPlan(selected.id))}
-                  onDecide={(actionId, decision, reason) =>
-                    act("Decision recorded.", () =>
-                      incidentsApi.decideAction(selected.id, actionId, decision, reason),
-                    )
-                  }
-                  onAttest={(actionId, performed_by, attestation) =>
-                    act("Attestation recorded.", () =>
-                      incidentsApi.attest(selected.id, actionId, { performed_by, attestation }),
-                    )
-                  }
-                  onFail={(actionId, reason) =>
-                    act("Recorded as not completed.", () =>
-                      incidentsApi.failAction(selected.id, actionId, reason),
-                    )
-                  }
-                />
+                sectionErrors.has("plan") ? (
+                  <SectionError what="the response plan" onRetry={() => void loadIncident(selected.id)} />
+                ) : (
+                  <ResponseTab
+                    actions={actions}
+                    summary={planSummary}
+                    busy={busy}
+                    onBuild={() => act("Plan built.", () => incidentsApi.buildPlan(selected.id))}
+                    onDecide={(actionId, decision, reason) =>
+                      act("Decision recorded.", () =>
+                        incidentsApi.decideAction(selected.id, actionId, decision, reason),
+                      )
+                    }
+                    onAttest={(actionId, performed_by, attestation) =>
+                      act("Attestation recorded.", () =>
+                        incidentsApi.attest(selected.id, actionId, { performed_by, attestation }),
+                      )
+                    }
+                    onFail={(actionId, reason) =>
+                      act("Recorded as not completed.", () =>
+                        incidentsApi.failAction(selected.id, actionId, reason),
+                      )
+                    }
+                  />
+                )
               )}
 
               {tab === "comms" && (
-                <CommunicationsTab
-                  comms={comms}
-                  busy={busy}
-                  onDraft={(audience, subject) =>
-                    act("Draft created.", () =>
-                      incidentsApi.draftCommunication(selected.id, { audience, subject }),
-                    )
-                  }
-                  onDecide={(id, decision, reason) =>
-                    act("Draft decided.", () =>
-                      incidentsApi.decideCommunication(selected.id, id, decision, reason),
-                    )
-                  }
-                  onSent={(id) => act("Recorded as sent.", () => incidentsApi.markSent(selected.id, id))}
-                />
+                sectionErrors.has("comms") ? (
+                  <SectionError what="communications" onRetry={() => void loadIncident(selected.id)} />
+                ) : (
+                  <CommunicationsTab
+                    comms={comms}
+                    busy={busy}
+                    onDraft={(audience, subject) =>
+                      act("Draft created.", () =>
+                        incidentsApi.draftCommunication(selected.id, { audience, subject }),
+                      )
+                    }
+                    onDecide={(id, decision, reason) =>
+                      act("Draft decided.", () =>
+                        incidentsApi.decideCommunication(selected.id, id, decision, reason),
+                      )
+                    }
+                    onSent={(id) => act("Recorded as sent.", () => incidentsApi.markSent(selected.id, id))}
+                  />
+                )
               )}
 
               {tab === "report" && (
-                <ReportTab
-                  report={report}
-                  incident={selected}
-                  busy={busy}
-                  onGenerate={() => act("Report generated.", () => incidentsApi.generateReport(selected.id))}
-                  onClose={(summary) => act("Incident closed.", () => incidentsApi.close(selected.id, summary))}
-                />
+                sectionErrors.has("report") ? (
+                  <SectionError what="the report" onRetry={() => void loadIncident(selected.id)} />
+                ) : (
+                  <ReportTab
+                    report={report}
+                    incident={selected}
+                    busy={busy}
+                    onGenerate={() => act("Report generated.", () => incidentsApi.generateReport(selected.id))}
+                    onClose={(summary) => act("Incident closed.", () => incidentsApi.close(selected.id, summary))}
+                  />
+                )
               )}
 
-              {tab === "audit" && <AuditTab entries={audit} />}
+              {tab === "audit" && (
+                sectionErrors.has("audit") ? (
+                  <SectionError what="the audit trail" onRetry={() => void loadIncident(selected.id)} />
+                ) : (
+                  <AuditTab entries={audit} />
+                )
+              )}
             </>
           )}
         </section>

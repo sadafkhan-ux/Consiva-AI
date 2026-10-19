@@ -116,7 +116,8 @@ async def _main(args: argparse.Namespace) -> None:
         return
 
     output = await discovery_service.discover_and_analyze(
-        connector, org_id=args.org_id, source_name=domain, review_threshold=args.review_threshold
+        connector, org_id=args.org_id, source_name=domain, review_threshold=args.review_threshold,
+        enrich=args.enrich,
     )
 
     sys.stdout.write(output.model_dump_json())
@@ -166,6 +167,16 @@ def _parser() -> argparse.ArgumentParser:
         "--evidence-only",
         action="store_true",
         help="stop after discovery and emit raw evidence, skipping the ROPA analysis pipeline",
+    )
+    parser.add_argument(
+        "--no-enrich",
+        dest="enrich",
+        action="store_false",
+        help=(
+            "skip Claude-backed enrichment of ambiguous classifications and run the deterministic "
+            "pipeline only -- the production worker path (ropa_run_service.py) always enriches, so "
+            "this script matches that by default; pass this flag for a faster, LLM-free structural check"
+        ),
     )
     parser.add_argument(
         "--review-threshold",

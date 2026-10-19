@@ -134,7 +134,9 @@ def apply_suggestions(
     return [updated.get((e.table, e.column), e) for e in elements]
 
 
-async def enrich_elements(elements: list[PersonalDataElement]) -> list[PersonalDataElement]:
+async def enrich_elements(
+    elements: list[PersonalDataElement], *, scan_id: str | None = None
+) -> list[PersonalDataElement]:
     """Ask the LLM about ambiguous columns. Returns the input unchanged if there
     is nothing ambiguous, or if the LLM is unavailable -- enrichment is an
     optional improvement, never a hard dependency of the pipeline."""
@@ -149,6 +151,7 @@ async def enrich_elements(elements: list[PersonalDataElement]) -> list[PersonalD
             system=SYSTEM_PROMPT,
             user=build_prompt(ambiguous),
             schema=EnrichmentResponse,
+            agent="ropa", scan_id=scan_id,
         )
     except Exception as exc:  # noqa: BLE001 -- enrichment must never fail the run
         logger.warning("ROPA LLM enrichment unavailable, continuing with rules only: %s", exc)

@@ -284,3 +284,52 @@ async def test_request_scan_allows_scan_just_under_the_limit(monkeypatch):
         await scan_service.request_scan(
             db, org_id=uuid.uuid4(), user_id=uuid.uuid4(), url="https://example.com", authorized=True
         )
+
+
+# ── A bare domain is what people actually type ──────────────────────────────────
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        ("gignaati.com", "https://gignaati.com"),
+        ("www.gignaati.com", "https://www.gignaati.com"),
+        ("gignaati.com/pricing", "https://gignaati.com/pricing"),
+        ("http://gignaati.com", "http://gignaati.com"),      # explicit http is kept
+        ("https://gignaati.com", "https://gignaati.com"),
+    ],
+)
+def test_a_bare_domain_is_promoted_to_an_https_url(typed, expected):
+    """urlparse() reads a schemeless string as a PATH, leaving netloc empty, so
+    "gignaati.com" used to be rejected outright and the caller had to know to type the
+    scheme. The scan needs a seed URL, so the host is normalised into one here."""
+    assert CreateScanRequest(url=typed, authorized=True).url == expected
+
+
+@pytest.mark.parametrize("bad", ["gignaati", "https://nodot", "   "])
+def test_a_hostname_without_a_dot_is_still_rejected(bad):
+    """Accepting a bare domain must not turn a typo into a scan that fails later at DNS
+    resolution -- it stays a clean 422 at the edge."""
+    with pytest.raises(ValidationError):
+        CreateScanRequest(url=bad, authorized=True)
+
+
+# ── www and non-www are one website, subdomains are not ─────────────────────────
+
+def test_www_and_the_bare_domain_resolve_to_one_site():
+    """These were two websites rows, because scan_service stored urlparse().netloc
+    verbatim: two ownership verifications to pass, and a monitoring baseline that never
+    saw half its own history."""
+    from app.scanner._domain import site_host
+
+    assert site_host("https://example.com/") == site_host("https://www.example.com/")
+    assert site_host("https://EXAMPLE.com:8443/x") == "example.com"
+
+
+def test_a_subdomain_is_not_folded_into_its_parent():
+    """Deliberately not eTLD+1. A subdomain is usually a different application: this
+    deployment has 40 scans of hireflow.gignaati.com next to 5 of gignaati.com, and
+    merging them would file one app's consent evidence under the other's name."""
+    from app.scanner._domain import site_host
+
+    assert site_host("https://hireflow.gignaati.com/") == "hireflow.gignaati.com"
+    assert site_host("https://gignaati.com/") == "gignaati.com"

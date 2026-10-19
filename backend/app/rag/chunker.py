@@ -19,8 +19,20 @@ _CHARS_PER_TOKEN_ESTIMATE = 4
 # layout/font info the plain-text extraction has already lost), but it stops the
 # captured snippet from being truncated into a garbled, misleading fragment either way.
 # 200 chars is a fallback ceiling, not the normal case -- most sentences end well before it.
+#
+# The keyword is matched CASE-SENSITIVELY, which is the one signal plain-text extraction
+# still carries once layout and font are gone, and it is what separates a real heading
+# from a mid-sentence cross-reference. Measured over the whole ingested corpus (279
+# chunks, 7 documents): all 15 capitalised matches are genuine headings ("CHAPTER II",
+# "CHAPTER XIIA"), and all 21 lower-case ones are body text a PDF line-wrap had pushed to
+# the start of a line -- "section 35;]", "section 28 were", "section 2 of the National
+# Commission for Allied and Healthcare Professions Act, 2021", "rule 38-A, sub-rules (1)
+# and (2) and sub-clauses (i)...". Those were reaching the customer-facing report as the
+# cited DPDP reference for a finding, which is worse than citing nothing: a real-looking
+# legal reference that does not support the claim. Requiring the capital drops all 21 and
+# loses none of the 15 -- the "a missed section beats a wrong one" rule above, applied.
 _SECTION_HEADING_RE = re.compile(
-    r"(?im)^\s*((?:chapter|section|rule)\s+[ivxlcdm\d]+[a-z]?\b[^\n]{0,200}?)"
+    r"(?m)^\s*((?:CHAPTER|Chapter|SECTION|Section|RULE|Rule)\s+[IVXLCDM\d]+[A-Za-z]?\b[^\n]{0,200}?)"
     r"(?=\(hereinafter|[.;]\s|[.;]$|\n|$)"
 )
 

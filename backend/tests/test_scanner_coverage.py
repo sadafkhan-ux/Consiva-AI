@@ -68,6 +68,12 @@ class _FakePage:
         self._requests.append(key)
         return _FakeResponse(200)
 
+    async def wait_for_load_state(self, state=None, timeout=None):
+        return None
+
+    async def wait_for_load_state(self, state=None, timeout=None):
+        return None
+
     async def wait_for_timeout(self, ms):
         return None
 

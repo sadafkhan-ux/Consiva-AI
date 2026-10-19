@@ -26,7 +26,11 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.breach.errors import ApprovalRequiredError, IncidentNotReadyError
+from app.agents.breach.errors import (
+    ApprovalRequiredError,
+    IncidentNotFoundError,
+    IncidentNotReadyError,
+)
 from app.agents.breach.schemas import incident as vocab
 from app.agents.breach.services import investigation_service
 from app.db.models import IncidentCase, IncidentCommunication, IncidentReport
@@ -192,6 +196,7 @@ def compose_report(case: IncidentCase, gathered: dict) -> str:
     completed = [e for e in gathered["executions"] if e.status in ("succeeded", "verified")]
     failed = [e for e in gathered["executions"] if e.status == "failed"]
     outstanding = [a for a in gathered["actions"] if a.status in ("proposed", "approved")]
+    rejected = [a for a in gathered["actions"] if a.status == "rejected"]
 
     lines.append("Response")
     lines.append("--------")
@@ -216,6 +221,14 @@ def compose_report(case: IncidentCase, gathered: dict) -> str:
         lines.append(f"  {len(failed)} action(s) could not be completed.")
     if outstanding:
         lines.append(f"  {len(outstanding)} action(s) remain outstanding.")
+    if rejected:
+        # Deliberately generic, never `IncidentApproval.reason` -- that text is the
+        # reviewer's private rationale for the audit trail, not vetted for a reader
+        # outside Consiva. Mirrors Agent 3's identical `rejected` sentence in
+        # dsr/services/response_service.py for the same omission.
+        lines.append(
+            f"  {len(rejected)} action(s) were reviewed and not carried out."
+        )
     lines.append("")
 
     unknowns = _open_questions(case, gathered)
@@ -393,12 +406,33 @@ async def approve_communication(
         )
     if decision == vocab.DECISION_REJECT and not (reason and reason.strip()):
         raise IncidentNotReadyError("rejecting a draft requires a reason")
+    # A reviewer's free-text reason carries the same credential-pasting risk evidence
+    # redaction already guards against, before it reaches the persisted approval row
+    # or the audit trail.
+    if reason:
+        reason, _ = investigation_service.redact_text(reason)
 
     comm = await incident_repository.get_communication(db, communication_id, case.org_id)
     if comm is None or comm.incident_id != case.id:
-        raise IncidentNotReadyError(f"communication {communication_id} not found on {case.reference}")
+        # A missing or cross-incident id is "not found", not "not ready" -- every
+        # equivalent lookup elsewhere in this agent (response_service.py's
+        # decide_action/attest/mark_action_failed) already raises
+        # IncidentNotFoundError (404) for the identical situation.
+        raise IncidentNotFoundError(f"communication {communication_id} not found on {case.reference}")
     if comm.status == "sent":
         raise IncidentNotReadyError("this communication has already been sent")
+    if comm.status in ("approved", "rejected"):
+        # This draft already carries a reviewer's decision. Without this guard a
+        # second call -- a stale UI re-submitting, two reviewers racing on the same
+        # draft, or a retried request -- silently overwrites `approved_by_user_id`/
+        # `approved_at` (or flips a rejected draft to approved with no trace beyond
+        # the audit log) and still records a second IncidentApproval row as if this
+        # were the first decision. Same class of gap as Agent 3's DsrApproval guard
+        # in dsr/services/approval_service.py.
+        raise IncidentNotReadyError(
+            f"this communication has already been {comm.status}; a new decision "
+            "cannot be recorded without a fresh draft"
+        )
 
     moment = now or datetime.now(UTC)
     comm.status = "approved" if decision == vocab.DECISION_APPROVE else "rejected"
@@ -437,7 +471,7 @@ async def mark_communication_sent(
     """
     comm = await incident_repository.get_communication(db, communication_id, case.org_id)
     if comm is None or comm.incident_id != case.id:
-        raise IncidentNotReadyError(f"communication {communication_id} not found")
+        raise IncidentNotFoundError(f"communication {communication_id} not found")
     if comm.status == "sent":
         return comm  # already recorded; not an error
 

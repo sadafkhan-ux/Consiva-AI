@@ -95,7 +95,16 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
     for i, form_tag in enumerate(soup.find_all("form")):
         fields = [
             ParsedFormField(
-                name=inp.get("name") or inp.get("id") or f"field-{j}",
+                # `placeholder`/`aria-label` are a real, rendered fallback -- plenty of
+                # JS-built forms (React/Vue state-bound inputs) carry no `name`/`id` at
+                # all, which previously fell straight through to an opaque "field-0"/
+                # "field-1" placeholder with zero signal for form_detector's purpose
+                # guess. The visible/accessible label text is evidence of the field's
+                # purpose exactly like a `name` attribute is, not a guess.
+                name=(
+                    inp.get("name") or inp.get("id") or inp.get("placeholder")
+                    or inp.get("aria-label") or f"field-{j}"
+                ),
                 field_type=inp.get("type", "text") if inp.name == "input" else inp.name,
                 required=inp.has_attr("required"),
             )

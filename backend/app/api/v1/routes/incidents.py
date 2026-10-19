@@ -935,14 +935,21 @@ async def close_incident(
             "an incident cannot be closed without a report; generate one first"
         )
 
-    case.closure_summary = payload.reason.strip()
+    # A human-written closure summary carries the same credential-pasting risk
+    # evidence redaction already guards against, before it is persisted permanently
+    # on the one record a regulator or auditor reads first.
+    closure_summary, _ = investigation_service.redact_text(payload.reason.strip())
+    case.closure_summary = closure_summary
     await db.flush()
 
-    # Closing as CLOSED when an action was blocked or failed would claim something
-    # that did not happen on the one field read first. Mirrors Agent 3's identical
-    # closing_status check for DSR.
+    # Closing as CLOSED when an action was blocked, rejected or failed would claim
+    # something that did not happen on the one field read first. Mirrors Agent 3's
+    # identical closing_status check for DSR, which folds a reviewer's "rejected"
+    # decision into "blocked": a reviewer declining a containment action is a
+    # deliberate non-change, exactly like a constraint block, and must not be
+    # invisible here just because it was a person who said no rather than a rule.
     actions = await incident_repository.list_actions(db, case.id, org_id)
-    blocked = sum(1 for a in actions if a.status == "blocked")
+    blocked = sum(1 for a in actions if a.status in ("blocked", "rejected"))
     failed = sum(1 for a in actions if a.status == "failed")
     closing = response_service.closing_status(blocked=blocked, failed=failed)
 

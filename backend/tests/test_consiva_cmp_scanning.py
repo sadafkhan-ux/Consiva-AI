@@ -16,6 +16,7 @@ import asyncio
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -382,3 +383,84 @@ def test_the_interaction_page_is_recorded_in_the_consent_signal_evidence():
     from app.scanner import crawler
 
     assert '"interaction_page_url": root_url' in inspect.getsource(crawler.run_scan)
+
+
+# ── a banner that appears only after the page's load event ──────────────────────────
+# _navigate_with_retry returns at "domcontentloaded". The interaction passes must still wait for the banner's own
+# script, which runs later. Seen on masterclass.gignaati.com after merging the faster navigation: Accept and Reject
+# went from "clicked" to "cmp_not_automatable".
+
+_LATE_PAGE = b"""<!doctype html><html><head><title>t</title></head><body><h1>Site</h1>
+<img src="/slow.png" width="1" height="1">
+<script>
+window.addEventListener('load', function () {
+  const b = document.createElement('div'); b.id = 'late-banner';
+  b.innerHTML = '<button id="onetrust-accept-btn-handler">Accept All Cookies</button>'
+              + '<button id="onetrust-reject-all-handler">Reject All</button>';
+  document.body.appendChild(b);
+  document.getElementById('onetrust-accept-btn-handler').onclick = function () { window.__consent = 'accept'; b.remove(); };
+  document.getElementById('onetrust-reject-all-handler').onclick = function () { window.__consent = 'reject'; b.remove(); };
+});
+</script></body></html>"""
+
+
+class _LateSite(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        if self.path.startswith("/slow.png"):
+            time.sleep(3.5)                   # holds the load event back well past the settle window
+            body, kind = b"", "image/png"
+        else:
+            body, kind = _LATE_PAGE, "text/html"
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+_LATE_CHILD = r"""
+import asyncio, sys
+from playwright.async_api import Error as PlaywrightError, async_playwright
+from app.config import get_settings
+from app.scanner import consent_interactor as ci, crawler
+
+async def main(url):
+    async with async_playwright() as p:
+        try:
+            browser = await p.chromium.launch(headless=True)
+        except PlaywrightError:
+            print("NOBROWSER"); return
+        try:
+            context = await browser.new_context()
+            *_, status, confirmed, _steps, _gate = await crawler._crawl_single_page_with_interaction(
+                context, url, get_settings(), set(), "post_reject", ci.click_reject)
+            print(f"status={status}|confirmed={confirmed}")
+        finally:
+            await browser.close()
+
+asyncio.run(main(sys.argv[1]))
+"""
+
+
+async def test_real_chromium_the_interaction_waits_for_a_banner_that_appears_after_load():
+    pytest.importorskip("playwright.async_api")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _LateSite)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        backend_root = Path(__file__).resolve().parent.parent
+        env = {**__import__("os").environ, "PYTHONPATH": str(backend_root)}
+        done = await asyncio.to_thread(
+            subprocess.run, [sys.executable, "-c", _LATE_CHILD, f"http://127.0.0.1:{server.server_port}/"],
+            cwd=backend_root, env=env, capture_output=True, text=True, timeout=120, check=False,
+        )
+    finally:
+        server.shutdown()
+
+    out = done.stdout.strip()
+    if out == "NOBROWSER":
+        pytest.skip("Chromium is not available in this environment")
+    assert "status=clicked|confirmed=True" in out, out + done.stderr[-500:]

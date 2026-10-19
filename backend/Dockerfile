@@ -51,10 +51,22 @@ COPY create_user.py ./
 COPY seed_regwatch_sources.py ./
 
 # Non-root runtime. The browser cache must be readable (not writable) by this user;
-# /app stays root-owned and read-only to the app, which is correct — the application
-# writes only to the database and stdout, never to its own source tree.
+# /app stays root-owned and read-only to the app otherwise -- the application writes
+# only to the database, stdout, and the one explicit carve-out below, never to its
+# own source tree.
+#
+# /app/logs: app/llm/usage_tracking.py appends a best-effort per-call token/cost
+# JSONL record here (USAGE_LOG_PATH = <repo>/logs/llm_usage.jsonl). Created and
+# chowned at build time, same as /ms-playwright below, because a non-root user can't
+# mkdir under a root-owned /app at runtime -- confirmed live: every write attempt was
+# failing with PermissionError on `.mkdir()`, so every scan's cost was silently never
+# logged (the LLM call itself still succeeded; record_llm_call is deliberately
+# best-effort and only logs a warning). Ephemeral like the rest of the container's
+# own writable layer -- lost on container recreation, same durability tradeoff the
+# module's own docstring already accepts ("the smallest thing", not a DB table).
 RUN useradd --create-home --uid 10001 consiva \
-    && chown -R consiva:consiva /ms-playwright
+    && mkdir -p /app/logs \
+    && chown -R consiva:consiva /ms-playwright /app/logs
 USER consiva
 
 EXPOSE 8000

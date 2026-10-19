@@ -63,11 +63,13 @@ class Settings(BaseSettings):
     # exactly as before.
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-haiku-5-5"
-    # Required by the Messages API when the key is not scoped to a single workspace: without the
-    # `anthropic-workspace-id` header every request is a 400 ("This API key is not scoped to a workspace"),
-    # the primary provider fails on EVERY analysis, and the run falls back to NVIDIA. Seen on a real scan
-    # (llm_analysis metadata: primary_status=failed, fallback_triggered=true) with ANTHROPIC_WORKSPACE_ID set
-    # in the environment but never read.
+    # Required when ANTHROPIC_API_KEY is an organization-scoped key (scope.type ==
+    # "organization" -- check via GET /v1/organizations/api_keys with this same key).
+    # Such a key has no single workspace to bill/rate-limit against, so every request
+    # needs this header or Anthropic returns 400 invalid_request_error ("This API key
+    # is not scoped to a workspace..."). A key created while a specific workspace was
+    # selected in the Console (scope.type == "workspace") already carries its own
+    # workspace and does not need this -- leave it unset for that case.
     anthropic_workspace_id: str | None = None
 
     # Postgres
@@ -282,6 +284,21 @@ class Settings(BaseSettings):
     @property
     def auto_login_enabled(self) -> bool:
         return self.app_env == "development" or self.open_access
+
+    @property
+    def scan_budget_seconds(self) -> float:
+        """Overall wall-clock ceiling for one scan: how long scanner/crawler.py lets a
+        single crawl run before aborting it.
+
+        Derived from the per-page navigation timeout times the page cap, plus headroom
+        for browser startup and the two consent-interaction passes. It lives here, on
+        the settings both sides already read, because two unrelated modules need the
+        same number: crawler.py enforces it, and jobs/queue.py has to set its
+        stale-job threshold ABOVE it. Those two had drifted -- a hardcoded 10-minute
+        threshold against an 870-second budget -- and a duplicated formula is how they
+        would drift again.
+        """
+        return self.scanner_max_pages * self.scanner_timeout_seconds + 120
 
     @property
     def psycopg_database_url(self) -> str:

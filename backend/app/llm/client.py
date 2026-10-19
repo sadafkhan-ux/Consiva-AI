@@ -35,6 +35,7 @@ already instantiate NvidiaLLMClient directly and are deliberately left untouched
 import functools
 import json
 import logging
+import re
 import time
 from typing import Literal, TypeVar
 
@@ -66,6 +67,7 @@ from tenacity import (
 
 from app.config import Settings, get_settings
 from app.core.exceptions import LLMOutputValidationError
+from app.llm import usage_tracking
 from app.llm.prompts import RETRY_SUFFIX
 
 logger = logging.getLogger(__name__)
@@ -214,6 +216,19 @@ class BaseLLMClient:
         self._supports_grammar = supports_grammar
         self._client = AsyncOpenAI(
             base_url=base_url, api_key=api_key, timeout=timeout,
+            # The openai SDK retries internally (default max_retries=2), and those
+            # retries are INVISIBLE to the tenacity loop in _chat: one `await
+            # .create()` becomes up to 3 HTTP requests, so a tenacity "attempt"
+            # bounded to a 60s call_timeout could really burn 180s. stop_after_delay
+            # only re-checks BETWEEN attempts, so it cannot interrupt that, and the
+            # shared deadline_epoch silently overruns. Measured live: a request
+            # surfaced APITimeoutError at seconds_since_start=181.62 -- 3x60s -- and
+            # the tenacity retry then added a second one, making one llm_analysis
+            # stage take 365.7s. This is the same multiplied-timeout failure _chat's
+            # docstring describes fixing at the application layer; the SDK layer
+            # underneath it was still multiplying. Retry policy belongs in exactly
+            # one place, and _chat is the layer that knows the remaining budget.
+            max_retries=0,
             # A clear, honest, self-identifying User-Agent -- normal practice for a
             # backend service calling an API, not stealth/evasion (this does NOT
             # touch the openai SDK's own x-stainless-* diagnostic headers, which
@@ -348,15 +363,43 @@ class BaseLLMClient:
                 # context and the most expensive. Keeping a bounded excerpt preserves
                 # what the repair actually needs (the shape the model was producing)
                 # while making prompt growth constant rather than cumulative.
-                excerpt = raw[:_REPAIR_EXCERPT_CHARS]
-                if len(raw) > _REPAIR_EXCERPT_CHARS:
-                    excerpt += "\n... (truncated; your previous response did not finish)"
-                messages = [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                    {"role": "assistant", "content": excerpt},
-                    {"role": "user", "content": RETRY_SUFFIX.format(error=str(exc)[:_REPAIR_ERROR_CHARS])},
-                ]
+                #
+                # EXCEPT when the response is degenerate -- near-empty after stripping
+                # whitespace (e.g. '{' followed by thousands of blank lines until
+                # max_tokens cuts it off). Replaying that back as the model's own
+                # "assistant" turn primes it to continue the exact same pattern: seen
+                # live on a real scan (dd23d45b-...), where NVIDIA's nemotron-3.5-lightning
+                # returned blank-whitespace JSON on attempt 1, and feeding that excerpt
+                # back made attempts 2 and 3 repeat it identically, every time,
+                # confirmed reproducible 3/3 by replaying the exact excerpt-and-retry
+                # messages a repair step like this builds. A genuinely truncated-but-
+                # substantive response (the scenario this repair exists for) always has
+                # far more than a few dozen non-whitespace characters by the time it's
+                # cut off, so this threshold only catches the pathological case.
+                non_whitespace_chars = len("".join(raw.split()))
+                if non_whitespace_chars < 40:
+                    messages = [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your previous response was empty or contained only "
+                                "whitespace. Respond with the complete JSON object "
+                                "matching the schema -- do not repeat that empty response."
+                            ),
+                        },
+                    ]
+                else:
+                    excerpt = raw[:_REPAIR_EXCERPT_CHARS]
+                    if len(raw) > _REPAIR_EXCERPT_CHARS:
+                        excerpt += "\n... (truncated; your previous response did not finish)"
+                    messages = [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                        {"role": "assistant", "content": excerpt},
+                        {"role": "user", "content": RETRY_SUFFIX.format(error=str(exc)[:_REPAIR_ERROR_CHARS])},
+                    ]
                 continue
             if usage_sink is not None:
                 usage_sink["attempts"] = attempt
@@ -592,9 +635,17 @@ class ClaudeLLMClient(BaseLLMClient):
         # off mid-string ("EOF while parsing a string") -- a wasted call and a retry. Headroom for thinking plus
         # the ~2,600-token answer that attempt 2 needed.
         self._max_output_tokens = 8000
-        headers = {"anthropic-workspace-id": settings.anthropic_workspace_id} if settings.anthropic_workspace_id else None
+        # Only needed for an organization-scoped key (no workspace of its own) -- see
+        # Settings.anthropic_workspace_id's docstring in config.py. Omitted entirely
+        # rather than sent empty when unset: a workspace-scoped key does not expect
+        # this header at all, and an empty string is not the same as "not sent".
+        default_headers = (
+            {"anthropic-workspace-id": settings.anthropic_workspace_id}
+            if settings.anthropic_workspace_id else None
+        )
         self._client = AsyncAnthropic(
-            api_key=settings.anthropic_api_key, timeout=self._call_timeout, default_headers=headers,
+            api_key=settings.anthropic_api_key, timeout=self._call_timeout,
+            default_headers=default_headers,
         )
 
     async def _chat(
@@ -690,9 +741,30 @@ def get_reasoning_llm_client(settings: Settings | None = None) -> BaseLLMClient:
     return NvidiaLLMClient(settings)
 
 
+def _context_overflow(exc: Exception) -> tuple[int, int] | None:
+    """`(prompt_tokens, context_tokens)` when `exc` is a context-size rejection, else None.
+
+    llama.cpp reports this as a structured 400 carrying both numbers, e.g.
+    "request (10577 tokens) exceeds the available context size (4096 tokens)" with
+    `n_prompt_tokens` and `n_ctx` alongside. Read from the message text rather than the
+    JSON body because the body shape differs per server build while this sentence has
+    been stable, and because a miss here only costs the more generic log line below --
+    it is a diagnostic, never a control-flow decision.
+    """
+    text = str(exc)
+    if "context size" not in text and "n_ctx" not in text:
+        return None
+    prompt = re.search(r"'?n_prompt_tokens'?[:=]\s*(\d+)", text) or re.search(r"request \((\d+) tokens\)", text)
+    ctx = re.search(r"'?n_ctx'?[:=]\s*(\d+)", text) or re.search(r"context size \((\d+) tokens\)", text)
+    if not prompt or not ctx:
+        return None
+    return int(prompt.group(1)), int(ctx.group(1))
+
+
 async def generate_structured_with_fallback(
     *, system: str, user: str, schema: type[T], settings: Settings | None = None,
     max_attempts: int = 3, usage_sink: dict | None = None, deadline_epoch: float | None = None,
+    agent: str = "unknown", scan_id: str | None = None,
 ) -> tuple[T, dict]:
     """Tries the primary provider FIRST, falling back to settings.llm_provider's
     client (NVIDIA by default) ONLY if the primary genuinely fails -- never calls both
@@ -713,6 +785,14 @@ async def generate_structured_with_fallback(
         "fallback_provider": None, "fallback_model": None,
     }
 
+    # Usage tracking (app/llm/usage_tracking.py) needs the per-attempt token counts
+    # usage_sink carries, regardless of whether the CALLER wants them -- most callers
+    # (ROPA, RegWatch) don't pass usage_sink today, which previously meant their
+    # tokens were never even captured, let alone recorded. Tracking internally like
+    # this is the smallest fix: every caller's own usage_sink (if any) is still
+    # populated exactly as before.
+    _usage_sink = usage_sink if usage_sink is not None else {}
+
     primary_client: BaseLLMClient | None = None
     if settings.anthropic_api_key:
         primary_client = ClaudeLLMClient(settings)
@@ -726,9 +806,13 @@ async def generate_structured_with_fallback(
         try:
             result = await primary_client.generate_structured(
                 system=system, user=user, schema=schema, max_attempts=max_attempts,
-                usage_sink=usage_sink, deadline_epoch=deadline_epoch,
+                usage_sink=_usage_sink, deadline_epoch=deadline_epoch,
             )
             fallback_meta["primary_status"] = "success"
+            usage_tracking.record_llm_call(
+                provider=primary_client.provider, model=primary_client.model_name,
+                agent=agent, usage_sink=_usage_sink, fallback_meta=fallback_meta, scan_id=scan_id,
+            )
             return result, fallback_meta
         except Exception as exc:  # noqa: BLE001 -- ANY exhausted-retry failure from the primary (connection
             # error, timeout, 5xx, or invalid/unparseable output after generate_structured's own internal
@@ -736,16 +820,45 @@ async def generate_structured_with_fallback(
             fallback_meta["primary_status"] = "failed"
             fallback_meta["fallback_triggered"] = True
             fallback_meta["fallback_reason"] = f"{type(exc).__name__}: {exc}"
-            logger.warning(
-                "Primary LLM (%s/%s) failed, falling back to %s: %s",
-                primary_client.provider, primary_client.model_name, settings.llm_provider, exc,
-            )
+            overflow = _context_overflow(exc)
+            fallback_meta["primary_failure_kind"] = "context_exceeded" if overflow else "other"
+            if overflow:
+                # A permanent, self-inflicted misconfiguration, not a bad day upstream:
+                # the prompt cannot fit and every future call will fail identically
+                # until somebody resizes the server. Worth separating from a transient
+                # failure, because in the metadata the two were indistinguishable --
+                # `primary_status: "failed"` reads the same whether the self-hosted
+                # model blipped once or has not served a single request in weeks. It
+                # was the latter: llama-server ran `-c 32768 --parallel 8`, and
+                # llama.cpp divides context across slots, so each slot held 4096
+                # tokens against an ~11k-token prompt. Every analysis silently paid
+                # for a remote round trip instead, and nothing in the run said so.
+                prompt_tokens, ctx_tokens = overflow
+                fallback_meta["primary_prompt_tokens"] = prompt_tokens
+                fallback_meta["primary_context_tokens"] = ctx_tokens
+                logger.error(
+                    "Primary LLM (%s/%s) CANNOT serve this prompt: %s tokens against a "
+                    "%s-token context. This is a server configuration fault and will "
+                    "recur on every request until the context is raised (llama.cpp "
+                    "divides -c across --parallel slots). Falling back to %s.",
+                    primary_client.provider, primary_client.model_name,
+                    prompt_tokens, ctx_tokens, settings.llm_provider,
+                )
+            else:
+                logger.warning(
+                    "Primary LLM (%s/%s) failed, falling back to %s: %s",
+                    primary_client.provider, primary_client.model_name, settings.llm_provider, exc,
+                )
 
     fallback_client = get_reasoning_llm_client(settings)
     fallback_meta["fallback_provider"] = fallback_client.provider
     fallback_meta["fallback_model"] = fallback_client.model_name
     result = await fallback_client.generate_structured(
         system=system, user=user, schema=schema, max_attempts=max_attempts,
-        usage_sink=usage_sink, deadline_epoch=deadline_epoch,
+        usage_sink=_usage_sink, deadline_epoch=deadline_epoch,
+    )
+    usage_tracking.record_llm_call(
+        provider=fallback_client.provider, model=fallback_client.model_name,
+        agent=agent, usage_sink=_usage_sink, fallback_meta=fallback_meta, scan_id=scan_id,
     )
     return result, fallback_meta

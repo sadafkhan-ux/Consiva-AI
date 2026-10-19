@@ -470,6 +470,7 @@ async def _interpret(
         drafted, meta = await generate_structured_with_fallback(
             system=_SYSTEM_PROMPT, user=user_prompt,
             schema=_Interpretation, settings=settings,
+            agent="regwatch", scan_id=str(finding.id),
         )
     except Exception as exc:  # noqa: BLE001 -- both providers exhausted; recorded, never raised
         logger.warning("Interpretation model failed for %s: %s", finding.reference, exc)

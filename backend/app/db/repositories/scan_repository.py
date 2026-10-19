@@ -198,6 +198,11 @@ async def save_scan_result(
     if scan:
         scan.status = "completed"
         scan.completed_at = datetime.now(UTC)
+        # The scanner always stamps this on its own ScanResult (crawler.py's
+        # SCANNER_VERSION) -- it was simply never copied onto the consent_scans row,
+        # so scan.scanner_version stayed NULL forever and every API/report response
+        # displayed "-" for every scan, not just old ones.
+        scan.scanner_version = scan_result.scanner_version
 
     await db.flush()
 

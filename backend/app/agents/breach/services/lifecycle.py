@@ -37,6 +37,7 @@ __all__ = [
     "can_transition",
     "is_terminal",
     "requires_error_code",
+    "requires_reason",
 ]
 
 # Read each line as "from X you may go to ...".
@@ -146,6 +147,26 @@ def requires_error_code(to_status: str) -> bool:
     is a system failure.
     """
     return to_status in (incident.FAILED, incident.PARTIALLY_COMPLETED)
+
+
+# REJECTED and ESCALATED are the two conclusions a human reaches without the system
+# having failed, which is exactly why requires_error_code excludes them -- but the
+# docstring above promises they "carry a reason in the audit entry rather than an
+# error code", and nothing enforced that promise: a caller could reject or escalate
+# an incident through the generic transition endpoint with no explanation at all,
+# leaving a terminal (REJECTED) or routing (ESCALATED) decision on the record with
+# no stated basis. requires_reason is the other half of requires_error_code: together
+# they cover every non-happy-path target with something that explains it.
+_REASON_REQUIRED = frozenset({incident.REJECTED, incident.ESCALATED})
+
+
+def requires_reason(to_status: str) -> bool:
+    """Statuses that record a human conclusion and so must carry a free-text reason,
+    even though requires_error_code is false for them because neither is a system
+    failure. An incident moved to REJECTED or ESCALATED with no error code AND no
+    reason would be a decision nobody can later account for.
+    """
+    return to_status in _REASON_REQUIRED
 
 
 def is_terminal(status: str) -> bool:

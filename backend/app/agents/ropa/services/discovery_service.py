@@ -74,7 +74,7 @@ async def run_pipeline_enriched(
     """
     elements = classification_service.classify_evidence(evidence, review_threshold=review_threshold)
     before = sum(1 for e in elements if e.classification == "Unknown")
-    elements = await enrichment_service.enrich_elements(elements)
+    elements = await enrichment_service.enrich_elements(elements, scan_id=run_id)
     after = sum(1 for e in elements if e.classification == "Unknown")
     if before != after:
         logger.info("ROPA enrichment resolved %d of %d ambiguous column(s)", before - after, before)

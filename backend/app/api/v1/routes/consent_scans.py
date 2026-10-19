@@ -27,15 +27,45 @@ class CreateScanRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_http_with_host(cls, value: str) -> str:
-        parsed = urlparse(value)
+        """A bare domain is accepted and promoted to https://. People type the thing
+        they say out loud -- "gignaati.com" -- and this used to reject it outright,
+        because urlparse() reads a schemeless string as a PATH and leaves netloc empty.
+        What the scan actually needs is a seed URL, so the host is normalised INTO one
+        here rather than the requirement being pushed back onto whoever is typing.
+
+        http:// is still accepted when given explicitly; only the unspecified case
+        defaults, and it defaults to https. The host must still contain a dot, so a
+        typo like "gignaati" stays a clean 422 at the edge instead of travelling down
+        to a DNS failure mid-scan. None of this widens what may be scanned: the SSRF
+        check in scan_service (assert_safe_url) runs afterwards either way and still
+        rejects private, loopback and link-local addresses.
+        """
+        candidate = value.strip()
+        if not candidate:
+            raise ValueError("url must not be empty")
+        if "://" not in candidate:
+            candidate = f"https://{candidate}"
+
+        parsed = urlparse(candidate)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError("url must be an absolute http(s) URL, e.g. https://example.com")
-        return value
+        if not parsed.hostname or "." not in parsed.hostname:
+            raise ValueError("url must include a full hostname, e.g. https://example.com")
+        return candidate
 
 
 class ScanResponse(BaseModel):
     id: uuid.UUID
     url: str
+    # Both, because they answer different questions and neither is derivable from the
+    # other without repeating this service's own normalisation rules in the client.
+    # `url` is the exact page this scan crawled -- the seed, with scheme and path, and
+    # the thing to show next to the evidence. `domain` is the site the scan is FILED
+    # under (websites.domain): what ownership verification, the scan history and the
+    # monitoring baseline are keyed on, after "www." and the port are folded away. A
+    # caller that posted "www.example.com/pricing" gets back both the URL it asked for
+    # and "example.com", which is the identity everything else in the platform uses.
+    domain: str
     status: str
 
 
@@ -196,7 +226,10 @@ async def create_scan(
         db, org_id=uuid.UUID(user.org_id), user_id=uuid.UUID(user.user_id),
         url=body.url, authorized=body.authorized,
     )
-    return ScanResponse(id=scan.id, url=scan.url, status=scan.status)
+    website = await scan_repository.get_website_by_id(db, scan.website_id)
+    return ScanResponse(
+        id=scan.id, url=scan.url, domain=website.domain if website else "", status=scan.status,
+    )
 
 
 @router.get("/{scan_id}", response_model=ScanStatusResponse)
@@ -208,6 +241,7 @@ async def get_scan(
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
+    website = await scan_repository.get_website_by_id(db, scan.website_id)
     counts = await scan_repository.get_scan_counts(db, scan_id)
     run = await scan_repository.latest_agent_run(db, scan_id)
     # `findings_complete` is true ONLY when analysis reached a state where the finding
@@ -215,7 +249,8 @@ async def get_scan(
     # findings are all present and waiting on a decision. Everything else -- never run,
     # still running, failed -- means the list is not yet the answer.
     return ScanStatusResponse(
-        id=scan.id, url=scan.url, status=scan.status, error=scan.error,
+        id=scan.id, url=scan.url, domain=website.domain if website else "",
+        status=scan.status, error=scan.error,
         evidence_counts=counts,
         analysis_status=run.status if run else None,
         findings_complete=bool(run and run.status in ("completed", "paused")),

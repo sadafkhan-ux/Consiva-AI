@@ -198,6 +198,47 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         domain_substrings=("cloudflareinsights.com", "cloudflare.com"),
         cookie_name_prefixes=("__cf",),
     ),
+    # The four below were all caught UNCLASSIFIED on one live scan of a real site, and
+    # are added on that direct evidence rather than guessed.
+    VendorSignature(
+        # Microsoft's advertising conversion/remarketing tag -- NOT the same product as
+        # Microsoft Clarity (clarity.ms) above, which is why the catalog already having
+        # "Microsoft" in it did not cover this. Seen live as
+        # bat.bing.com/p/action/<id>.js, filed "unclassified / low" while firing before
+        # any consent interaction; as a marketing tracker it belongs in the
+        # pre-consent-marketing count, so missing it under-reported real risk.
+        vendor="Bing UET",
+        default_category="marketing",
+        domain_substrings=("bat.bing.com",),
+        cookie_name_prefixes=("_uetsid", "_uetvid"),
+    ),
+    VendorSignature(
+        # Follows the YouTube Embed precedent above: an embedded third-party video
+        # player, categorised functional for WHAT IT IS, leaving whether it is
+        # appropriately consented to consent_rules.py and the LLM layer.
+        vendor="Vimeo Embed",
+        default_category="functional",
+        domain_substrings=("player.vimeo.com", "vimeo.com"),
+        cookie_name_prefixes=("vuid",),
+    ),
+    # Asset CDNs. These matter for STABILITY, not just coverage: without a vendor match
+    # they fall through to _is_likely_static_asset(), which requires the URL to carry no
+    # query string -- so on one scan ik.imagekit.io images landed in two categories at
+    # once ("Static CDN Asset / functional" for the plain URLs, "unclassified" for the
+    # ones carrying ImageKit's ?tr= transformation params). Same host, same purpose,
+    # different answer. Matching by domain first makes the result depend on the vendor
+    # rather than on whether a URL happened to have a query string, and leaves that
+    # heuristic intact for genuinely unknown hosts.
+    VendorSignature(
+        vendor="ImageKit CDN",
+        default_category="functional",
+        domain_substrings=("imagekit.io",),
+    ),
+    VendorSignature(
+        vendor="Envato CDN",
+        default_category="functional",
+        domain_substrings=("envato-static.com", "envatousercontent.com"),
+    ),
     VendorSignature(
         # A live scan found api.consiva.ai/api/v1/banner/{id}, /api/v1/consent/record,
         # and /sdk.js on the scanned site -- this is a first-party consent-management

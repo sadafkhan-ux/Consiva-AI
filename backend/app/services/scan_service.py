@@ -13,7 +13,8 @@ from app.db.session import async_session_factory
 from app.jobs import queue
 from app.lookup import repository as lookup_repository
 from app.observability.stage_tracker import track_stage
-from app.rules.consent_rules import classify_scan
+from app.rules.consent_rules import classify_scan, cookie_consent_state_counts, tracker_consent_state_counts
+from app.scanner._domain import site_host
 from app.scanner.crawler import run_scan_isolated
 from app.scanner.scan_profiles import ScanProfile, profile_for_scan_options
 from app.scanner.url_safety import assert_safe_url
@@ -35,9 +36,19 @@ async def request_scan(
             "Scanning requires an explicit authorization attestation for this domain."
         )
 
-    domain = urlparse(url).netloc
-    if not domain:
+    # site_host(), not urlparse().netloc: netloc carries the port and the "www." and
+    # was stored verbatim, so https://example.com and https://www.example.com became
+    # two separate websites rows -- two ownership verifications to pass, and a
+    # monitoring baseline that never saw half its own history. It is deliberately NOT
+    # the eTLD+1 either; see site_host's docstring for why folding subdomains would be
+    # worse than the problem it fixes.
+    # The absolute-URL guard stays exactly as it was: site_host() alone would accept
+    # "not-a-url" as a hostname, because a schemeless string is a perfectly good host
+    # to it. This is the lower-level entry point -- the API validator above it is not
+    # the only caller -- so it keeps rejecting anything that is not an absolute URL.
+    if not urlparse(url).netloc:
         raise InvalidUrlError(f"Could not parse a domain from url: {url}")
+    domain = site_host(url)
 
     settings = get_settings()
     recent_count = await scan_repository.count_scans_since(
@@ -200,6 +211,23 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
             meta["cookies_out"] = len(classification.cookies)
             if len(classification.trackers) != len(scan_result.trackers):
                 meta["classification_gap"] = len(scan_result.trackers) - len(classification.trackers)
+
+            # Per-consent-state counts restricted to analytics/marketing-classified
+            # vendors, grouped so repeat requests to the same vendor count once -- see
+            # consent_rules.py's tracker_consent_state_counts/cookie_consent_state_counts
+            # docstrings for why this exists (a real scan reported 44 "pre-consent
+            # trackers" that were overwhelmingly fonts/CDN assets, and counted one
+            # analytics vendor firing on every page as that many separate trackers).
+            # Computed here, after classify_scan(), because category/vendor do not
+            # exist until classification has run -- website_scan's own per-state
+            # breakdown above is necessarily over the scanner's raw, unclassified
+            # observations and is kept as-is for that diagnostic purpose.
+            tracker_counts = tracker_consent_state_counts(classification.trackers)
+            cookie_counts = cookie_consent_state_counts(classification.cookies)
+            meta["trackers_by_consent_state"] = {s: c["total"] for s, c in tracker_counts.items()}
+            meta["cookies_by_consent_state"] = {s: c["total"] for s, c in cookie_counts.items()}
+            meta["trackers_by_consent_state_by_category"] = tracker_counts
+            meta["cookies_by_consent_state_by_category"] = cookie_counts
     except Exception as exc:
         logger.exception("Scan failed for %s", url)
         async with async_session_factory() as db:

@@ -21,7 +21,7 @@ from app.agents.breach.errors import (
 )
 from app.agents.breach.rules import classification
 from app.agents.breach.schemas import incident as vocab
-from app.agents.breach.services import lifecycle
+from app.agents.breach.services import investigation_service, lifecycle
 from app.db.models import IncidentCase
 from app.db.repositories import incident_repository
 from app.services import audit_service
@@ -174,6 +174,25 @@ async def transition(
     if error_code and error_code not in vocab.ERROR_CODES:
         raise IncidentNotReadyError(f"{error_code!r} is not an incident error code")
 
+    if lifecycle.requires_reason(to_status):
+        reason_text = error_detail or (detail or {}).get("reason")
+        if not (reason_text and reason_text.strip()):
+            raise IncidentNotReadyError(
+                f"moving an incident to {to_status} is a conclusion a human reached, "
+                "not a system failure, so it carries no error code -- but it still "
+                "requires a reason explaining it; none was supplied"
+            )
+
+    # error_detail and detail["reason"]/["closure_summary"] are free text a human
+    # writes -- the same risk this agent's own module docstring names for evidence
+    # ("occasionally a credential somebody pasted into a ticket"). Redacted before it
+    # reaches the persisted case row or the audit trail, the same discipline evidence
+    # already gets in investigation_service.add_evidence.
+    if error_detail:
+        error_detail, _ = investigation_service.redact_text(error_detail)
+    if detail:
+        detail, _ = investigation_service.redact(detail)
+
     moment = now or datetime.now(UTC)
     before = case.status
     case.status = to_status
@@ -294,6 +313,7 @@ async def set_finding(
     before = getattr(case, field)
     setattr(case, field, confidence)
     await db.flush()
+    clean_reason, _ = investigation_service.redact_text(reason) if reason else (reason, False)
     await audit_service.record(
         db,
         org_id=case.org_id,
@@ -302,7 +322,7 @@ async def set_finding(
         entity_type=vocab.AUDIT_ENTITY,
         entity_id=case.id,
         before={field: before},
-        after={field: confidence, "reason": reason},
+        after={field: confidence, "reason": clean_reason},
     )
     return case
 
