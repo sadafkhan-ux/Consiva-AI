@@ -266,6 +266,14 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     # predating the flag -- reads as unconfirmed, never as "assume it worked".
     reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
     interaction_page = interaction_evidence.get("interaction_page_url")
+    # A banner counts as displayed when its own wording was seen (banner_ui_observed) or a click on it landed. Only a
+    # detected CMP whose scan recorded the observation and saw neither is "not displayed"; an older scan without the
+    # key reads as unknown, never as "not shown".
+    _observed = ((signals or {}).get("evidence") or {}).get("banner_ui_observed")
+    banner_not_displayed = (
+        mechanism_type == "cmp" and _observed is False
+        and accept_outcome != "clicked" and reject_outcome != "clicked"
+    )
 
     # R-001 / R-003 depend on the three-pass consent-state scan (crawler.py). Both stay
     # silent (not "no violation found") until an item is actually observed in that state —
@@ -345,7 +353,7 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
                 confidence="low",
             ))
 
-    if signals and mechanism_type in ("banner", "cmp") and signals["has_reject_all"] is False:
+    if signals and mechanism_type in ("banner", "cmp") and signals["has_reject_all"] is False and not banner_not_displayed:
         findings.append(RuleFinding(
             rule_id="R-005",
             category="other",
@@ -402,10 +410,16 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             category="other",
             risk_level="medium",
             summary=(
-                f"A consent mechanism ({mechanism_type}"
-                + (f", {signals.get('cmp_vendor')}" if signals.get("cmp_vendor") else "")
-                + f") was detected, but its Reject control could not be automated ({reject_outcome}) -- "
-                "either a non-standard/bespoke banner, or Reject is genuinely harder to reach than Accept."
+                (
+                    f"A consent tool ({signals.get('cmp_vendor') or mechanism_type}) is loaded, but no consent banner was "
+                    "displayed to the scanner, so Accept and Reject could not be tested. Some sites show the banner only "
+                    "to visitors in certain regions; scan from the audience's region, or scan a page where it appears."
+                    if banner_not_displayed else
+                    f"A consent mechanism ({mechanism_type}"
+                    + (f", {signals.get('cmp_vendor')}" if signals.get("cmp_vendor") else "")
+                    + f") was detected, but its Reject control could not be automated ({reject_outcome}) -- "
+                    "either a non-standard/bespoke banner, or Reject is genuinely harder to reach than Accept."
+                )
                 + (
                     f" Accept and Reject were only tried on {interaction_page}; if the banner appears only on other "
                     "pages of the site, scan one of those pages directly to test it."

@@ -75,6 +75,9 @@ def detect_consent_signal(
 
     has_reject_all = any(h in text for h in _REJECT_HINTS)
     has_accept = any(h in text for h in _ACCEPT_HINTS)
+    # Wording that only a displayed banner carries. A footer "Manage cookies" link (granular wording) is on pages
+    # whose banner is not showing, so it does not count: cnn.com and bbc.com have one and showed no banner.
+    banner_wording_seen = has_reject_all or has_accept
     # A strong granular phrase stands alone; a weak one only counts once something
     # else has already established that a consent mechanism is present.
     has_strong_granular = any(h in text for h in _GRANULAR_HINTS)
@@ -87,14 +90,21 @@ def detect_consent_signal(
 
     if cmp_match:
         confidence = 0.95 if detection_source == "script_src" else 0.85
+        # A CMP SCRIPT being loaded says nothing about whether its banner was ever shown. Many consent tools
+        # display nothing to visitors outside the regions the site targets (cnn.com's OneTrust, lemonde.fr, bbc.com
+        # showed no banner to a visitor in India), and a banner can sit behind an age gate. With no consent wording
+        # on any clickable control, "there is no reject-all option" is not something the scan observed, so it is
+        # left unknown (None) rather than reported as False -- rule R-005 only fires on a False.
+        banner_ui_observed = banner_wording_seen
         return ConsentSignalRecord(
             mechanism_type="cmp",
             cmp_vendor=cmp_match.cmp_vendor,
-            has_reject_all=has_reject_all,
-            has_granular_choices=has_granular,
+            has_reject_all=has_reject_all if established else None,
+            has_granular_choices=has_granular if established else None,
             evidence={
                 "matched_cmp": cmp_match.cmp_vendor, "global_vars": detected_global_vars,
                 "confidence": confidence, "detection_source": detection_source,
+                "banner_ui_observed": banner_ui_observed,
             },
         )
     if established:

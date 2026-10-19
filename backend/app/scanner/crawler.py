@@ -92,6 +92,22 @@ _CMP_GLOBAL_VAR_CANDIDATES = sorted({v for sig in CMP_CATALOG for v in sig.globa
 # real ones load within 1-2s of `load`), without the unbounded tail.
 _TRACKER_SETTLE_MS = 1200
 
+#: Longest a page waits for its own "load" event after navigation has returned at "domcontentloaded".
+_LOAD_EVENT_WAIT_MS = 10_000
+
+
+async def _wait_for_load_event(page: Page, label: str, timeout_ms: int = _LOAD_EVENT_WAIT_MS) -> None:
+    """_navigate_with_retry returns at "domcontentloaded" (a page that never reaches "load" must not read as
+    unreachable). Detection must still see what the page does AFTER that: the settle window above was sized as
+    "a short window past `load`", and a consent tool's loader, its banner and most tag managers run after
+    domcontentloaded. Measured after that navigation change, on the same sites: lemonde.fr lost its consent tool
+    (so a high "no consent mechanism" finding), masterclass.gignaati.com lost Accept/Reject, and pre-consent
+    tracker counts fell. Bounded and never fatal: a page that does not reach "load" is scanned as it stands."""
+    try:
+        await page.wait_for_load_state("load", timeout=timeout_ms)
+    except PlaywrightError:
+        logger.info("%s did not reach the load event within %dms; scanning it as it stands", label, timeout_ms)
+
 # Progressive scroll (scanner-hardening audit, live-measured against 3 real sites --
 # swaransoft.com/nvidia.com/klaviyo.com -- not guessed): a load+settle-only pass misses
 # IntersectionObserver-gated lazy content. Scrolling top-to-bottom surfaced 12%-65% MORE
@@ -500,6 +516,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
 
         # Bounded settle window (see _TRACKER_SETTLE_MS) replacing "networkidle" --
         # gives async-loading trackers/tag-managers a fair, predictable chance to fire.
+        await _wait_for_load_event(browser_page, url)
         await browser_page.wait_for_timeout(_TRACKER_SETTLE_MS)
         scroll_steps = await _progressive_scroll(browser_page, request_count=lambda: len(request_records))
         http_status = response.status if response else None
@@ -888,13 +905,14 @@ async def _crawl_single_page_with_interaction(
             # gate is shown first), so clicking after only the settle window below found no banner at all:
             # masterclass.gignaati.com went from Accept and Reject both clicked to "cmp_not_automatable" for both.
             # The page's own "load" event is what the interaction used to wait for; bounded, and never fatal.
-            try:
-                await browser_page.wait_for_load_state("load", timeout=_INTERACTION_LOAD_WAIT_MS)
-            except PlaywrightError:
-                logger.info("%s did not reach the load event within %dms; trying the banner anyway", root_url, _INTERACTION_LOAD_WAIT_MS)
+            await _wait_for_load_event(browser_page, root_url, _INTERACTION_LOAD_WAIT_MS)
             await browser_page.wait_for_timeout(_TRACKER_SETTLE_MS)  # see _TRACKER_SETTLE_MS docstring above
             gate = await pass_consent_gate(browser_page)
             interaction_status = await click_fn(browser_page)
+            if interaction_status == "not_found":
+                await browser_page.wait_for_timeout(_BANNER_RETRY_WAIT_MS)
+                gate = await pass_consent_gate(browser_page) or gate
+                interaction_status = await click_fn(browser_page)
             if interaction_status == "clicked":
                 await browser_page.wait_for_timeout(2000)  # let post-click network activity settle -- separate from
                 # _TRACKER_SETTLE_MS above: this one is conditional on an actual consent decision having just
@@ -1028,6 +1046,12 @@ def _final_interaction_status(raw_status: str, mechanism_type: str) -> str:
 
 #: Longest an interaction pass waits for the page's load event before looking for the banner.
 _INTERACTION_LOAD_WAIT_MS = 15_000
+
+#: A banner that is not there on the first look gets one more look after this long. Consent tools fetch their
+#: configuration over the network before drawing anything, so a slow response reads as "no banner": one of about
+#: a dozen scans of gignaati.com found no Reject control on the first try and clicked it on every other. One retry,
+#: never a loop -- a site with no banner pays this wait once.
+_BANNER_RETRY_WAIT_MS = 2_500
 
 
 async def _run_interaction_pass(

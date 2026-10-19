@@ -210,6 +210,45 @@ async def test_the_interaction_pass_returns_the_gate_record_and_still_matches_it
     assert out[2] == "clicked" and out[3] is True and out[5] == record
 
 
+async def _run_pass_with_clicks(monkeypatch, outcomes):
+    from app.config import get_settings
+    from tests.test_scanner_coverage import ROOT, _FakeContext, _links
+
+    monkeypatch.setattr(crawler, "pass_consent_gate", lambda page: _async_value(None))
+    monkeypatch.setattr(crawler, "confirm_interaction_completed", lambda page, accept: _async_value(True))
+    monkeypatch.setattr(crawler, "_BANNER_RETRY_WAIT_MS", 0)
+    calls = []
+
+    async def click(_page):
+        calls.append(1)
+        return outcomes[min(len(calls), len(outcomes)) - 1]
+
+    out = await crawler._crawl_single_page_with_interaction(
+        _FakeContext({f"{ROOT}/": _links()}), f"{ROOT}/", get_settings(), set(), "post_reject", click,
+    )
+    return out, len(calls)
+
+
+async def test_a_banner_that_is_not_there_on_the_first_look_gets_one_more_look(monkeypatch):
+    """gignaati.com: one scan in about a dozen found no Reject control on the first try; the consent tool had not
+    drawn the banner yet."""
+    out, calls = await _run_pass_with_clicks(monkeypatch, ["not_found", "clicked"])
+
+    assert out[2] == "clicked" and out[3] is True and calls == 2
+
+
+async def test_the_second_look_is_the_last_a_site_with_no_banner_is_not_retried_forever(monkeypatch):
+    out, calls = await _run_pass_with_clicks(monkeypatch, ["not_found"])
+
+    assert out[2] == "not_found" and calls == 2
+
+
+async def test_a_banner_found_first_time_is_not_looked_for_again(monkeypatch):
+    out, calls = await _run_pass_with_clicks(monkeypatch, ["clicked"])
+
+    assert out[2] == "clicked" and calls == 1
+
+
 async def test_a_robots_disallowed_page_returns_the_same_shape_as_every_other_outcome():
     from app.config import get_settings
     out = await crawler._crawl_single_page_with_interaction(

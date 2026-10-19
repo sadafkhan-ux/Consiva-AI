@@ -184,6 +184,9 @@ class _FakePage:
         # falls back to parsed.visible_text when falsy) all treat it as "nothing".
         return ""
 
+    async def wait_for_load_state(self, state=None, timeout=None):
+        return None
+
     async def wait_for_timeout(self, _ms):
         pass
 
