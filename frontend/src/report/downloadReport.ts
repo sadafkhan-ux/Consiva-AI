@@ -1,5 +1,5 @@
 import type { jsPDF as JsPdf } from "jspdf";
-import type { DiscoveredPdfRow, ReportModel } from "./buildReport";
+import type { ReportModel } from "./buildReport";
 import { NOT_AVAILABLE, type GroupCount } from "./cookieInventory";
 
 // A4 portrait in points. Everything below is laid out against these bounds so the
@@ -12,6 +12,7 @@ const CONTENT_W = PAGE_W - M * 2;
 const BOTTOM_LIMIT = PAGE_H - 56; // leave room for the footer
 
 const INK = { r: 24, g: 28, b: 38 };
+const SCORE_BANNER = { r: 38, g: 50, b: 74 };
 const MUTED = { r: 108, g: 116, b: 132 };
 const RULE = { r: 214, g: 219, b: 228 };
 
@@ -105,17 +106,28 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   doc.text(`Consiva AI · DPDP Act 2023 · generated ${model.generatedAt}`, M, y);
   y += 16;
 
-  // ---------- overall risk banner ----------
-  const rc = riskColor(model.overallRisk);
-  doc.setFillColor(rc.r, rc.g, rc.b);
+  // ---------- DPDP Compliance Score banner (replaces the old overall-risk banner) ----------
+  // The same headline and coverage wording as the dashboard (report/dpdpScore.ts). A neutral colour: the score is not a risk level.
+  doc.setFillColor(SCORE_BANNER.r, SCORE_BANNER.g, SCORE_BANNER.b);
   doc.roundedRect(M, y, CONTENT_W, 38, 4, 4, "F");
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(12);
-  doc.text(`Overall risk: ${model.overallRisk.toUpperCase()}`, M + 14, y + 16);
+  doc.text(
+    model.dpdpScore
+      ? `DPDP Compliance Score (proposed methodology): ${model.dpdpScore.headline}`
+      : "DPDP Compliance Score: not available for this report",
+    M + 14, y + 16,
+  );
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
-  doc.text(doc.splitTextToSize(model.headline, CONTENT_W - 28)[0] as string, M + 14, y + 29);
+  doc.text(
+    doc.splitTextToSize(
+      model.dpdpScore ? `Assessment coverage (separate from the score): ${model.dpdpScore.coverageHeadline}. ${model.dpdpScore.coverageLine}` : model.headline,
+      CONTENT_W - 28,
+    )[0] as string,
+    M + 14, y + 29,
+  );
   y += 50;
 
   // Honesty marker: findings still pending review are NOT signed off, and a client
@@ -138,9 +150,11 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   doc.setFontSize(8.5);
   setColor(MUTED);
   writeWrapped(model.scope, 8.5, 11);
-  if (model.discoveredLine) {
+  if (model.dpdpScore) {
     y += 2;
-    writeWrapped(model.discoveredLine, 8.5, 11);
+    writeWrapped(`${model.dpdpScore.scopeLines[0]} ${model.dpdpScore.scanTimeLine}.`, 8.5, 11);
+    writeWrapped(`${model.dpdpScore.versionsLine}. ${model.dpdpScore.basisLine} Method, weights, evidence and remediation follow on the next page.`, 8.5, 11);
+    if (model.dpdpScore.caution) writeWrapped(model.dpdpScore.caution, 8.5, 11);
   }
   y += 4;
   setColor(INK);
@@ -236,7 +250,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     PAGE_H - 33,
   );
 
-  drawDiscoveredDomains(doc, model);
+  drawDpdpScore(doc, model);
   drawCookieInventory(doc, model);
 
   const host = model.siteUrl.replace(/^https?:\/\//, "").replace(/[^a-zA-Z0-9.-]/g, "-").replace(/-+$/, "");
@@ -244,72 +258,57 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   doc.save(`consiva-consent-summary-${host || "report"}-${stamp}.pdf`);
 }
 
-// ---------- discovered subdomains & websites (after the summary page) ----------
+// ---------- DPDP Compliance Score (after the summary page) ----------
 //
-// The scan covers the entered site only. Subdomains and separate websites it came across -- through links, requests or
-// frames -- are listed here, on their own pages and in their own colour, so a reader can see them next to the main-site
-// findings without mistaking them for results about the site itself. Every one is listed, with its URLs, over as many
-// pages as it takes.
+// Every figure and sentence comes from report/dpdpScore.ts, the same view the dashboard renders, so the two cannot differ.
+// It flows over as many portrait pages as it needs, and says "Insufficient Evidence" instead of a number when the score is
+// withheld.
 
 const AMBER = { r: 178, g: 112, b: 20 };
 const AMBER_FILL = { r: 253, g: 246, b: 232 };
 const AMBER_RULE = { r: 233, g: 205, b: 150 };
 
-function drawDiscoveredDomains(doc: JsPdf, model: ReportModel): void {
-  const section = model.discoveredSection;
-  if (!section) return;
+function drawDpdpScore(doc: JsPdf, model: ReportModel): void {
+  const v = model.dpdpScore;
+  if (!v) return;
 
   let y = M;
   let page = 0;
   const setColor = (c: { r: number; g: number; b: number }) => doc.setTextColor(c.r, c.g, c.b);
 
   const footer = () => {
-    doc.setDrawColor(AMBER_RULE.r, AMBER_RULE.g, AMBER_RULE.b);
+    doc.setDrawColor(RULE.r, RULE.g, RULE.b);
     doc.setLineWidth(0.6);
     doc.line(M, PAGE_H - 44, M + CONTENT_W, PAGE_H - 44);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
     setColor(MUTED);
     doc.text(
-      doc.splitTextToSize(
-        `Discovered subdomains & websites — ${model.siteUrl}. These were found while scanning ${section.mainHost}; they were not` +
-          ` scanned as its pages, and their requests and cookies are not counted in the site's own results. Page ${page}.`,
-        CONTENT_W,
-      ) as string[],
-      M,
-      PAGE_H - 33,
+      doc.splitTextToSize(`DPDP Compliance Score, ${model.siteUrl}. ${v.methodologyLine}. Proposed methodology, not legal advice. Page ${page}.`, CONTENT_W) as string[],
+      M, PAGE_H - 33,
     );
     setColor(INK);
   };
-
   const newPage = () => {
     doc.addPage("a4", "portrait");
     page += 1;
     y = M;
-    // A tinted band marks every page of this section, so it cannot be taken for part of the main-site summary.
-    doc.setFillColor(AMBER_FILL.r, AMBER_FILL.g, AMBER_FILL.b);
-    doc.rect(0, 0, PAGE_W, page === 1 ? 74 : 38, "F");
-    doc.setFillColor(AMBER.r, AMBER.g, AMBER.b);
-    doc.rect(0, 0, 6, page === 1 ? 74 : 38, "F");
     doc.setFont("helvetica", "bold");
     doc.setFontSize(page === 1 ? 15 : 11);
-    setColor(AMBER);
-    doc.text(page === 1 ? "Discovered Subdomains & Websites" : "Discovered Subdomains & Websites (continued)", M, y + (page === 1 ? 2 : 0));
-    y += page === 1 ? 17 : 12;
+    setColor(INK);
+    doc.text(page === 1 ? "DPDP Compliance Score" : "DPDP Compliance Score (continued)", M, y);
+    y += page === 1 ? 16 : 12;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.5);
     setColor(MUTED);
-    doc.text(`${model.siteUrl} · for review, not a verdict`, M, y);
-    y += page === 1 ? 40 : 28;
+    doc.text(`${model.siteUrl} · proposed methodology`, M, y);
+    y += 16;
     setColor(INK);
     footer();
   };
-
   const ensure = (space: number) => {
     if (y + space > BOTTOM_LIMIT) newPage();
   };
-
-  /** Wrapped text that flows onto a new page line by line. */
   const write = (text: string, x: number, w: number, size: number, gap: number) => {
     doc.setFontSize(size);
     for (const line of doc.splitTextToSize(text, w) as string[]) {
@@ -318,111 +317,306 @@ function drawDiscoveredDomains(doc: JsPdf, model: ReportModel): void {
       y += gap;
     }
   };
-
-  const groupHeading = (label: string) => {
-    ensure(40);
+  const heading = (label: string) => {
+    ensure(34);
     y += 6;
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
-    setColor(AMBER);
+    setColor(MUTED);
     doc.text(label.toUpperCase(), M, y);
     y += 5;
-    doc.setDrawColor(AMBER_RULE.r, AMBER_RULE.g, AMBER_RULE.b);
-    doc.setLineWidth(0.8);
+    doc.setDrawColor(RULE.r, RULE.g, RULE.b);
+    doc.setLineWidth(0.6);
     doc.line(M, y, M + CONTENT_W, y);
     y += 13;
     doc.setFont("helvetica", "normal");
     setColor(INK);
   };
-
-  const drawRow = (r: DiscoveredPdfRow) => {
-    ensure(64); // keep a row's name with its first lines
-    const top = y;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    setColor(INK);
-    doc.text(r.name, M + 10, y);
-    const nameW = doc.getTextWidth(r.name);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    setColor(AMBER);
-    const tags = [r.kind.toUpperCase(), ...(r.framed ? ["SHOWN IN A FRAME"] : []), ...(r.review ? ["REVIEW"] : [])].join("  ·  ");
-    doc.text(tags, M + 18 + nameW, y);
-    setColor(INK);
-    y += 13;
-
-    for (const u of r.urls) {
-      doc.setFontSize(7);
-      setColor(MUTED);
-      ensure(10);
-      doc.text(u.label.toUpperCase(), M + 10, y);
-      y += 9;
-      setColor(INK);
-      write(u.url, M + 10, CONTENT_W - 14, 8.5, 10);
-      y += 2;
-    }
-    write(r.requests, M + 10, CONTENT_W - 14, 8.5, 10.5);
-    if (r.cookies) write(r.cookies, M + 10, CONTENT_W - 14, 8.5, 10.5);
-    if (r.vendors) write(r.vendors, M + 10, CONTENT_W - 14, 8.5, 10.5);
-    if (r.unclassified) {
-      setColor(MUTED);
-      write(r.unclassified, M + 10, CONTENT_W - 14, 8.5, 10.5);
-      setColor(INK);
-    }
-    for (const f of r.findings) {
-      ensure(24);
+  const rows = (items: typeof v.assessed) => {
+    for (const r of items) {
+      ensure(40);
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(8);
-      const fc = riskColor(f.risk);
-      setColor(fc);
-      doc.text(`FINDING · ${f.risk.toUpperCase()}`, M + 10, y);
-      y += 10;
+      doc.setFontSize(9.5);
+      const titleLines = doc.splitTextToSize(`${r.id}  ${r.title}`, CONTENT_W - 110) as string[];
+      doc.text(r.status, M + CONTENT_W, y, { align: "right" });
+      for (const line of titleLines) {
+        ensure(12);
+        doc.text(line, M, y);
+        y += 12;
+      }
       doc.setFont("helvetica", "normal");
-      setColor(INK);
-      write(f.text, M + 10, CONTENT_W - 14, 8.5, 10.5);
       setColor(MUTED);
-      write(f.share, M + 10, CONTENT_W - 14, 8, 10);
+      write(`${r.provisions} · weight ${r.weight} · ${r.points} · ${r.inForce}`, M + 8, CONTENT_W - 8, 8, 10);
       setColor(INK);
+      if (r.timingNote) {
+        setColor(AMBER);
+        write(r.timingNote, M + 8, CONTENT_W - 8, 8, 10);
+        setColor(INK);
+      }
+      for (const o of r.observations) write(o, M + 8, CONTENT_W - 8, 8.5, 10.5);
+      setColor(MUTED);
+      write(`${r.checkType}. Checks: ${r.description}`, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      write(`Applies when: ${r.applicability}`, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      write(`Assessment criteria: ${r.criteria}`, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      write(`Evidence expected: ${r.expectedEvidence}`, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      if (r.pages.length) write(`Pages: ${r.pages.join(", ")}`, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      if (r.sufficiency) write(r.sufficiency, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      if (r.limitation) write(r.limitation, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      write(`Confidence: ${r.confidence}`, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      write(`Scoring rationale: ${r.scoringRationale}`, M + 8, CONTENT_W - 8, 7.5, 9.5);
+      setColor(INK);
+      if (r.note) {
+        setColor(MUTED);
+        write(r.note, M + 8, CONTENT_W - 8, 8, 10);
+        setColor(INK);
+      }
+      if (r.rules.length || r.evidenceIds.length) {
+        setColor(MUTED);
+        const ev = r.evidenceIds.length ? `Evidence: ${r.evidenceIds.slice(0, 6).join(", ")}${r.evidenceIds.length > 6 ? ` and ${r.evidenceIds.length - 6} more` : ""}.` : "";
+        write(`${r.rules.length ? `Related rules: ${r.rules.join(", ")}. ` : ""}${ev}`, M + 8, CONTENT_W - 8, 7.5, 9.5);
+        setColor(INK);
+      }
+      y += 5;
     }
-
-    // A bar down the left edge ties the row together, across a page break too.
-    doc.setDrawColor(AMBER_RULE.r, AMBER_RULE.g, AMBER_RULE.b);
-    doc.setLineWidth(2);
-    doc.line(M + 2, top - 8, M + 2, Math.max(top - 8, y - 6));
-    y += 6;
   };
 
   newPage();
-  const total = section.subdomains.length + section.websites.length;
-  doc.setFont("helvetica", "normal");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(26);
   setColor(INK);
-  write(
-    `The scan covers ${section.mainHost} only. The ${total === 1 ? "domain" : `${total} domains`} below were found while scanning it: ` +
-      "links on its pages, requests its pages made, or content they display. They were not crawled and are not pages of " +
-      `${section.mainHost}. Findings that involve a domain are shown under it, and are marked in the full report. ` +
-      "Everything here is for review; nothing is a verdict.",
-    M, CONTENT_W, 9, 12,
-  );
+  doc.text(v.headline, M, y + 8);
+  y += 22;
+  doc.setFont("helvetica", "normal");
+  write(v.coverageLine, M, CONTENT_W, 9, 12);
+  setColor(MUTED);
+  for (const l of v.scopeLines) write(l, M, CONTENT_W, 8.5, 11);
+  write(v.scanTimeLine, M, CONTENT_W, 8.5, 11);
+  write(v.versionsLine, M, CONTENT_W, 8.5, 11);
+  setColor(INK);
+  setColor(AMBER);
+  write(v.natureNote, M, CONTENT_W, 8.5, 11);
+  if (v.caution) write(v.caution, M, CONTENT_W, 8.5, 11);
+  setColor(INK);
+  write(v.basisLine, M, CONTENT_W, 9, 12);
+  write(v.inForceLine, M, CONTENT_W, 9, 12);
+  write(v.formulaLine, M, CONTENT_W, 8.5, 11);
+  write(v.methodology.versionLine, M, CONTENT_W, 8.5, 11);
+  write(v.methodologyLine, M, CONTENT_W, 8.5, 11);
+  if (v.methodology.custom) {
+    setColor(AMBER);
+    write(v.methodology.weightsNote, M, CONTENT_W, 8.5, 11);
+    setColor(INK);
+  }
+  if (v.withheldReason) {
+    setColor(RISK_COLORS.medium);
+    write(`A score is not shown because the evidence is not sufficient: ${v.withheldReason} Missing or untested evidence is never counted as compliance.`, M, CONTENT_W, 9, 12);
+    setColor(INK);
+  }
+  if (v.unableLine) write(v.unableLine, M, CONTENT_W, 9, 12);
+
+  heading("What the scan found");
+  write(v.breakdownLine, M, CONTENT_W, 9, 12);
+  write(v.statusCountsLine, M, CONTENT_W, 9, 12);
+  write(v.checkTypesLine, M, CONTENT_W, 8.5, 11);
+  ensure(24);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Technical signals, counted apart", M, y);
+  doc.setFont("helvetica", "normal");
+  y += 12;
+  for (const l of v.evidenceLines) write(`• ${l}`, M + 4, CONTENT_W - 4, 8.5, 10.5);
+  setColor(MUTED);
+  write(v.evidenceNote, M, CONTENT_W, 8, 10.5);
+  setColor(INK);
+
+  // ---- the four finding groups, in order. Needs Human Review is the amber "Logic Required / Human Review" box. ----
+  write(v.groupCountsLine, M, CONTENT_W, 9, 12);
+  for (const line of v.upcomingLines) {
+    setColor(MUTED);
+    write(line, M, CONTENT_W, 8.5, 11);
+    setColor(INK);
+  }
+  const entry = (f: (typeof v.groups)[number]["entries"][number], amber: boolean) => {
+    ensure(54);
+    const top = y;
+    doc.setFont("helvetica", "bold");
+    write(`${f.id.startsWith("DPDP-") ? `${f.id}  ` : ""}${f.title}`, M + 10, CONTENT_W - 12, 9.5, 11.5);
+    doc.setFont("helvetica", "normal");
+    setColor(amber ? AMBER : MUTED);
+    write(`${f.outcome} · ${f.severity}${f.timingNote ? ` · ${f.timingNote}` : ""}`, M + 10, CONTENT_W - 12, 8, 10);
+    write(f.severityNote, M + 10, CONTENT_W - 12, 7.5, 9.5);
+    setColor(INK);
+    if (f.legal) write(`Legal reference: ${f.legal}`, M + 10, CONTENT_W - 12, 8.5, 10.5);
+    write(`Affected page: ${f.pages.length ? f.pages.join(", ") : "none recorded"} · Consent state: ${f.consentState}`, M + 10, CONTENT_W - 12, 8.5, 10.5);
+    if (f.observed.length) {
+      doc.setFont("helvetica", "bold");
+      write("What was observed", M + 10, CONTENT_W - 12, 8, 10);
+      doc.setFont("helvetica", "normal");
+      for (const o of f.observed) write(`• ${o}`, M + 14, CONTENT_W - 16, 8.5, 10.5);
+    }
+    if (f.rules.length || f.evidenceIds.length) {
+      setColor(MUTED);
+      const ids = f.evidenceIds.length ? `Evidence: ${f.evidenceIds.slice(0, 6).join(", ")}${f.evidenceIds.length > 6 ? ` and ${f.evidenceIds.length - 6} more` : ""}.` : "";
+      write(`${f.rules.length ? `Related rules: ${f.rules.join(", ")}. ` : ""}${ids}`, M + 10, CONTENT_W - 12, 7.5, 9.5);
+      setColor(INK);
+    }
+    if (f.caveat) {
+      setColor(MUTED);
+      write(f.caveat, M + 10, CONTENT_W - 12, 7.5, 9.5);
+      setColor(INK);
+    }
+    if (f.businessImpact) write(`Business impact: ${f.businessImpact}`, M + 10, CONTENT_W - 12, 8.5, 10.5);
+    if (f.explanation) write(`Why this group: ${f.explanation}`, M + 10, CONTENT_W - 12, 8.5, 10.5);
+    if (f.whatToReview.length) write(`What must be reviewed: ${f.whatToReview.join(" ")}`, M + 10, CONTENT_W - 12, 8.5, 10.5);
+    if (f.missing.length) {
+      doc.setFont("helvetica", "bold");
+      write("What is missing", M + 10, CONTENT_W - 12, 8, 10);
+      doc.setFont("helvetica", "normal");
+      for (const m of f.missing) write(`• ${m}`, M + 14, CONTENT_W - 16, 8.5, 10.5);
+    }
+    if (f.remediation) write(`Recommended remediation: ${f.remediation}`, M + 10, CONTENT_W - 12, 8.5, 10.5);
+    if (f.howToVerify) write(`How to verify: ${f.howToVerify}`, M + 10, CONTENT_W - 12, 8.5, 10.5);
+    if (f.related) {
+      setColor(MUTED);
+      write(`Related: ${f.related}`, M + 10, CONTENT_W - 12, 7.5, 9.5);
+      setColor(INK);
+    }
+    const c = amber ? AMBER_RULE : RULE;
+    doc.setDrawColor(c.r, c.g, c.b);
+    doc.setLineWidth(2);
+    doc.line(M + 2, top - 9, M + 2, Math.max(top - 9, y - 6));
+    y += 6;
+  };
+  for (const g of v.groups) {
+    const amber = g.key === "needs_review";
+    ensure(amber ? 60 : 40);
+    y += 8;
+    if (amber) {
+      // The "Logic Required / Human Review" box: a shaded band, the statement, then an amber bar down each item.
+      doc.setFillColor(AMBER_FILL.r, AMBER_FILL.g, AMBER_FILL.b);
+      doc.rect(M - 6, y - 12, CONTENT_W + 12, 20, "F");
+      doc.setFillColor(AMBER.r, AMBER.g, AMBER.b);
+      doc.rect(M - 6, y - 12, 4, 20, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10.5);
+      setColor(AMBER);
+      doc.text(`${v.reviewTitle.toUpperCase()}: ${g.title.toUpperCase()} (${g.count})`, M + 4, y + 2);
+      setColor(INK);
+      doc.setFont("helvetica", "normal");
+      y += 20;
+      write(v.reviewStatement, M, CONTENT_W, 8.5, 11);
+    } else {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10.5);
+      doc.text(`${g.title} (${g.count})`, M, y);
+      doc.setFont("helvetica", "normal");
+      y += 13;
+    }
+    setColor(MUTED);
+    write(`${g.intro} ${g.note}`, M, CONTENT_W, 8, 10.5);
+    setColor(INK);
+    if (g.entries.length === 0) write("None.", M, CONTENT_W, 8.5, 11);
+    for (const f of g.entries) entry(f, amber);
+  }
+
+  heading("Why this result");
+  for (const l of v.explanationLines) write(`• ${l}`, M + 4, CONTENT_W - 4, 8.5, 10.5);
+
+  heading("By category");
+  for (const c of v.categories) {
+    ensure(14);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.text(c.name, M, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(c.score, M + 190, y);
+    doc.text(c.coverage, M + 270, y);
+    doc.text(c.weights, M + 360, y);
+    y += 13;
+  }
+
+  heading(`Assessed requirements (${v.assessed.length})`);
+  rows(v.assessed);
+  if (v.unableToVerify.length) {
+    heading(`Unable to verify (${v.unableToVerify.length}): not in the score`);
+    rows(v.unableToVerify);
+  }
+  if (v.excluded.length) {
+    heading(`Excluded from the score (${v.excluded.length})`);
+    rows(v.excluded);
+  }
+  heading(`Prioritized remediation (${v.remediationPlan.length})`);
+  setColor(MUTED);
+  write(v.remediationNote, M, CONTENT_W, 8, 10.5);
+  setColor(INK);
+  if (v.remediationPlan.length === 0) write("No remediation actions: no check failed with sufficient evidence.", M, CONTENT_W, 8.5, 11);
+  for (const p of v.remediationPlan) {
+    ensure(40);
+    doc.setFont("helvetica", "bold");
+    write(`${p.rank}. ${p.title} · ${p.priority}`, M, CONTENT_W, 9.5, 11.5);
+    doc.setFont("helvetica", "normal");
+    setColor(MUTED);
+    write(`${p.outcome} · ${p.timing} · ${p.priorityReason}`, M + 10, CONTENT_W - 10, 7.5, 9.5);
+    setColor(INK);
+    write(`Action: ${p.action}`, M + 10, CONTENT_W - 10, 8.5, 10.5);
+    write(`How to verify: ${p.howToVerify}`, M + 10, CONTENT_W - 10, 8.5, 10.5);
+    setColor(MUTED);
+    write(p.legal, M + 10, CONTENT_W - 10, 7.5, 9.5);
+    setColor(INK);
+    y += 4;
+  }
+
+  heading(v.methodology.title);
+  if (!v.methodology.custom) write(v.methodology.weightsNote, M, CONTENT_W, 8.5, 10.5);
+  for (const l of v.methodology.rules) write(`• ${l}`, M + 4, CONTENT_W - 4, 8.5, 10.5);
+  ensure(24);
   y += 4;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
-  setColor(AMBER);
-  doc.text(
-    `${section.subdomains.length} subdomain${section.subdomains.length === 1 ? "" : "s"} · ${section.websites.length} separate website${section.websites.length === 1 ? "" : "s"}`,
-    M, y,
-  );
-  y += 6;
+  doc.text("Category weights", M, y);
   doc.setFont("helvetica", "normal");
-  setColor(INK);
+  y += 12;
+  for (const c of v.methodology.categories) {
+    write(`${c.name}: weight ${c.weight} (${c.share} of the applicable weight). ${c.rationale}`, M + 4, CONTENT_W - 4, 8.5, 10.5);
+  }
+  ensure(24);
+  y += 4;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Requirement weights", M, y);
+  doc.setFont("helvetica", "normal");
+  y += 12;
+  for (const w of v.methodology.weights) {
+    write(`${w.id}  ${w.title} · ${w.type} · weight ${w.weight} · ${w.applies}`, M + 4, CONTENT_W - 4, 8.5, 10.5);
+    setColor(MUTED);
+    write(`Why this weight: ${w.rationale}`, M + 12, CONTENT_W - 12, 7.5, 9.5);
+    write(`Applies when: ${w.applicability}`, M + 12, CONTENT_W - 12, 7.5, 9.5);
+    setColor(INK);
+  }
+  ensure(24);
+  y += 4;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Legal mapping", M, y);
+  doc.setFont("helvetica", "normal");
+  y += 12;
+  write(v.versionsLine, M + 4, CONTENT_W - 4, 8.5, 10.5);
+  for (const l of v.legalSources) write(`• ${l}`, M + 4, CONTENT_W - 4, 8.5, 10.5);
+  ensure(24);
+  y += 4;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text("Duplicate rules", M, y);
+  doc.setFont("helvetica", "normal");
+  y += 12;
+  for (const l of v.methodology.dedup) write(`• ${l}`, M + 4, CONTENT_W - 4, 8.5, 10.5);
 
-  if (section.subdomains.length) {
-    groupHeading(`Subdomains of ${section.mainHost} (${section.subdomains.length})`);
-    section.subdomains.forEach(drawRow);
-  }
-  if (section.websites.length) {
-    groupHeading(`Separate websites (${section.websites.length})`);
-    section.websites.forEach(drawRow);
-  }
+  heading("Not assessed by this score");
+  for (const o of v.outOfScope) write(o, M, CONTENT_W, 8.5, 11);
+  y += 4;
+  setColor(MUTED);
+  write(v.disclaimer, M, CONTENT_W, 8, 10.5);
+  setColor(INK);
 }
 
 // ---------- cookie inventory (pages 2+) ----------

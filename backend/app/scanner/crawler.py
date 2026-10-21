@@ -97,7 +97,6 @@ _TRACKER_SETTLE_MS = 1200
 _MAX_SKIPPED_PAGES_LISTED = 50
 
 #: How many other hosts (subdomains and external sites) a scan lists individually.
-_MAX_OTHER_HOSTS = 100
 
 
 _FRAMESET_RE = re.compile(r"<frameset\b", re.IGNORECASE)
@@ -670,11 +669,6 @@ async def _crawl_full_site(
         "skipped_by_reason": {},
         # Other sites that a frameset page displays in place of content of its own. See _frameset_sources.
         "framed_sites": [],
-        "links_off_site_ignored": 0,
-        "links_subdomain_not_scanned": 0,
-        # Other hosts the scan came across -- subdomains of the entered domain and external sites -- one entry per host.
-        # They are reported for review; they are never crawled, and are not pages.
-        "discovered_domains": [],
         # <script src> tags present in the DOM that the browser does not run (a CMP's type="text/plain"
         # block). Not counted as trackers; recorded so a reviewer can see the CMP did block something.
         "script_tags_not_executed": 0,
@@ -695,30 +689,10 @@ async def _crawl_full_site(
         if len(diagnostics["skipped_pages"]) < _MAX_SKIPPED_PAGES_LISTED:
             diagnostics["skipped_pages"].append({"url": url, "reason": reason})
 
-    other_hosts: dict[str, dict] = {}
-
-    def _note_other_host(url: str, *, framed: bool = False, skipped: bool = True) -> None:
-        """A host other than the entered one: a subdomain of it, or an external site. Recorded for review, never queued."""
-        host = _host_key(url)
-        if not host:
-            return
-        kind = "subdomain" if _is_same_site(url, site_registered) else "external"
-        entry = other_hosts.get(host)
-        if entry is None:
-            if len(other_hosts) >= _MAX_OTHER_HOSTS:
-                return
-            entry = other_hosts[host] = {"host": host, "kind": kind, "links": 0, "sample_url": url, "framed": False}
-            if kind == "subdomain" and skipped:
-                _skip(url, "subdomain_not_scanned")
-        entry["links"] += 1
-        entry["framed"] = entry["framed"] or framed
-
     def _discover(url: str, via: str) -> None:
         if via != "seed" and _host_key(url) != main_host:
-            # The scan stays on the entered site. A link to a subdomain or to another site is noted for review, not
-            # followed: it is neither a page of this site nor a reason to spend one of the three pages.
-            diagnostics["links_subdomain_not_scanned" if _is_same_site(url, site_registered) else "links_off_site_ignored"] += 1
-            _note_other_host(url)
+            # The scan stays on the entered main domain. A link to a subdomain or to another website is neither followed
+            # nor recorded: it is not a page of this site and not a reason to spend one of the pages.
             return
         key = normalize_url(url)
         if key in seen_keys:
@@ -773,11 +747,9 @@ async def _crawl_full_site(
 
         if via != "seed":
             # Where the navigation actually ended. A redirect can land on a page that was already scanned (counted
-            # once, not twice) or on another site entirely (not a page of this one); neither brings in evidence.
+            # once, not twice) or on another host entirely (not a page of the main domain); neither brings in evidence.
             final_url = result.get("final_url") or url
             if _host_key(final_url) != main_host:
-                _skip(url, "redirected_to_subdomain" if _is_same_site(final_url, site_registered) else "redirected_off_site")
-                _note_other_host(final_url, skipped=False)   # already reported above, with its own reason
                 return
             if normalize_url(final_url) in scanned_keys:
                 _skip(url, "redirected_to_already_scanned_page")
@@ -785,7 +757,6 @@ async def _crawl_full_site(
         for frame_src in result.get("frame_sources") or []:
             if _host_key(frame_src) != main_host:
                 framed_sites.add(frame_src)
-                _note_other_host(frame_src, framed=True, skipped=False)
         scanned_keys.add(normalize_url(result.get("final_url") or url))
         scanned_keys.add(normalize_url(url))
         seen_keys.add(normalize_url(result.get("final_url") or url))
@@ -905,7 +876,6 @@ async def _crawl_full_site(
         stop_reason = "page_limit"
 
     diagnostics["framed_sites"] = sorted(framed_sites)
-    diagnostics["discovered_domains"] = sorted(other_hosts.values(), key=lambda e: (-e["links"], e["host"]))[:_MAX_OTHER_HOSTS]
     diagnostics["stop_reason"] = stop_reason
     for _rank, _n, queued_url, _via in sorted(queue):
         _skip(queued_url, {"page_limit": "page_limit", "deadline": "time_limit", "cancelled": "scan_cancelled"}.get(stop_reason, "not_reached"))

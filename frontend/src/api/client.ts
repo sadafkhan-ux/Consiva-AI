@@ -2,6 +2,7 @@ import type {
   AgentRunResponse,
   AuditLogResponse,
   FindingResponse,
+  DpdpScoreResponse,
   ScanEvidenceResponse,
   ScanResponse,
   ScanStatusResponse,
@@ -139,6 +140,9 @@ export const api = {
   },
   getEvidence(scanId: string): Promise<ScanEvidenceResponse> {
     return request(`/api/v1/consent/scans/${scanId}/evidence`);
+  },
+  getDpdpScore(scanId: string): Promise<DpdpScoreResponse> {
+    return request(`/api/v1/consent/scans/${scanId}/dpdp-score`);
   },
   analyze(scanId: string): Promise<AgentRunResponse> {
     return request(`/api/v1/consent/scans/${scanId}/analyze`, { method: "POST" });

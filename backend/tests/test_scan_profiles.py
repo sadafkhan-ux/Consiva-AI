@@ -86,19 +86,19 @@ def test_missing_variables_take_the_documented_defaults_not_unlimited(monkeypatc
     # Settings() also reads backend/.env; pass the three fields explicitly absent by building from
     # the class defaults rather than the file.
     fields = Settings.model_fields
-    assert fields["consent_web_max_pages"].default == 3
+    assert fields["consent_web_max_pages"].default == 5
     assert fields["consent_app_max_pages"].default == 0
     assert fields["consent_app_max_seconds"].default == 0, "no crawl deadline unless one is set"
     assert resolve_profile(WEB, Settings.model_validate(
-        {**get_settings().model_dump(), "consent_web_max_pages": 3}
-    )).max_pages == 3
+        {**get_settings().model_dump(), "consent_web_max_pages": 5}
+    )).max_pages == 5
 
 
 def test_the_example_env_documents_all_three_variables_without_secrets():
     from pathlib import Path
 
     text = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
-    for line in ("CONSENT_WEB_MAX_PAGES=3", "CONSENT_APP_MAX_PAGES=0", "CONSENT_APP_MAX_SECONDS=0"):
+    for line in ("CONSENT_WEB_MAX_PAGES=5", "CONSENT_APP_MAX_PAGES=0", "CONSENT_APP_MAX_SECONDS=0"):
         assert line in text
     block = text[text.index("Consent scan profiles"):text.index("CONSENT_APP_MAX_SECONDS=")]
     assert "no fixed page-count cap" in block, "0 must be documented as 'no fixed page-count cap'"
@@ -220,17 +220,17 @@ def _site(n: int) -> dict:
     return pages
 
 
-async def test_the_web_profile_stops_at_three_unique_pages():
+async def test_the_web_profile_stops_at_five_unique_pages():
     context = _FakeContext(_site(40))
-    profile = resolve_profile(WEB, _settings(consent_web_max_pages=3))
+    profile = resolve_profile(WEB, _settings(consent_web_max_pages=5))
 
     *_rest, diagnostics = await _crawl_with(context, profile)
 
-    assert diagnostics["pages_attempted"] == 3 and len(context.navigations) == 3
-    assert len(set(context.navigations)) == 3, "three UNIQUE pages"
+    assert diagnostics["pages_attempted"] == 5 and len(context.navigations) == 5
+    assert len(set(context.navigations)) == 5, "five UNIQUE pages"
     assert diagnostics["stop_reason"] == "page_limit"
     assert diagnostics["pages_not_attempted_budget_exhausted"] > 0
-    assert diagnostics["scan_profile"] == WEB and diagnostics["page_limit"] == 3
+    assert diagnostics["scan_profile"] == WEB and diagnostics["page_limit"] == 5
 
 
 async def test_the_web_limit_holds_even_when_the_deployment_wide_limit_is_enormous():
@@ -271,7 +271,7 @@ async def test_without_a_profile_the_historical_deployment_wide_limit_still_appl
 
     *_rest, diagnostics = await _crawl(context, _settings(scanner_max_pages=7))   # above the ceiling: clamped
 
-    assert diagnostics["pages_attempted"] == 3 and diagnostics["scan_profile"] is None
+    assert diagnostics["pages_attempted"] == 5 and diagnostics["scan_profile"] is None
 
 
 class _SlowContext(_FakeContext):

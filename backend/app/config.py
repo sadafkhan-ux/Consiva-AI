@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     # Fallback page limit for code that calls the crawler WITHOUT a scan profile. Console, scheduled
     # and API scans all run under a profile (scan_profiles), where CONSENT_WEB_MAX_PAGES decides.
     # Kept equal to that default so the two can never disagree about "how many pages".
-    scanner_max_pages: int = Field(default=3, ge=1)
+    scanner_max_pages: int = Field(default=5, ge=1)
     # ── Consent scan profiles ───────────────────────────────────────────────────────
     # Two profiles share one scanning engine and differ only in the budget they get. The
     # profile is chosen by the SERVER from which endpoint was called and who called it --
@@ -140,9 +140,9 @@ class Settings(BaseSettings):
     # never means "disabled".
     #
     # CONSENT_WEB_MAX_PAGES -- public website scans. At most this many unique pages per
-    # scan. Must be 1..3: the upper bound is a hard ceiling in code, so no environment value
+    # scan. Must be 1..5: the upper bound is a hard ceiling in code, so no environment value
     # can turn the public profile into a larger one (scan_profiles.MAX_WEB_PAGES).
-    consent_web_max_pages: int = Field(default=3, ge=1)
+    consent_web_max_pages: int = Field(default=5, ge=1)
     # CONSENT_APP_MAX_PAGES -- authorized application scans. 0 means "no fixed page-count
     # cap" (see CONSENT_APP_MAX_SECONDS for the optional time deadline); a positive value is an
     # explicit cap for deployments that want one. Negative values are rejected.
@@ -157,13 +157,21 @@ class Settings(BaseSettings):
 
     @field_validator("scanner_max_pages", "consent_web_max_pages")
     @classmethod
-    def _public_scans_are_capped_at_three_pages(cls, value: int) -> int:
-        """A public scan never covers more than MAX_WEB_PAGES (3) pages, whatever the environment says. A larger value
-        left in an older .env (this used to default to 5 and accept up to 25) is clamped, not rejected: refusing to start
+    def _public_scans_are_capped_at_five_pages(cls, value: int) -> int:
+        """A public scan never covers more than MAX_WEB_PAGES (5) pages, whatever the environment says. A larger value
+        left in an older .env (this used to accept up to 25) is clamped, not rejected: refusing to start
         would turn a tightened limit into an outage, and honouring it would break the limit."""
         from app.scanner.scan_profiles import MAX_WEB_PAGES
 
         return min(value, MAX_WEB_PAGES)
+
+    @field_validator("dpdp_score_weights")
+    @classmethod
+    def _score_weights_are_valid(cls, value: dict[str, int]) -> dict[str, int]:
+        from app.scoring.dpdp_score import resolve_weights
+
+        resolve_weights(value)           # raises a ValueError (a startup failure) on an unknown id or an out-of-range weight
+        return value
 
     @field_validator("consent_app_max_seconds")
     @classmethod
@@ -192,6 +200,10 @@ class Settings(BaseSettings):
     # actual vantage point -- that limitation needs a real India-region proxy/egress,
     # which is a separate infrastructure decision, not something these two settings
     # can substitute for.
+    # DPDP Compliance Score: optional overrides of the documented requirement weights, as JSON, e.g.
+    # DPDP_SCORE_WEIGHTS={"DPDP-C1": 6}. Each weight is a whole number 1..10 for a known requirement id; anything else stops
+    # the app from starting. Empty means the documented defaults. A custom set is declared in every result and report.
+    dpdp_score_weights: dict[str, int] = Field(default_factory=dict)
     scanner_locale: str = "en-IN"
     scanner_accept_language: str = "en-IN,en;q=0.9"
     # When True, a scan is refused unless the target domain has passed DNS-TXT

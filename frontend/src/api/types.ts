@@ -65,13 +65,6 @@ export interface StageResponse {
 // The website_scan stage's metadata dict, as populated by
 // backend/app/services/scan_service.py -- every key here is real and already
 // returned today, nothing added on the frontend side.
-export interface DiscoveredDomain {
-  host: string;
-  kind: "subdomain" | "external";
-  links: number;
-  sample_url: string;
-  framed: boolean;
-}
 
 export interface WebsiteScanMetadata {
   pages_found?: number;
@@ -92,10 +85,6 @@ export interface WebsiteScanMetadata {
   /** Why discovered pages were not scanned: one entry per page (capped at 50) and the full count per reason. */
   skipped_pages?: { url: string; reason: string }[];
   skipped_by_reason?: Record<string, number>;
-  links_off_site_ignored?: number;
-  links_subdomain_not_scanned?: number;
-  /** Subdomains and external sites the scan came across (never crawled), one entry per host. */
-  discovered_domains?: DiscoveredDomain[];
   framed_sites?: string[];
   total_scroll_steps?: number;
   accept_scroll_steps?: number;
@@ -213,6 +202,268 @@ export interface ScanEvidenceResponse {
   third_party_services: EvidenceThirdPartyItem[];
   policies: EvidencePolicyItem[];
   consent_signals: EvidenceConsentSignalItem[];
+}
+
+/** The proposed DPDP Compliance Score for one scan (backend app/scoring/dpdp_score.py; docs/DPDP_COMPLIANCE_SCORE.md). */
+export type DpdpStatus = "met" | "partially_met" | "not_met" | "unable_to_verify" | "not_applicable";
+
+export interface DpdpRequirementResult {
+  id: string;
+  category: string;
+  title: string;
+  provisions: string[];
+  weight: number;
+  effective: string;
+  in_force: boolean;
+  status: DpdpStatus;
+  points_earned: number;
+  counts_in_score: boolean;
+  observations: string[];
+  evidence_ids: string[];
+  rule_ids: string[];
+  exclusion_reason: string | null;
+  default_weight: number;
+  description: string;
+  criteria: string;
+  expected_evidence: string;
+  pages: string[];
+  sufficient: boolean | null;
+  sufficiency_reason: string;
+  limitation: string;
+  timing: "in_force" | "future";
+  duplicate_of: string | null;
+  why_it_matters: string;
+  remediation: string;
+  verification: string;
+  check_type: "website" | "business";
+  applicability: string;
+  confidence: "high" | "medium" | "none";
+  scoring_rationale: string;
+}
+
+export interface DpdpCategoryScore {
+  category: string;
+  applicable_weight: number;
+  assessed_weight: number;
+  points_earned: number;
+  score_percent: number | null;
+  coverage_percent: number | null;
+  status: "scored" | "not_assessed";
+}
+
+export interface DpdpScoreBlock {
+  basis: "readiness" | "in_force";
+  status: "scored" | "insufficient_evidence";
+  score_percent: number | null;
+  points_earned: number;
+  points_assessed: number;
+  applicable_weight: number;
+  assessed_weight: number;
+  unable_to_verify_weight: number;
+  coverage_percent: number | null;
+  insufficient_reason: string | null;
+  caution: string | null;
+  categories: DpdpCategoryScore[];
+}
+
+export interface DpdpStateCounts {
+  pre_consent: number;
+  post_accept: number;
+  post_reject: number;
+}
+
+/** The three kinds of technical signal, counted apart. None of them is a finding on its own. */
+export interface DpdpEvidenceSummary {
+  network_requests: number;
+  known_tracker_requests: number;
+  unclassified_requests: number;
+  cookies: number;
+  known_tracker_cookies: number;
+  unclassified_cookies: number;
+  network_requests_by_state: DpdpStateCounts;
+  known_tracker_requests_by_state: DpdpStateCounts;
+  cookies_by_state: DpdpStateCounts;
+  pages_scanned: number;
+  note: string;
+}
+
+export interface DpdpGapItem {
+  requirement_id: string;
+  title: string;
+  status: "not_met" | "partially_met";
+  timing: "in_force" | "future";
+  applies_from: string;
+  provisions: string[];
+  weight: number;
+  points: number;
+  what_the_scan_observed: string[];
+  pages: string[];
+  evidence_ids: string[];
+  rule_ids: string[];
+  why_it_matters: string;
+  recommended_action: string;
+  how_to_verify: string;
+}
+
+export interface DpdpMissingEvidenceItem {
+  requirement_id: string;
+  title: string;
+  provisions: string[];
+  weight: number;
+  reason: string;
+  kind: "scan_limit" | "organisational";
+}
+
+export interface DpdpBreakdown {
+  /** Not Met, and the duty is in force now. */
+  verified_gaps: DpdpGapItem[];
+  /** Not Met, but the duty is not yet in force: a readiness gap, never a current violation. */
+  readiness_gaps: DpdpGapItem[];
+  partially_satisfied: DpdpGapItem[];
+  missing_evidence: DpdpMissingEvidenceItem[];
+  uncertain_count: number;
+}
+
+export type DpdpNeed = "business_context" | "legal_interpretation" | "more_evidence";
+
+export interface DpdpReviewItem {
+  id: string;
+  category: "uncertain" | "missing_evidence";
+  topic: string;
+  needs: DpdpNeed[];
+  known: string[];
+  missing: string[];
+  decision: string;
+  provisions: string[];
+  evidence_ids: string[];
+  requirement_ids: string[];
+}
+
+export interface DpdpHumanReview {
+  statement: string;
+  items: DpdpReviewItem[];
+}
+
+export type DpdpGroupKey = "confirmed" | "needs_review" | "unable_to_verify" | "future_readiness";
+
+export interface DpdpFindingEntry {
+  id: string;
+  group: DpdpGroupKey;
+  title: string;
+  requirement_ids: string[];
+  legal_references: string[];
+  outcome: string;
+  severity: "High" | "Medium" | "Low" | null;
+  severity_note: string;
+  pages: string[];
+  consent_states: string[];
+  observed: string[];
+  evidence_ids: string[];
+  rule_ids: string[];
+  effective_date: string | null;
+  timing_note: string;
+  business_impact: string;
+  explanation: string;
+  what_to_review: string[];
+  missing: string[];
+  how_to_verify: string;
+  remediation: string;
+  signal_caveat: string;
+  confidence: string;
+  related_ids: string[];
+}
+
+export interface DpdpFindingGroups {
+  confirmed: DpdpFindingEntry[];
+  needs_review: DpdpFindingEntry[];
+  unable_to_verify: DpdpFindingEntry[];
+  future_readiness: DpdpFindingEntry[];
+  upcoming: { date: string; requirement_ids: string[] }[];
+  notes: Record<DpdpGroupKey, string>;
+  counts: Record<DpdpGroupKey, number>;
+}
+
+export interface DpdpMethodWeight {
+  id: string;
+  title: string;
+  category: string;
+  check_type: "website" | "business";
+  weight: number;
+  default_weight: number;
+  rationale: string;
+  applicability: string;
+  effective: string;
+  applies_now: boolean;
+}
+
+export interface DpdpMethodCategory {
+  name: string;
+  rationale: string;
+  weight: number;
+  share_percent: number | null;
+  requirement_ids: string[];
+}
+
+export interface DpdpAssessment {
+  scan_url: string | null;
+  main_domain: string | null;
+  scanned_at: string | null;
+  assessed_on: string;
+  pages_scanned: string[];
+  page_limit: number;
+  states_tested: string[];
+  states_not_tested: string[];
+  nature_note: string;
+}
+
+export interface DpdpRemediationStep {
+  rank: number;
+  requirement_id: string;
+  title: string;
+  outcome: string;
+  timing: string;
+  priority: string;
+  priority_reason: string;
+  action: string;
+  how_to_verify: string;
+  legal_references: string[];
+}
+
+export interface DpdpMethodology {
+  version: string;
+  weights_source: "default" | "custom";
+  weights_note: string;
+  score_formula: string;
+  coverage_formula: string;
+  points_rules: string[];
+  reliability_rule: string;
+  duplicate_rule: string;
+  timing_rule: string;
+  scope_rule: string;
+  legal_mapping_version: string;
+  legal_sources: { name: string; reference: string }[];
+  weights: DpdpMethodWeight[];
+  categories: DpdpMethodCategory[];
+  dedup: { group: string; requirement_ids: string[]; explanation: string }[];
+}
+
+export interface DpdpScoreResponse {
+  methodology_version: string;
+  as_of: string;
+  requirements: DpdpRequirementResult[];
+  readiness: DpdpScoreBlock;
+  in_force: DpdpScoreBlock;
+  disclaimer: string;
+  status_counts: Record<DpdpStatus, number>;
+  evidence_summary: DpdpEvidenceSummary;
+  breakdown: DpdpBreakdown;
+  human_review: DpdpHumanReview;
+  finding_groups: DpdpFindingGroups;
+  methodology: DpdpMethodology;
+  assessment: DpdpAssessment;
+  remediation_plan: DpdpRemediationStep[];
+  thresholds: { min_coverage_percent: number; min_assessed_requirements: number };
+  out_of_scope: { provision: string; reason: string }[];
 }
 
 export interface ActionResponse {

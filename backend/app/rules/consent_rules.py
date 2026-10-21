@@ -10,6 +10,7 @@ Two distinct stages, matching docs/architecture §D/§E:
   evidence back out of the database as plain dicts.
 """
 
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import tldextract
@@ -236,51 +237,79 @@ def _observed_on(items: list[dict]) -> str:
     return f" Observed on: {', '.join(hosts)}." if hosts else ""
 
 
+@dataclass(frozen=True)
+class ConsentContext:
+    """What the consent rules (and the DPDP score, app/scoring/dpdp_score.py) both need to know about one scan's evidence.
+    Derived in ONE place so a finding and a score requirement can never disagree about, say, whether the banner was shown."""
+    cookies: list[dict]
+    trackers: list[dict]
+    forms: list[dict]
+    pages: list[dict]
+    policy_types: set[str]
+    signals: dict | None
+    mechanism_type: str
+    non_essential: list[dict]
+    interaction_evidence: dict
+    accept_outcome: str | None
+    reject_outcome: str | None
+    reject_confirmed: bool
+    interaction_page: str | None
+    framed_sites: list[str]
+    banner_not_displayed: bool
+    # True when the scan carries the three-pass consent-state record (accept_interaction present, or any item has states).
+    three_pass: bool
+
+
+def build_consent_context(evidence: dict) -> ConsentContext:
+    cookies = evidence["cookies"]
+    trackers = evidence["trackers"]
+    policy_types = {p["policy_type"] for p in evidence["policies"]}
+    signals = evidence["consent_signals"][0] if evidence["consent_signals"] else None
+    mechanism_type = signals["mechanism_type"] if signals else "unknown"
+    non_essential = [c for c in cookies if c["category"] in ("analytics", "marketing")] + [
+        t for t in trackers if t["category"] in ("analytics", "marketing")
+    ]
+    interaction_evidence = (signals or {}).get("evidence", {}) or {}
+    accept_outcome = interaction_evidence.get("accept_interaction")
+    reject_outcome = interaction_evidence.get("reject_interaction")
+    reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
+    framed_sites = list(interaction_evidence.get("framed_sites") or [])
+    observed = interaction_evidence.get("banner_ui_observed")
+    banner_not_displayed = (
+        mechanism_type == "cmp" and observed is False
+        and accept_outcome != "clicked" and reject_outcome != "clicked"
+    )
+    three_pass = "accept_interaction" in interaction_evidence or any(
+        e.get("consent_states") for e in (*cookies, *trackers)
+    )
+    return ConsentContext(
+        cookies=cookies, trackers=trackers, forms=evidence["forms"], pages=evidence.get("pages", []),
+        policy_types=policy_types, signals=signals, mechanism_type=mechanism_type, non_essential=non_essential,
+        interaction_evidence=interaction_evidence, accept_outcome=accept_outcome, reject_outcome=reject_outcome,
+        reject_confirmed=reject_confirmed, interaction_page=interaction_evidence.get("interaction_page_url"),
+        framed_sites=framed_sites, banner_not_displayed=banner_not_displayed, three_pass=three_pass,
+    )
+
+
 def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     """`evidence` is the dict shape produced by
     scan_repository.get_scan_evidence_summary() — real DB ids, already vendor/category
     classified. Called from agents/consent_agent/nodes/classify_rules.py."""
     findings: list[RuleFinding] = []
 
-    cookies = evidence["cookies"]
-    trackers = evidence["trackers"]
-    forms = evidence["forms"]
-    policy_types = {p["policy_type"] for p in evidence["policies"]}
-    signals = evidence["consent_signals"][0] if evidence["consent_signals"] else None
-    mechanism_type = signals["mechanism_type"] if signals else "unknown"
-
-    non_essential = [c for c in cookies if c["category"] in ("analytics", "marketing")] + [
-        t for t in trackers if t["category"] in ("analytics", "marketing")
-    ]
-
-    # The three-pass scanner's own account of whether it could actually operate the
-    # banner (crawler.py's _final_interaction_status): "clicked", "click_failed",
-    # "page_unreachable", "cmp_not_found" or "cmp_not_automatable". Read here rather
-    # than further down because R-003 depends on it. `evidence` defaults to {} for
-    # scans and fixtures predating this being surfaced, so the outcomes read as None.
-    interaction_evidence = (signals or {}).get("evidence", {}) or {}
-    accept_outcome = interaction_evidence.get("accept_interaction")
-    reject_outcome = interaction_evidence.get("reject_interaction")
-    # "clicked" only says a click was dispatched; this says it observably took effect
-    # (consent_interactor.confirm_interaction_completed). Absent -- scans and fixtures
-    # predating the flag -- reads as unconfirmed, never as "assume it worked".
-    reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
-    interaction_page = interaction_evidence.get("interaction_page_url")
+    ctx = build_consent_context(evidence)
+    cookies, trackers, forms = ctx.cookies, ctx.trackers, ctx.forms
+    policy_types, signals, mechanism_type = ctx.policy_types, ctx.signals, ctx.mechanism_type
+    non_essential = ctx.non_essential
+    accept_outcome, reject_outcome, reject_confirmed = ctx.accept_outcome, ctx.reject_outcome, ctx.reject_confirmed
+    interaction_page, framed_sites = ctx.interaction_page, ctx.framed_sites
+    banner_not_displayed = ctx.banner_not_displayed
     # Another site that the scanned page only frames (a frameset wrapper). What the visitor sees was not scanned, so a
     # claim that something is ABSENT (no banner, no privacy policy) describes the wrapper, not the site. See R-012.
-    framed_sites: list[str] = list(interaction_evidence.get("framed_sites") or [])
     framed_note = (
         f" This page only displays another site ({framed_sites[0]}) in a frame, so this describes the wrapper page, "
         "not what visitors see -- see R-012."
         if framed_sites else ""
-    )
-    # A banner counts as displayed when its own wording was seen (banner_ui_observed) or a click on it landed. Only a
-    # detected CMP whose scan recorded the observation and saw neither is "not displayed"; an older scan without the
-    # key reads as unknown, never as "not shown".
-    _observed = ((signals or {}).get("evidence") or {}).get("banner_ui_observed")
-    banner_not_displayed = (
-        mechanism_type == "cmp" and _observed is False
-        and accept_outcome != "clicked" and reject_outcome != "clicked"
     )
 
     # R-001 / R-003 depend on the three-pass consent-state scan (crawler.py). Both stay

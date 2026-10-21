@@ -1,11 +1,13 @@
 import uuid
-from datetime import datetime
+from dataclasses import asdict
+from datetime import date, datetime
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.core.exceptions import NotFoundError
 from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import (
@@ -16,6 +18,7 @@ from app.db.repositories import (
 )
 from app.db.session import get_db
 from app.llm.schemas import DpdpReference
+from app.scoring import dpdp_score
 from app.services import analysis_service, scan_service
 
 router = APIRouter(prefix="/api/v1/consent/scans", tags=["consent-scans"])
@@ -221,6 +224,275 @@ class ScanEvidenceResponse(BaseModel):
     consent_signals: list[EvidenceConsentSignalItem]
 
 
+# --- DPDP Compliance Score (proposed methodology; app/scoring/dpdp_score.py, docs/DPDP_COMPLIANCE_SCORE.md) -------------
+class DpdpRequirementResult(BaseModel):
+    id: str
+    category: str
+    title: str
+    provisions: list[str]
+    weight: int
+    effective: date
+    in_force: bool
+    status: str
+    points_earned: float
+    counts_in_score: bool
+    observations: list[str]
+    evidence_ids: list[str]
+    rule_ids: list[str]
+    exclusion_reason: str | None = None
+    default_weight: int
+    description: str
+    criteria: str
+    expected_evidence: str
+    pages: list[str]
+    sufficient: bool | None
+    sufficiency_reason: str
+    limitation: str
+    timing: str
+    duplicate_of: str | None = None
+    why_it_matters: str
+    remediation: str
+    verification: str
+    check_type: str
+    applicability: str
+    confidence: str
+    scoring_rationale: str
+
+
+class DpdpCategoryScore(BaseModel):
+    category: str
+    applicable_weight: int
+    assessed_weight: int
+    points_earned: float
+    score_percent: float | None
+    coverage_percent: float | None
+    status: str
+
+
+class DpdpScoreBlock(BaseModel):
+    basis: str
+    status: str
+    score_percent: float | None
+    points_earned: float
+    points_assessed: int
+    applicable_weight: int
+    assessed_weight: int
+    unable_to_verify_weight: int
+    coverage_percent: float | None
+    insufficient_reason: str | None
+    caution: str | None = None
+    categories: list[DpdpCategoryScore]
+
+
+class DpdpStateCounts(BaseModel):
+    pre_consent: int
+    post_accept: int
+    post_reject: int
+
+
+class DpdpEvidenceSummary(BaseModel):
+    network_requests: int
+    known_tracker_requests: int
+    unclassified_requests: int
+    cookies: int
+    known_tracker_cookies: int
+    unclassified_cookies: int
+    network_requests_by_state: DpdpStateCounts
+    known_tracker_requests_by_state: DpdpStateCounts
+    cookies_by_state: DpdpStateCounts
+    pages_scanned: int
+    note: str
+
+
+class DpdpGapItem(BaseModel):
+    requirement_id: str
+    title: str
+    status: str
+    timing: str
+    applies_from: date
+    provisions: list[str]
+    weight: int
+    points: float
+    what_the_scan_observed: list[str]
+    pages: list[str]
+    evidence_ids: list[str]
+    rule_ids: list[str]
+    why_it_matters: str
+    recommended_action: str
+    how_to_verify: str
+
+
+class DpdpMissingEvidenceItem(BaseModel):
+    requirement_id: str
+    title: str
+    provisions: list[str]
+    weight: int
+    reason: str
+    kind: str
+
+
+class DpdpBreakdown(BaseModel):
+    verified_gaps: list[DpdpGapItem]
+    readiness_gaps: list[DpdpGapItem]
+    partially_satisfied: list[DpdpGapItem]
+    missing_evidence: list[DpdpMissingEvidenceItem]
+    uncertain_count: int
+
+
+class DpdpReviewItem(BaseModel):
+    id: str
+    category: str
+    topic: str
+    needs: list[str]
+    known: list[str]
+    missing: list[str]
+    decision: str
+    provisions: list[str]
+    evidence_ids: list[str]
+    requirement_ids: list[str]
+
+
+class DpdpHumanReview(BaseModel):
+    statement: str
+    items: list[DpdpReviewItem]
+
+
+class DpdpFindingEntry(BaseModel):
+    id: str
+    group: str
+    title: str
+    requirement_ids: list[str]
+    legal_references: list[str]
+    outcome: str
+    severity: str | None
+    severity_note: str
+    pages: list[str]
+    consent_states: list[str]
+    observed: list[str]
+    evidence_ids: list[str]
+    rule_ids: list[str]
+    effective_date: date | None
+    timing_note: str
+    business_impact: str
+    explanation: str
+    what_to_review: list[str]
+    missing: list[str]
+    how_to_verify: str
+    remediation: str
+    signal_caveat: str
+    confidence: str
+    related_ids: list[str]
+
+
+class DpdpUpcomingDate(BaseModel):
+    date: date
+    requirement_ids: list[str]
+
+
+class DpdpFindingGroups(BaseModel):
+    confirmed: list[DpdpFindingEntry]
+    needs_review: list[DpdpFindingEntry]
+    unable_to_verify: list[DpdpFindingEntry]
+    future_readiness: list[DpdpFindingEntry]
+    upcoming: list[DpdpUpcomingDate]
+    notes: dict[str, str]
+    counts: dict[str, int]
+
+
+class DpdpMethodWeight(BaseModel):
+    id: str
+    title: str
+    category: str
+    check_type: str
+    weight: int
+    default_weight: int
+    rationale: str
+    applicability: str
+    effective: date
+    applies_now: bool
+
+
+class DpdpMethodCategory(BaseModel):
+    name: str
+    rationale: str
+    weight: int
+    share_percent: float | None
+    requirement_ids: list[str]
+
+
+class DpdpMethodDedup(BaseModel):
+    group: str
+    requirement_ids: list[str]
+    explanation: str
+
+
+class DpdpLegalSource(BaseModel):
+    name: str
+    reference: str
+
+
+class DpdpAssessment(BaseModel):
+    scan_url: str | None
+    main_domain: str | None
+    scanned_at: str | None
+    assessed_on: date
+    pages_scanned: list[str]
+    page_limit: int
+    states_tested: list[str]
+    states_not_tested: list[str]
+    nature_note: str
+
+
+class DpdpRemediationStep(BaseModel):
+    rank: int
+    requirement_id: str
+    title: str
+    outcome: str
+    timing: str
+    priority: str
+    priority_reason: str
+    action: str
+    how_to_verify: str
+    legal_references: list[str]
+
+
+class DpdpMethodology(BaseModel):
+    version: str
+    weights_source: str
+    weights_note: str
+    score_formula: str
+    coverage_formula: str
+    points_rules: list[str]
+    reliability_rule: str
+    duplicate_rule: str
+    timing_rule: str
+    scope_rule: str
+    legal_mapping_version: str
+    legal_sources: list[DpdpLegalSource]
+    weights: list[DpdpMethodWeight]
+    categories: list[DpdpMethodCategory]
+    dedup: list[DpdpMethodDedup]
+
+
+class DpdpScoreResponse(BaseModel):
+    methodology_version: str
+    as_of: date
+    requirements: list[DpdpRequirementResult]
+    readiness: DpdpScoreBlock
+    in_force: DpdpScoreBlock
+    disclaimer: str
+    status_counts: dict[str, int]
+    evidence_summary: DpdpEvidenceSummary
+    breakdown: DpdpBreakdown
+    human_review: DpdpHumanReview
+    finding_groups: DpdpFindingGroups
+    methodology: DpdpMethodology
+    assessment: DpdpAssessment
+    remediation_plan: list[DpdpRemediationStep]
+    thresholds: dict
+    out_of_scope: list[dict]
+
+
 @router.post("", response_model=ScanResponse, status_code=202)
 async def create_scan(
     body: CreateScanRequest,
@@ -318,6 +590,36 @@ async def get_scan_evidence(
     # copy leaves out -- see scan_repository._cookie_detail.
     evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)
     return ScanEvidenceResponse(**evidence)
+
+
+
+@router.get("/{scan_id}/dpdp-score", response_model=DpdpScoreResponse)
+async def get_scan_dpdp_score(
+    scan_id: uuid.UUID,
+    as_of: date | None = None,
+    processes_children_data: bool | None = None,
+    significant_data_fiduciary: bool | None = None,
+    consent_manager: bool | None = None,
+    erasure_class: bool | None = None,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The proposed DPDP Compliance Score for one scan, computed on demand from its persisted evidence (nothing new is
+    stored). `as_of` defaults to today (UTC) and decides which obligations are already in force. The four boolean
+    parameters declare entity-specific applicability; left out, those requirements are excluded, never guessed."""
+    scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
+    if scan is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)
+    result = dpdp_score.assess(
+        evidence, as_of,
+        dpdp_score.Applicability(processes_children_data, significant_data_fiduciary, consent_manager, erasure_class),
+        get_settings().dpdp_score_weights or None,
+        scan_url=scan.url,
+        scanned_at=(scan.completed_at or scan.started_at or scan.created_at).isoformat()
+        if (scan.completed_at or scan.started_at or scan.created_at) else None,
+    )
+    return DpdpScoreResponse(**asdict(result))
 
 
 @router.get("/{scan_id}/stages", response_model=list[StageResponse])

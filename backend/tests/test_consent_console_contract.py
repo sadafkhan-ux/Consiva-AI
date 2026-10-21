@@ -65,8 +65,8 @@ def _normalise(path: str) -> str:
     return re.sub(r"\{\w+\}", "{}", path)
 
 
-def test_the_console_calls_the_ten_documented_endpoints():
-    assert len(_console_calls()) == 10, _console_calls()
+def test_the_console_calls_the_eleven_documented_endpoints():
+    assert len(_console_calls()) == 11, _console_calls()
 
 
 @pytest.mark.parametrize("method,path", _console_calls())
@@ -117,6 +117,10 @@ PAIRS = [
     ("EvidenceConsentSignalItem", "EvidenceConsentSignalItem"),
     ("EvidencePolicyItem", "EvidencePolicyItem"),
     ("ScanEvidenceResponse", "ScanEvidenceResponse"),
+    ("DpdpScoreResponse", "DpdpScoreResponse"),
+    ("DpdpScoreBlock", "DpdpScoreBlock"),
+    ("DpdpCategoryScore", "DpdpCategoryScore"),
+    ("DpdpRequirementResult", "DpdpRequirementResult"),
 ]
 
 
@@ -141,6 +145,7 @@ ENDPOINTS = [
     ("GET", f"/api/v1/consent/scans/{SCAN}", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/stages", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/evidence", None),
+    ("GET", f"/api/v1/consent/scans/{SCAN}/dpdp-score", None),
     ("POST", f"/api/v1/consent/scans/{SCAN}/analyze", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/findings", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/audit", None),
@@ -168,6 +173,7 @@ def test_every_console_endpoint_refuses_a_forged_token(method, path, body):
     "/api/v1/consent/scans/not-a-uuid",
     "/api/v1/consent/scans/not-a-uuid/stages",
     "/api/v1/consent/scans/not-a-uuid/evidence",
+    "/api/v1/consent/scans/not-a-uuid/dpdp-score",
     "/api/v1/consent/scans/not-a-uuid/findings",
     "/api/v1/consent/scans/not-a-uuid/audit",
 ])

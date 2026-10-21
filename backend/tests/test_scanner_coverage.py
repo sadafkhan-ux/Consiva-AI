@@ -117,17 +117,17 @@ async def _crawl(context, settings=None, disallowed=None, sitemap=None):
 
 # ── 1-4. the limit is configuration, is honoured, and 25 is not it ───────────────
 
-def test_every_page_limit_setting_agrees_on_three():
+def test_every_page_limit_setting_agrees_on_five():
     """There used to be two that disagreed: SCANNER_MAX_PAGES (25) and CONSENT_WEB_MAX_PAGES (5). A scan
-    is limited to 3 pages per scan, and nothing may say otherwise."""
+    is limited to 5 pages per scan, and nothing may say otherwise."""
     from pathlib import Path
 
     from app.config import Settings
 
-    assert Settings.model_fields["scanner_max_pages"].default == 3
-    assert Settings.model_fields["consent_web_max_pages"].default == 3
+    assert Settings.model_fields["scanner_max_pages"].default == 5
+    assert Settings.model_fields["consent_web_max_pages"].default == 5
     example = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8")
-    assert "SCANNER_MAX_PAGES=3" in example and "CONSENT_WEB_MAX_PAGES=3" in example
+    assert "SCANNER_MAX_PAGES=5" in example and "CONSENT_WEB_MAX_PAGES=5" in example
     assert "SCANNER_MAX_PAGES=25" not in example
 
 
@@ -152,9 +152,9 @@ def test_no_hidden_second_page_cap_exists_in_the_fetch_path():
     assert get_settings().scanner_max_pages != 25
 
 
-@pytest.mark.parametrize("limit", [1, 2, 3])
+@pytest.mark.parametrize("limit", [1, 2, 3, 4, 5])
 async def test_the_configured_page_limit_is_what_actually_bounds_the_crawl(limit):
-    """Honoured exactly, at every value up to the ceiling of three."""
+    """Honoured exactly, at every value up to the ceiling of five."""
     pages = {f"{ROOT}/": _links(*[f"/p{i}" for i in range(60)])}
     for i in range(60):
         pages[f"{ROOT}/p{i}"] = _links()
@@ -197,27 +197,27 @@ async def test_a_one_page_site_scans_its_one_page():
     assert diagnostics["pages_not_attempted_budget_exhausted"] == 0
 
 
-async def test_a_three_page_site_scans_all_three_pages():
-    records, *_rest, diagnostics = await _crawl_web_profile(3)
+async def test_a_five_page_site_scans_all_five_pages():
+    records, *_rest, diagnostics = await _crawl_web_profile(5)
 
-    assert diagnostics["pages_scanned"] == 3
-    assert diagnostics["page_limit"] == 3
+    assert diagnostics["pages_scanned"] == 5
+    assert diagnostics["page_limit"] == 5
     assert diagnostics["stop_reason"] == "queue_exhausted", "exactly at the limit is not 'cut off'"
-    assert len([p for p in records if p.discovered_via in ("seed", "link", "sitemap")]) == 3
+    assert len([p for p in records if p.discovered_via in ("seed", "link", "sitemap")]) == 5
 
 
-async def test_a_site_with_more_than_three_pages_scans_only_the_first_three_and_says_so():
+async def test_a_site_with_more_than_five_pages_scans_only_the_first_five_and_says_so():
     records, *_rest, diagnostics = await _crawl_web_profile(9)
 
-    assert diagnostics["pages_scanned"] == 3
-    assert diagnostics["page_limit"] == 3
+    assert diagnostics["pages_scanned"] == 5
+    assert diagnostics["page_limit"] == 5
     assert diagnostics["stop_reason"] == "page_limit"
     assert diagnostics["pages_discovered"] == 9
-    assert diagnostics["pages_not_attempted_budget_exhausted"] == 6, "the pages left unscanned are counted"
-    assert len(records) == 3, "the pages list holds exactly the pages that were scanned"
+    assert diagnostics["pages_not_attempted_budget_exhausted"] == 4, "the pages left unscanned are counted"
+    assert len(records) == 5, "the pages list holds exactly the pages that were scanned"
 
 
-async def test_the_page_limit_is_not_a_time_limit_a_slow_crawl_still_reaches_all_three_pages():
+async def test_the_page_limit_is_not_a_time_limit_a_slow_crawl_still_reaches_all_five_pages():
     """The crawl has no deadline of its own now: slow pages do not shrink it below the page limit."""
     from app.scanner.scan_profiles import WEB, resolve_profile
 
@@ -396,13 +396,13 @@ async def test_the_diagnostics_distinguish_discovered_attempted_and_scanned():
         pages[f"{ROOT}/p{i}"] = _links()
     context = _FakeContext(pages)
 
-    settings = get_settings().model_copy(update={"scanner_max_pages": 10})   # above the ceiling: clamped to 3
+    settings = get_settings().model_copy(update={"scanner_max_pages": 10})   # above the ceiling: clamped to 5
     _records, *_rest, d = await _crawl(context, settings)
 
     assert d["pages_discovered"] == 41           # seed + 40 links, all distinct
-    assert d["pages_attempted"] == 3             # the ceiling, whatever was configured
-    assert d["pages_scanned"] == 3
-    assert d["pages_not_attempted_budget_exhausted"] == 38
+    assert d["pages_attempted"] == 5             # the ceiling, whatever was configured
+    assert d["pages_scanned"] == 5
+    assert d["pages_not_attempted_budget_exhausted"] == 36
     assert d["pages_discovered"] > d["pages_attempted"] >= d["pages_scanned"]
 
 

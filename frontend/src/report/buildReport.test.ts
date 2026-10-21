@@ -84,7 +84,7 @@ describe("headline and scope: a quiet report is not a clean one", () => {
   it("says 'findings to review', not that violations were identified", () => {
     const model = buildReportModel(null, [finding("high"), finding("low")], meta());
 
-    expect(model.headline).toBe("2 findings to review; highest severity is HIGH.");
+    expect(model.headline).toBe("2 findings to review.");
   });
 
   it("with no findings and all three states tested, says what was tested", () => {

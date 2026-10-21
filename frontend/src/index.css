@@ -809,3 +809,12 @@ button.reject { background: var(--red); }
 .domain-row { padding: 8px 0; border-top: 1px solid rgba(201, 138, 59, 0.15); }
 .domain-row:first-of-type { border-top: 0; }
 .badge.warn { background: rgba(201, 138, 59, 0.15); color: var(--amber); }
+
+/* DPDP Compliance Score: the score on the left, the "Logic Required / Human Review" box beside it. */
+.score-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.review-box { border: 1px solid var(--amber, #b97a12); border-left-width: 4px; border-radius: 6px; padding: 10px 12px;
+  background: color-mix(in srgb, var(--amber, #b97a12) 7%, transparent); }
+.review-box h3 { margin: 0 0 6px; }
+.review-item { border-top: 1px solid color-mix(in srgb, var(--amber, #b97a12) 35%, transparent); padding: 8px 0; }
+.review-item ul { margin: 2px 0 6px 18px; padding: 0; }
+@media (max-width: 900px) { .score-layout { grid-template-columns: minmax(0, 1fr); } }

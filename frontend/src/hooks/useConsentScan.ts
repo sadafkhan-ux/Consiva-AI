@@ -4,6 +4,7 @@ import { ApiError } from "../api/types";
 import type {
   AuditLogResponse,
   FindingResponse,
+  DpdpScoreResponse,
   ScanEvidenceResponse,
   ScanStatusResponse,
   StageResponse,
@@ -131,6 +132,9 @@ export interface ConsentScanState {
   findings: FindingResponse[];
   audit: AuditLogResponse[];
   evidence: ScanEvidenceResponse | null;
+  /** The proposed DPDP Compliance Score. Null until loaded, and left null if it could not be (the page shows nothing rather
+   *  than a made-up number). Optional so state built before it existed keeps working. */
+  dpdpScore?: DpdpScoreResponse | null;
   error: string | null;
   /** Which pipeline stage failed, when one did. The status panel showed "—" for
    *  "Current Stage" while the failing stage was known and displayed further down
@@ -150,6 +154,7 @@ const INITIAL_STATE: ConsentScanState = {
   findings: [],
   audit: [],
   evidence: null,
+  dpdpScore: null,
   error: null,
   failedStage: null,
   startedAt: null,
@@ -168,10 +173,11 @@ export function useConsentScan() {
     // Each settles on its own. Previously `Promise.all` with only the evidence call
     // guarded meant one failing request discarded the other two results as well --
     // so a 500 on findings also blanked the evidence that had loaded fine.
-    const [findings, audit, evidence] = await Promise.all([
+    const [findings, audit, evidence, dpdpScore] = await Promise.all([
       api.getFindings(scanId).catch(() => null),
       api.getAudit(scanId).catch(() => null),
       api.getEvidence(scanId).catch(() => null),
+      api.getDpdpScore(scanId).catch(() => null),
     ]);
     if (runIdRef.current !== myRunId) return;
     setState((s) => ({
@@ -179,6 +185,7 @@ export function useConsentScan() {
       findings: findings ?? s.findings,
       audit: audit ?? s.audit,
       evidence: evidence ?? s.evidence,
+      dpdpScore: dpdpScore ?? s.dpdpScore ?? null,
     }));
   }, []);
 
@@ -190,9 +197,12 @@ export function useConsentScan() {
    *  worse than one that renders nothing at all -- it is a confident false negative
    *  in a product whose whole job is to find what a site is doing. */
   const loadEvidenceRegardless = useCallback(async (scanId: string, myRunId: number) => {
-    const evidence = await api.getEvidence(scanId).catch(() => null);
+    const [evidence, dpdpScore] = await Promise.all([
+      api.getEvidence(scanId).catch(() => null),
+      api.getDpdpScore(scanId).catch(() => null),
+    ]);
     if (runIdRef.current !== myRunId || !evidence) return;
-    setState((s) => ({ ...s, evidence }));
+    setState((s) => ({ ...s, evidence, dpdpScore: dpdpScore ?? s.dpdpScore ?? null }));
   }, []);
 
   const pollStagesUntilAuditOrPending = useCallback(

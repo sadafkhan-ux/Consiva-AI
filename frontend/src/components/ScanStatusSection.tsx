@@ -34,10 +34,7 @@ const SKIP_REASONS: Record<string, string> = {
   page_limit: "left unscanned: page limit reached",
   robots_disallowed: "disallowed by robots.txt",
   duplicate_url: "duplicate of a page already found",
-  subdomain_not_scanned: "subdomain: not scanned, listed for review",
-  redirected_to_subdomain: "redirected to a subdomain, not scanned",
   redirected_to_already_scanned_page: "redirected to a page already scanned",
-  redirected_off_site: "redirected to another site",
   time_limit: "left unscanned: time limit",
   scan_cancelled: "left unscanned: scan cancelled",
 };

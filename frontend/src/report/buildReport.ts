@@ -1,7 +1,7 @@
 import type {
   EvidenceCookieItem, EvidenceTrackerItem, FindingResponse, ScanStatusResponse, WebsiteScanMetadata,
 } from "../api/types";
-import type { DomainReport, DomainRow } from "../components/subdomains";
+import type { ScoreView } from "./dpdpScore";
 import { summariseTrackers } from "./trackerSummary";
 import { buildCookieInventory, type CookieInventory } from "./cookieInventory";
 
@@ -14,72 +14,15 @@ function riskRank(level: string): number {
   return i === -1 ? RISK_ORDER.length : i;
 }
 
-/** One discovered subdomain or separate website, as the PDF prints it. */
-export interface DiscoveredPdfRow {
-  name: string;
-  kind: "subdomain" | "separate website";
-  review: boolean;
-  framed: boolean;
-  /** Where it was found: the link or frame it was found through, and example requests the scanned pages made to it. */
-  urls: { label: string; url: string }[];
-  requests: string;
-  cookies: string | null;
-  vendors: string | null;
-  unclassified: string | null;
-  findings: { risk: string; text: string; share: string }[];
-}
-
-export interface DiscoveredPdfSection {
-  mainHost: string;
-  subdomains: DiscoveredPdfRow[];
-  websites: DiscoveredPdfRow[];
-}
-
-function pdfRow(r: DomainRow): DiscoveredPdfRow {
-  const q = r.requests;
-  const c = r.cookies;
-  const cookieTotal = c.pre_consent + c.post_accept + c.post_reject;
-  const urls: DiscoveredPdfRow["urls"] = [];
-  for (const u of r.foundUrls) urls.push({ label: r.framed ? "Shown in a frame" : "Linked from the scanned site", url: u });
-  if (r.moreHosts > 0) urls.push({ label: "More", url: `and ${r.moreHosts} more host${r.moreHosts === 1 ? "" : "s"} of this website` });
-  for (const u of r.requestUrls) urls.push({ label: "Requested by a scanned page", url: u });
-  return {
-    name: r.key,
-    kind: r.kind === "subdomain" ? "subdomain" : "separate website",
-    review: r.needsReview,
-    framed: r.framed,
-    urls,
-    requests: q.pre_consent + q.post_accept + q.post_reject === 0
-      ? "No requests to it were seen."
-      : `Requests: before consent ${q.pre_consent} · after Accept ${q.post_accept} · after Reject ${q.post_reject}`,
-    cookies: cookieTotal === 0
-      ? null
-      : `Cookies set: before consent ${c.pre_consent} · after Accept ${c.post_accept} · after Reject ${c.post_reject} (${c.names.join(", ")})`,
-    vendors: r.namedVendors.length ? `Named analytics or advertising: ${r.namedVendors.join(", ")}` : null,
-    unclassified: r.unclassifiedRequests
-      ? `${r.unclassifiedRequests} request${r.unclassifiedRequests === 1 ? "" : "s"} before consent could not be classified: purpose unknown.`
-      : null,
-    findings: r.findings.map((f) => ({ risk: f.risk, text: f.text, share: `${f.fromDomain} of ${f.total} evidence items for this finding involve it.` })),
-  };
-}
-
-export function discoveredPdfSection(report: DomainReport | null): DiscoveredPdfSection | null {
-  if (!report || (report.subdomains.length === 0 && report.external.length === 0)) return null;
-  return { mainHost: report.mainHost, subdomains: report.subdomains.map(pdfRow), websites: report.external.map(pdfRow) };
-}
-
 export interface ReportModel {
   siteUrl: string;
   generatedAt: string;
-  overallRisk: string;
   /** True while findings still carry status "pending" -- the report is a draft until a
    *  human has actually signed off, and must say so rather than implying sign-off. */
   provisional: boolean;
   headline: string;
-  /** Subdomains and separate websites the scan came across: counted apart, not in the figures above. Null when none. */
-  discoveredLine: string | null;
-  /** Every discovered subdomain and separate website, with its URLs: printed on its own highlighted pages. Null when none. */
-  discoveredSection: DiscoveredPdfSection | null;
+  /** The proposed DPDP Compliance Score, as the dashboard shows it (report/dpdpScore.ts). Null when it was not loaded. */
+  dpdpScore: ScoreView | null;
   /** What was actually tested: pages, and which consent states could be exercised. Printed under the headline. */
   scope: string;
   counts: { label: string; value: string }[];
@@ -102,12 +45,9 @@ export function buildReportModel(
   meta: WebsiteScanMetadata | null,
   cookies: EvidenceCookieItem[] = [],
   trackers: EvidenceTrackerItem[] = [],
-  /** What the scan came across on subdomains and separate websites. `cookies` and `trackers` above are the site's own. */
-  discovered: { requests: number; cookies: number; domains: number } | null = null,
-  domainReport: DomainReport | null = null,
+  dpdpScore: ScoreView | null = null,
 ): ReportModel {
   const sorted = [...findings].sort((a, b) => riskRank(a.risk_level) - riskRank(b.risk_level));
-  const overallRisk = sorted.length ? sorted[0].risk_level : "none";
   const provisional = findings.some((f) => f.status === "pending");
 
   const counts: { label: string; value: string }[] = [];
@@ -212,7 +152,7 @@ export function buildReportModel(
   ];
 
   const headline = sorted.length
-    ? `${sorted.length} ${sorted.length === 1 ? "finding" : "findings"} to review; highest severity is ${overallRisk.toUpperCase()}.`
+    ? `${sorted.length} ${sorted.length === 1 ? "finding" : "findings"} to review.`
     : allStatesTested
       ? "No issues were observed in the tested scope (all three consent states were tested)."
       : "No findings were produced, but not every consent state could be tested: this is not a clean result.";
@@ -220,14 +160,10 @@ export function buildReportModel(
   return {
     siteUrl: scan?.url ?? "(unknown site)",
     generatedAt: new Date().toLocaleString(),
-    overallRisk,
     provisional,
     headline,
     scope,
-    discoveredSection: discoveredPdfSection(domainReport),
-    discoveredLine: discovered && discovered.domains > 0
-      ? `Also found, and counted apart from the site's own results: ${discovered.domains} subdomain${discovered.domains === 1 ? "" : "s"} or separate website${discovered.domains === 1 ? "" : "s"} (${discovered.requests} request${discovered.requests === 1 ? "" : "s"}, ${discovered.cookies} cookie${discovered.cookies === 1 ? "" : "s"}). They were not scanned as pages; they are listed, with their URLs, in the Discovered Subdomains & Websites section that follows this page.`
-      : null,
+    dpdpScore,
     counts,
     problems: sorted.slice(0, MAX_PROBLEMS).map((f) => ({ risk: f.risk_level, text: f.finding_text })),
     consentIssues: consentIssues.slice(0, 4),

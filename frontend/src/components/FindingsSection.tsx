@@ -3,7 +3,6 @@ import { api } from "../api/client";
 import { ApiError } from "../api/types";
 import type { FindingResponse } from "../api/types";
 import { RiskBadge, StatusBadge } from "./shared";
-import type { FindingScope } from "./subdomains";
 
 type ReviewAction = "approve" | "reject" | "edit";
 
@@ -11,20 +10,11 @@ export function FindingsSection({
   findings,
   onDecision,
   analysisFailed = false,
-  hostCounts,
-  mainHost = "",
-  scopes,
 }: {
   findings: FindingResponse[];
   onDecision: () => Promise<void>;
   /** The analysis stage failed for this scan. Changes what an empty list MEANS. */
   analysisFailed?: boolean;
-  /** finding id -> host -> how many of its evidence items were observed there; used to say where a finding comes from. */
-  hostCounts?: Record<string, Record<string, number>>;
-  /** The host that was requested. Any other host in `hostCounts` is a subdomain. */
-  mainHost?: string;
-  /** Whom each finding is about. A finding about discovered subdomains / websites ONLY is listed apart. */
-  scopes?: Record<string, FindingScope>;
 }) {
   const [openReview, setOpenReview] = useState<{ id: string; action: ReviewAction } | null>(null);
   const [reason, setReason] = useState("");
@@ -83,10 +73,6 @@ export function FindingsSection({
     }
   }
 
-  const scopeOf = (f: FindingResponse): FindingScope => scopes?.[f.id] ?? "main";
-  const mainFindings = findings.filter((f) => scopeOf(f) !== "discovered");
-  const discoveredFindings = findings.filter((f) => scopeOf(f) === "discovered");
-
   const renderCard = (f: FindingResponse) => (
         <div className="finding-card" key={f.id}>
           <div className="finding-head">
@@ -100,27 +86,6 @@ export function FindingsSection({
 
           <div className="finding-text">{f.finding_text}</div>
 
-          {scopeOf(f) === "mixed" && (
-            <div className="muted small" data-testid={`finding-scope-${f.id}`}>
-              <span className="badge warn">also involves discovered subdomains / websites</span>
-            </div>
-          )}
-          {scopeOf(f) === "discovered" && (
-            <div className="muted small" data-testid={`finding-scope-${f.id}`}>
-              <span className="badge warn">discovered subdomains / websites only</span> This finding is not about {mainHost || "the scanned site"} itself.
-            </div>
-          )}
-          {hostCounts && Object.keys(hostCounts[f.id] ?? {}).length > 0 && (
-            <div className="muted small" data-testid={`finding-hosts-${f.id}`}>
-              Evidence involves:{" "}
-              {Object.entries(hostCounts[f.id]).map(([host, n], i) => (
-                <span key={host}>
-                  {i > 0 ? "; " : ""}
-                  {host} ({n}){host !== mainHost && mainHost ? " — see Discovered Subdomains & Websites" : ""}
-                </span>
-              ))}
-            </div>
-          )}
 
           <div className="finding-block">
             <div className="label">Evidence</div>
@@ -187,19 +152,5 @@ export function FindingsSection({
         </div>
   );
 
-  return (
-    <div>
-      {mainFindings.map(renderCard)}
-      {discoveredFindings.length > 0 && (
-        <div className="domain-review" data-testid="discovered-findings" style={{ marginTop: 16 }}>
-          <h3>Findings about discovered subdomains &amp; websites ({discoveredFindings.length})</h3>
-          <p className="muted small">
-            These findings cite evidence from subdomains or separate websites the scan came across, not from {mainHost || "the scanned site"} itself.
-            They are listed apart so they are not read as results for the scanned site, and still need a review decision.
-          </p>
-          {discoveredFindings.map(renderCard)}
-        </div>
-      )}
-    </div>
-  );
+  return <div>{findings.map(renderCard)}</div>;
 }

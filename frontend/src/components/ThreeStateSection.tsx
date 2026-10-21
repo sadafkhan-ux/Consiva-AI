@@ -15,27 +15,16 @@ const STATES: { key: string; title: string }[] = [
   { key: "post_reject", title: "After Reject" },
 ];
 
-/** Per-state counts for the scanned site's own evidence and, apart, for discovered subdomains and websites. */
-export interface ScopedCounts {
-  cookies: Record<string, number>;
-  trackers: Record<string, number>;
-  discoveredCookies: Record<string, number>;
-  discoveredTrackers: Record<string, number>;
-}
-
 export function ThreeStateSection({
   meta,
   trackers,
-  scoped,
 }: {
   meta: WebsiteScanMetadata | null;
   trackers: EvidenceTrackerItem[];
-  /** When given, the figures are the scanned site's own; the rest are shown apart. Otherwise the scan's totals. */
-  scoped?: ScopedCounts;
 }) {
   if (!meta) return null;
-  const cByState = scoped?.cookies ?? meta.cookies_by_consent_state ?? {};
-  const tByState = scoped?.trackers ?? meta.trackers_by_consent_state ?? {};
+  const cByState = meta.cookies_by_consent_state ?? {};
+  const tByState = meta.trackers_by_consent_state ?? {};
 
   return (
     <section className="section">
@@ -53,14 +42,8 @@ export function ThreeStateSection({
               {pill ? <InteractionPill status={pill} /> : <span className="badge neutral">Baseline (no interaction)</span>}
               <div className="counts">
                 <div><b>{cByState[key] ?? 0}</b> cookies</div>
-                <div><b>{tByState[key] ?? 0}</b> {scoped ? "named trackers" : "trackers / third-party requests"}</div>
+                <div><b>{tByState[key] ?? 0}</b> third-party requests</div>
               </div>
-              {scoped && ((scoped.discoveredCookies[key] ?? 0) + (scoped.discoveredTrackers[key] ?? 0)) > 0 && (
-                <div className="hint" style={{ margin: "6px 0 0" }} data-testid={`state-discovered-${key}`}>
-                  Not counted above: {scoped.discoveredTrackers[key] ?? 0} request{(scoped.discoveredTrackers[key] ?? 0) === 1 ? "" : "s"} and{" "}
-                  {scoped.discoveredCookies[key] ?? 0} cookie{(scoped.discoveredCookies[key] ?? 0) === 1 ? "" : "s"} from discovered subdomains &amp; websites.
-                </div>
-              )}
               {pill && pill !== "clicked" && (
                 <div className="hint" style={{ margin: "8px 0 0" }} data-testid={`state-untested-${key}`}>
                   No choice was made, so these figures are the page seen again — not what happens after {key === "post_accept" ? "Accept" : "Reject"}.

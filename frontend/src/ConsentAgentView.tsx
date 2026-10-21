@@ -5,15 +5,13 @@ import { useState } from "react";
 import { failedStageName, scanEvidenceUnavailable, useConsentScan } from "./hooks/useConsentScan";
 import { ScanStatusSection } from "./components/ScanStatusSection";
 import { ConsentSummarySection } from "./components/ConsentSummarySection";
+import { buildScoreView, isDpdpScore } from "./report/dpdpScore";
+import { DpdpScoreSection } from "./components/DpdpScoreSection";
 import { ThreeStateSection } from "./components/ThreeStateSection";
 import { TrackersTable } from "./components/TrackersTable";
 import { CookiesTable } from "./components/CookiesTable";
 import { FormsSection, PoliciesSection } from "./components/FormsAndPoliciesSection";
 import { FindingsSection } from "./components/FindingsSection";
-import { DomainsReviewSection } from "./components/DomainsReviewSection";
-import {
-  countByState, deriveDomainReport, evidenceDomains, findingDomainCounts, findingScope, mainHostOf, splitEvidence,
-} from "./components/subdomains";
 import { DpdpReferencesSection, RecommendationsSection } from "./components/DpdpAndRecommendations";
 import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnostics";
 import { buildReportModel } from "./report/buildReport";
@@ -42,19 +40,6 @@ export function ConsentAgentView() {
   // scanEvidenceUnavailable. The status and diagnostics sections stay -- they carry the failure.
   const notScanned = scanEvidenceUnavailable(state);
 
-  // Where each finding's evidence was observed, and which subdomains of the requested site appeared in the scan.
-  const mainHost = mainHostOf(state.scan?.url);
-  const evidenceIndex = evidenceDomains(mainHost, state.evidence?.trackers ?? [], state.evidence?.cookies ?? []);
-  const findingDomains = Object.fromEntries(state.findings.map((f) => [f.id, findingDomainCounts(f, evidenceIndex)]));
-  const findingScopes = Object.fromEntries(state.findings.map((f) => [f.id, findingScope(findingDomains[f.id], mainHost)]));
-  // The scanned site's own trackers and cookies, and -- apart -- those of the subdomains and separate websites the scan
-  // came across. Nothing is dropped; each item is on exactly one side.
-  const split = splitEvidence(mainHost, state.evidence?.trackers ?? [], state.evidence?.cookies ?? []);
-  const domainReport = deriveDomainReport({
-    scanUrl: state.scan?.url, trackers: state.evidence?.trackers ?? [], cookies: state.evidence?.cookies ?? [],
-    findings: state.findings, meta: state.websiteScanMeta,
-  });
-
   // Offered once the analysis has actually produced findings -- i.e. from the
   // human-review pause (analysis done, audit not yet saved) onward, and still after
   // the run closes out. Purely additive: it reads state the app already holds and
@@ -71,10 +56,10 @@ export function ConsentAgentView() {
     setBuildingReport(true);
     try {
       await downloadReport(
-        buildReportModel(state.scan, state.findings, state.websiteScanMeta, split.mainCookies, split.mainTrackers, {
-          requests: split.discoveredTrackers.length, cookies: split.discoveredCookies.length,
-          domains: domainReport.subdomains.length + domainReport.external.length,
-        }, domainReport),
+        buildReportModel(
+          state.scan, state.findings, state.websiteScanMeta, state.evidence?.cookies ?? [], state.evidence?.trackers ?? [],
+          isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null,
+        ),
       );
     } catch (err) {
       // Surface it rather than failing silently -- the PDF library is fetched on
@@ -133,7 +118,7 @@ export function ConsentAgentView() {
           <div className="report-bar-text">
             <strong>One-page summary</strong>
             <span>
-              Client-friendly headlines only — overall risk, main problems, key consent issues, DPDP
+              Client-friendly headlines only — the DPDP Compliance Score, main problems, key consent issues, DPDP
               references and recommended actions.
               {reportIsProvisional && " Marked provisional until every finding is reviewed."}
             </span>
@@ -174,30 +159,24 @@ export function ConsentAgentView() {
           ) : (
         <>
           <ConsentSummarySection meta={state.websiteScanMeta} />
-          <ThreeStateSection
-            meta={state.websiteScanMeta} trackers={split.mainTrackers}
-            scoped={state.evidence ? {
-              cookies: countByState(split.mainCookies), trackers: countByState(split.mainTrackers),
-              discoveredCookies: countByState(split.discoveredCookies), discoveredTrackers: countByState(split.discoveredTrackers),
-            } : undefined}
-          />
+          <DpdpScoreSection score={state.dpdpScore} />
+          <ThreeStateSection meta={state.websiteScanMeta} trackers={state.evidence?.trackers ?? []} />
 
           <section className="section">
             <h2>4. Trackers</h2>
             <p className="hint" data-testid="trackers-scope">
-              Named analytics and advertising services that {mainHost || "the scanned site"} loaded.
-              {split.discoveredTrackers.length > 0 && ` ${split.discoveredTrackers.length} other request${split.discoveredTrackers.length === 1 ? "" : "s"} (to subdomains and separate websites) are under Discovered Subdomains & Websites.`}
+              Requests the scanned main-domain pages made to other services. A request shows the browser contacted a service; it
+              does not show that a tracker ran or what it sent, and it is not by itself a violation.
             </p>
-            <TrackersTable trackers={split.mainTrackers} />
+            <TrackersTable trackers={state.evidence?.trackers ?? []} />
           </section>
 
           <section className="section">
             <h2>5. Cookies</h2>
             <p className="hint" data-testid="cookies-scope">
-              Cookies set for {mainHost || "the scanned site"}, and by named analytics or advertising services.
-              {split.discoveredCookies.length > 0 && ` ${split.discoveredCookies.length} cookie${split.discoveredCookies.length === 1 ? "" : "s"} set by subdomains and separate websites are under Discovered Subdomains & Websites.`}
+              Cookies stored while the scanned main-domain pages loaded. A cookie is not by itself a violation; what it is for decides that.
             </p>
-            <CookiesTable cookies={split.mainCookies} />
+            <CookiesTable cookies={state.evidence?.cookies ?? []} />
           </section>
 
           <section className="section">
@@ -210,17 +189,12 @@ export function ConsentAgentView() {
             <PoliciesSection policies={state.evidence?.policies ?? []} />
           </section>
 
-          <DomainsReviewSection report={domainReport} />
-
           <section className="section">
             <h2>8. Findings &amp; Compliance</h2>
             <FindingsSection
               findings={state.findings}
               onDecision={afterReviewDecision}
               analysisFailed={state.failedStage !== null}
-              hostCounts={findingDomains}
-              mainHost={mainHost}
-              scopes={findingScopes}
             />
           </section>
 
