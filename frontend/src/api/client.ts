@@ -78,7 +78,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // A network-level failure (backend down, DNS, CORS rejection) never reaches the
     // server at all -- fetch() throws a generic TypeError with no useful detail, so
     // this is the one case where the message here is ours, not the backend's.
-    throw new ApiError(0, "Network error -- could not reach the backend. Is it running and reachable at " + BASE_URL + "?");
+    throw new ApiError(
+      0,
+      "Network error -- could not reach the backend" + (BASE_URL ? ` at ${BASE_URL}` : "") + ". Check your connection and that the service is running.",
+    );
   }
 
   if (res.status === 204) return undefined as T;

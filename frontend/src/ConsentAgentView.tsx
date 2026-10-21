@@ -10,6 +10,10 @@ import { TrackersTable } from "./components/TrackersTable";
 import { CookiesTable } from "./components/CookiesTable";
 import { FormsSection, PoliciesSection } from "./components/FormsAndPoliciesSection";
 import { FindingsSection } from "./components/FindingsSection";
+import { DomainsReviewSection } from "./components/DomainsReviewSection";
+import {
+  countByState, deriveDomainReport, evidenceDomains, findingDomainCounts, findingScope, mainHostOf, splitEvidence,
+} from "./components/subdomains";
 import { DpdpReferencesSection, RecommendationsSection } from "./components/DpdpAndRecommendations";
 import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnostics";
 import { buildReportModel } from "./report/buildReport";
@@ -38,6 +42,19 @@ export function ConsentAgentView() {
   // scanEvidenceUnavailable. The status and diagnostics sections stay -- they carry the failure.
   const notScanned = scanEvidenceUnavailable(state);
 
+  // Where each finding's evidence was observed, and which subdomains of the requested site appeared in the scan.
+  const mainHost = mainHostOf(state.scan?.url);
+  const evidenceIndex = evidenceDomains(mainHost, state.evidence?.trackers ?? [], state.evidence?.cookies ?? []);
+  const findingDomains = Object.fromEntries(state.findings.map((f) => [f.id, findingDomainCounts(f, evidenceIndex)]));
+  const findingScopes = Object.fromEntries(state.findings.map((f) => [f.id, findingScope(findingDomains[f.id], mainHost)]));
+  // The scanned site's own trackers and cookies, and -- apart -- those of the subdomains and separate websites the scan
+  // came across. Nothing is dropped; each item is on exactly one side.
+  const split = splitEvidence(mainHost, state.evidence?.trackers ?? [], state.evidence?.cookies ?? []);
+  const domainReport = deriveDomainReport({
+    scanUrl: state.scan?.url, trackers: state.evidence?.trackers ?? [], cookies: state.evidence?.cookies ?? [],
+    findings: state.findings, meta: state.websiteScanMeta,
+  });
+
   // Offered once the analysis has actually produced findings -- i.e. from the
   // human-review pause (analysis done, audit not yet saved) onward, and still after
   // the run closes out. Purely additive: it reads state the app already holds and
@@ -54,7 +71,10 @@ export function ConsentAgentView() {
     setBuildingReport(true);
     try {
       await downloadReport(
-        buildReportModel(state.scan, state.findings, state.websiteScanMeta, state.evidence?.cookies ?? []),
+        buildReportModel(state.scan, state.findings, state.websiteScanMeta, split.mainCookies, split.mainTrackers, {
+          requests: split.discoveredTrackers.length, cookies: split.discoveredCookies.length,
+          domains: domainReport.subdomains.length + domainReport.external.length,
+        }, domainReport),
       );
     } catch (err) {
       // Surface it rather than failing silently -- the PDF library is fetched on
@@ -132,26 +152,52 @@ export function ConsentAgentView() {
             <section className="section" data-testid="not-scanned">
               <h2>Results</h2>
               <div className="error-box">
-                <strong>Not scanned — no result.</strong> The website scan failed
-                {failedStageName(state.stages) ? ` at the "${failedStageName(state.stages)}" stage` : ""} before any
-                page was collected, so nothing is known about this site's consent banner, cookies, trackers, forms
-                or policies. Zero is not shown for any of them, because nothing was measured: this is not a clean
-                result. The reason is under Errors / Diagnostics below; fix it and scan again.
+                {(state.scan?.evidence_counts.pages ?? 0) > 0 ? (
+                  <>
+                    <strong>Results could not be loaded.</strong> The scan collected{" "}
+                    {state.scan?.evidence_counts.pages} page{state.scan?.evidence_counts.pages === 1 ? "" : "s"}, but
+                    this page lost its connection to the backend before the results arrived. Nothing below is
+                    shown as "none detected", because the evidence exists and has not been read: this is not a clean
+                    result. Check the connection, then open the scan again or run it again.
+                  </>
+                ) : (
+                  <>
+                    <strong>Not scanned — no result.</strong> The website scan failed
+                    {failedStageName(state.stages) ? ` at the "${failedStageName(state.stages)}" stage` : ""} before any
+                    page was collected, so nothing is known about this site's consent banner, cookies, trackers, forms
+                    or policies. Zero is not shown for any of them, because nothing was measured: this is not a clean
+                    result. The reason is under Errors / Diagnostics below; fix it and scan again.
+                  </>
+                )}
               </div>
             </section>
           ) : (
         <>
           <ConsentSummarySection meta={state.websiteScanMeta} />
-          <ThreeStateSection meta={state.websiteScanMeta} trackers={state.evidence?.trackers ?? []} />
+          <ThreeStateSection
+            meta={state.websiteScanMeta} trackers={split.mainTrackers}
+            scoped={state.evidence ? {
+              cookies: countByState(split.mainCookies), trackers: countByState(split.mainTrackers),
+              discoveredCookies: countByState(split.discoveredCookies), discoveredTrackers: countByState(split.discoveredTrackers),
+            } : undefined}
+          />
 
           <section className="section">
             <h2>4. Trackers</h2>
-            <TrackersTable trackers={state.evidence?.trackers ?? []} />
+            <p className="hint" data-testid="trackers-scope">
+              Named analytics and advertising services that {mainHost || "the scanned site"} loaded.
+              {split.discoveredTrackers.length > 0 && ` ${split.discoveredTrackers.length} other request${split.discoveredTrackers.length === 1 ? "" : "s"} (to subdomains and separate websites) are under Discovered Subdomains & Websites.`}
+            </p>
+            <TrackersTable trackers={split.mainTrackers} />
           </section>
 
           <section className="section">
             <h2>5. Cookies</h2>
-            <CookiesTable cookies={state.evidence?.cookies ?? []} />
+            <p className="hint" data-testid="cookies-scope">
+              Cookies set for {mainHost || "the scanned site"}, and by named analytics or advertising services.
+              {split.discoveredCookies.length > 0 && ` ${split.discoveredCookies.length} cookie${split.discoveredCookies.length === 1 ? "" : "s"} set by subdomains and separate websites are under Discovered Subdomains & Websites.`}
+            </p>
+            <CookiesTable cookies={split.mainCookies} />
           </section>
 
           <section className="section">
@@ -164,12 +210,17 @@ export function ConsentAgentView() {
             <PoliciesSection policies={state.evidence?.policies ?? []} />
           </section>
 
+          <DomainsReviewSection report={domainReport} />
+
           <section className="section">
             <h2>8. Findings &amp; Compliance</h2>
             <FindingsSection
               findings={state.findings}
               onDecision={afterReviewDecision}
               analysisFailed={state.failedStage !== null}
+              hostCounts={findingDomains}
+              mainHost={mainHost}
+              scopes={findingScopes}
             />
           </section>
 

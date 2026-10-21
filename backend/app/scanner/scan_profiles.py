@@ -48,6 +48,10 @@ _STARTUP_ALLOWANCE_SECONDS = 120
 #: so its ceiling is 30 minutes (the old derived limit was 330 seconds, which a slow site exceeded);
 #: an application scan has no page cap, so its ceiling is 24 hours.
 _WEB_HARD_CEILING_SECONDS = 1_800.0
+
+#: The most distinct pages a public (web-profile) scan may navigate to, across the whole scan -- the main domain and any
+#: subdomain together. Enforced in the crawler as well as in the settings, so no configuration value can raise it.
+MAX_WEB_PAGES = 3
 _APP_HARD_CEILING_SECONDS = 86_400.0
 
 

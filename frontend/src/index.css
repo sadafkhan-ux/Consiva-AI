@@ -796,3 +796,16 @@ button.reject { background: var(--red); }
 }
 
 .case-id { margin: 0; width: 100%; word-break: break-all; }
+
+/* Subdomains & external domains: found while scanning, not scanned. Quietly set apart, not alarming. */
+.domain-review {
+  background: rgba(201, 138, 59, 0.05);
+  border: 1px solid rgba(201, 138, 59, 0.22);
+  border-left: 3px solid var(--amber);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.domain-review h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); font-weight: 600; }
+.domain-row { padding: 8px 0; border-top: 1px solid rgba(201, 138, 59, 0.15); }
+.domain-row:first-of-type { border-top: 0; }
+.badge.warn { background: rgba(201, 138, 59, 0.15); color: var(--amber); }

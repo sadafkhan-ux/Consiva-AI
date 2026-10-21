@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ConsentScanState } from "../hooks/useConsentScan";
 import { pollUntil } from "../hooks/useConsentScan";
+import { ApiError } from "../api/types";
 import type { WebsiteScanMetadata } from "../api/types";
 import { ScanStatusSection } from "./ScanStatusSection";
 
@@ -191,6 +192,70 @@ describe("stage timing is reconciled with the run's total", () => {
   });
 });
 
+describe("polling survives a dropped connection", () => {
+  const down = () => new ApiError(0, "Network error");
+
+  it("retries after a network error and carries on to the result", async () => {
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls <= 2) throw down();
+      return calls;
+    });
+
+    await expect(pollUntil(fn, (n) => n >= 4, Number.POSITIVE_INFINITY, 5)).resolves.toBe(4);
+    expect(fn).toHaveBeenCalledTimes(4);
+  });
+
+  it("gives up once the outage outlasts the grace period", async () => {
+    const fn = vi.fn(async () => { throw down(); });
+
+    await expect(pollUntil(fn, () => false, Number.POSITIVE_INFINITY, 5, 30)).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("does not retry an error that is not a lost connection", async () => {
+    const fn = vi.fn(async () => { throw new ApiError(500, "boom"); });
+
+    await expect(pollUntil(fn, () => false, Number.POSITIVE_INFINITY, 5)).rejects.toThrow("boom");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("a sleeping tab is not counted as time spent waiting", async () => {
+    // The clock jumps an hour between two rounds, as when a laptop wakes. The 600 s ceiling must not fire.
+    const real = Date.now();
+    let offset = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => real + offset);
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 2) offset = 3_600_000;
+      return calls;
+    });
+
+    await expect(pollUntil(fn, (n) => n >= 4, 600_000, 5)).resolves.toBe(4);
+    vi.restoreAllMocks();
+  });
+});
+
+describe("the wait-between-steps note", () => {
+  const row = (stage: string, status: string, duration_ms: number) => ({ stage, status, duration_ms, error: null, metadata: {} });
+  const state = (phase: string, stages: unknown[]) =>
+    ({
+      phase, scanId: "d3b6f2f4", scan: null, stages, startedAt: 0, completedAt: 8_413_000, durationMs: 8_413_000,
+      websiteScanMeta: null, error: null, failedStage: null,
+    }) as never;
+
+  it("is not shown for a failed run whose stage never finished", () => {
+    render(<ScanStatusSection state={state("failed", [row("website_scan", "completed", 20_770), row("rag_retrieval", "running", 0)])} />);
+    expect(screen.queryByTestId("stage-gap")).not.toBeInTheDocument();
+  });
+
+  it("is still shown for a run that finished", () => {
+    render(<ScanStatusSection state={state("completed", [row("website_scan", "completed", 20_770)])} />);
+    expect(screen.getByTestId("stage-gap")).toBeInTheDocument();
+  });
+});
+
 describe("empty knowledge base notice", () => {
   const stateWith = (metadata: Record<string, unknown>) =>
     ({
@@ -208,5 +273,60 @@ describe("empty knowledge base notice", () => {
   it("shows nothing when retrieval had a populated knowledge base", () => {
     render(<ScanStatusSection state={stateWith({ chunks_retrieved: 3 })} />);
     expect(screen.queryByTestId("kb-empty")).not.toBeInTheDocument();
+  });
+});
+
+describe("duration comes from the server's clock", () => {
+  const row = (stage: string, status: string, started_at: string | null, completed_at: string | null, duration_ms: number | null = null) =>
+    ({ stage, status, duration_ms, error: null, metadata: {}, started_at, completed_at });
+
+  // Scan d3b6f2f4, as reported: a 21 s pipeline whose RAG stage was still "running", seen by a browser that was
+  // away for 2 h 20 m. 17:59:14 -> 20:19:27 is 8,413 s of the page's clock.
+  const REAL_STAGES = [
+    row("url_validation", "completed", "2026-10-20T12:29:14.000Z", "2026-10-20T12:29:14.213Z", 213),
+    row("website_scan", "completed", "2026-10-20T12:29:15.000Z", "2026-10-20T12:29:35.770Z", 20_770),
+    row("rules_check", "completed", "2026-10-20T12:29:36.000Z", "2026-10-20T12:29:36.000Z", 0),
+    row("rag_retrieval", "running", "2026-10-20T12:29:36.100Z", null),
+  ];
+
+  const state = (phase: string, stages: unknown[], browserMs: number | null) =>
+    ({
+      phase, scanId: "d3b6f2f4", scan: null, stages, startedAt: 0, completedAt: browserMs, durationMs: browserMs,
+      websiteScanMeta: null, error: null, failedStage: null,
+    }) as never;
+
+  it("serverSpanMs is first start to last end, and runs to 'now' while a stage is running", async () => {
+    const { serverSpanMs } = await import("./stageTiming");
+    const done = REAL_STAGES.slice(0, 3);
+
+    expect(serverSpanMs(done as never, 0)).toBe(22_000);                          // 12:29:14.000 -> 12:29:36.000
+    expect(serverSpanMs(REAL_STAGES as never, Date.parse("2026-10-20T12:29:46.100Z"))).toBe(32_100);
+    expect(serverSpanMs([row("a", "completed", null, null)] as never, 0)).toBeNull();   // an older response: no timestamps
+  });
+
+  it("shows the server's duration, not the browser's, and says the page waited longer", () => {
+    const stages = REAL_STAGES.map((s) => (s.status === "running" ? { ...s, status: "completed", completed_at: "2026-10-20T12:29:40.000Z" } : s));
+    render(<ScanStatusSection state={state("completed", stages, 8_413_060)} />);
+
+    expect(screen.getByText("Duration").previousSibling).toHaveTextContent("26.00 s");
+    expect(screen.queryByText(/8413/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("paused-time")).toHaveTextContent("waited 2 h 20 min longer than the server worked");
+  });
+
+  it("falls back to the browser's time when the server sent no timestamps", () => {
+    const stages = REAL_STAGES.slice(0, 3).map((s) => ({ ...s, started_at: null, completed_at: null }));
+    render(<ScanStatusSection state={state("completed", stages, 42_000)} />);
+
+    expect(screen.getByText("Duration").previousSibling).toHaveTextContent("42.00 s");
+    expect(screen.queryByTestId("paused-time")).not.toBeInTheDocument();
+  });
+
+  it("warns when a stage has been running for far longer than a healthy run", async () => {
+    const { stuckStages } = await import("./stageTiming");
+    const now = Date.parse("2026-10-20T14:49:27.000Z");                            // 2 h 20 m later
+
+    expect(stuckStages(REAL_STAGES as never, now)).toEqual([{ stage: "rag_retrieval", runningMs: now - Date.parse("2026-10-20T12:29:36.100Z") }]);
+    expect(stuckStages(REAL_STAGES as never, Date.parse("2026-10-20T12:30:00.000Z"))).toEqual([]);   // 24 s in: normal
+    expect(stuckStages(REAL_STAGES.slice(0, 3) as never, now)).toEqual([]);                           // nothing running
   });
 });

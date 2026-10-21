@@ -266,6 +266,14 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     # predating the flag -- reads as unconfirmed, never as "assume it worked".
     reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
     interaction_page = interaction_evidence.get("interaction_page_url")
+    # Another site that the scanned page only frames (a frameset wrapper). What the visitor sees was not scanned, so a
+    # claim that something is ABSENT (no banner, no privacy policy) describes the wrapper, not the site. See R-012.
+    framed_sites: list[str] = list(interaction_evidence.get("framed_sites") or [])
+    framed_note = (
+        f" This page only displays another site ({framed_sites[0]}) in a frame, so this describes the wrapper page, "
+        "not what visitors see -- see R-012."
+        if framed_sites else ""
+    )
     # A banner counts as displayed when its own wording was seen (banner_ui_observed) or a click on it landed. Only a
     # detected CMP whose scan recorded the observation and saw neither is "not displayed"; an older scan without the
     # key reads as unknown, never as "not shown".
@@ -299,10 +307,10 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             risk_level="high",
             summary=(
                 f"{len(non_essential)} analytics/marketing cookie(s)/script(s) detected but no "
-                "consent banner or CMP was found on the scanned pages."
+                "consent banner or CMP was found on the scanned pages." + framed_note
             ),
             evidence_ids=[e["id"] for e in non_essential],
-            confidence="high",
+            confidence="low" if framed_sites else "high",
         ))
 
     # R-003 asserts a specific human action -- that somebody clicked Reject and the
@@ -367,8 +375,8 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             rule_id="R-006",
             category="other",
             risk_level="high",
-            summary="No privacy policy page was discovered during the crawl.",
-            confidence="high",
+            summary="No privacy policy page was discovered during the crawl." + framed_note,
+            confidence="low" if framed_sites else "high",
         ))
 
     if non_essential and "cookie_policy" not in policy_types:
@@ -427,6 +435,19 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
                 )
             ),
             confidence="low",  # a scanner automation limitation, not confirmed non-compliance -- routes to human review
+        ))
+
+    if framed_sites:
+        findings.append(RuleFinding(
+            rule_id="R-012",
+            category="other",
+            risk_level="medium",
+            summary=(
+                f"This address is a wrapper that displays another site ({', '.join(framed_sites[:3])}) in a frame. What "
+                "visitors actually see was not scanned, so the consent banner, trackers, cookies and policies reported here "
+                f"describe the wrapper page only. Scan {framed_sites[0]} directly to assess the site itself."
+            ),
+            confidence="high",
         ))
 
     if reject_outcome == "clicked" and not reject_confirmed:

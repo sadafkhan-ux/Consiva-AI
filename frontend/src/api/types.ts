@@ -57,11 +57,22 @@ export interface StageResponse {
   duration_ms: number | null;
   error: string | null;
   metadata: WebsiteScanMetadata | Record<string, unknown>;
+  /** The server's own timestamps (ISO 8601); absent on older responses. */
+  started_at?: string | null;
+  completed_at?: string | null;
 }
 
 // The website_scan stage's metadata dict, as populated by
 // backend/app/services/scan_service.py -- every key here is real and already
 // returned today, nothing added on the frontend side.
+export interface DiscoveredDomain {
+  host: string;
+  kind: "subdomain" | "external";
+  links: number;
+  sample_url: string;
+  framed: boolean;
+}
+
 export interface WebsiteScanMetadata {
   pages_found?: number;
   cookies_found?: number;
@@ -78,6 +89,14 @@ export interface WebsiteScanMetadata {
   pages_failed?: number;
   pages_timeout?: number;
   pages_blocked_robots?: number;
+  /** Why discovered pages were not scanned: one entry per page (capped at 50) and the full count per reason. */
+  skipped_pages?: { url: string; reason: string }[];
+  skipped_by_reason?: Record<string, number>;
+  links_off_site_ignored?: number;
+  links_subdomain_not_scanned?: number;
+  /** Subdomains and external sites the scan came across (never crawled), one entry per host. */
+  discovered_domains?: DiscoveredDomain[];
+  framed_sites?: string[];
   total_scroll_steps?: number;
   accept_scroll_steps?: number;
   reject_scroll_steps?: number;

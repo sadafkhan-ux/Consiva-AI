@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     # Fallback page limit for code that calls the crawler WITHOUT a scan profile. Console, scheduled
     # and API scans all run under a profile (scan_profiles), where CONSENT_WEB_MAX_PAGES decides.
     # Kept equal to that default so the two can never disagree about "how many pages".
-    scanner_max_pages: int = Field(default=5, ge=1, le=25)
+    scanner_max_pages: int = Field(default=3, ge=1)
     # ── Consent scan profiles ───────────────────────────────────────────────────────
     # Two profiles share one scanning engine and differ only in the budget they get. The
     # profile is chosen by the SERVER from which endpoint was called and who called it --
@@ -140,9 +140,9 @@ class Settings(BaseSettings):
     # never means "disabled".
     #
     # CONSENT_WEB_MAX_PAGES -- public website scans. At most this many unique pages per
-    # scan. Must be 1..25: the upper bound is a hard ceiling in code (the old global
-    # default), so no environment value can turn the public profile into an unbounded one.
-    consent_web_max_pages: int = Field(default=5, ge=1, le=25)
+    # scan. Must be 1..3: the upper bound is a hard ceiling in code, so no environment value
+    # can turn the public profile into a larger one (scan_profiles.MAX_WEB_PAGES).
+    consent_web_max_pages: int = Field(default=3, ge=1)
     # CONSENT_APP_MAX_PAGES -- authorized application scans. 0 means "no fixed page-count
     # cap" (see CONSENT_APP_MAX_SECONDS for the optional time deadline); a positive value is an
     # explicit cap for deployments that want one. Negative values are rejected.
@@ -154,6 +154,16 @@ class Settings(BaseSettings):
     # set here, the scan as a whole still has a fixed ceiling (scan_profiles._APP_HARD_CEILING_SECONDS)
     # so a hung browser cannot hold a worker, and its job lease, forever.
     consent_app_max_seconds: int = Field(default=0, ge=0, le=86_400)
+
+    @field_validator("scanner_max_pages", "consent_web_max_pages")
+    @classmethod
+    def _public_scans_are_capped_at_three_pages(cls, value: int) -> int:
+        """A public scan never covers more than MAX_WEB_PAGES (3) pages, whatever the environment says. A larger value
+        left in an older .env (this used to default to 5 and accept up to 25) is clamped, not rejected: refusing to start
+        would turn a tightened limit into an outage, and honouring it would break the limit."""
+        from app.scanner.scan_profiles import MAX_WEB_PAGES
+
+        return min(value, MAX_WEB_PAGES)
 
     @field_validator("consent_app_max_seconds")
     @classmethod

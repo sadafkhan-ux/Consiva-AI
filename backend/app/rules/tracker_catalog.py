@@ -212,6 +212,31 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         domain_substrings=("bat.bing.com",),
         cookie_name_prefixes=("_uetsid", "_uetvid"),
     ),
+    # ── Advertising networks and exchanges ───────────────────────────────────────────────────
+    #
+    # A report on the news sites bbc.com, cnn.com and hindustantimes.com left 74-81% of third-party requests
+    # "unclassified". The largest unclassified hosts were these ad networks and exchanges, which is not a neutral
+    # gap: R-001 only counts analytics and marketing, so an advertising request filed as "unclassified" was invisible
+    # to the flagship rule and sat in R-008 as an unexplained, low-confidence line. Each entry below is a company whose
+    # business is advertising or audience data, seen in those scans or the standard exchanges beside them. Like every
+    # entry here this says WHAT the host is, not whether the request was consented to.
+    VendorSignature(vendor="Taboola", default_category="marketing", domain_substrings=("taboola.com", "taboolasyndication.com")),
+    VendorSignature(vendor="Dianomi", default_category="marketing", domain_substrings=("dianomi.com",)),
+    VendorSignature(vendor="Magnite (Rubicon Project)", default_category="marketing", domain_substrings=("rubiconproject.com", "magnite.com")),
+    VendorSignature(vendor="AdRoll (NextRoll)", default_category="marketing", domain_substrings=("adroll.com", "nextroll.com")),
+    VendorSignature(vendor="Seedtag", default_category="marketing", domain_substrings=("seedtag.com",)),
+    VendorSignature(vendor="Permutive", default_category="marketing", domain_substrings=("permutive.app", "permutive.com")),
+    VendorSignature(vendor="Criteo", default_category="marketing", domain_substrings=("criteo.com", "criteo.net")),
+    VendorSignature(vendor="Outbrain", default_category="marketing", domain_substrings=("outbrain.com",)),
+    VendorSignature(vendor="Klaviyo", default_category="marketing", domain_substrings=("klaviyo.com",)),
+    VendorSignature(vendor="Amazon Advertising", default_category="marketing", domain_substrings=("amazon-adsystem.com",)),
+    VendorSignature(vendor="OpenX", default_category="marketing", domain_substrings=("openx.net",)),
+    VendorSignature(vendor="PubMatic", default_category="marketing", domain_substrings=("pubmatic.com",)),
+    VendorSignature(vendor="Index Exchange", default_category="marketing", domain_substrings=("casalemedia.com", "indexww.com")),
+    VendorSignature(vendor="The Trade Desk", default_category="marketing", domain_substrings=("adsrvr.org",)),
+    VendorSignature(vendor="Xandr (Microsoft Advertising)", default_category="marketing", domain_substrings=("adnxs.com",)),
+    VendorSignature(vendor="Teads", default_category="marketing", domain_substrings=("teads.tv",)),
+    VendorSignature(vendor="Smart AdServer", default_category="marketing", domain_substrings=("smartadserver.com",)),
     VendorSignature(
         # Follows the YouTube Embed precedent above: an embedded third-party video
         # player, categorised functional for WHAT IT IS, leaving whether it is

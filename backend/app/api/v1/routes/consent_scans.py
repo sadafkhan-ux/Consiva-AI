@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends
@@ -111,6 +112,10 @@ class StageResponse(BaseModel):
     duration_ms: int | None
     error: str | None
     metadata: dict
+    # When the server started and finished the stage. The page used to time the whole scan with the BROWSER's clock,
+    # which keeps running while a laptop sleeps or a tab is frozen: a 21 s pipeline was reported as 8,413 s.
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class AuditLogResponse(BaseModel):
@@ -329,7 +334,8 @@ async def get_scan_stages(
     stages = await stage_repository.list_stages(db, scan_id, uuid.UUID(user.org_id))
     return [
         StageResponse(
-            stage=s.stage, status=s.status, duration_ms=s.duration_ms, error=s.error, metadata=s.stage_metadata
+            stage=s.stage, status=s.status, duration_ms=s.duration_ms, error=s.error, metadata=s.stage_metadata,
+            started_at=s.started_at, completed_at=s.completed_at,
         )
         for s in stages
     ]

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { ConsentScanState } from "../hooks/useConsentScan";
 import { deriveFailureReason } from "../hooks/useConsentScan";
 import { formatMs, formatTimestamp } from "./shared";
-import { summariseStages, unaccountedMs } from "./stageTiming";
+import { serverSpanMs, stuckStages, summariseStages, unaccountedMs } from "./stageTiming";
 
 const PHASE_LABELS: Record<string, string> = {
   idle: "Idle",
@@ -27,6 +27,29 @@ const PHASE_TONE: Record<string, string> = {
   degraded: "warn",
   failed: "bad",
 };
+
+// Why a discovered page was not scanned. Only pages the scanner navigated to are "scanned"; everything else it found is
+// listed here with its reason.
+const SKIP_REASONS: Record<string, string> = {
+  page_limit: "left unscanned: page limit reached",
+  robots_disallowed: "disallowed by robots.txt",
+  duplicate_url: "duplicate of a page already found",
+  subdomain_not_scanned: "subdomain: not scanned, listed for review",
+  redirected_to_subdomain: "redirected to a subdomain, not scanned",
+  redirected_to_already_scanned_page: "redirected to a page already scanned",
+  redirected_off_site: "redirected to another site",
+  time_limit: "left unscanned: time limit",
+  scan_cancelled: "left unscanned: scan cancelled",
+};
+
+/** "2 h 20 min" / "7 min": for waits that are minutes or hours, where "8387.06 s" is hard to read. */
+function humanDuration(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
 
 const STAGE_ORDER = [
   "url_validation", "website_scan", "data_structuring", "classification",
@@ -75,10 +98,21 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
   const tone = PHASE_TONE[state.phase] ?? "progress";
 
   const byStage = summariseStages(state.stages);
-  const totalMs = state.durationMs ?? (state.startedAt && state.completedAt ? state.completedAt - state.startedAt : null);
-  const gapMs = state.completedAt ? unaccountedMs(totalMs, byStage) : null;
+  const browserMs = state.durationMs ?? (state.startedAt && state.completedAt ? state.completedAt - state.startedAt : null);
+  // The server's clock where it sent one. The browser's own elapsed time includes any time the tab or the machine was
+  // asleep, and overstated a 21 s pipeline as 8,413 s.
+  const serverMs = serverSpanMs(state.stages, now);
+  const totalMs = serverMs ?? browserMs;
+  const pausedMs = serverMs != null && browserMs != null && browserMs - serverMs > 5 * 60_000 ? browserMs - serverMs : null;
+  const stuck = stuckStages(state.stages, now);
+  // Only a run that reached its end has a "wait between steps": on a failed run, or with a stage still running, the
+  // remainder is time the run was stuck or the page lost touch, and saying "the wait between steps" would mislead.
+  const runFinished = (state.phase === "completed" || state.phase === "awaiting_review" || state.phase === "degraded")
+    && !state.stages.some((s) => s.status === "running");
+  const gapMs = state.completedAt && runFinished ? unaccountedMs(totalMs, byStage) : null;
   const currentStage = STAGE_ORDER.find((name) => byStage[name] && byStage[name].status === "running");
   const meta = state.websiteScanMeta;
+  const skippedTotal = Object.values(meta?.skipped_by_reason ?? {}).reduce((n, v) => n + v, 0);
   const knowledgeBaseEmpty = state.stages.some(
     (s) => s.stage === "rag_retrieval" && (s.metadata as Record<string, unknown>)?.knowledge_base_empty === true,
   );
@@ -113,6 +147,34 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
           loaded.
         </div>
       )}
+      {stuck.length > 0 && (
+        <div className="status-banner warn" role="status" style={{ marginBottom: 14 }} data-testid="stuck-stage">
+          {stuck.map((s) => `${STAGE_LABELS[s.stage] ?? s.stage} has been running for ${Math.round(s.runningMs / 60_000)} minutes`).join("; ")}
+          . That is far longer than a healthy run, so the job may be stuck or its worker may have stopped. The server marks
+          such a job as interrupted and retries it; if this stays, check the worker.
+        </div>
+      )}
+      {pausedMs != null && (
+        <p className="muted small" data-testid="paused-time">
+          This page waited {humanDuration(pausedMs)} longer than the server worked (the tab or the machine was probably asleep or
+          offline). The duration shown is the server's.
+        </p>
+      )}
+      {skippedTotal > 0 && (
+        <details className="muted small" data-testid="skipped-pages" style={{ marginBottom: 14 }}>
+          <summary>
+            Pages not scanned ({skippedTotal}):{" "}
+            {Object.entries(meta?.skipped_by_reason ?? {}).map(([reason, n], i) => (
+              <span key={reason}>{i > 0 ? ", " : ""}{n} {SKIP_REASONS[reason] ?? reason}</span>
+            ))}
+          </summary>
+          {(meta?.skipped_pages ?? []).map((s) => (
+            <div key={`${s.reason}:${s.url}`} className="mono" style={{ fontSize: 11 }}>
+              {s.url} — {SKIP_REASONS[s.reason] ?? s.reason}
+            </div>
+          ))}
+        </details>
+      )}
       {knowledgeBaseEmpty && (
         <div className="status-banner warn" role="status" style={{ marginBottom: 14 }} data-testid="kb-empty">
           The regulatory knowledge base is empty, so the findings below cannot cite any DPDP provision. They come
@@ -145,10 +207,7 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
             Completed At were both populated a few pixels away. */}
         <div className="stat">
           <div className="n">
-            {formatMs(
-              state.durationMs ??
-                (state.startedAt && state.completedAt ? state.completedAt - state.startedAt : null),
-            )}
+            {formatMs(totalMs)}
           </div>
           <div className="l">Duration</div>
         </div>

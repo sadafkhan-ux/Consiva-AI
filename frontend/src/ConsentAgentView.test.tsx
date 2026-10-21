@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 /** A backend whose scan fails, reporting `pages` pages collected before it did. */
-function failingBackend(pages: number) {
+function failingBackend(pages: number, opts: { evidenceDown?: boolean } = {}) {
   const counts = { ...COUNTS, pages };
   return vi.fn((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
@@ -37,6 +37,7 @@ function failingBackend(pages: number) {
       ]));
     }
     if (url.endsWith("/evidence")) {
+      if (opts.evidenceDown) return Promise.reject(new TypeError("Failed to fetch"));   // the connection dropped
       return Promise.resolve(jsonResponse({
         pages: [], forms: [], cookies: [], trackers: [], third_party_services: [], policies: [], consent_signals: [],
       }));
@@ -100,6 +101,20 @@ describe("a failed scan that collected nothing is not shown as a clean result", 
   });
 });
 
+describe("a scan whose results could not be loaded is not shown as clean", () => {
+  it("says the results could not be loaded, and shows no 'none detected' text, when pages were collected", async () => {
+    await scanAndWaitForFailure(failingBackend(5, { evidenceDown: true }));
+
+    const notice = screen.getByTestId("not-scanned");
+    expect(notice).toHaveTextContent("Results could not be loaded");
+    expect(notice).toHaveTextContent("collected 5 pages");
+    expect(notice).toHaveTextContent("this is not a clean result");
+    for (const text of [/No trackers were detected on this scan/, /No cookies were detected on this scan/, /No findings for this scan/]) {
+      expect(screen.queryByText(text)).not.toBeInTheDocument();
+    }
+  });
+});
+
 describe("scanEvidenceUnavailable", () => {
   const scan = (pages: number | null) =>
     pages === null ? null : ({ evidence_counts: { ...COUNTS, pages } } as never);
@@ -114,6 +129,18 @@ describe("scanEvidenceUnavailable", () => {
     ["degraded (findings exist, narrative failed)", "degraded", 4, false],
   ])("%s", (_name, phase, pages, expected) => {
     expect(scanEvidenceUnavailable({ phase: phase as never, scan: scan(pages), stages: [] })).toBe(expected);
+  });
+});
+
+describe("scanEvidenceUnavailable and the evidence that was (not) loaded", () => {
+  const scan = { evidence_counts: { ...COUNTS, pages: 5 } } as never;
+
+  it.each([
+    ["pages collected, evidence loaded", { evidence: {} as never }, false],
+    ["pages collected, evidence could not be loaded", { evidence: null }, true],
+    ["a caller that does not track evidence keeps the earlier meaning", {}, false],
+  ])("%s", (_name, extra, expected) => {
+    expect(scanEvidenceUnavailable({ phase: "failed", scan, stages: [], ...extra } as never)).toBe(expected);
   });
 });
 

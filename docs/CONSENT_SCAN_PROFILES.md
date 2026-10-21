@@ -7,20 +7,20 @@ in a request body can choose or widen it.
 | | `web` | `application` |
 |---|---|---|
 | Endpoint | `POST /api/v1/consent-agent/scans/web` (also the original `POST /scans`) | `POST /api/v1/consent-agent/scans/application` |
-| Pages per scan | at most `CONSENT_WEB_MAX_PAGES` unique pages (default **5**, never above 25) | **no fixed page-count cap** when `CONSENT_APP_MAX_PAGES=0` |
+| Pages per scan | at most `CONSENT_WEB_MAX_PAGES` unique pages (default **3**, never above 3 -- a larger configured value is clamped; the main domain and any subdomain share this one budget) | **no fixed page-count cap** when `CONSENT_APP_MAX_PAGES=0` |
 | Wall-clock bound | **no crawl deadline**; per-page timeout only; fixed 30 min ceiling for a hung scan | **no crawl deadline** by default (`CONSENT_APP_MAX_SECONDS=0`); optional deadline if set; fixed 24 h ceiling for a hung scan |
 | Who may call | any signed-in user, or a key with `consent:scan` | an **organisation admin**, or a service key with `consent:scan:application` |
 | Domain | existing deployment policy (`SCANNER_REQUIRE_DOMAIN_VERIFICATION`) | **must have passed DNS ownership verification**, always |
 | SSRF / same-site / robots / de-dup / concurrency / per-navigation timeout | applied | applied, identically |
 
 `POST /scans` (the original endpoint) is now the **web** profile. It can never start an
-application scan, so existing integrations get the 5-page limit and nothing else changes for them.
+application scan, so existing integrations get the 3-page limit and nothing else changes for them.
 Console scans and scheduled monitoring scans also run as `web`.
 
 ## Configuration (`backend/.env`; documented in `backend/.env.example`)
 
 ```
-CONSENT_WEB_MAX_PAGES=5      # 1-25. A request can only lower it.
+CONSENT_WEB_MAX_PAGES=3      # 1-3. A request can only lower it.
 CONSENT_APP_MAX_PAGES=0      # 0 = no fixed page-count cap; a positive number = an explicit cap
 CONSENT_APP_MAX_SECONDS=0    # 0 = no crawl deadline; 60-86400 = an optional deadline.
 ```
@@ -71,7 +71,7 @@ python -m pytest tests/test_scan_profiles.py -q
 curl -s -X POST http://127.0.0.1:8000/api/v1/consent-agent/scans/web \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"website_url":"https://example.com","authorized":true,"scan_options":{"max_pages":100}}'
-# -> {"profile":"web","max_pages":5,...}   (the 100 was ignored)
+# -> {"profile":"web","max_pages":3,...}   (the 100 was ignored)
 
 curl -s -X POST http://127.0.0.1:8000/api/v1/consent-agent/scans/application \
   -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
@@ -81,3 +81,24 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/consent-agent/scans/application \
 ```
 
 To mint a key for the application profile, grant it the `consent:scan:application` scope.
+
+## What counts as a page (public scans)
+
+A page is something the scanner navigated to. Skipped pages are not pages: links that `robots.txt` disallows, duplicate
+spellings of a page, links left in the queue when the limit was reached, and redirects that land on an already-scanned
+page or on another site are reported in the scan diagnostics (`skipped_by_reason`, and up to 50 URLs in `skipped_pages`)
+with the reason, and never added to the pages list. Third-party requests are trackers, not pages.
+
+A public scan stays on the entered host (with or without `www.`). Links to a subdomain of it, links to other sites, and
+sites a scanned page displays in a frame are **not crawled**. They are recorded once per host in the scan diagnostics
+(`discovered_domains`: host, `subdomain` or `external`, how often it was linked, one sample URL, whether it was framed) and
+shown in the report under "Subdomains & External Domains — Review", together with the requests the scanned pages made to them
+and the findings that involve them. To assess a subdomain, enter it as the address to scan.
+
+**How the report keeps them apart.** The Trackers and Cookies sections, the three consent-state counts and the PDF summary
+cover the scanned site's own evidence: requests to the site itself and to *named* analytics or advertising services it loaded,
+and cookies set for its host, a parent domain, or by such a named service. Requests and cookies from a subdomain, or from a
+separate website or service that is not a named tracker (a booking widget, a payment frame, a font host, a site shown in a
+frame), are counted under "Discovered Subdomains & Websites" instead; nothing is dropped, each item is on exactly one side.
+A finding whose evidence is all from discovered domains is listed in its own highlighted group in the findings section
+(it still needs a review decision); a finding citing both is marked "also involves discovered subdomains / websites".

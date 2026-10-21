@@ -15,8 +15,11 @@ const STATE_LABELS: Record<string, string> = {
   post_reject: "Post-Reject",
 };
 
-export function stateLabel(state: string): string {
-  return STATE_LABELS[state] ?? state;
+export function stateLabel(state: string, untested: readonly string[] = []): string {
+  const label = STATE_LABELS[state] ?? state;
+  // The scanner revisits the page for the Accept and Reject passes even when it found nothing to click. What it records
+  // then is the same page seen again, not what happens after a choice, and must not be presented as if it were.
+  return untested.includes(state) ? `${label} (no choice was made — not tested)` : label;
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -100,10 +103,10 @@ function formatExpiry(cookie: EvidenceCookieItem): string {
   return `${date} (about ${days} day${days === 1 ? "" : "s"} after it was seen)`;
 }
 
-function sighting(o: CookieObservation): CookieSighting {
+function sighting(o: CookieObservation, untested: readonly string[]): CookieSighting {
   return {
     state: o.consent_state,
-    stateLabel: stateLabel(o.consent_state),
+    stateLabel: stateLabel(o.consent_state, untested),
     page: o.page_url ?? NOT_AVAILABLE,
     candidatePages: o.page_url ? [] : o.candidate_page_urls ?? [],
     detectedAt: formatTimestamp(o.observed_at),
@@ -112,15 +115,15 @@ function sighting(o: CookieObservation): CookieSighting {
   };
 }
 
-function rowFor(cookie: EvidenceCookieItem): CookieRow {
+function rowFor(cookie: EvidenceCookieItem, untested: readonly string[]): CookieRow {
   const observations = cookie.observations ?? [];
-  const sightings = observations.map(sighting);
+  const sightings = observations.map((o) => sighting(o, untested));
   // A state the cookie was seen in but which has no observation (a scan from before
   // observations were recorded) still gets a line, saying the page is unknown.
   for (const state of cookie.consent_states) {
     if (!observations.some((o) => o.consent_state === state)) {
       sightings.push({
-        state, stateLabel: stateLabel(state), page: NOT_AVAILABLE, candidatePages: [],
+        state, stateLabel: stateLabel(state, untested), page: NOT_AVAILABLE, candidatePages: [],
         detectedAt: NOT_AVAILABLE, how: NOT_AVAILABLE, sourceRequest: null,
       });
     }
@@ -166,8 +169,8 @@ function countBy(rows: CookieRow[], keys: (row: CookieRow) => string[]): GroupCo
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
-export function buildCookieInventory(cookies: EvidenceCookieItem[]): CookieInventory {
-  const rows = cookies.map(rowFor).sort(
+export function buildCookieInventory(cookies: EvidenceCookieItem[], untestedStates: readonly string[] = []): CookieInventory {
+  const rows = cookies.map((c) => rowFor(c, untestedStates)).sort(
     (a, b) => stateRank(a.states[0] ?? "") - stateRank(b.states[0] ?? "") || a.name.localeCompare(b.name),
   );
   return {
@@ -176,7 +179,7 @@ export function buildCookieInventory(cookies: EvidenceCookieItem[]): CookieInven
     total: rows.length,
     // A cookie seen in two states counts in both -- these are "present in", not a split.
     byState: STATE_ORDER.map((state) => ({
-      label: stateLabel(state),
+      label: stateLabel(state, untestedStates),
       count: rows.filter((r) => r.states.includes(state)).length,
     })),
     byCategory: countBy(rows, (r) => [r.category]),

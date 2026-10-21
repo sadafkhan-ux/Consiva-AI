@@ -30,6 +30,7 @@ import heapq
 import itertools
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -37,7 +38,7 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import BrowserContext, Page, Route, async_playwright
 from playwright.async_api import Error as PlaywrightError
@@ -63,7 +64,7 @@ from app.scanner.cookie_detector import (
 from app.scanner.form_detector import detect_forms
 from app.scanner.page_parser import ParsedScript, parse_page
 from app.scanner.policy_detector import detect_policies
-from app.scanner.scan_profiles import ScanProfile, resolve_profile
+from app.scanner.scan_profiles import APPLICATION, MAX_WEB_PAGES, ScanProfile, resolve_profile
 from app.scanner.schemas import (
     ConsentSignalRecord,
     CookieRecord,
@@ -91,6 +92,33 @@ _CMP_GLOBAL_VAR_CANDIDATES = sorted({v for sig in CMP_CATALOG for v in sig.globa
 # window still gives async-loading trackers/tag-managers a fair chance to fire (most
 # real ones load within 1-2s of `load`), without the unbounded tail.
 _TRACKER_SETTLE_MS = 1200
+
+#: How many skipped pages are listed individually in a scan's diagnostics (the per-reason counts are always complete).
+_MAX_SKIPPED_PAGES_LISTED = 50
+
+#: How many other hosts (subdomains and external sites) a scan lists individually.
+_MAX_OTHER_HOSTS = 100
+
+
+_FRAMESET_RE = re.compile(r"<frameset\b", re.IGNORECASE)
+_FRAME_SRC_RE = re.compile(r"<frame\b[^>]*?\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)   # <frame>, not <iframe>
+
+
+def _frameset_sources(html: str, base_url: str) -> list[str]:
+    """Absolute URLs of the <frame>s of a frameset document, or [] for any other page.
+
+    A page that is only a <frameset> has no content of its own: the browser shows whatever its frames load, often another
+    site. smartians.ai is one (a single frame onto corp.gignaati.com). Ordinary <iframe> embeds are not looked at --
+    they are widgets on a real page, not the page."""
+    if not _FRAMESET_RE.search(html or ""):
+        return []
+    return [urljoin(base_url, src.strip()) for src in _FRAME_SRC_RE.findall(html)]
+
+
+def _host_key(url: str) -> str:
+    """A page's host for the main-domain-vs-subdomain comparison: lowercase, without a leading "www."."""
+    host = (urlparse(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
 
 #: Longest a page waits for its own "load" event after navigation has returned at "domcontentloaded".
 _LOAD_EVENT_WAIT_MS = 10_000
@@ -514,6 +542,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
                 raise _SeedUnreachable(url, exc, attempts=attempts)
             return {"url": url, "status": status, "attempts": attempts, "error": str(exc)}
 
+        final_url = getattr(browser_page, "url", None) or url
         # Bounded settle window (see _TRACKER_SETTLE_MS) replacing "networkidle" --
         # gives async-loading trackers/tag-managers a fair, predictable chance to fire.
         await _wait_for_load_event(browser_page, url)
@@ -554,6 +583,8 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         "rendered_text": rendered_text,
         "rendered_control_text": rendered_control_text,
         "set_cookie_events": set_cookie_events,
+        "final_url": final_url,
+        "frame_sources": _frameset_sources(html, url),
     }
 
 
@@ -614,6 +645,10 @@ async def _crawl_full_site(
     all_scripts_flat = []
     detected_global_vars: set[str] = set()
     budget = settings.scanner_max_pages if profile is None else profile.max_pages
+    # The public scan's ceiling is enforced HERE, where pages are actually launched, not only in the settings that
+    # feed it: whatever number arrived, a web scan navigates to at most MAX_WEB_PAGES distinct pages.
+    if budget is not None and (profile is None or profile.name != APPLICATION):
+        budget = min(budget, MAX_WEB_PAGES)
     diagnostics = {
         "page_limit": budget,
         "page_limit_mode": "capped" if budget is not None else "uncapped",
@@ -629,6 +664,17 @@ async def _crawl_full_site(
         "pages_skipped_duplicate": 0,
         "pages_from_sitemap": 0,
         "pages_not_attempted_budget_exhausted": 0,
+        # Why a discovered page was not scanned, one entry per page (capped), and the full count per reason. These
+        # are NOT page records: only a page the scanner actually navigated to is one.
+        "skipped_pages": [],
+        "skipped_by_reason": {},
+        # Other sites that a frameset page displays in place of content of its own. See _frameset_sources.
+        "framed_sites": [],
+        "links_off_site_ignored": 0,
+        "links_subdomain_not_scanned": 0,
+        # Other hosts the scan came across -- subdomains of the entered domain and external sites -- one entry per host.
+        # They are reported for review; they are never crawled, and are not pages.
+        "discovered_domains": [],
         # <script src> tags present in the DOM that the browser does not run (a CMP's type="text/plain"
         # block). Not counted as trackers; recorded so a reviewer can see the CMP did block something.
         "script_tags_not_executed": 0,
@@ -637,32 +683,61 @@ async def _crawl_full_site(
 
     # (priority, insertion order, url as first spelled, discovered_via). The insertion
     # counter keeps it FIFO within a priority and keeps the heap from comparing urls.
-    queue: list[tuple[int, int, str, str]] = []
+    queue: list[tuple[float, int, str, str]] = []
     order = itertools.count()
     seen_keys: set[str] = set()
     seen_spellings: set[str] = set()
 
+    main_host = _host_key(root_url)
+
+    def _skip(url: str, reason: str) -> None:
+        diagnostics["skipped_by_reason"][reason] = diagnostics["skipped_by_reason"].get(reason, 0) + 1
+        if len(diagnostics["skipped_pages"]) < _MAX_SKIPPED_PAGES_LISTED:
+            diagnostics["skipped_pages"].append({"url": url, "reason": reason})
+
+    other_hosts: dict[str, dict] = {}
+
+    def _note_other_host(url: str, *, framed: bool = False, skipped: bool = True) -> None:
+        """A host other than the entered one: a subdomain of it, or an external site. Recorded for review, never queued."""
+        host = _host_key(url)
+        if not host:
+            return
+        kind = "subdomain" if _is_same_site(url, site_registered) else "external"
+        entry = other_hosts.get(host)
+        if entry is None:
+            if len(other_hosts) >= _MAX_OTHER_HOSTS:
+                return
+            entry = other_hosts[host] = {"host": host, "kind": kind, "links": 0, "sample_url": url, "framed": False}
+            if kind == "subdomain" and skipped:
+                _skip(url, "subdomain_not_scanned")
+        entry["links"] += 1
+        entry["framed"] = entry["framed"] or framed
+
     def _discover(url: str, via: str) -> None:
-        if via != "seed" and not _is_same_site(url, site_registered):
+        if via != "seed" and _host_key(url) != main_host:
+            # The scan stays on the entered site. A link to a subdomain or to another site is noted for review, not
+            # followed: it is neither a page of this site nor a reason to spend one of the three pages.
+            diagnostics["links_subdomain_not_scanned" if _is_same_site(url, site_registered) else "links_off_site_ignored"] += 1
+            _note_other_host(url)
             return
         key = normalize_url(url)
         if key in seen_keys:
             if url not in seen_spellings:
                 seen_spellings.add(url)
                 diagnostics["pages_skipped_duplicate"] += 1
+                _skip(url, "duplicate_url")
             return
         seen_keys.add(key)
         seen_spellings.add(url)
         diagnostics["pages_discovered"] += 1
         if _is_robots_disallowed(url, disallowed_prefixes):
             logger.info("Skipping %s (robots.txt disallow)", url)
-            pages.append(PageRecord(
-                local_id=f"page-{len(pages)}", url=url, title=None,
-                http_status=None, discovered_via="robots_disallowed",
-            ))
+            # Not a page record: a robots-disallowed link used to be appended to `pages`, one per link, with no limit --
+            # which is how a scan capped at 5 reported 12 or more "pages". The count and the reason are kept.
             diagnostics["pages_blocked_robots"] += 1
+            _skip(url, "robots_disallowed")
             return
-        rank = -1 if via == "seed" else priority(url)
+        rank: float = -1 if via == "seed" else priority(url)
         heapq.heappush(queue, (rank, next(order), url, via))
         if via == "sitemap":
             diagnostics["pages_from_sitemap"] += 1
@@ -679,6 +754,9 @@ async def _crawl_full_site(
 
     stop_reason = "queue_exhausted"
 
+    scanned_keys: set[str] = set()
+    framed_sites: set[str] = set()
+
     def _record_result(url: str, via: str, result: dict) -> None:
         page_local_id = f"page-{len(pages)}"
 
@@ -693,6 +771,24 @@ async def _crawl_full_site(
             diagnostics["pages_timeout" if result["status"] == "timeout" else "pages_failed"] += 1
             return
 
+        if via != "seed":
+            # Where the navigation actually ended. A redirect can land on a page that was already scanned (counted
+            # once, not twice) or on another site entirely (not a page of this one); neither brings in evidence.
+            final_url = result.get("final_url") or url
+            if _host_key(final_url) != main_host:
+                _skip(url, "redirected_to_subdomain" if _is_same_site(final_url, site_registered) else "redirected_off_site")
+                _note_other_host(final_url, skipped=False)   # already reported above, with its own reason
+                return
+            if normalize_url(final_url) in scanned_keys:
+                _skip(url, "redirected_to_already_scanned_page")
+                return
+        for frame_src in result.get("frame_sources") or []:
+            if _host_key(frame_src) != main_host:
+                framed_sites.add(frame_src)
+                _note_other_host(frame_src, framed=True, skipped=False)
+        scanned_keys.add(normalize_url(result.get("final_url") or url))
+        scanned_keys.add(normalize_url(url))
+        seen_keys.add(normalize_url(result.get("final_url") or url))
         diagnostics["pages_scanned"] += 1
         parsed = result["parsed"]
         detected_global_vars.update(result["global_vars"])
@@ -808,7 +904,11 @@ async def _crawl_full_site(
     elif queue and not _budget_left():
         stop_reason = "page_limit"
 
+    diagnostics["framed_sites"] = sorted(framed_sites)
+    diagnostics["discovered_domains"] = sorted(other_hosts.values(), key=lambda e: (-e["links"], e["host"]))[:_MAX_OTHER_HOSTS]
     diagnostics["stop_reason"] = stop_reason
+    for _rank, _n, queued_url, _via in sorted(queue):
+        _skip(queued_url, {"page_limit": "page_limit", "deadline": "time_limit", "cancelled": "scan_cancelled"}.get(stop_reason, "not_reached"))
     if stop_reason == "deadline":
         diagnostics["pages_not_attempted_deadline_exceeded"] = len(queue)
         diagnostics["pages_not_attempted_budget_exhausted"] = 0
@@ -1152,6 +1252,8 @@ async def run_scan(
         # The one page Accept and Reject were tried on. The mechanism is detected across every crawled page, but the
         # interaction passes only exercise this one -- so "not automatable" can mean "no banner on THIS page".
         "interaction_page_url": root_url,
+        # Set only when the scanned page is a frameset that shows another site: see rule R-012.
+        **({"framed_sites": pre_consent_diagnostics["framed_sites"]} if pre_consent_diagnostics.get("framed_sites") else {}),
         # What the scanner answered before the consent choice could be shown (an age gate), per pass.
         # Absent when no gate was on the page.
         **({"consent_gate": {"post_accept": accept_gate, "post_reject": reject_gate}} if (accept_gate or reject_gate) else {}),

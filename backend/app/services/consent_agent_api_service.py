@@ -238,6 +238,29 @@ async def _findings(db: AsyncSession, scan_id: uuid.UUID) -> list[ConsentFinding
     return list(result.scalars().all())
 
 
+# What a caller is told when a stage fails. The stage's own error is a provider exception ("Error code: 400 -
+# {'error': 'This model does not support image input as query'}"): internal detail that a public scan widget
+# displayed verbatim to a visitor of consiva.ai. It stays in the platform's own stage record; the API gives a message
+# a person can act on.
+_STAGE_FAILURE_MESSAGES = {
+    "rag_retrieval": (
+        "The look-up of regulatory references could not be completed. The findings come from the scan's measured "
+        "evidence only and cite no legal provision."
+    ),
+    "llm_analysis": (
+        "The written analysis could not be completed. The findings come from the scan's measured evidence only."
+    ),
+}
+
+
+def _stage_failure_message(stage: str, *, recoverable: bool) -> str:
+    known = _STAGE_FAILURE_MESSAGES.get(stage)
+    if known and recoverable:
+        return known
+    label = stage.replace("_", " ")
+    return f"The {label} step could not be completed." + ("" if recoverable else " No result was produced for this scan.")
+
+
 async def get_status(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
     stages = await _stages(db, scan.id)
     run = await scan_repository.latest_agent_run(db, scan.id)
@@ -251,7 +274,7 @@ async def get_status(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
         if failed is not None:
             error = {
                 "code": "STAGE_FAILED",
-                "message": f"Stage {failed.stage!r} failed: {failed.error}",
+                "message": _stage_failure_message(failed.stage, recoverable=status == "completed"),
                 "stage": failed.stage,
                 # Stated explicitly so an integrator is not left guessing whether a
                 # failed stage means they got nothing.

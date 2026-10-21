@@ -1,5 +1,5 @@
 import type { jsPDF as JsPdf } from "jspdf";
-import type { ReportModel } from "./buildReport";
+import type { DiscoveredPdfRow, ReportModel } from "./buildReport";
 import { NOT_AVAILABLE, type GroupCount } from "./cookieInventory";
 
 // A4 portrait in points. Everything below is laid out against these bounds so the
@@ -133,6 +133,18 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     y += 2;
   }
 
+  // What was tested, so a quiet report is not read as a clean one.
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  setColor(MUTED);
+  writeWrapped(model.scope, 8.5, 11);
+  if (model.discoveredLine) {
+    y += 2;
+    writeWrapped(model.discoveredLine, 8.5, 11);
+  }
+  y += 4;
+  setColor(INK);
+
   // ---------- scan at a glance ----------
   if (model.counts.length && sectionHeading("Scan at a glance")) {
     const colW = CONTENT_W / model.counts.length;
@@ -224,11 +236,193 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     PAGE_H - 33,
   );
 
+  drawDiscoveredDomains(doc, model);
   drawCookieInventory(doc, model);
 
   const host = model.siteUrl.replace(/^https?:\/\//, "").replace(/[^a-zA-Z0-9.-]/g, "-").replace(/-+$/, "");
   const stamp = new Date().toISOString().slice(0, 10);
   doc.save(`consiva-consent-summary-${host || "report"}-${stamp}.pdf`);
+}
+
+// ---------- discovered subdomains & websites (after the summary page) ----------
+//
+// The scan covers the entered site only. Subdomains and separate websites it came across -- through links, requests or
+// frames -- are listed here, on their own pages and in their own colour, so a reader can see them next to the main-site
+// findings without mistaking them for results about the site itself. Every one is listed, with its URLs, over as many
+// pages as it takes.
+
+const AMBER = { r: 178, g: 112, b: 20 };
+const AMBER_FILL = { r: 253, g: 246, b: 232 };
+const AMBER_RULE = { r: 233, g: 205, b: 150 };
+
+function drawDiscoveredDomains(doc: JsPdf, model: ReportModel): void {
+  const section = model.discoveredSection;
+  if (!section) return;
+
+  let y = M;
+  let page = 0;
+  const setColor = (c: { r: number; g: number; b: number }) => doc.setTextColor(c.r, c.g, c.b);
+
+  const footer = () => {
+    doc.setDrawColor(AMBER_RULE.r, AMBER_RULE.g, AMBER_RULE.b);
+    doc.setLineWidth(0.6);
+    doc.line(M, PAGE_H - 44, M + CONTENT_W, PAGE_H - 44);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    setColor(MUTED);
+    doc.text(
+      doc.splitTextToSize(
+        `Discovered subdomains & websites — ${model.siteUrl}. These were found while scanning ${section.mainHost}; they were not` +
+          ` scanned as its pages, and their requests and cookies are not counted in the site's own results. Page ${page}.`,
+        CONTENT_W,
+      ) as string[],
+      M,
+      PAGE_H - 33,
+    );
+    setColor(INK);
+  };
+
+  const newPage = () => {
+    doc.addPage("a4", "portrait");
+    page += 1;
+    y = M;
+    // A tinted band marks every page of this section, so it cannot be taken for part of the main-site summary.
+    doc.setFillColor(AMBER_FILL.r, AMBER_FILL.g, AMBER_FILL.b);
+    doc.rect(0, 0, PAGE_W, page === 1 ? 74 : 38, "F");
+    doc.setFillColor(AMBER.r, AMBER.g, AMBER.b);
+    doc.rect(0, 0, 6, page === 1 ? 74 : 38, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(page === 1 ? 15 : 11);
+    setColor(AMBER);
+    doc.text(page === 1 ? "Discovered Subdomains & Websites" : "Discovered Subdomains & Websites (continued)", M, y + (page === 1 ? 2 : 0));
+    y += page === 1 ? 17 : 12;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    setColor(MUTED);
+    doc.text(`${model.siteUrl} · for review, not a verdict`, M, y);
+    y += page === 1 ? 40 : 28;
+    setColor(INK);
+    footer();
+  };
+
+  const ensure = (space: number) => {
+    if (y + space > BOTTOM_LIMIT) newPage();
+  };
+
+  /** Wrapped text that flows onto a new page line by line. */
+  const write = (text: string, x: number, w: number, size: number, gap: number) => {
+    doc.setFontSize(size);
+    for (const line of doc.splitTextToSize(text, w) as string[]) {
+      ensure(gap);
+      doc.text(line, x, y);
+      y += gap;
+    }
+  };
+
+  const groupHeading = (label: string) => {
+    ensure(40);
+    y += 6;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    setColor(AMBER);
+    doc.text(label.toUpperCase(), M, y);
+    y += 5;
+    doc.setDrawColor(AMBER_RULE.r, AMBER_RULE.g, AMBER_RULE.b);
+    doc.setLineWidth(0.8);
+    doc.line(M, y, M + CONTENT_W, y);
+    y += 13;
+    doc.setFont("helvetica", "normal");
+    setColor(INK);
+  };
+
+  const drawRow = (r: DiscoveredPdfRow) => {
+    ensure(64); // keep a row's name with its first lines
+    const top = y;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    setColor(INK);
+    doc.text(r.name, M + 10, y);
+    const nameW = doc.getTextWidth(r.name);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    setColor(AMBER);
+    const tags = [r.kind.toUpperCase(), ...(r.framed ? ["SHOWN IN A FRAME"] : []), ...(r.review ? ["REVIEW"] : [])].join("  ·  ");
+    doc.text(tags, M + 18 + nameW, y);
+    setColor(INK);
+    y += 13;
+
+    for (const u of r.urls) {
+      doc.setFontSize(7);
+      setColor(MUTED);
+      ensure(10);
+      doc.text(u.label.toUpperCase(), M + 10, y);
+      y += 9;
+      setColor(INK);
+      write(u.url, M + 10, CONTENT_W - 14, 8.5, 10);
+      y += 2;
+    }
+    write(r.requests, M + 10, CONTENT_W - 14, 8.5, 10.5);
+    if (r.cookies) write(r.cookies, M + 10, CONTENT_W - 14, 8.5, 10.5);
+    if (r.vendors) write(r.vendors, M + 10, CONTENT_W - 14, 8.5, 10.5);
+    if (r.unclassified) {
+      setColor(MUTED);
+      write(r.unclassified, M + 10, CONTENT_W - 14, 8.5, 10.5);
+      setColor(INK);
+    }
+    for (const f of r.findings) {
+      ensure(24);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      const fc = riskColor(f.risk);
+      setColor(fc);
+      doc.text(`FINDING · ${f.risk.toUpperCase()}`, M + 10, y);
+      y += 10;
+      doc.setFont("helvetica", "normal");
+      setColor(INK);
+      write(f.text, M + 10, CONTENT_W - 14, 8.5, 10.5);
+      setColor(MUTED);
+      write(f.share, M + 10, CONTENT_W - 14, 8, 10);
+      setColor(INK);
+    }
+
+    // A bar down the left edge ties the row together, across a page break too.
+    doc.setDrawColor(AMBER_RULE.r, AMBER_RULE.g, AMBER_RULE.b);
+    doc.setLineWidth(2);
+    doc.line(M + 2, top - 8, M + 2, Math.max(top - 8, y - 6));
+    y += 6;
+  };
+
+  newPage();
+  const total = section.subdomains.length + section.websites.length;
+  doc.setFont("helvetica", "normal");
+  setColor(INK);
+  write(
+    `The scan covers ${section.mainHost} only. The ${total === 1 ? "domain" : `${total} domains`} below were found while scanning it: ` +
+      "links on its pages, requests its pages made, or content they display. They were not crawled and are not pages of " +
+      `${section.mainHost}. Findings that involve a domain are shown under it, and are marked in the full report. ` +
+      "Everything here is for review; nothing is a verdict.",
+    M, CONTENT_W, 9, 12,
+  );
+  y += 4;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  setColor(AMBER);
+  doc.text(
+    `${section.subdomains.length} subdomain${section.subdomains.length === 1 ? "" : "s"} · ${section.websites.length} separate website${section.websites.length === 1 ? "" : "s"}`,
+    M, y,
+  );
+  y += 6;
+  doc.setFont("helvetica", "normal");
+  setColor(INK);
+
+  if (section.subdomains.length) {
+    groupHeading(`Subdomains of ${section.mainHost} (${section.subdomains.length})`);
+    section.subdomains.forEach(drawRow);
+  }
+  if (section.websites.length) {
+    groupHeading(`Separate websites (${section.websites.length})`);
+    section.websites.forEach(drawRow);
+  }
 }
 
 // ---------- cookie inventory (pages 2+) ----------

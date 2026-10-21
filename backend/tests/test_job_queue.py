@@ -157,3 +157,73 @@ async def test_the_reaped_error_names_the_threshold_actually_applied():
     await queue.reap_stale_jobs(db)
 
     assert str(queue._stale_threshold()) in job.error
+
+
+# ── a dead worker's stage row must not stay "running" for ever ──────────────────────────────
+
+def _job_for_scan(scan_id, *, attempts=1):
+    return SimpleNamespace(
+        status="running", attempts=attempts, error=None, run_after=None, locked_by="dead-worker",
+        payload={"scan_id": scan_id}, job_type="analyze",
+    )
+
+
+def _statements(db):
+    return [str(call.args[0]).replace("\n", " ") for call in db.execute.await_args_list]
+
+
+async def test_reaping_a_job_closes_the_stage_rows_its_worker_left_running():
+    """A scan showed RAG Retrieval "running" for 8,392 s. The worker was gone; nothing ever closed the row."""
+    import uuid
+
+    job = _job_for_scan(str(uuid.uuid4()))
+    db = _db_returning([job])
+
+    await queue.reap_stale_jobs(db)
+
+    updates = [s for s in _statements(db) if s.startswith("UPDATE agent_run_stages")]
+    assert len(updates) == 1, _statements(db)
+    assert "agent_run_stages.status" in updates[0] and "completed_at" in updates[0] and "error" in updates[0]
+    assert job.status == "queued", "the job itself is still requeued as before"
+
+
+async def test_stages_are_closed_whether_the_job_is_requeued_or_given_up_on():
+    import uuid
+
+    for attempts, expected in ((1, "queued"), (queue._MAX_ATTEMPTS, "failed")):
+        job = _job_for_scan(str(uuid.uuid4()), attempts=attempts)
+        db = _db_returning([job])
+
+        await queue.reap_stale_jobs(db)
+
+        assert job.status == expected
+        assert any(s.startswith("UPDATE agent_run_stages") for s in _statements(db))
+
+
+async def test_a_job_with_no_scan_id_touches_no_stage_rows():
+    db = _db_returning([_stale_job(attempts=1)])
+
+    await queue.reap_stale_jobs(db)
+
+    assert not any("agent_run_stages" in s for s in _statements(db))
+
+
+async def test_a_malformed_scan_id_is_ignored_not_fatal():
+    job = _job_for_scan("not-a-uuid")
+    db = _db_returning([job])
+
+    assert await queue.reap_stale_jobs(db) == 1
+    assert not any(s.startswith("UPDATE agent_run_stages") for s in _statements(db))
+
+
+def test_the_stage_response_carries_the_servers_own_timestamps():
+    from datetime import UTC, datetime
+
+    from app.api.v1.routes.consent_scans import StageResponse
+
+    started = datetime(2026, 10, 20, 12, 29, 14, tzinfo=UTC)
+    response = StageResponse(stage="rag_retrieval", status="running", duration_ms=None, error=None, metadata={},
+                             started_at=started, completed_at=None)
+
+    assert response.model_dump(mode="json")["started_at"].startswith("2026-10-20T12:29:14")
+    assert StageResponse(stage="x", status="completed", duration_ms=1, error=None, metadata={}).started_at is None

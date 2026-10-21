@@ -34,16 +34,37 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** How long a poll keeps retrying after the connection to the backend drops before it gives up. */
+const NETWORK_GRACE_MS = 120_000;
+
 /** Polls `fn` until `isDone`. `timeoutMs` may be `Infinity`: the scan-status poll has no client-side
  *  ceiling, because the BACKEND bounds a scan (its own safety ceiling, and a bounded number of job
  *  retries) and reports a terminal status when it is over. A request that fails still ends the loop. */
-export async function pollUntil<T>(fn: () => Promise<T>, isDone: (v: T) => boolean, timeoutMs: number, intervalMs: number): Promise<T> {
-  const start = Date.now();
+export async function pollUntil<T>(
+  fn: () => Promise<T>, isDone: (v: T) => boolean, timeoutMs: number, intervalMs: number,
+  networkGraceMs: number = NETWORK_GRACE_MS,
+): Promise<T> {
+  // Time spent waiting is counted per round, and one round counts for at most a few intervals. A laptop that sleeps,
+  // or a tab the browser freezes, therefore does not turn a few minutes of waiting into hours that "time out" the
+  // scan the moment it wakes (a real scan showed an 8,413 s duration for a 21 s crawl).
+  let waited = 0;
+  let outageStart: number | null = null;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const result = await fn();
-    if (isDone(result)) return result;
-    if (Date.now() - start > timeoutMs) {
+    const roundStart = Date.now();
+    try {
+      const result = await fn();
+      outageStart = null;
+      if (isDone(result)) return result;
+    } catch (err) {
+      // A dropped connection (wifi blip, sleep/wake, a restarting backend) is not the scan failing. Keep trying for
+      // a bounded time; anything else, or a longer outage, ends the poll as before.
+      if (!(err instanceof ApiError && err.status === 0)) throw err;
+      outageStart ??= roundStart;
+      if (Date.now() - outageStart > networkGraceMs) throw err;
+    }
+    waited += Math.min(Date.now() - roundStart + intervalMs, intervalMs * 5);
+    if (waited > timeoutMs) {
       throw new Error("Timed out waiting for the backend -- it may still finish on its own; re-check the scan by re-entering the same URL is not needed, the scan already exists server-side.");
     }
     await sleep(intervalMs);
@@ -57,10 +78,15 @@ export async function pollUntil<T>(fn: () => Promise<T>, isDone: (v: T) => boole
  *  scan that failed LATER (the analysis, say) after pages were collected is not this case -- its
  *  evidence is real and is still shown. */
 export function scanEvidenceUnavailable(
-  state: Pick<ConsentScanState, "phase" | "scan" | "stages">,
+  state: Pick<ConsentScanState, "phase" | "scan" | "stages"> & Partial<Pick<ConsentScanState, "evidence">>,
 ): boolean {
   if (state.phase !== "failed") return false;
-  if ((state.scan?.evidence_counts.pages ?? 0) > 0) return false;
+  if ((state.scan?.evidence_counts.pages ?? 0) > 0) {
+    // Pages were collected, but if the results could not be fetched (the backend became unreachable) the empty
+    // lists below would read "No trackers were detected" over evidence that exists. `evidence` is absent from a
+    // caller that does not track it, which keeps the earlier meaning.
+    return "evidence" in state && state.evidence === null;
+  }
   return true;
 }
 

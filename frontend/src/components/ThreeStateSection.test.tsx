@@ -30,3 +30,14 @@ describe("tracker page attribution", () => {
     expect(screen.getByText("not recorded")).toBeInTheDocument();
   });
 });
+
+describe("states that were never exercised", () => {
+  it("says the figures are the page seen again, for Accept and Reject when nothing was clicked", () => {
+    render(<ThreeStateSection meta={{ accept_interaction: "cmp_not_found", reject_interaction: "clicked" } as never} trackers={[]} />);
+
+    expect(screen.getByTestId("state-untested-post_accept")).toHaveTextContent("No choice was made");
+    expect(screen.getByTestId("state-untested-post_accept")).toHaveTextContent("after Accept");
+    expect(screen.queryByTestId("state-untested-post_reject")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("state-untested-pre_consent")).not.toBeInTheDocument();
+  });
+});

@@ -6,11 +6,11 @@ four functions below, so that swap wouldn't ripple outward."""
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.models import AgentJob
+from app.db.models import AgentJob, AgentRunStage
 from app.scanner import scan_profiles
 
 _MAX_ATTEMPTS = 3
@@ -146,6 +146,32 @@ async def mark_failed(db: AsyncSession, job_id: uuid.UUID, error: str) -> None:
     await db.flush()
 
 
+async def _close_orphaned_stages(db: AsyncSession, job: AgentJob) -> None:
+    """Marks the stage rows a dead worker left at "running" as failed.
+
+    A worker that dies mid-stage never closes its stage row. The job is requeued (or failed), but the row stays
+    "running" for ever: a page polling it shows a stage that has been running for hours, and a requeued run adds a
+    second row beside it. The reaper is the one place that knows the worker is gone, so it closes them -- keeping the
+    time they were observed running, and saying why."""
+    payload = getattr(job, "payload", None)
+    scan_id = payload.get("scan_id") if isinstance(payload, dict) else None
+    if not scan_id:
+        return
+    try:
+        scan_uuid = uuid.UUID(str(scan_id))
+    except ValueError:
+        return
+    now = datetime.now(UTC)
+    await db.execute(
+        update(AgentRunStage)
+        .where(AgentRunStage.scan_id == scan_uuid, AgentRunStage.status == "running")
+        .values(
+            status="failed", completed_at=now,
+            error=f"Interrupted: worker {getattr(job, 'locked_by', None)!r} stopped without finishing this stage",
+        )
+    )
+
+
 async def reap_stale_jobs(db: AsyncSession) -> int:
     """Requeues (or fails, if attempts are already exhausted) any job stuck at
     status="running" whose worker evidently died without releasing it. Returns the
@@ -167,6 +193,7 @@ async def reap_stale_jobs(db: AsyncSession) -> int:
         if getattr(j, "locked_at", None) is None or j.locked_at < now - stale_threshold_for(j)
     ]
     for job in stale_jobs:
+        await _close_orphaned_stages(db, job)
         job.error = f"Reaped: worker {job.locked_by!r} held this job past {stale_threshold_for(job)} without completing it"
         if job.attempts >= _MAX_ATTEMPTS:
             job.status = "failed"

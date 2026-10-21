@@ -4,6 +4,7 @@ from app.agents.consent_agent.state import AgentState
 from app.db.repositories import finding_repository
 from app.db.session import async_session_factory
 from app.llm.schemas import ConsentAnalysisResponse, DpdpReference
+from app.llm.text_hygiene import scrub_internal_references
 from app.observability.stage_tracker import track_stage
 
 
@@ -63,6 +64,11 @@ async def create_findings(state: AgentState) -> dict:
     ) as meta:
         async with async_session_factory() as db:
             for finding in response.findings:
+                # The written text, not the evidence references: internal ids and status codes do not belong in prose.
+                finding = finding.model_copy(update={
+                    "finding": scrub_internal_references(finding.finding) or finding.finding,
+                    "recommendation": scrub_internal_references(finding.recommendation) or finding.recommendation,
+                })
                 required = _needs_review(finding)
                 if required and not finding.requires_human_review:
                     # Recorded, not silently corrected: the audit trail should show
