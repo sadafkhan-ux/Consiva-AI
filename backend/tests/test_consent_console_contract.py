@@ -47,7 +47,7 @@ def _console_calls() -> list[tuple[str, str]]:
     """(METHOD, path template) for each consent call in client.ts, with ${x} turned into {x}."""
     calls = []
     for match in re.finditer(r"request\([`\"](/api/v1/consent/[^`\"]+)[`\"](?:,\s*\{\s*method:\s*\"(\w+)\")?", CLIENT_TS):
-        path = re.sub(r"\$\{(\w+)\}", r"{\1}", match.group(1))
+        path = re.sub(r"\$\{(\w+)\}", r"{\1}", match.group(1)).split("?")[0]   # the query string is not part of the route
         calls.append(((match.group(2) or "GET").upper(), path))
     return calls
 
@@ -65,8 +65,8 @@ def _normalise(path: str) -> str:
     return re.sub(r"\{\w+\}", "{}", path)
 
 
-def test_the_console_calls_the_eleven_documented_endpoints():
-    assert len(_console_calls()) == 11, _console_calls()
+def test_the_console_calls_the_fourteen_documented_endpoints():
+    assert len(_console_calls()) == 14, _console_calls()
 
 
 @pytest.mark.parametrize("method,path", _console_calls())
@@ -112,6 +112,7 @@ PAIRS = [
     ("FindingResponse", "FindingResponse"),
     ("StageResponse", "StageResponse"),
     ("AuditLogResponse", "AuditLogResponse"),
+    ("EvidencePageItem", "EvidencePageItem"),
     ("EvidenceCookieItem", "EvidenceCookieItem"),
     ("EvidenceTrackerItem", "EvidenceTrackerItem"),
     ("EvidenceConsentSignalItem", "EvidenceConsentSignalItem"),
@@ -121,6 +122,9 @@ PAIRS = [
     ("DpdpScoreBlock", "DpdpScoreBlock"),
     ("DpdpCategoryScore", "DpdpCategoryScore"),
     ("DpdpRequirementResult", "DpdpRequirementResult"),
+    ("DpdpLedger", "DpdpLedger"),
+    ("DpdpLedgerMetric", "DpdpLedgerMetric"),
+    ("DpdpStatusRule", "DpdpStatusRule"),
 ]
 
 
@@ -191,3 +195,88 @@ async def test_scan_targets_that_are_internal_or_not_http_never_pass_the_safety_
 
     with pytest.raises(Exception):  # noqa: B017 -- which typed error depends on the reason; that it refuses is the contract
         await assert_safe_url(url)
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# GET /api/v1/consent/scans: the recent scans the console lists so one can be reopened.
+# ---------------------------------------------------------------------------------------------------------------------------
+
+def test_the_scan_list_is_scoped_to_the_callers_organisation_and_clamps_the_limit(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.db.session import get_db
+
+    seen = {}
+
+    async def fake_list(db, org_id, limit=20):
+        seen["org"], seen["limit"] = org_id, limit
+        now = datetime.now(UTC)
+        return [SimpleNamespace(id=uuid.uuid4(), url="https://a.test/", status="completed", created_at=now, completed_at=now),
+                SimpleNamespace(id=uuid.uuid4(), url="https://b.test/", status="failed", created_at=now, completed_at=None)]
+
+    async def fake_db():
+        yield None
+
+    monkeypatch.setattr(consent_scans.scan_repository, "list_recent_scans", fake_list)
+    app.dependency_overrides[get_db] = fake_db
+    try:
+        headers = _headers()
+        org = jwt.decode(headers["Authorization"].split()[1], os.environ["SUPABASE_JWT_SECRET"], algorithms=["HS256"], audience="authenticated")["org_id"]
+        resp = client.get("/api/v1/consent/scans?limit=500", headers=headers)
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert [r["url"] for r in rows] == ["https://a.test/", "https://b.test/"]
+        assert set(rows[0]) == {"id", "url", "status", "created_at", "completed_at"}
+        assert rows[1]["completed_at"] is None
+        assert str(seen["org"]) == org            # only the caller's own organisation
+        assert seen["limit"] == 50                # a huge request is clamped
+        client.get("/api/v1/consent/scans?limit=0", headers=headers)
+        assert seen["limit"] == 1
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+
+def test_the_scan_list_query_filters_by_organisation_and_orders_newest_first():
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.db.repositories import scan_repository
+
+    captured = {}
+
+    class Db:
+        async def execute(self, stmt):
+            captured["sql"] = str(stmt.compile())
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: []))
+
+    assert asyncio.run(scan_repository.list_recent_scans(Db(), uuid.uuid4(), 5)) == []
+    sql = captured["sql"].lower()
+    assert "org_id" in sql and "order by" in sql and "created_at desc" in sql and "limit" in sql
+
+
+def test_business_sector_is_validated_on_the_score_endpoint():
+    sid = uuid.uuid4()
+    resp = client.get(f"/api/v1/consent/scans/{sid}/dpdp-score?business_sector=nonsense", headers=_headers())
+    assert resp.status_code == 422
+    resp = client.get(f"/api/v1/consent/scans/{sid}/dpdp-score?business_sector=general", headers=_headers())
+    assert resp.status_code == 422                     # "general" means undeclared: it is not an accepted declaration
+
+
+def test_business_sector_accepts_each_declarable_sector_before_any_lookup(monkeypatch):
+    from app.db.session import get_db
+    from app.scoring.sector import SECTORS
+
+    async def no_scan(db, scan_id, org_id):
+        return None
+
+    async def fake_db():
+        yield None
+
+    monkeypatch.setattr(consent_scans.scan_repository, "get_scan", no_scan)
+    app.dependency_overrides[get_db] = fake_db
+    try:
+        for key in (k for k in SECTORS if k != "general"):
+            resp = client.get(f"/api/v1/consent/scans/{uuid.uuid4()}/dpdp-score?business_sector={key}", headers=_headers())
+            assert resp.status_code == 404, (key, resp.status_code)   # passed validation, then the scan was (rightly) not found
+    finally:
+        app.dependency_overrides.pop(get_db, None)

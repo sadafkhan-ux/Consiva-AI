@@ -16,10 +16,12 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -84,6 +86,25 @@ class WebsitePage(Base):
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discovered_via: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class ScanScreenshot(Base):
+    """The homepage preview of one scan (migration 0040). One row per scan; an image only when status is "ok"."""
+
+    __tablename__ = "scan_screenshots"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("consent_scans.id", ondelete="CASCADE"), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    mime: Mapped[str | None] = mapped_column(String, nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
 class ConsentForm(Base):

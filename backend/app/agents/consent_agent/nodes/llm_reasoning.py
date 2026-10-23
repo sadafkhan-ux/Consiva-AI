@@ -91,6 +91,11 @@ async def _llm_reasoning_inner(state: AgentState) -> dict:
         meta["model"] = actual_model
         meta["findings_drafted"] = len(response.findings)
         meta["llm_usage"] = usage_sink
+        # Totals across every attempt of this call, so the audit trail answers "what did this analysis cost" without summing
+        # usage_by_attempt by hand. Providers name the fields differently (Claude: input/output, OpenAI-style: prompt/completion).
+        attempts = usage_sink.get("usage_by_attempt") or []
+        meta["tokens_in"] = sum((u or {}).get("input_tokens") or (u or {}).get("prompt_tokens") or 0 for u in attempts)
+        meta["tokens_out"] = sum((u or {}).get("output_tokens") or (u or {}).get("completion_tokens") or 0 for u in attempts)
 
         if fallback_meta["fallback_triggered"]:
             # agent_runs.llm_provider/llm_model were stamped up front (before this

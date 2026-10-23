@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     # exactly as before.
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-haiku-5-5"
+    # How much hidden reasoning Claude spends per call. It counts as OUTPUT tokens and cannot be switched off: on the stored
+    # scans 604 of a 1,001-token reply, and up to 3,041 of 4,000, were reasoning. "medium" is the behaviour this project has
+    # always run with, so the default changes nothing; "low" is an opt-in way to spend fewer tokens, to be adopted only after
+    # comparing finding quality on real scans.
+    anthropic_effort: Literal["low", "medium", "high"] = "medium"
     # Required when ANTHROPIC_API_KEY is an organization-scoped key (scope.type ==
     # "organization" -- check via GET /v1/organizations/api_keys with this same key).
     # Such a key has no single workspace to bill/rate-limit against, so every request
@@ -220,16 +225,15 @@ class Settings(BaseSettings):
     # Tune only against test_rag_retrieval_quality.py runs on live infrastructure.
     rag_max_distance: float = 0.95
 
-    # Per-request ceiling and automatic-retry count for EMBEDDING calls (RAG queries). The OpenAI SDK's
-    # defaults are a 60s timeout and 2 silent retries, so ONE hung request to the hosted embedding
-    # endpoint cost up to 3 x 60s. Measured on a real scan (ac537cef): the three queries took 121.9s,
-    # 61.0s and 34.0s, the worker log showing "Retrying request" after each 60s hang -- 216.8s of
-    # waiting for nothing. A healthy embedding call is 0.2-3s (slowest healthy one seen: 7.9s), and a hung
-    # request never answers while the NEXT request succeeds in under a second (live: 20.9s and 21.0s =
-    # a 20s timeout plus a quick success). So a short timeout loses almost nothing and a hang costs ~6s,
-    # not ~21s: 6s with two retries bounds the worst case for the whole batch to ~18s.
-    embed_timeout_seconds: float = Field(default=6.0, ge=1.0, le=120.0)
-    embed_max_retries: int = Field(default=2, ge=0, le=3)
+    # EMBEDDING calls (RAG queries) go to a hosted endpoint that is intermittently unresponsive: measured against it directly, a
+    # request either answers in 0.3-3s or never answers at all (5 of 11 test requests hung for the full 30s; three identical requests
+    # sent at once gave two answers in ~0.47s and one hang). Waiting out a hang and then retrying (the old 6s x 3 attempts, twice) failed
+    # a real scan after 39s. So a call is HEDGED: if it has not answered after `embed_hedge_after_seconds`, an identical request is sent
+    # alongside it, up to `embed_max_retries` extra requests in all, and the first answer wins. `embed_timeout_seconds` is the deadline
+    # for the whole call, hedges included. A healthy call is unchanged (one request, 0.3s); a hang costs ~1.5s instead of a failure.
+    embed_timeout_seconds: float = Field(default=12.0, ge=1.0, le=120.0)
+    embed_max_retries: int = Field(default=3, ge=0, le=5)
+    embed_hedge_after_seconds: float = Field(default=1.5, ge=0.2, le=30.0)
 
     # LLM
     # Shared wall-clock budget for one analysis's ENTIRE LLM effort, across all three

@@ -88,12 +88,12 @@ Leave it out and the request is refused.
 {
   "website_url": "https://example.com",
   "authorized": true,
-  "scan_options": { "max_pages": 10 }
+  "scan_options": { "max_pages": 3 }
 }
 ```
 
-`max_pages` is capped at the server's limit (25). Ask for more and you get 25, not an
-error.
+`max_pages` is capped at the server's limit (5 pages of the entered main domain). Ask for more and you get 5, not an
+error. A request can only lower the limit.
 
 ### Idempotency-Key
 
@@ -280,7 +280,7 @@ this is deliberate SSRF protection, not a bug.
 |---|---|---|
 | Scans per organisation, per hour | 20 | `CONSENT_API_SCANS_PER_HOUR` |
 | Scans per organisation, per day | configured | `SCANNER_MAX_SCANS_PER_ORG_PER_DAY` |
-| Pages per scan | 25 | `SCANNER_MAX_PAGES` |
+| Pages per scan | 5 (hard ceiling) | `CONSENT_WEB_MAX_PAGES` / `SCANNER_MAX_PAGES` |
 | Per-page timeout | 30s | `SCANNER_TIMEOUT_SECONDS` |
 
 A scan is a real browser crawl plus a model call, so it costs real time and money.

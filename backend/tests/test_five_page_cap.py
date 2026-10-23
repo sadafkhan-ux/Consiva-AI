@@ -237,3 +237,49 @@ async def test_a_frame_onto_another_host_still_marks_the_scan_as_describing_a_wr
 
     assert d["framed_sites"] == ["https://corp.example.com/"]
     assert "discovered_domains" not in d
+
+
+# ── one source of truth: nothing that describes the limit may carry its own number ─────────────────────────────
+
+def test_the_page_limit_disclosure_follows_the_constant_not_a_typed_number(monkeypatch):
+    from datetime import date
+
+    from app.scoring import findings as fg
+    from tests.test_dpdp_score import evidence
+
+    monkeypatch.setattr(fg, "MAX_WEB_PAGES", 3)
+    unable = [e for e in __import__("app.scoring.dpdp_score", fromlist=["assess"]).assess(evidence(pages=3), date(2026, 10, 22)).finding_groups.unable_to_verify]
+    entry = next(e for e in unable if e.id == "page-limit")
+    assert "first 3" in entry.title and "at most 3 pages" in entry.explanation
+
+    monkeypatch.setattr(fg, "MAX_WEB_PAGES", 5)
+    assert "page-limit" not in [e.id for e in __import__("app.scoring.dpdp_score", fromlist=["assess"]).assess(evidence(pages=3), date(2026, 10, 22)).finding_groups.unable_to_verify]
+
+
+def test_the_assessment_and_methodology_report_the_constant():
+    from datetime import date
+
+    from app.scoring.dpdp_score import assess
+    from tests.test_dpdp_score import evidence
+
+    s = assess(evidence(pages=2), date(2026, 10, 22))
+    assert s.assessment.page_limit == MAX_WEB_PAGES == 5
+    assert f"up to {MAX_WEB_PAGES} pages" in s.methodology.scope_rule
+
+
+def test_the_api_documentation_states_the_same_limit_as_the_code():
+    from app.main import app
+
+    op = app.openapi()["paths"]["/api/v1/consent-agent/scans/web"]["post"]
+    assert f"maximum {MAX_WEB_PAGES} pages" in op["summary"]
+    assert f"default {MAX_WEB_PAGES}," in op["description"]
+
+
+def test_the_environment_examples_and_the_api_guide_agree_with_the_constant():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    example = (root / "backend" / ".env.example").read_text(encoding="utf-8")
+    assert f"SCANNER_MAX_PAGES={MAX_WEB_PAGES}" in example and f"CONSENT_WEB_MAX_PAGES={MAX_WEB_PAGES}" in example
+    guide = (root / "docs" / "CONSENT_AGENT_API_FOR_WEBSITE_TEAM.md").read_text(encoding="utf-8")
+    assert f"| Pages per scan | {MAX_WEB_PAGES} " in guide

@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -12,13 +14,17 @@ from app.db.models import (
     ConsentSignal,
     Cookie,
     Policy,
+    ScanScreenshot,
     ThirdPartyService,
     Tracker,
     Website,
     WebsitePage,
 )
 from app.rules.consent_rules import RulesClassification
-from app.scanner.schemas import ScanResult
+from app.rules.cookie_purposes import describe_cookie, lifetime_days
+from app.scanner.schemas import ScanResult, ScreenshotRecord
+
+logger = logging.getLogger(__name__)
 
 
 async def count_scans_since(db: AsyncSession, *, org_id: uuid.UUID, since: datetime) -> int:
@@ -68,6 +74,14 @@ async def get_scan(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID) -> C
     assumed from the database. See docs/architecture §P."""
     result = await db.execute(select(ConsentScan).where(ConsentScan.id == scan_id, ConsentScan.org_id == org_id))
     return result.scalar_one_or_none()
+
+
+async def list_recent_scans(db: AsyncSession, org_id: uuid.UUID, limit: int = 20) -> list[ConsentScan]:
+    """The organisation's most recent scans, newest first. Scoped to `org_id` in the query for the same reason as get_scan."""
+    result = await db.execute(
+        select(ConsentScan).where(ConsentScan.org_id == org_id).order_by(ConsentScan.created_at.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def mark_scan_running(db: AsyncSession, scan_id: uuid.UUID) -> None:
@@ -194,6 +208,8 @@ async def save_scan_result(
         evidence=signal.evidence,
     ))
 
+    await _save_screenshot(db, scan_id, scan_result.screenshot)
+
     scan = await db.get(ConsentScan, scan_id)
     if scan:
         scan.status = "completed"
@@ -234,6 +250,34 @@ async def save_scan_result(
     return written
 
 
+async def _save_screenshot(db: AsyncSession, scan_id: uuid.UUID, rec: ScreenshotRecord | None) -> None:
+    """Keeps the homepage preview with the scan. Never fails the scan: a preview that cannot be stored is logged and the scan result is saved
+    without it (the report then says no preview is available). It runs inside its own savepoint so a problem here cannot undo the evidence."""
+    if rec is None:
+        return
+    try:
+        image = None
+        if rec.status == "ok":
+            image = base64.b64decode(rec.image_b64 or "", validate=True)
+            if not image or not rec.width or not rec.height:
+                raise ValueError("an 'ok' preview without an image or its size")
+        async with db.begin_nested():
+            db.add(ScanScreenshot(
+                scan_id=scan_id, status=rec.status, reason=rec.reason, mime=rec.mime if image else None, width=rec.width if image else None,
+                height=rec.height if image else None, http_status=rec.http_status, page_url=rec.page_url, page_title=(rec.page_title or "")[:300] or None,
+                image=image,
+            ))
+            await db.flush()
+    except Exception as exc:   # noqa: BLE001 -- any failure here must leave the scan result intact
+        logger.warning("Could not store the homepage preview for scan %s: %s", scan_id, exc)
+
+
+async def get_screenshot(db: AsyncSession, scan_id: uuid.UUID) -> ScanScreenshot | None:
+    """The homepage preview row of a scan, or None for a scan made before previews existed."""
+    result = await db.execute(select(ScanScreenshot).where(ScanScreenshot.scan_id == scan_id))
+    return result.scalar_one_or_none()
+
+
 async def get_scan_counts(db: AsyncSession, scan_id: uuid.UUID) -> dict:
     """Cheap evidence counts for a scan status response — avoids pulling full content
     just to answer "how much did we find" (see get_scan_evidence_summary for that)."""
@@ -252,10 +296,16 @@ def _cookie_detail(c) -> dict:
     """The audit columns of a cookie, for the evidence API's cookie inventory only.
     Kept out of the agent's evidence dict on purpose: prompts.py's cookie compactor
     reads `expiry`, so adding these there would change what the model is shown."""
+    first_seen = next((o.get("observed_at") for o in (c.observations or []) if isinstance(o, dict) and o.get("observed_at")), None)
+    about = describe_cookie(c.name, c.category)
     return {
         "path": c.path, "expiry": c.expiry.isoformat() if c.expiry else None,
         "secure": c.secure, "http_only": c.http_only, "same_site": c.same_site,
         "observations": c.observations or [],
+        # What the cookie is for, in the report's cookie inventory: from the provider's own description of a recognised cookie, never invented
+        # (rules/cookie_purposes.py). `lifetime_days` is None for a session cookie, or when the time it was first seen was not recorded.
+        "provider": about["provider"], "purpose": about["purpose"], "purpose_source": about["purpose_source"],
+        "is_session": c.expiry is None, "lifetime_days": lifetime_days(c.expiry, first_seen),
     }
 
 
@@ -265,9 +315,17 @@ def _serialize_evidence(
 ) -> dict:
     page_url_by_id = {p.id: p.url for p in pages}
     return {
-        "pages": [{"id": str(p.id), "url": p.url, "title": p.title} for p in pages],
+        # http_status and discovered_via say whether a page loaded and how it was found ("seed", "link", "sitemap"), or that the
+        # attempt did not succeed ("failed", "timeout"): the scan report lists the pages from these.
+        "pages": [
+            {"id": str(p.id), "url": p.url, "title": p.title, "http_status": p.http_status, "discovered_via": p.discovered_via}
+            for p in pages
+        ],
         "forms": [
-            {"id": str(f.id), "selector": f.selector, "fields": f.fields, "purpose_guess": f.purpose_guess}
+            {"id": str(f.id), "selector": f.selector, "fields": f.fields, "purpose_guess": f.purpose_guess,
+             # Where the form posts to, for the security signals of the report. Only in the API's detailed view, so the agent's own evidence is unchanged.
+             # and the page it was on, so the five-page readiness review can tie a form to its page.
+             **({"submit_url": f.submit_url, "page_url": page_url_by_id.get(f.page_id)} if include_cookie_detail else {})}
             for f in forms
         ],
         "cookies": [

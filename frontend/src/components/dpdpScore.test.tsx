@@ -95,7 +95,7 @@ describe("buildScoreView: the one place the score becomes words", () => {
     const v = buildScoreView(mixed);
     expect(v.title).toContain("proposed methodology");
     expect(v.methodologyLine).toBe("Methodology v1.5.0 · assessed as of 21 October 2026");
-    expect(v.disclaimer).toContain("not an officially prescribed legal formula");
+    expect(v.disclaimer).toContain("does not constitute legal advice");
   });
 });
 
@@ -108,10 +108,19 @@ describe("DpdpScoreSection", () => {
   it("shows the headline, coverage, basis and the methodology note", () => {
     render(<DpdpScoreSection score={mixed} />);
     expect(screen.getByTestId("dpdp-headline")).toHaveTextContent("56.5%");
-    expect(screen.getByTestId("dpdp-coverage")).toHaveTextContent("Assessment coverage 62.2%");
+    expect(screen.getByTestId("dpdp-coverage-figure")).toHaveTextContent("62.2%");
+    // the card shows the final percentages only: no formula or working in view, and the arithmetic is behind a closed disclosure
+    const card = screen.getByTestId("dpdp-score");
+    const details = screen.getByTestId("dpdp-calculation-details") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(screen.queryByTestId("dpdp-coverage")).not.toBeInTheDocument();
+    const methodology = screen.getByTestId("dpdp-methodology") as HTMLDetailsElement;
+    expect(methodology.open).toBe(false);   // the methodology is collapsed
+    // and no formula or arithmetic is printed anywhere in the card, collapsed sections included
+    expect((card.textContent ?? "").match(/.{0,50}(Score = |Coverage = |÷|×|divided by|times 100).{0,50}/)?.[0]).toBeUndefined();
     expect(screen.getByTestId("dpdp-basis")).toHaveTextContent("not yet in force");
     expect(screen.getByTestId("dpdp-inforce")).toHaveTextContent("no score");
-    expect(screen.getByTestId("dpdp-disclaimer")).toHaveTextContent("not an officially prescribed legal formula");
+    expect(screen.getByTestId("dpdp-disclaimer")).toHaveTextContent("for informational purposes only");
     expect(screen.queryByTestId("dpdp-withheld")).not.toBeInTheDocument();
   });
 
@@ -136,8 +145,8 @@ describe("DpdpScoreSection", () => {
   it("keeps unable-to-verify and excluded requirements out of the assessed list, in their own sections", () => {
     render(<DpdpScoreSection score={mixed} />);
     expect(screen.getByTestId("dpdp-unable")).toHaveTextContent("could not be verified from a website scan");
-    const unable = screen.getByTestId("dpdp-unable-list");
-    expect(within(unable).getByTestId("dpdp-req-DPDP-S6")).toBeInTheDocument();
+    // security and data-rights checks are not shown on the card (they stay in the score as not tested)
+    expect(screen.queryByTestId("dpdp-req-DPDP-S6")).not.toBeInTheDocument();
     const excluded = screen.getByTestId("dpdp-excluded-list");
     expect(within(excluded).getByTestId("dpdp-req-DPDP-C5")).toHaveTextContent("Counted under DPDP-C4");
     expect(within(excluded).getByTestId("dpdp-req-DPDP-X10")).toHaveTextContent("excluded unless declared");
@@ -148,7 +157,27 @@ describe("DpdpScoreSection", () => {
     const table = screen.getByTestId("dpdp-categories");
     expect(table).toHaveTextContent("Consent");
     expect(table).toHaveTextContent("47.1%");
-    expect(table).toHaveTextContent("Not assessed");
+    expect(table).not.toHaveTextContent("Data principal rights");
+    expect(table).not.toHaveTextContent("Security and breach");
+  });
+
+  it("shows no data-rights or security section, check, finding or weight anywhere on the card, and says once why", () => {
+    for (const key of ["mixed", "review", "confirmed", "thin"]) {
+      const { container, unmount } = render(<DpdpScoreSection score={(fixtures as never as Record<string, typeof mixed>)[key]} />);
+      const text = container.textContent ?? "";
+      for (const word of ["Data principal rights", "Security and breach", "DPDP-R9", "DPDP-R14A", "DPDP-R14B", "DPDP-S6", "DPDP-S7", "GDPR", "CCPA"]) {
+        expect(text, `${key}: ${word}`).not.toContain(word);
+      }
+      expect(screen.getByTestId("dpdp-omitted-note")).toHaveTextContent("cannot be observed from a website");
+      unmount();
+    }
+  });
+
+  it("keeps the score, the coverage and the status counts as they were", () => {
+    render(<DpdpScoreSection score={mixed} />);
+    expect(screen.getByTestId("dpdp-headline")).toHaveTextContent("56.5%");
+    expect(screen.getByTestId("dpdp-coverage-figure")).toHaveTextContent("62.2%");
+    expect(screen.getByTestId("dpdp-status-counts")).toHaveTextContent(buildScoreView(mixed).statusCountsLine);
   });
 });
 
@@ -297,7 +326,7 @@ describe("website checks versus business checks, confidence and rationale", () =
   it("renders them on the dashboard", () => {
     render(<DpdpScoreSection score={review} />);
     expect(screen.getByTestId("dpdp-type-DPDP-C1")).toHaveTextContent("Website check");
-    expect(screen.getByTestId("dpdp-type-DPDP-S6")).toHaveTextContent("Business check");
+    expect(screen.getByTestId("dpdp-type-DPDP-X10")).toHaveTextContent("Business check");   // entity-specific business checks are still listed
     expect(screen.getByTestId("dpdp-check-types")).toHaveTextContent("business checks apply");
     const rec = screen.getByTestId("dpdp-record-DPDP-C1");
     expect(rec).toHaveTextContent("Applies when:");
@@ -428,10 +457,10 @@ describe("the methodology, weights and calculation explanation", () => {
     expect(m.weights.find((w) => w.id === "DPDP-C2")!.weight).toBe("4");
   });
 
-  it("explains the formulas, the points rules, the reliability rule, duplicates and timing", () => {
+  it("explains the points rules, the reliability rule, duplicates and timing, without showing a formula", () => {
     const rules = buildScoreView(mixed).methodology.rules.join("\n");
-    for (const t of ["weighted points earned ÷ weighted points assessed", "weight of assessed requirements ÷ weight of applicable requirements",
-      "Met earns 100%", "Partially Met earns 50%", "Not Met earns 0%", "never counted as met or as not met",
+    expect(rules).not.toMatch(/÷|×|Score \(%\)|Assessment coverage \(%\)/);   // the formulas are not shown, only the rules in words
+    for (const t of ["Met earns 100%", "Partially Met earns 50%", "Not Met earns 0%", "never counted as met or as not met",
       "Insufficient Evidence", "scored once", "never as current violations", "up to 5 pages"]) expect(rules).toContain(t);
   });
 
@@ -497,7 +526,7 @@ describe("the methodology, weights and calculation explanation", () => {
     expect(screen.getByTestId("dpdp-weight-DPDP-C1")).toHaveTextContent("8 (default 5)");
     expect(screen.getByTestId("dpdp-category-weights")).toHaveTextContent("Consent");
     expect(screen.getByTestId("dpdp-dedup")).toHaveTextContent("counted once");
-    expect(screen.getByTestId("dpdp-explanation")).toHaveTextContent("The score is ");
+    expect(screen.queryByTestId("dpdp-explanation")).not.toBeInTheDocument();   // the arithmetic narrative is not shown
   });
 });
 

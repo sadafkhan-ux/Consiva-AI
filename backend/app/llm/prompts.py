@@ -539,6 +539,12 @@ def pre_post_reject_vendor_lists(compacted_evidence: dict) -> tuple[list[str], l
         for item in compacted_evidence.get(key) or []:
             if not isinstance(item, dict):
                 continue
+            # Only what consent is about: analytics, marketing and anything the rules could not classify. A font, a static asset or the
+            # consent tool's own script (category "functional") is not tracking, and listing it here told the model it was a vendor that
+            # "fired before consent". Measured on a live scan: the model then reported the consent tool, Google Fonts and a CDN as a HIGH
+            # finding ("continued after Reject") on a site whose rules, and score, found no tracking at all.
+            if item.get("cat") not in (None, "analytics", "marketing") and not item.get("unclassified"):
+                continue
             name = item.get("vendor") or item.get("host") or item.get("name") or item.get("domain")
             if not name:
                 continue
@@ -548,6 +554,25 @@ def pre_post_reject_vendor_lists(compacted_evidence: dict) -> tuple[list[str], l
             if "rej" in states:
                 post_reject.add(name)
     return sorted(pre), sorted(post_reject)
+
+
+def _lean_schema(node):
+    """The response schema as the PROMPT shows it, without text that tells the model nothing.
+
+    pydantic adds a `title` to every field and model ("Risk Level" for `risk_level`, "Priority" for `priority`) and copies
+    each model's docstring into a model-level `description`. None of that is an instruction: the field name already says it,
+    and the docstring is an implementation note. It was sent on every call and every retry (259 of the schema's 1,191
+    characters on the live schema). Field-level descriptions ARE instructions and are kept, as are enums, types and
+    `required`. Only the prompt's copy changes: the schema sent to the provider as the enforced response format is untouched."""
+    if isinstance(node, dict):
+        is_model = "properties" in node
+        return {
+            k: _lean_schema(v) for k, v in node.items()
+            if not (k == "title" and isinstance(v, str)) and not (k == "description" and is_model and isinstance(v, str))
+        }
+    if isinstance(node, list):
+        return [_lean_schema(v) for v in node]
+    return node
 
 
 def build_analysis_prompt(*, scan_summary: dict, rule_findings: list[dict], rag_chunks: list[dict]) -> str:
@@ -565,12 +590,12 @@ def build_analysis_prompt(*, scan_summary: dict, rule_findings: list[dict], rag_
     per-scan evidence/rules/RAG (which change every time, and so can never be cached)
     come last. The previous order had it backwards -- the variable evidence sat in front
     of the stable text, which defeats prefix caching entirely."""
-    schema_json = json.dumps(ConsentAnalysisResponse.model_json_schema(), separators=(",", ":"))
+    schema_json = json.dumps(_lean_schema(ConsentAnalysisResponse.model_json_schema()), separators=(",", ":"))
     compacted_evidence = compact_scan_evidence(scan_summary)
     pre_consent_vendors, post_reject_vendors = pre_post_reject_vendor_lists(compacted_evidence)
     return f"""## Task
 For each rule finding with confidence "low", and for any other consent/tracking issue \
-clearly supported by the evidence below, produce a finding. Ground every \
+clearly supported by the evidence below, produce a finding. Tracking seen only after the visitor accepted is expected and is not an issue. Do not report an issue that neither the rule findings nor the vendor lists below support. Ground every \
 `dpdp_reference` in the retrieved excerpts below by their chunk_id, and reference \
 supporting evidence items by their `local_id`. Set `priority` \
 independently of `risk_level` — risk_level is how serious the issue is; priority is how \
@@ -617,11 +642,10 @@ Report the automation failure if it matters (e.g. "the reject state could not be
 reliably tested"); never assert a click that the evidence does not show taking effect.
 
 ## Vendors confirmed by state
-These two lists are the authoritative, pre-computed ground truth for the two most
-legally load-bearing claims a finding can make. Do not name a vendor as having fired
-"before consent" / "pre-consent" unless it appears in the first list, and do not name a
-vendor as having "continued firing after Reject" unless it appears in the second —
-even if that vendor appears elsewhere in the evidence tables below in a different state.
+Authoritative, pre-computed lists. Name a vendor as firing "before consent" only if it is \
+in the first list, and as firing "after Reject" only if it is in the second, even if the \
+evidence tables below show it in another state. Saying that nothing fired in a state is fine.
+Items with cat=functional (fonts, static assets, the consent tool's own scripts) are not tracking: never report them as firing before consent or after Reject.
 - Fired before any consent interaction (pre_consent): {", ".join(pre_consent_vendors) or "none"}
 - Continued firing after a clicked, confirmed Reject (post_reject): {", ".join(post_reject_vendors) or "none"}
 

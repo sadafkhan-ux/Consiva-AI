@@ -102,7 +102,8 @@ async def test_embed_returns_vectors_and_passes_input_type():
     # verifies the two agree (the pgvector column is fixed-width, so a silent
     # mismatch would otherwise surface later as a confusing insert/search error).
     client = NvidiaLLMClient.__new__(NvidiaLLMClient)
-    client._settings = MagicMock(nvidia_embed_model="test-embed", nvidia_embed_dimensions=3)
+    client._settings = MagicMock(nvidia_embed_model="test-embed", nvidia_embed_dimensions=3, embed_timeout_seconds=12.0, embed_max_retries=3,
+                                 embed_hedge_after_seconds=1.5, nvidia_api_base_url="https://x/v1")
     fake_openai = MagicMock()
     fake_openai.embeddings.create = AsyncMock(
         return_value=MagicMock(data=[MagicMock(embedding=[0.1, 0.2, 0.3])])
@@ -121,7 +122,8 @@ async def test_embed_rejects_dimension_mismatch():
     """The new dimension guard: a model returning vectors that don't match the
     configured (and pgvector-column-fixed) width must fail loudly at the source."""
     client = NvidiaLLMClient.__new__(NvidiaLLMClient)
-    client._settings = MagicMock(nvidia_embed_model="test-embed", nvidia_embed_dimensions=1024)
+    client._settings = MagicMock(nvidia_embed_model="test-embed", nvidia_embed_dimensions=1024, embed_timeout_seconds=12.0, embed_max_retries=3,
+                                 embed_hedge_after_seconds=1.5, nvidia_api_base_url="https://x/v1")
     fake_openai = MagicMock()
     fake_openai.embeddings.create = AsyncMock(
         return_value=MagicMock(data=[MagicMock(embedding=[0.1, 0.2, 0.3])])

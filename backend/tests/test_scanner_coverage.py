@@ -430,3 +430,18 @@ async def test_a_tight_budget_spends_itself_on_the_pages_that_carry_evidence():
     assert "/privacy" in fetched
     assert "/contact" in fetched
     assert not any(p.startswith("/blog") for p in fetched)
+
+
+# ── www and the bare domain are one page ─────────────────────────────────────────────────────────
+
+def test_the_www_host_and_the_bare_host_are_the_same_page():
+    assert normalize_url("https://www.swaransoft.com/") == normalize_url("https://swaransoft.com/")
+    assert normalize_url("https://www.swaransoft.com/privacy") == normalize_url("https://swaransoft.com/privacy/")
+    assert normalize_url("HTTPS://WWW.Example.com/a?utm_source=x") == normalize_url("https://example.com/a")
+
+
+def test_other_hosts_are_still_different_pages():
+    assert normalize_url("https://blog.swaransoft.com/") != normalize_url("https://swaransoft.com/")
+    assert normalize_url("https://www.a.com/") != normalize_url("https://www.b.com/")
+    assert normalize_url("http://www.swaransoft.com/") != normalize_url("https://swaransoft.com/")   # the scheme still counts
+    assert normalize_url("https://www.com/") == "https://www.com/"                                    # a host that is only "www.<tld>" is left alone

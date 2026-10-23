@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ConsentScanState } from "../hooks/useConsentScan";
-import { pollUntil } from "../hooks/useConsentScan";
+import { pollUntil, readableError } from "../hooks/useConsentScan";
 import { ApiError } from "../api/types";
 import type { WebsiteScanMetadata } from "../api/types";
 import { ScanStatusSection } from "./ScanStatusSection";
@@ -211,6 +211,23 @@ describe("polling survives a dropped connection", () => {
     const fn = vi.fn(async () => { throw down(); });
 
     await expect(pollUntil(fn, () => false, Number.POSITIVE_INFINITY, 5, 30)).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it.each([502, 503, 504])("treats a %s from the gateway during a restart as an outage, not as the scan failing", async (status) => {
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls <= 2) throw new ApiError(status, "<html><head><title>Bad Gateway</title></head></html>");
+      return calls;
+    });
+    await expect(pollUntil(fn, (n) => n >= 4, Number.POSITIVE_INFINITY, 5)).resolves.toBe(4);
+  });
+
+  it("shows a sentence, not an HTML error page, as the reason", () => {
+    const text = readableError(new ApiError(502, "<html> <head><title>502 Bad Gateway</title></head> <body>nginx</body> </html>"));
+    expect(text).not.toContain("<");
+    expect(text).toContain("did not answer (502)");
+    expect(readableError(new ApiError(422, "URL is not allowed"))).toBe("URL is not allowed");
   });
 
   it("does not retry an error that is not a lost connection", async () => {

@@ -122,6 +122,20 @@ class ConsentSignalRecord(BaseModel):
     evidence: dict = Field(default_factory=dict)
 
 
+class ScreenshotRecord(BaseModel):
+    """The first screen of the homepage, photographed by the same browser load as the pre-consent crawl. `status` says whether a usable picture
+    exists; an image is carried only for "ok". The image travels as base64 text because a scan on Windows reports back through JSON."""
+    status: Literal["ok", "blocked", "timeout", "failed"]
+    reason: str | None = None
+    image_b64: str | None = None
+    mime: str = "image/jpeg"
+    width: int | None = None
+    height: int | None = None
+    page_url: str | None = None
+    page_title: str | None = None
+    http_status: int | None = None
+
+
 class ScanResult(BaseModel):
     domain: str
     root_url: str
@@ -138,3 +152,5 @@ class ScanResult(BaseModel):
     # existing per-stage `agent_run_stages.metadata` via track_stage(). Not evidence
     # about the target site; operational data about how this particular scan ran.
     scan_diagnostics: dict = Field(default_factory=dict)
+    # The homepage preview. None only when the scan never reached the point of taking one (an unreachable seed fails the scan first).
+    screenshot: ScreenshotRecord | None = None

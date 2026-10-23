@@ -1,9 +1,10 @@
+import base64
 import uuid
 from dataclasses import asdict
 from datetime import date, datetime
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,7 @@ from app.db.repositories import (
 from app.db.session import get_db
 from app.llm.schemas import DpdpReference
 from app.scoring import dpdp_score
+from app.scoring.sector import SECTORS
 from app.services import analysis_service, scan_service
 
 router = APIRouter(prefix="/api/v1/consent/scans", tags=["consent-scans"])
@@ -146,6 +148,8 @@ class EvidencePageItem(BaseModel):
     id: str
     url: str
     title: str | None
+    http_status: int | None = None
+    discovered_via: str | None = None
 
 
 class EvidenceFormItem(BaseModel):
@@ -153,6 +157,10 @@ class EvidenceFormItem(BaseModel):
     selector: str | None
     fields: list
     purpose_guess: str | None
+    # Where the form posts to; only present on the console's evidence (used to flag a form that posts over plain http).
+    submit_url: str | None = None
+    # The page the form was on; None when not recorded.
+    page_url: str | None = None
 
 
 class EvidenceCookieObservation(BaseModel):
@@ -180,6 +188,13 @@ class EvidenceCookieItem(BaseModel):
     http_only: bool | None = None
     same_site: str | None = None
     observations: list[EvidenceCookieObservation] = []
+    # Worked out from the cookie's name and attributes; purpose_source says how far to trust the purpose
+    # ("catalogue" = a recognised cookie, "category" = only its classification, "unknown" = could not be identified).
+    provider: str | None = None
+    purpose: str | None = None
+    purpose_source: str | None = None
+    is_session: bool | None = None
+    lifetime_days: float | None = None
 
 
 class EvidenceTrackerItem(BaseModel):
@@ -257,6 +272,10 @@ class DpdpRequirementResult(BaseModel):
     applicability: str
     confidence: str
     scoring_rationale: str
+    legal_note: str
+    penalty_points: float | None = None
+    score_contribution_percent: float | None = None
+    coverage_share_percent: float | None = None
 
 
 class DpdpCategoryScore(BaseModel):
@@ -454,6 +473,12 @@ class DpdpRemediationStep(BaseModel):
     action: str
     how_to_verify: str
     legal_references: list[str]
+    # What fixing this one gap would do to the readiness score, from the same weights the score uses (None when the score is withheld).
+    current_percent: float | None = None
+    percent_if_fixed: float | None = None
+    gain_percent: float | None = None
+    # What the gap means for the organisation, in plain words ("" when there is no stated impact for this check).
+    impact: str = ""
 
 
 class DpdpMethodology(BaseModel):
@@ -474,6 +499,93 @@ class DpdpMethodology(BaseModel):
     dedup: list[DpdpMethodDedup]
 
 
+class DpdpLedgerMetric(BaseModel):
+    key: str
+    name: str
+    numerator: float
+    denominator: float
+    percent: float | None
+    formula: str
+    meaning: str
+
+
+class DpdpStatusRule(BaseModel):
+    status: str
+    label: str
+    rule: str
+    in_numerator: str
+    in_denominator: str
+    on_coverage: str
+    count: int
+    weight: int
+    check_ids: list[str]
+
+
+class DpdpLedger(BaseModel):
+    total_checks: int
+    applicable_checks: int
+    assessed_checks: int
+    passed_checks: int
+    partial_checks: int
+    failed_checks: int
+    unable_checks: int
+    not_applicable_checks: int
+    total_weight: int
+    applicable_weight: int
+    assessed_weight: int
+    earned_weight: float
+    penalty_weight: float
+    unable_weight: int
+    not_applicable_weight: int
+    metrics: list[DpdpLedgerMetric]
+    category_metrics: list[DpdpLedgerMetric]
+    status_rules: list[DpdpStatusRule]
+    penalty_note: str
+    security_score_note: str
+    not_applicable: list[dict]
+
+
+class SectorSignalModel(BaseModel):
+    sector: str
+    source: str
+    match: str
+    seen_in: str
+    points: int
+
+
+class SectorNoteModel(BaseModel):
+    id: str
+    title: str
+    provisions: list[str]
+    text: str
+    observed: list[str]
+    action: str
+
+
+class SectorDeclarationModel(BaseModel):
+    flag: str
+    requirement_id: str
+    label: str
+    why: str
+    declared: bool | None = None
+
+
+class SectorAssessmentModel(BaseModel):
+    sector: str
+    label: str
+    confidence: str
+    summary: str
+    signals: list[SectorSignalModel]
+    also_possible: list[str]
+    notes: list[SectorNoteModel]
+    declarations: list[SectorDeclarationModel]
+    limitations: list[str]
+    sector_scores: dict[str, int] = {}
+    declared: bool = False
+    detected_sector: str | None = None
+    agrees_with_scan: bool | None = None
+
+
 class DpdpScoreResponse(BaseModel):
     methodology_version: str
     as_of: date
@@ -489,8 +601,29 @@ class DpdpScoreResponse(BaseModel):
     methodology: DpdpMethodology
     assessment: DpdpAssessment
     remediation_plan: list[DpdpRemediationStep]
+    ledger: DpdpLedger
+    sector: SectorAssessmentModel | None = None
     thresholds: dict
     out_of_scope: list[dict]
+
+
+class ScanListItem(BaseModel):
+    id: uuid.UUID
+    url: str
+    status: str
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+@router.get("", response_model=list[ScanListItem])
+async def list_scans(
+    limit: int = 20,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The caller's organisation's recent scans, newest first, so the console can reopen one after a reload."""
+    rows = await scan_repository.list_recent_scans(db, uuid.UUID(user.org_id), max(1, min(limit, 50)))
+    return [ScanListItem(id=s.id, url=s.url, status=s.status, created_at=s.created_at, completed_at=s.completed_at) for s in rows]
 
 
 @router.post("", response_model=ScanResponse, status_code=202)
@@ -601,12 +734,15 @@ async def get_scan_dpdp_score(
     significant_data_fiduciary: bool | None = None,
     consent_manager: bool | None = None,
     erasure_class: bool | None = None,
+    business_sector: str | None = Query(None, pattern="^(" + "|".join(k for k in SECTORS if k != "general") + ")$"),
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """The proposed DPDP Compliance Score for one scan, computed on demand from its persisted evidence (nothing new is
     stored). `as_of` defaults to today (UTC) and decides which obligations are already in force. The four boolean
-    parameters declare entity-specific applicability; left out, those requirements are excluded, never guessed."""
+    parameters declare entity-specific applicability; left out, those requirements are excluded, never guessed.
+    `business_sector` is the sector the organisation declares for itself (business context the scan cannot see); the scan's own reading
+    is returned beside it. Neither changes the score."""
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
@@ -618,8 +754,126 @@ async def get_scan_dpdp_score(
         scan_url=scan.url,
         scanned_at=(scan.completed_at or scan.started_at or scan.created_at).isoformat()
         if (scan.completed_at or scan.started_at or scan.created_at) else None,
+        business_sector=business_sector,
     )
     return DpdpScoreResponse(**asdict(result))
+
+
+class ScreenshotResponse(BaseModel):
+    """The homepage preview of one scan, as the dashboard and every PDF show it. It carries the scan id and the domain it belongs to so a
+    reader of the response can see it is the right site. `status` is ok, blocked, timeout, failed, or not_captured (a scan made before previews
+    existed); `message` says in plain words why there is no picture, and never carries an internal error or a path. `data` is the JPEG as base64."""
+    scan_id: uuid.UUID
+    domain: str
+    status: str
+    available: bool
+    message: str | None = None
+    page_url: str | None = None
+    mime: str | None = None
+    width: int | None = None
+    height: int | None = None
+    captured_at: datetime | None = None
+    data: str | None = None
+
+
+_NO_PREVIEW = {
+    "not_captured": "No homepage preview was taken for this scan: it was scanned before previews were added.",
+    "blocked": "The site did not show its homepage to the scanner (it answered with an error or a security check), so no preview is shown.",
+    "timeout": "The homepage preview could not be taken in time.",
+    "failed": "A preview of the homepage could not be taken for this scan.",
+    "blank": "The homepage was blank when the scanner looked, so no preview is shown.",
+}
+
+
+@router.get("/{scan_id}/screenshot", response_model=ScreenshotResponse)
+async def get_scan_screenshot(
+    scan_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
+    if scan is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    website = await scan_repository.get_website_by_id(db, scan.website_id)
+    domain = website.domain if website else ""
+    row = await scan_repository.get_screenshot(db, scan_id)
+    if row is None:
+        return ScreenshotResponse(scan_id=scan_id, domain=domain, status="not_captured", available=False, message=_NO_PREVIEW["not_captured"])
+    if row.status == "ok" and row.image:
+        return ScreenshotResponse(
+            scan_id=scan_id, domain=domain, status="ok", available=True, page_url=row.page_url, mime=row.mime or "image/jpeg",
+            width=row.width, height=row.height, captured_at=row.captured_at, data=base64.b64encode(row.image).decode("ascii"),
+        )
+    key = "blank" if row.reason == "blank" else row.status
+    return ScreenshotResponse(
+        scan_id=scan_id, domain=domain, status=row.status if row.status in ("blocked", "timeout", "failed") else "failed", available=False,
+        message=_NO_PREVIEW.get(key, _NO_PREVIEW["failed"]), page_url=row.page_url, captured_at=row.captured_at,
+    )
+
+
+class PolicyRequirementModel(BaseModel):
+    id: str
+    title: str
+    group: str
+    basis: str
+    provisions: list[str]
+    status: str
+    quote: str = ""
+    source_url: str | None = None
+    detail: str = ""
+    fix: str = ""
+    # For the contact and response-period points: what was found beside the quoted passage (never inferred), else None.
+    contacts: dict[str, list[str]] | None = None
+    response_days: float | None = None
+
+
+class PolicySummaryModel(BaseModel):
+    applicable: int
+    verified: int
+    partial: int
+    not_found: int
+    not_applicable: int
+    quotes_rejected: int
+    completeness_percent: float | None = None
+
+
+class PolicyDocumentModel(BaseModel):
+    url: str
+    policy_type: str
+    characters: int
+    source: str
+    truncated: bool = False
+
+
+class PolicyAnalysisResponse(BaseModel):
+    """What the scan's privacy and cookie policies say, with exact quotations and the DPDP provisions each point rests on
+    (app/policy). `status` is analysed, unavailable (with a reason) or not_run. Informational: it never changes the score."""
+    status: str
+    reason: str | None = None
+    sector: str | None = None
+    documents: list[PolicyDocumentModel] = []
+    notes: list[str] = []
+    summary: PolicySummaryModel | None = None
+    requirements: list[PolicyRequirementModel] = []
+    limitations: list[str] = []
+    model: dict | None = None
+
+
+@router.get("/{scan_id}/policy-analysis", response_model=PolicyAnalysisResponse)
+async def get_scan_policy_analysis(
+    scan_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
+    if scan is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    stages = await stage_repository.list_stages(db, scan_id, uuid.UUID(user.org_id))
+    done = [s for s in stages if s.stage == "policy_analysis" and s.status == "completed" and (s.stage_metadata or {}).get("result")]
+    if not done:
+        return PolicyAnalysisResponse(status="not_run", reason="The policy analysis has not run for this scan.")
+    latest = max(done, key=lambda s: s.started_at or s.completed_at)
+    return PolicyAnalysisResponse(**latest.stage_metadata["result"])
 
 
 @router.get("/{scan_id}/stages", response_model=list[StageResponse])

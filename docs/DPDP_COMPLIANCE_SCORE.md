@@ -4,8 +4,9 @@
 It measures what a public website scan can observe, against the DPDP Act, 2023 and the DPDP Rules, 2025.
 
 Code: `backend/app/scoring/dpdp_score.py` (the only place a score is calculated). Endpoint:
-`GET /api/v1/consent/scans/{scan_id}/dpdp-score`. Dashboard: `DpdpScoreSection`. PDF: summary page line plus the
-"DPDP Compliance Score" pages. Both render one view, `frontend/src/report/dpdpScore.ts`, so they cannot differ.
+`GET /api/v1/consent/scans/{scan_id}/dpdp-score`. Dashboard: `DpdpScoreSection` (everything below: legal references, weights,
+methodology, evidence records). PDF: a fixed **two-page** report with no legal wording (see "The PDF report"). Both render one view,
+`frontend/src/report/dpdpScore.ts`, so the numbers cannot differ.
 Tests: `backend/tests/test_dpdp_score.py`, `frontend/src/components/dpdpScore.test.tsx`, `frontend/src/report/dpdpScorePdf.test.ts`.
 
 ## Formula
@@ -127,6 +128,20 @@ coverage, below 30%, so the page says **Insufficient Evidence**.
 **4. No pages scanned.** Nothing is assessed, coverage 0%, Insufficient Evidence. Nothing is Met.
 
 **5. Same site as example 1 on 13 May 2027.** All requirements are in force: the in-force score equals the readiness score, 100.0%.
+
+## The PDF report
+
+The downloaded PDF is exactly **two A4 pages** and carries no legal references, effective dates, weights tables or methodology pages:
+
+* **Page 1:** the Compliance Score and the coverage in a banner, a one-line brief, the formula in plain words with this scan's own
+  numbers (`score = points earned ÷ points possible × 100`, `coverage = weight of the checks we could test ÷ weight of all checks that apply × 100`, met = full
+  points, partly met = half, not met = none, untested checks earn nothing and lower the coverage), the scores by category, the status and
+  group counts, and the scope (main domain, pages, consent states tested).
+* **Page 2:** the fixes to do first, then the four finding groups, a few entries each (what was observed, the page, the consent state).
+  What does not fit is left to the dashboard and the page says so; the fixes come first so they can never be pushed off the page.
+
+The complete cookie inventory, the weights and legal-mapping tables and the per-check records are in the dashboard, not the PDF. To
+return to the previous multi-page report, check out the git tag `before-two-page-report`.
 
 ## Scope, versions, remediation order and the caution (v1.5.0)
 
@@ -259,3 +274,88 @@ listed or reported. The box always states that a website scan cannot establish c
 Any change to a weight, status rule, threshold or exclusion changes `METHODOLOGY_VERSION` (semantic versioning: weights or status rules
 change the major or minor number) and this document, and the worked-example tests must be updated to the new numbers. Scores
 from different versions must not be compared.
+
+## Score ledger, check table and assessment appendix (added 2026-10-22)
+
+Every number on the score card can now be traced to the individual checks, their weights, their evidence and their legal basis.
+There is **one calculation**: the server (`backend/app/scoring/dpdp_score.py`). The dashboard and the PDF only format what it returns.
+
+### Where each part lives
+
+| Question | Code |
+|---|---|
+| Where the checks are defined | `REQUIREMENTS` (16 checks), `DETAILS` (definition, criteria, expected evidence), `LEGAL_BASIS_NOTES` (legal basis and how far a scan can speak to it) |
+| How checks are selected and applicability decided | `Requirement.applies_if` with `Applicability` (entity-specific checks X4, X8, X10, X13 are excluded unless declared), and each check's own Not Applicable rule (`APPLICABILITY_TEXT`) |
+| Where weights are set | `Requirement.weight` (documented defaults), `resolve_weights` (validated overrides from `DPDP_SCORE_WEIGHTS`) |
+| How evidence is collected | the three-pass crawl (`scanner/crawler.py`), stored, then read by `scan_repository.get_scan_evidence_summary_concurrent` into `build_consent_context` |
+| How a status is decided | the check functions (`_pre_consent_processing` and the others), which never return Met on missing evidence |
+| How penalties are decided | `SCORED_FACTOR`: Met 1, Partially Met 0.5, Not Met 0. Penalty = weight − points earned (`_attach_contributions`) |
+| How the aggregates are calculated | `_block` (score and coverage), `build_ledger` (labels and tallies, reading `_block`'s figures) |
+| API | `GET /api/v1/consent/scans/{id}/dpdp-score`, field `ledger` and the per-check fields |
+| Scorecard UI | `DpdpScoreSection.tsx`: `CheckTable`, `ScoreLedger`, `PenaltyRules`, directly under the score |
+| PDF | `downloadReport.ts`: pages 1–2 summary, then the assessment appendix (page 3 onwards) |
+| One view for both | `buildScoreView` in `report/dpdpScore.ts` |
+
+### The ten concepts, and the ledger field for each
+
+| Concept | Ledger field | What it counts |
+|---|---|---|
+| Total checks | `total_checks` | every check defined (16) |
+| Applicable checks | `applicable_checks` | total minus Not Applicable |
+| Total applicable weight | `applicable_weight` | sum of the weights of the applicable checks. The coverage denominator |
+| Earned weight | `earned_weight` | Met full weight, Partially Met half, Not Met nothing. The score numerator |
+| Failed checks | `failed_checks` | Not Met (partly met checks are `partial_checks`) |
+| Cannot Verify checks | `unable_checks`, `unable_weight` | applicable, but a scan could not obtain the evidence. Not scored, never a violation |
+| Not Applicable checks | `not_applicable_checks`, `not_applicable` (with reasons) | excluded under the applicability rule, never a pass |
+| Coverage | metric `coverage` | assessed weight ÷ applicable weight × 100. **By weight, not by number of checks** |
+| Compliance (readiness) score | metric `score` | earned weight ÷ assessed weight × 100 |
+| Security score | none | there is no separate security score; the "Security and breach" category is Not assessed because a scan cannot observe it (`security_score_note`) |
+
+Also in the ledger: `assessed_weight` (the score denominator and coverage numerator), `penalty_weight` (assessed minus earned),
+`total_weight` (all checks), and a status table (`status_rules`) saying for each status whether it is in the numerator, the
+denominator and the coverage, with the checks that carry it.
+
+### Penalties, in the code's own terms
+
+There is no separate penalty list. A check's penalty is the weight it did not earn. The multipliers 1, 0.5 and 0 are the share of
+the weight a check **earns**, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and Not
+Applicable carry no penalty: they are not scored. Unable to Verify lowers coverage (its weight stays in the applicable total) and
+never changes the score. Not Applicable is removed from both the score and the coverage denominators and is never counted as a pass.
+
+### Real data: scan 277f3f37 (gignaati.com, 21 Oct 2026)
+
+| Figure | Value |
+|---|---|
+| Checks defined / applicable / assessed / cannot verify / not applicable | 16 / 12 / 5 / 7 / 4 |
+| Total weight / applicable / assessed / earned / penalty / not verified | 49 / 39 / 19 / 18 / 1 / 20 |
+| Readiness score | 18 ÷ 19 × 100 = 94.7% |
+| Coverage | 19 ÷ 39 × 100 = 48.7% |
+| Consent score, coverage | 13 ÷ 13 = 100%, 13 ÷ 19 = 68.4% |
+| Notice score, coverage | 5 ÷ 6 = 83.3%, 6 ÷ 6 = 100% |
+
+The assessed checks are C1, C2, C3, N1 (Met, 17 weight) and N2 (Partially Met, 1 of 2). No figure of 29 exists for this scan.
+Validated on all 27 completed stored scans: counts and weights add up, the score and coverage metrics equal the score block, and
+the per-check contributions add up to the score within rounding. Contributions are rounded to one decimal, so their sum can differ
+from the score by a few tenths.
+
+### Legal basis, and what is not claimed
+
+Each check lists its provisions, whether the duty is in force on the assessment date (the core duties start 13 May 2027), why it
+applies, the evidence expected and the limits of a scan. `LEGAL_BASIS_NOTES` separates a statutory duty tested by a scan signal
+from Consiva's own reading of a duty: the cookie-policy check (DPDP-N2) is labelled as a reading, because the Act and Rules do not
+name a cookie policy. Provision numbers were mapped from the Act and Rules and should be confirmed by counsel.
+
+### Website Pages Scanned (PDF page 3)
+
+The PDF lists the pages the scan visited, from the stored page records of the same scan run as the score (`website_pages`, returned
+by `/evidence` with `http_status` and `discovered_via`), with a Scan Review built from the crawler's own counts (`frontend/src/report/scanPages.ts`).
+
+* **How pages are chosen** (`scanner/crawler.py`, `scanner/url_normalize.py`): the entered address first; then links found on
+  scanned pages and the sitemap when there is one, on the entered domain only, tried in this order: privacy/cookie, terms/legal,
+  sign-up/login/checkout/contact, about/pricing/product, everything else, blog/news last; first found first within a group. No
+  address is guessed. On the stored gignaati.com five-page scan the four extra pages (privacy, terms, contact, about) came from the sitemap.
+* **Status** is read from the record: `seed`/`link`/`sitemap` loaded and are scanned; `failed` and `timeout` are attempts that did
+  not load and are shown as Not scanned; a scan stored before the status was kept shows "Recorded; load result not stored", never "Scanned".
+* **Order**: the homepage, then the pages that loaded in the order the scan recorded them (pages load concurrently, so this is not
+  the order they were tried), then attempts that did not load.
+* The section changes no score, weight, coverage or finding.

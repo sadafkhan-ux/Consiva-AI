@@ -12,10 +12,19 @@ import { TrackersTable } from "./components/TrackersTable";
 import { CookiesTable } from "./components/CookiesTable";
 import { FormsSection, PoliciesSection } from "./components/FormsAndPoliciesSection";
 import { FindingsSection } from "./components/FindingsSection";
+import { InsightSections } from "./components/InsightSections";
+import { ReadinessReview } from "./components/ReadinessReview";
+import { PolicyAnalysisSection } from "./components/PolicyAnalysisSection";
+import { ScanHero } from "./components/ScanHero";
 import { DpdpReferencesSection, RecommendationsSection } from "./components/DpdpAndRecommendations";
 import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnostics";
-import { buildReportModel } from "./report/buildReport";
+import { ANALYSIS_INCOMPLETE_NOTE, buildReportModel, untestedConsentStates } from "./report/buildReport";
+import { buildInsightSections } from "./report/insights";
+import { buildReadinessReview } from "./report/readiness";
 import { downloadReport } from "./report/downloadReport";
+
+// The stages that turn rule results into findings; if one fails, "no findings" says nothing about what the rules found.
+const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
 
 export function ConsentAgentView() {
   const { state, run, afterReviewDecision } = useConsentScan();
@@ -44,11 +53,12 @@ export function ConsentAgentView() {
   // human-review pause (analysis done, audit not yet saved) onward, and still after
   // the run closes out. Purely additive: it reads state the app already holds and
   // triggers no request, so the scan/review/audit workflow is untouched.
-  const canDownloadReport =
-    (state.phase === "awaiting_review" || state.phase === "completed" ||
-     // Findings from rules, with no narrative. Still the only record of what the
-     // scan found, and the phase is only ever set when findings.length > 0.
-     state.phase === "degraded") && state.findings.length > 0;
+  // Said on the score card and in the PDF whenever the analysis step did not complete, so a score is never read as the result of a finished analysis.
+  const analysisNote = state.phase === "degraded" ? ANALYSIS_INCOMPLETE_NOTE : null;
+  // A finished scan always has a report, whether or not it produced findings: a clean site (no findings, a full score) is a real result
+  // and the report is how it is shared. When the analysis did not complete the report says so.
+  const canDownloadReport = state.phase === "awaiting_review" || state.phase === "completed" || state.phase === "degraded";
+  const reportPending = state.phase === "starting" || state.phase === "scanning" || state.phase === "analyzing";
   const reportIsProvisional = state.findings.some((f) => f.status === "pending");
 
   async function handleDownloadReport() {
@@ -59,6 +69,10 @@ export function ConsentAgentView() {
         buildReportModel(
           state.scan, state.findings, state.websiteScanMeta, state.evidence?.cookies ?? [], state.evidence?.trackers ?? [],
           isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null,
+          state.evidence,
+          analysisNote,
+          state.policyAnalysis ?? null,
+          state.screenshot ?? null,
         ),
       );
     } catch (err) {
@@ -98,12 +112,28 @@ export function ConsentAgentView() {
       {state.phase === "failed" && state.error && (
         <div className="error-box">{state.error}</div>
       )}
-      {state.phase === "degraded" && (
-        <div className="info-box">
+      {state.phase === "degraded" && state.findings.length > 0 && (
+        <div className="info-box" data-testid="degraded-notice">
           The findings below were produced by the deterministic rules from evidence the scan actually collected, so what
           they report was measured. The step that writes the plain-English explanation and attaches regulatory citations
           did not complete ({state.error}), so each finding carries its rule's own summary, cites nothing, and requires
           human review. Re-running the analysis will add the explanations; the evidence does not need re-scanning.
+        </div>
+      )}
+      {state.phase === "degraded" && state.findings.length === 0 && RULE_STAGES.has(state.failedStage ?? "") && (
+        <div className="info-box" data-testid="degraded-notice">
+          <strong>The scan completed; the findings step did not.</strong> The checks and the score below are computed from
+          the scan's own evidence. The step that turns rule results into findings did not complete ({state.error}), so
+          the absence of findings here does not mean the rules found nothing. Re-running the analysis completes it.
+        </div>
+      )}
+      {state.phase === "degraded" && state.findings.length === 0 && !RULE_STAGES.has(state.failedStage ?? "") && (
+        <div className="info-box" data-testid="degraded-notice">
+          <strong>The scan completed; the analysis did not.</strong> The checks and the score below are computed from the
+          scan's own evidence and do not depend on the analysis step. That step, which writes the explanations, attaches
+          the regulatory citations and can add model-assisted findings, did not complete ({state.error}). The rules matched
+          nothing on the scanned pages, so there are no findings and no recommendations. That is not a statement that the
+          analysis would have found nothing. Re-running the analysis completes it; the evidence does not need re-scanning.
         </div>
       )}
       {state.phase === "awaiting_review" && (
@@ -116,7 +146,7 @@ export function ConsentAgentView() {
       {canDownloadReport && (
         <div className="report-bar">
           <div className="report-bar-text">
-            <strong>One-page summary</strong>
+            <strong>Three-page report</strong>
             <span>
               Client-friendly headlines only — the DPDP Compliance Score, main problems, key consent issues, DPDP
               references and recommended actions.
@@ -127,6 +157,16 @@ export function ConsentAgentView() {
           <button className="report-btn" onClick={handleDownloadReport} disabled={buildingReport}>
             {buildingReport ? "Preparing…" : "Download Report (PDF)"}
           </button>
+        </div>
+      )}
+
+      {reportPending && (
+        <div className="report-bar" data-testid="report-pending">
+          <div className="report-bar-text">
+            <strong>Three-page report</strong>
+            <span>The PDF report becomes available when the scan finishes.</span>
+          </div>
+          <button className="report-btn" disabled>Download Report (PDF)</button>
         </div>
       )}
 
@@ -143,7 +183,7 @@ export function ConsentAgentView() {
                     {state.scan?.evidence_counts.pages} page{state.scan?.evidence_counts.pages === 1 ? "" : "s"}, but
                     this page lost its connection to the backend before the results arrived. Nothing below is
                     shown as "none detected", because the evidence exists and has not been read: this is not a clean
-                    result. Check the connection, then open the scan again or run it again.
+                    result. Check the connection, then run the scan again.
                   </>
                 ) : (
                   <>
@@ -158,9 +198,13 @@ export function ConsentAgentView() {
             </section>
           ) : (
         <>
+          <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} />
           <ConsentSummarySection meta={state.websiteScanMeta} />
-          <DpdpScoreSection score={state.dpdpScore} />
-          <ThreeStateSection meta={state.websiteScanMeta} trackers={state.evidence?.trackers ?? []} />
+          <DpdpScoreSection score={state.dpdpScore} analysisNote={analysisNote} />
+          <PolicyAnalysisSection analysis={state.policyAnalysis} />
+          <InsightSections sections={buildInsightSections({ policy: state.policyAnalysis, meta: state.websiteScanMeta, evidence: state.evidence, sector: isDpdpScore(state.dpdpScore) ? state.dpdpScore.sector : null })} />
+          <ReadinessReview review={buildReadinessReview({ siteUrl: state.scan?.url ?? "", evidence: state.evidence, meta: state.websiteScanMeta, policy: state.policyAnalysis, sector: isDpdpScore(state.dpdpScore) ? state.dpdpScore.sector : null })} />
+          <ThreeStateSection meta={state.websiteScanMeta} trackers={state.evidence?.trackers ?? []} cookies={state.evidence?.cookies} />
 
           <section className="section">
             <h2>4. Trackers</h2>
@@ -176,7 +220,7 @@ export function ConsentAgentView() {
             <p className="hint" data-testid="cookies-scope">
               Cookies stored while the scanned main-domain pages loaded. A cookie is not by itself a violation; what it is for decides that.
             </p>
-            <CookiesTable cookies={state.evidence?.cookies ?? []} />
+            <CookiesTable cookies={state.evidence?.cookies ?? []} untestedStates={untestedConsentStates(state.websiteScanMeta)} />
           </section>
 
           <section className="section">
@@ -205,7 +249,7 @@ export function ConsentAgentView() {
 
           <section className="section">
             <h2>10. Recommendations</h2>
-            <RecommendationsSection findings={state.findings} />
+            <RecommendationsSection findings={state.findings} analysisFailed={state.failedStage !== null} />
           </section>
 
         </>

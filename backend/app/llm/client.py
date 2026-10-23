@@ -32,6 +32,7 @@ already instantiate NvidiaLLMClient directly and are deliberately left untouched
 "keep the current RAG implementation unchanged."
 """
 
+import asyncio
 import functools
 import json
 import logging
@@ -39,6 +40,8 @@ import re
 import time
 from typing import Literal, TypeVar
 
+import httpx
+import openai
 from anthropic import AsyncAnthropic
 from anthropic import AuthenticationError as AnthropicAuthenticationError
 from anthropic import BadRequestError as AnthropicBadRequestError
@@ -171,6 +174,45 @@ def _strict_json_schema(schema: dict) -> dict:
         if isinstance(out.get(key), list):
             out[key] = [_strict_json_schema(v) for v in out[key]]
     return out
+
+
+async def hedged(make, *, hedge_after: float, extra: int, deadline: float, base_url: str = "http://hedged.invalid"):
+    """The first successful result of `make()`, sending a further identical request alongside it every `hedge_after` seconds that nothing has
+    answered, up to `extra` more, and giving up after `deadline` seconds in all. The slower requests are cancelled once one answers.
+
+    For an endpoint that either answers fast or not at all: waiting for a hung request wastes the whole timeout, and retrying only after it
+    expires multiplies that. A request that fails outright (a refusal, a 400) is raised at once for the caller to handle; only a failure
+    that could be transient (a timeout, a dropped connection, a 5xx) lets the others carry on."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + deadline
+    pending: set[asyncio.Task] = {asyncio.ensure_future(make())}
+    launched = 1
+    last: BaseException | None = None
+    try:
+        while pending:
+            remaining = end - loop.time()
+            if remaining <= 0:
+                break
+            can_hedge = launched <= extra
+            done, pending = await asyncio.wait(
+                pending, timeout=min(hedge_after, remaining) if can_hedge else remaining, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                exc = task.exception()
+                if exc is None:
+                    return task.result()
+                if isinstance(exc, (openai.BadRequestError, openai.AuthenticationError, openai.PermissionDeniedError, openai.NotFoundError)):
+                    raise exc
+                last = exc
+            if can_hedge and loop.time() < end:
+                pending.add(asyncio.ensure_future(make()))
+                launched += 1
+    finally:
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+    raise last or openai.APITimeoutError(request=httpx.Request("POST", base_url))
 
 
 class BaseLLMClient:
@@ -440,20 +482,26 @@ class NvidiaLLMClient(BaseLLMClient):
         )
 
     async def embed(self, texts: list[str], *, input_type: Literal["query", "passage"]) -> list[list[float]]:
-        # Bounded per call: see Settings.embed_timeout_seconds for the measurement behind these numbers.
-        # `with_options` is the SDK's own per-request override; anything else (a test double) is used as is.
+        # Hedged and bounded: see Settings.embed_hedge_after_seconds for the measurement behind these numbers. The SDK's own retries are
+        # off (`max_retries=0`); the hedging below is the retry, and it runs requests alongside each other instead of one after another.
+        s = self._settings
         transport = self._client
         if isinstance(transport, AsyncOpenAI):
-            transport = transport.with_options(
-                timeout=self._settings.embed_timeout_seconds, max_retries=self._settings.embed_max_retries,
+            transport = transport.with_options(timeout=s.embed_timeout_seconds, max_retries=0)
+
+        async def request():
+            return await transport.embeddings.create(
+                model=s.nvidia_embed_model,
+                input=texts,
+                # `dimensions` matters for Matryoshka-capable models (e.g. llama-3.2-nv-embedqa-1b-v2,
+                # default 2048) — pins output to NVIDIA_EMBED_DIMENSIONS so it matches the
+                # pgvector column's fixed width regardless of the model's own default.
+                extra_body={"input_type": input_type, "dimensions": s.nvidia_embed_dimensions},
             )
-        response = await transport.embeddings.create(
-            model=self._settings.nvidia_embed_model,
-            input=texts,
-            # `dimensions` matters for Matryoshka-capable models (e.g. llama-3.2-nv-embedqa-1b-v2,
-            # default 2048) — pins output to NVIDIA_EMBED_DIMENSIONS so it matches the
-            # pgvector column's fixed width regardless of the model's own default.
-            extra_body={"input_type": input_type, "dimensions": self._settings.nvidia_embed_dimensions},
+
+        response = await hedged(
+            request, hedge_after=s.embed_hedge_after_seconds, extra=s.embed_max_retries, deadline=s.embed_timeout_seconds,
+            base_url=str(s.nvidia_api_base_url),
         )
         embeddings = [item.embedding for item in response.data]
         # The pgvector column is vector(1024) hardcoded in the SQL migration while this
@@ -625,6 +673,7 @@ class ClaudeLLMClient(BaseLLMClient):
             )
         self.provider = "claude"
         self.model_name = settings.anthropic_model
+        self._effort = settings.anthropic_effort
         self._call_timeout = 60.0
         # Matches NvidiaLLMClient/GroqLLMClient's default ceiling (BaseLLMClient's
         # class default) -- Claude's own max output is far higher, but this project's
@@ -670,7 +719,7 @@ class ClaudeLLMClient(BaseLLMClient):
         system_content = messages[0]["content"]
         claude_messages = [{"role": m["role"], "content": m["content"]} for m in messages[1:]]
 
-        output_config: dict = {"effort": "medium"}
+        output_config: dict = {"effort": self._effort}
         if schema is not None:
             output_config["format"] = {
                 "type": "json_schema",

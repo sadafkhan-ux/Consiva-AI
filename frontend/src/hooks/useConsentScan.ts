@@ -3,6 +3,8 @@ import { api } from "../api/client";
 import { ApiError } from "../api/types";
 import type {
   AuditLogResponse,
+  PolicyAnalysis,
+  ScanScreenshot,
   FindingResponse,
   DpdpScoreResponse,
   ScanEvidenceResponse,
@@ -38,6 +40,21 @@ function sleep(ms: number) {
 /** How long a poll keeps retrying after the connection to the backend drops before it gives up. */
 const NETWORK_GRACE_MS = 120_000;
 
+/** A gateway answering for a backend that is restarting (nginx 502/503/504) is the same outage as a dropped connection. */
+function isTransientOutage(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 0 || err.status === 502 || err.status === 503 || err.status === 504);
+}
+
+/** The reason shown for a failed request. A gateway error page arrives as a whole HTML document; show a sentence, not markup. */
+export function readableError(err: unknown): string {
+  const message = err instanceof ApiError ? err.detail : err instanceof Error ? err.message : String(err);
+  if (/<\s*(html|body|head|!doctype)/i.test(message)) {
+    const status = err instanceof ApiError && err.status ? ` (${err.status})` : "";
+    return `The service did not answer${status}. It may be restarting. The scan may still be running or finished on the server, so reload the page or scan again in a minute.`;
+  }
+  return message;
+}
+
 /** Polls `fn` until `isDone`. `timeoutMs` may be `Infinity`: the scan-status poll has no client-side
  *  ceiling, because the BACKEND bounds a scan (its own safety ceiling, and a bounded number of job
  *  retries) and reports a terminal status when it is over. A request that fails still ends the loop. */
@@ -60,7 +77,7 @@ export async function pollUntil<T>(
     } catch (err) {
       // A dropped connection (wifi blip, sleep/wake, a restarting backend) is not the scan failing. Keep trying for
       // a bounded time; anything else, or a longer outage, ends the poll as before.
-      if (!(err instanceof ApiError && err.status === 0)) throw err;
+      if (!isTransientOutage(err)) throw err;
       outageStart ??= roundStart;
       if (Date.now() - outageStart > networkGraceMs) throw err;
     }
@@ -78,6 +95,17 @@ export async function pollUntil<T>(
  *  false reassurance: they read as a verified clean result when the truth is "we never looked". A
  *  scan that failed LATER (the analysis, say) after pages were collected is not this case -- its
  *  evidence is real and is still shown. */
+/** The stages of the ANALYSIS (explanations, citations, model-assisted findings), which run after the scan has completed and scored. A failure
+ *  in one of them costs the write-up, not the scan: the evidence, the checks and the score exist without it. */
+export const ANALYSIS_STAGES: ReadonlySet<string> = new Set([
+  "rag_retrieval", "llm_analysis", "output_validation", "findings_generated", "rule_findings_generated",
+]);
+
+/** The phase a scan ends in when a pipeline stage failed after the scan itself completed. */
+export function phaseAfterStageFailure(stage: string): "degraded" | "failed" {
+  return ANALYSIS_STAGES.has(stage) ? "degraded" : "failed";
+}
+
 export function scanEvidenceUnavailable(
   state: Pick<ConsentScanState, "phase" | "scan" | "stages"> & Partial<Pick<ConsentScanState, "evidence">>,
 ): boolean {
@@ -135,6 +163,10 @@ export interface ConsentScanState {
   /** The proposed DPDP Compliance Score. Null until loaded, and left null if it could not be (the page shows nothing rather
    *  than a made-up number). Optional so state built before it existed keeps working. */
   dpdpScore?: DpdpScoreResponse | null;
+  /** What the site's policies say (null until loaded, or when it could not be). */
+  policyAnalysis?: PolicyAnalysis | null;
+  /** The scanned homepage's preview (null until loaded, or when it could not be). */
+  screenshot?: ScanScreenshot | null;
   error: string | null;
   /** Which pipeline stage failed, when one did. The status panel showed "—" for
    *  "Current Stage" while the failing stage was known and displayed further down
@@ -155,6 +187,8 @@ const INITIAL_STATE: ConsentScanState = {
   audit: [],
   evidence: null,
   dpdpScore: null,
+  policyAnalysis: null,
+  screenshot: null,
   error: null,
   failedStage: null,
   startedAt: null,
@@ -173,11 +207,13 @@ export function useConsentScan() {
     // Each settles on its own. Previously `Promise.all` with only the evidence call
     // guarded meant one failing request discarded the other two results as well --
     // so a 500 on findings also blanked the evidence that had loaded fine.
-    const [findings, audit, evidence, dpdpScore] = await Promise.all([
+    const [findings, audit, evidence, dpdpScore, policyAnalysis, screenshot] = await Promise.all([
       api.getFindings(scanId).catch(() => null),
       api.getAudit(scanId).catch(() => null),
       api.getEvidence(scanId).catch(() => null),
       api.getDpdpScore(scanId).catch(() => null),
+      api.getPolicyAnalysis(scanId).catch(() => null),
+      api.getScreenshot(scanId).catch(() => null),
     ]);
     if (runIdRef.current !== myRunId) return;
     setState((s) => ({
@@ -186,6 +222,8 @@ export function useConsentScan() {
       audit: audit ?? s.audit,
       evidence: evidence ?? s.evidence,
       dpdpScore: dpdpScore ?? s.dpdpScore ?? null,
+      policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null,
+      screenshot: screenshot ?? s.screenshot ?? null,
     }));
   }, []);
 
@@ -197,12 +235,14 @@ export function useConsentScan() {
    *  worse than one that renders nothing at all -- it is a confident false negative
    *  in a product whose whole job is to find what a site is doing. */
   const loadEvidenceRegardless = useCallback(async (scanId: string, myRunId: number) => {
-    const [evidence, dpdpScore] = await Promise.all([
+    const [evidence, dpdpScore, policyAnalysis, screenshot] = await Promise.all([
       api.getEvidence(scanId).catch(() => null),
       api.getDpdpScore(scanId).catch(() => null),
+      api.getPolicyAnalysis(scanId).catch(() => null),
+      api.getScreenshot(scanId).catch(() => null),
     ]);
     if (runIdRef.current !== myRunId || !evidence) return;
-    setState((s) => ({ ...s, evidence, dpdpScore: dpdpScore ?? s.dpdpScore ?? null }));
+    setState((s) => ({ ...s, evidence, dpdpScore: dpdpScore ?? s.dpdpScore ?? null, policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null, screenshot: screenshot ?? s.screenshot ?? null }));
   }, []);
 
   const pollStagesUntilAuditOrPending = useCallback(
@@ -226,6 +266,118 @@ export function useConsentScan() {
     []
   );
 
+  /** Follows one scan to its end: waits for the crawl, then (for a scan the user just started) requests the analysis, waits for it and loads
+   *  what it produced. Reopening a scan runs the same code without requesting an analysis. */
+  const follow = useCallback(
+    async (scanId: string, myRunId: number, analyze: boolean) => {
+    const finalScan = await pollUntil(
+      async () => {
+        const [s, stages] = await Promise.all([api.getScan(scanId), api.getStages(scanId)]);
+        if (runIdRef.current !== myRunId) return s;
+        setState((prev) => ({
+          ...prev,
+          scan: s,
+          stages,
+          websiteScanMeta: (stages.find((x) => x.stage === "website_scan")?.metadata as WebsiteScanMetadata) ?? prev.websiteScanMeta,
+        }));
+        return s;
+      },
+      // "cancelled" is terminal too: with no client ceiling below, a state that is not listed
+      // here would be polled forever.
+      (s) => s.status === "completed" || s.status === "failed" || s.status === "cancelled",
+      // No client-side ceiling. This used to give up after 600 s with "Timed out waiting for the
+      // backend" -- but a slow site's scan (and the queue wait before it) can take longer than that
+      // and still finish, and the user was told it had failed while it was still running. The
+      // backend decides when a scan is over: it aborts a hung scan at its own ceiling, retries a
+      // bounded number of times, and then reports "failed" with the reason -- which is shown.
+      Number.POSITIVE_INFINITY,
+      1_200
+    );
+    if (runIdRef.current !== myRunId) return;
+
+    if (finalScan.status === "cancelled") {
+      await loadEvidenceRegardless(scanId, myRunId);
+      setState((s) => ({ ...s, phase: "failed", error: "The scan was cancelled.", completedAt: Date.now() }));
+      return;
+    }
+
+    if (finalScan.status === "failed") {
+      // Load whatever evidence the crawl DID persist before giving up. A failed
+      // scan still leaves real cookies, trackers, forms and pages behind, and
+      // without this the report renders every itemized section as "none
+      // detected" -- telling the customer their site is clean when the truth is
+      // that the pipeline broke. Measured on a real hubspot.com scan: 840
+      // trackers, 124 cookies, 50 forms and 175 policies were in the database
+      // while the report said none of them existed.
+      // The audit list too: it now carries the `scan.failed` entry (stage and reason), and the
+      // Audit Timeline read "No audit events recorded yet" for a scan that had in fact failed.
+      await refreshFindingsAuditEvidence(scanId, myRunId);
+      setState((s) => ({ ...s, phase: "failed", error: finalScan.error, completedAt: Date.now() }));
+      return;
+    }
+
+    if (!analyze) {
+      const existing = await api.getStages(scanId);
+      if (runIdRef.current !== myRunId) return;
+      if (!existing.some((x) => ANALYSIS_STAGES.has(x.stage))) {
+        await refreshFindingsAuditEvidence(scanId, myRunId);
+        setState((s) => ({ ...s, phase: "degraded", error: "The analysis was not run for this scan.", completedAt: Date.now() }));
+        return;
+      }
+    }
+    setState((s) => ({ ...s, phase: "analyzing" }));
+    if (analyze) await api.analyze(scanId);
+    if (runIdRef.current !== myRunId) return;
+
+    const finalStages = await pollStagesUntilAuditOrPending(scanId, myRunId);
+    if (runIdRef.current !== myRunId) return;
+
+    const byName = Object.fromEntries(finalStages.map((s) => [s.stage, s]));
+    const failedStage = finalStages.find((s) => s.status === "failed");
+    if (failedStage) {
+      // Fetch findings too, not just evidence.
+      //
+      // This path used to call loadEvidenceRegardless (evidence ONLY) and
+      // return. On scan 63497fc6 the rules had already written three findings
+      // to the database -- 297 trackers firing before any consent interaction,
+      // 54 still firing after Reject -- and the report showed none of them,
+      // because nothing on this path ever asked for them. The crawl evidence
+      // appeared, the findings list stayed empty, and the banner said "Failed".
+      //
+      // A failed llm_analysis costs the narrative, not the findings; the page
+      // has to reflect that distinction rather than collapsing both into
+      // "Failed" and showing nothing.
+      await refreshFindingsAuditEvidence(scanId, myRunId);
+      if (runIdRef.current !== myRunId) return;
+      const reason = `Analysis failed at stage "${failedStage.stage}": ${failedStage.error}`;
+      setState((s) => ({
+        ...s,
+        // An analysis step failing is "degraded" whether or not the rules produced findings: the scan completed, its evidence was
+        // collected and its score was computed from that evidence alone. "Failed" is kept for a scan that did not complete (below,
+        // and when a stage outside the analysis failed) so it never describes a scan that has a result.
+        phase: phaseAfterStageFailure(failedStage.stage),
+        error: reason,
+        failedStage: failedStage.stage,
+        completedAt: Date.now(),
+        durationMs: s.startedAt ? Date.now() - s.startedAt : null,
+      }));
+      return;
+    }
+
+    await refreshFindingsAuditEvidence(scanId, myRunId);
+    if (runIdRef.current !== myRunId) return;
+
+    const stillAwaiting = byName.audit_saved?.status !== "completed" && byName.audit_saved?.status !== "failed";
+    setState((s) => ({
+      ...s,
+      phase: stillAwaiting ? "awaiting_review" : "completed",
+      completedAt: Date.now(),
+      durationMs: s.startedAt ? Date.now() - s.startedAt : null,
+    }));
+    },
+    [pollStagesUntilAuditOrPending, refreshFindingsAuditEvidence, loadEvidenceRegardless]
+  );
+
   const run = useCallback(
     async (url: string, authorized: boolean) => {
       const myRunId = ++runIdRef.current;
@@ -236,109 +388,29 @@ export function useConsentScan() {
         if (runIdRef.current !== myRunId) return;
         setState((s) => ({ ...s, scanId: scan.id, phase: "scanning" }));
 
-        const finalScan = await pollUntil(
-          async () => {
-            const [s, stages] = await Promise.all([api.getScan(scan.id), api.getStages(scan.id)]);
-            if (runIdRef.current !== myRunId) return s;
-            setState((prev) => ({
-              ...prev,
-              scan: s,
-              stages,
-              websiteScanMeta: (stages.find((x) => x.stage === "website_scan")?.metadata as WebsiteScanMetadata) ?? prev.websiteScanMeta,
-            }));
-            return s;
-          },
-          // "cancelled" is terminal too: with no client ceiling below, a state that is not listed
-          // here would be polled forever.
-          (s) => s.status === "completed" || s.status === "failed" || s.status === "cancelled",
-          // No client-side ceiling. This used to give up after 600 s with "Timed out waiting for the
-          // backend" -- but a slow site's scan (and the queue wait before it) can take longer than that
-          // and still finish, and the user was told it had failed while it was still running. The
-          // backend decides when a scan is over: it aborts a hung scan at its own ceiling, retries a
-          // bounded number of times, and then reports "failed" with the reason -- which is shown.
-          Number.POSITIVE_INFINITY,
-          1_200
-        );
-        if (runIdRef.current !== myRunId) return;
-
-        if (finalScan.status === "cancelled") {
-          await loadEvidenceRegardless(scan.id, myRunId);
-          setState((s) => ({ ...s, phase: "failed", error: "The scan was cancelled.", completedAt: Date.now() }));
-          return;
-        }
-
-        if (finalScan.status === "failed") {
-          // Load whatever evidence the crawl DID persist before giving up. A failed
-          // scan still leaves real cookies, trackers, forms and pages behind, and
-          // without this the report renders every itemized section as "none
-          // detected" -- telling the customer their site is clean when the truth is
-          // that the pipeline broke. Measured on a real hubspot.com scan: 840
-          // trackers, 124 cookies, 50 forms and 175 policies were in the database
-          // while the report said none of them existed.
-          // The audit list too: it now carries the `scan.failed` entry (stage and reason), and the
-          // Audit Timeline read "No audit events recorded yet" for a scan that had in fact failed.
-          await refreshFindingsAuditEvidence(scan.id, myRunId);
-          setState((s) => ({ ...s, phase: "failed", error: finalScan.error, completedAt: Date.now() }));
-          return;
-        }
-
-        setState((s) => ({ ...s, phase: "analyzing" }));
-        await api.analyze(scan.id);
-        if (runIdRef.current !== myRunId) return;
-
-        const finalStages = await pollStagesUntilAuditOrPending(scan.id, myRunId);
-        if (runIdRef.current !== myRunId) return;
-
-        const byName = Object.fromEntries(finalStages.map((s) => [s.stage, s]));
-        const failedStage = finalStages.find((s) => s.status === "failed");
-        if (failedStage) {
-          // Fetch findings too, not just evidence.
-          //
-          // This path used to call loadEvidenceRegardless (evidence ONLY) and
-          // return. On scan 63497fc6 the rules had already written three findings
-          // to the database -- 297 trackers firing before any consent interaction,
-          // 54 still firing after Reject -- and the report showed none of them,
-          // because nothing on this path ever asked for them. The crawl evidence
-          // appeared, the findings list stayed empty, and the banner said "Failed".
-          //
-          // A failed llm_analysis costs the narrative, not the findings; the page
-          // has to reflect that distinction rather than collapsing both into
-          // "Failed" and showing nothing.
-          await refreshFindingsAuditEvidence(scan.id, myRunId);
-          if (runIdRef.current !== myRunId) return;
-          const reason = `Analysis failed at stage "${failedStage.stage}": ${failedStage.error}`;
-          setState((s) => ({
-            ...s,
-            // Degraded only when the fallback actually produced something. If it
-            // produced nothing there is genuinely nothing to show and "failed" is
-            // the honest label -- this must not dress an empty result up as a
-            // partial success.
-            phase: s.findings.length > 0 ? "degraded" : "failed",
-            error: reason,
-            failedStage: failedStage.stage,
-            completedAt: Date.now(),
-            durationMs: s.startedAt ? Date.now() - s.startedAt : null,
-          }));
-          return;
-        }
-
-        await refreshFindingsAuditEvidence(scan.id, myRunId);
-        if (runIdRef.current !== myRunId) return;
-
-        const stillAwaiting = byName.audit_saved?.status !== "completed" && byName.audit_saved?.status !== "failed";
-        setState((s) => ({
-          ...s,
-          phase: stillAwaiting ? "awaiting_review" : "completed",
-          completedAt: Date.now(),
-          durationMs: s.startedAt ? Date.now() - s.startedAt : null,
-        }));
+        await follow(scan.id, myRunId, true);
       } catch (err) {
         if (runIdRef.current !== myRunId) return;
-        const message = err instanceof ApiError ? err.detail : err instanceof Error ? err.message : String(err);
+        const message = readableError(err);
         setState((s) => ({ ...s, phase: "failed", error: message, completedAt: Date.now() }));
       }
     },
-    [pollStagesUntilAuditOrPending, refreshFindingsAuditEvidence, loadEvidenceRegardless]
+    [follow]
+  );
+
+  /** Reopens an earlier scan of this organisation: its status, evidence, score, findings and audit, as the page showed them. */
+  const open = useCallback(
+    async (scanId: string) => {
+      const myRunId = ++runIdRef.current;
+      setState({ ...INITIAL_STATE, phase: "scanning", scanId });
+      try {
+        await follow(scanId, myRunId, false);
+      } catch (err) {
+        if (runIdRef.current !== myRunId) return;
+        setState((s) => ({ ...s, phase: "failed", error: readableError(err), completedAt: Date.now() }));
+      }
+    },
+    [follow]
   );
 
   // After a human decision (approve/reject/edit), the LangGraph checkpointer resumes
@@ -378,5 +450,5 @@ export function useConsentScan() {
     }
   }, [state.scanId, refreshFindingsAuditEvidence, pollStagesUntilAuditOrPending]);
 
-  return { state, run, afterReviewDecision };
+  return { state, run, open, afterReviewDecision };
 }

@@ -5,6 +5,11 @@ from the footer, not necessarily itself crawled)."""
 from app.scanner._domain import registered_domain
 from app.scanner.page_parser import ParsedLink
 from app.scanner.schemas import PolicyRecord
+from app.scanner.url_normalize import normalize_url
+
+#: The most policy text kept per document. A policy is read in full for the content analysis (app/policy), so the old 2,000-character
+#: excerpt was far too short; this still bounds what one page can add to the database.
+POLICY_TEXT_LIMIT = 60_000
 
 _KEYWORDS = {
     "privacy_policy": ("privacy",),
@@ -38,21 +43,25 @@ def detect_policies(
     seen_urls: set[str] = set()
     records: list[PolicyRecord] = []
     counter = 0
+    # Looked up by the page's canonical spelling, so a policy linked as https://www.x/privacy finds the text of the page the crawl
+    # recorded as https://x/privacy (the same page), and is listed once, not once per spelling.
+    text_by_key = {normalize_url(u): t for u, t in crawled_page_text.items()}
     for link in all_links:
-        if link.href in seen_urls:
+        key = normalize_url(link.href)
+        if key in seen_urls:
             continue
         policy_type = _classify_link(link)
         if policy_type is None:
             continue
         if registered_domain(link.href) != site_registered:
             continue
-        seen_urls.add(link.href)
-        text = crawled_page_text.get(link.href)
+        seen_urls.add(key)
+        text = crawled_page_text.get(link.href) or text_by_key.get(key)
         records.append(PolicyRecord(
             local_id=f"policy-{counter}",
             url=link.href,
             policy_type=policy_type,  # type: ignore[arg-type]
-            extracted_text_ref=text[:2000] if text else None,
+            extracted_text_ref=text[:POLICY_TEXT_LIMIT] if text else None,
         ))
         counter += 1
     return records

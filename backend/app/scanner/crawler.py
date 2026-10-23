@@ -26,6 +26,7 @@ per step found no site gaining a new third-party host after step 3 while a fixed
 """
 
 import asyncio
+import base64
 import heapq
 import itertools
 import logging
@@ -63,6 +64,7 @@ from app.scanner.cookie_detector import (
 )
 from app.scanner.form_detector import detect_forms
 from app.scanner.page_parser import ParsedScript, parse_page
+from app.scanner.page_signals import indic_script_counts, merge_language, merge_security, response_headers
 from app.scanner.policy_detector import detect_policies
 from app.scanner.scan_profiles import APPLICATION, MAX_WEB_PAGES, ScanProfile, resolve_profile
 from app.scanner.schemas import (
@@ -72,6 +74,7 @@ from app.scanner.schemas import (
     PageRecord,
     PolicyRecord,
     ScanResult,
+    ScreenshotRecord,
     TrackerRecord,
 )
 from app.scanner.sitemap import discover_sitemap_urls
@@ -416,6 +419,53 @@ async def _navigate_with_retry(browser_page: Page, url: str, timeout_ms: int) ->
     return None, status, last_exc, _NAV_MAX_ATTEMPTS
 
 
+# --- the homepage preview ---------------------------------------------------------------------------------------------------------
+# One picture per scan: the first screen of the homepage, taken in the load that already runs for the pre-consent crawl (after the page has
+# loaded and settled, before any scrolling), so it shows the site as a first-time visitor sees it, banner included. Taking it only READS the
+# page: no click, no scroll, no cookie or storage change, no extra navigation, so the consent tests that follow are unaffected. It is bounded
+# and fail-soft: whatever goes wrong becomes a status on the record, never an exception.
+_SHOT_QUALITY = 70
+_SHOT_RETRY_QUALITY = 45
+_SHOT_MAX_BYTES = 450_000
+_SHOT_MIN_BYTES = 2_500       # a picture this small is a blank page, not a website
+_SHOT_TIMEOUT_MS = 8_000
+# A site that answers the scanner with a block, challenge or error page is not showing its homepage. That picture would put somebody
+# else's error screen in the client's report, so it is not kept.
+_BLOCK_TITLE = re.compile(
+    r"access denied|^\s*(?:forbidden\s*$|request blocked|just a moment|attention required|security check|unusual traffic|verify you are human|"
+    r"are you a (?:robot|human)|please complete the captcha|40[0-9]\b|50[0-9]\b)",
+    re.IGNORECASE,
+)
+
+
+async def _capture_homepage_screenshot(page: Page, *, http_status: int | None, final_url: str | None) -> dict:
+    """The homepage preview as a plain dict (it becomes a ScreenshotRecord): status ok / blocked / timeout / failed, a reason code, and for
+    "ok" the JPEG as base64 with its size. Never raises."""
+    info: dict = {"page_url": final_url, "http_status": http_status}
+    try:
+        try:
+            title = (await page.title()) or ""
+        except PlaywrightError:
+            title = ""
+        info["page_title"] = title
+        if (http_status is not None and http_status >= 400) or _BLOCK_TITLE.search(title):
+            return {**info, "status": "blocked", "reason": "blocked"}
+        shot = {"type": "jpeg", "full_page": False, "timeout": _SHOT_TIMEOUT_MS, "animations": "disabled", "caret": "hide"}
+        data = await page.screenshot(quality=_SHOT_QUALITY, **shot)
+        if len(data) > _SHOT_MAX_BYTES:
+            data = await page.screenshot(quality=_SHOT_RETRY_QUALITY, **shot)
+        if len(data) < _SHOT_MIN_BYTES:
+            return {**info, "status": "failed", "reason": "blank"}
+        size = page.viewport_size or {"width": 1280, "height": 720}
+        return {**info, "status": "ok", "reason": None, "image_b64": base64.b64encode(data).decode("ascii"),
+                "width": int(size["width"]), "height": int(size["height"])}
+    except PlaywrightTimeoutError:
+        return {**info, "status": "timeout", "reason": "capture_timeout"}
+    except Exception as exc:  # noqa: BLE001 -- a preview that cannot be taken must never fail the scan
+        logger.info("Could not capture the homepage preview of %s: %s", final_url, exc)
+        return {**info, "status": "failed", "reason": "capture_failed"}
+
+
 async def _progressive_scroll(page: Page, request_count: Callable[[], int] | None = None) -> int:
     """Bounded, stepped scroll toward the bottom so IntersectionObserver-gated lazy
     content (ad/analytics pixels, infinite-scroll sections) gets a real chance to fire
@@ -546,6 +596,11 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         # gives async-loading trackers/tag-managers a fair, predictable chance to fire.
         await _wait_for_load_event(browser_page, url)
         await browser_page.wait_for_timeout(_TRACKER_SETTLE_MS)
+        # The homepage preview: the seed page only, at the top of the page, before the scroll pass below moves it.
+        screenshot = (
+            await _capture_homepage_screenshot(browser_page, http_status=response.status if response else None, final_url=final_url)
+            if is_seed else None
+        )
         scroll_steps = await _progressive_scroll(browser_page, request_count=lambda: len(request_records))
         http_status = response.status if response else None
         html = await browser_page.content()
@@ -574,7 +629,15 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
             await browser_page.close()
 
     parsed = parse_page(html, url)
+    # Read-only observations for the language and security sections of the report (scanner/page_signals.py); they change nothing about the scan.
+    page_signals = {
+        "indic": indic_script_counts(rendered_text or parsed.visible_text),
+        "control_indic": indic_script_counts(rendered_control_text or parsed.control_text),
+        "html_lang": parsed.html_lang, "hreflang": parsed.hreflang,
+        "headers": response_headers(response) if response is not None and is_seed else None,
+    }
     return {
+        "page_signals": page_signals,
         "url": url, "status": "success", "attempts": attempts, "http_status": http_status, "title": parsed.title,
         "request_records": request_records, "parsed": parsed, "global_vars": set(global_vars_present),
         "scroll_steps": scroll_steps, "iframe_scripts": iframe_scripts, "iframe_text": iframe_text,
@@ -584,6 +647,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         "set_cookie_events": set_cookie_events,
         "final_url": final_url,
         "frame_sources": _frameset_sources(html, url),
+        "screenshot": screenshot,
     }
 
 
@@ -754,6 +818,13 @@ async def _crawl_full_site(
             if normalize_url(final_url) in scanned_keys:
                 _skip(url, "redirected_to_already_scanned_page")
                 return
+        sig = result.get("page_signals") or {}
+        merge_language(diagnostics.setdefault("language_signals", {}), indic=sig.get("indic") or {}, control_indic=sig.get("control_indic") or {},
+                       html_lang=sig.get("html_lang"), hreflang=sig.get("hreflang") or [], is_seed=via == "seed")
+        merge_security(diagnostics.setdefault("security_signals", {}), final_url=result.get("final_url") or url, headers=sig.get("headers"), is_seed=via == "seed")
+        if via == "seed" and result.get("screenshot") is not None:
+            # Carried out of the crawl beside the diagnostics, and removed from them before they are stored (run_scan): a picture is not a diagnostic.
+            diagnostics["homepage_screenshot"] = result["screenshot"]
         for frame_src in result.get("frame_sources") or []:
             if _host_key(frame_src) != main_host:
                 framed_sites.add(frame_src)
@@ -771,7 +842,9 @@ async def _crawl_full_site(
         scripts_by_page[page_local_id] = parsed.scripts + result["iframe_scripts"]
         network_requests_by_page[page_local_id] = result["request_records"]
         all_links.extend(parsed.links)
-        crawled_page_text[url] = parsed.visible_text
+        # The rendered text (the whole page, shadow roots included), not the 5,000-character excerpt: a policy found among the crawled
+        # pages is kept in full for the content analysis. policy_detector is the only reader of this dictionary.
+        crawled_page_text[url] = result["rendered_text"] or parsed.visible_text
         # rendered_text (document.body.innerText + every open shadow root's text,
         # see _SHADOW_DOM_TEXT_JS) is a strict superset of parsed.visible_text for
         # THIS purpose -- used only for consent-signal keyword detection, not for
@@ -1190,6 +1263,7 @@ async def run_scan(
                 )
             finally:
                 await context.close()
+            homepage_screenshot = pre_consent_diagnostics.pop("homepage_screenshot", None)
 
             # post_accept and post_reject are fully independent -- separate contexts
             # (deliberately fresh, so neither pass's consent state leaks into the
@@ -1249,6 +1323,7 @@ async def run_scan(
         policies=policies,
         consent_signals=consent_signal,
         scan_diagnostics=scan_diagnostics,
+        screenshot=ScreenshotRecord(**homepage_screenshot) if homepage_screenshot else None,
     )
 
 

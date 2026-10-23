@@ -25,7 +25,7 @@ Website
   -> structured evidence
   -> deterministic rules + lookup
   -> RAG retrieval (pgvector over approved DPDP documents)
-  -> LLM reasoning (self-hosted primary, NVIDIA fallback)
+  -> LLM reasoning (Claude primary when ANTHROPIC_API_KEY is set; else self-hosted; NVIDIA/Groq fallback)
   -> structured-output validation + citation grounding
   -> findings -> human review gate -> append-only audit
 
@@ -52,8 +52,8 @@ Authorized source (Postgres, REST API, or a customer-side adapter)
   accepted during the transition and can be switched off by deleting the
   `SUPABASE_*` settings.
 - **Scanner** — Playwright, with SSRF protection on every navigation and redirect hop.
-- **LLM** — provider-agnostic client: self-hosted llama.cpp (primary), NVIDIA NIM and
-  Groq (fallback), all through one OpenAI-compatible abstraction. Embeddings are
+- **LLM** — provider-agnostic client: Claude (primary when `ANTHROPIC_API_KEY` is set), an optional
+  self-hosted llama.cpp server, and NVIDIA NIM or Groq as the fallback. Embeddings are
   NVIDIA-only.
 
 ## Getting started

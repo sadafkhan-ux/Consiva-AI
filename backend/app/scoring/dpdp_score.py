@@ -27,6 +27,7 @@ from typing import Literal
 from app.rules.consent_rules import ConsentContext, build_consent_context
 from app.scanner.scan_profiles import MAX_WEB_PAGES
 from app.scoring import findings, review
+from app.scoring import sector as sector_analysis
 
 METHODOLOGY_VERSION = "1.5.0"
 
@@ -49,9 +50,9 @@ NATURE_NOTE = (
 )
 
 DISCLAIMER = (
-    "A proposed, evidence-based readiness metric produced by Consiva from a website scan. It is not an officially "
-    "prescribed legal formula, not a certification and not legal advice. It covers only what a public website scan can "
-    "observe; requirements that need organisational evidence are listed as Unable to Verify."
+    "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages "
+    "listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a "
+    "qualified legal professional before relying on it."
 )
 
 # ---- thresholds below which a score is withheld ---------------------------------------------------------------------
@@ -514,6 +515,45 @@ APPLICABILITY_TEXT: dict[str, str] = {
     'DPDP-X10': "Only where the organisation processes children's personal data. Included only when declared applicable.", 'DPDP-X13': 'Only a notified Significant Data Fiduciary. Included only when declared applicable.',
 }
 
+# What kind of legal basis each check has, and how far a website scan can speak to it. "Statutory duty" means the cited provision
+# imposes the duty. The scan can only observe a signal of that duty; where the signal is Consiva's own reading of the provision
+# rather than something the text names, the note says so. Provision numbers are those in `provisions`; they were mapped from the
+# DPDP Act, 2023 and the DPDP Rules, 2025 (see LEGAL_SOURCES) and should be confirmed by counsel before being relied on.
+LEGAL_BASIS_NOTES: dict[str, str] = {
+    "DPDP-C1": "Statutory duty: consent must be given by a clear affirmative action before processing that depends on it. The scan "
+               "observes what runs before any choice. It cannot tell whether another lawful ground in the Act covers an item.",
+    "DPDP-C2": "Statutory duty: notice and a request for consent must reach the visitor. The scan observes whether a consent tool "
+               "exists and was displayed. It does not assess whether the notice it carries meets the Rules.",
+    "DPDP-C3": "Statutory duty: consent can be withdrawn and processing must stop. The scan tests this only after a Reject click that "
+               "the banner confirmed, on the homepage.",
+    "DPDP-C4": "Statutory duty: refusing must be as easy as giving consent. The scan checks that a reject-all option is present. How "
+               "prominent it is, and how many clicks it takes, are not measured.",
+    "DPDP-C5": "Statutory duty: consent must be specific. The scan detects per-purpose choices from banner wording. It cannot judge "
+               "whether the purposes listed are specific enough.",
+    "DPDP-N1": "Statutory duty: a notice must be given with specified content. The scan checks that a privacy-policy page exists on the "
+               "domain. It does not read the policy, so it cannot show the content the Rules require is there.",
+    "DPDP-N2": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name "
+               "a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy "
+               "counts as partial evidence.",
+    "DPDP-R9": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not "
+               "observed by a scan; assessed only from organisational evidence.",
+    "DPDP-R14A": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed "
+                 "only from organisational evidence.",
+    "DPDP-R14B": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a "
+                 "scan; assessed only from organisational evidence.",
+    "DPDP-S6": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is "
+               "assessed only from organisational evidence.",
+    "DPDP-S7": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from "
+               "a public website, so this is assessed only from organisational evidence.",
+    "DPDP-X4": "Statutory duties of a registered Consent Manager. Included only when the organisation declares it is one.",
+    "DPDP-X8": "Statutory duty of the Third Schedule classes (erasure after the specified period, with 48 hours' notice). Included "
+               "only when the organisation declares it is in such a class.",
+    "DPDP-X10": "Statutory duty where children's data is processed (verifiable parental or guardian consent). Included only when "
+                "declared.",
+    "DPDP-X13": "Statutory duties of a notified Significant Data Fiduciary (annual impact assessment and audit). Included only when "
+                "declared.",
+}
+
 # Checks that rest on something NOT being found within the pages scanned: their conclusions are weaker than a positive observation.
 ABSENCE_BASED = ('DPDP-C2', 'DPDP-N1', 'DPDP-N2')
 
@@ -606,6 +646,13 @@ class RequirementResult:
     # "high", "medium" or "none" (nothing was observed, or the check does not apply), and the arithmetic behind the points.
     confidence: str = "none"
     scoring_rationale: str = ""
+    # What kind of legal basis the check has and how far a scan can speak to it.
+    legal_note: str = ""
+    # Weight not earned (None when the check is not scored), the percentage points it adds to the score, and the share of the
+    # applicable weight it represents. Filled in from the score block, never recomputed elsewhere.
+    penalty_points: float | None = None
+    score_contribution_percent: float | None = None
+    coverage_share_percent: float | None = None
 
 
 @dataclass
@@ -691,6 +738,154 @@ class Assessment:
 
 
 @dataclass
+class LedgerMetric:
+    """One percentage the score card shows, with exactly what it divides by what."""
+    key: str
+    name: str
+    numerator: float
+    denominator: float
+    percent: float | None
+    formula: str
+    meaning: str
+
+
+@dataclass
+class StatusRule:
+    """How one status is treated by the score, and which checks of this scan carry it."""
+    status: str
+    label: str
+    rule: str
+    in_numerator: str
+    in_denominator: str
+    on_coverage: str
+    count: int
+    weight: int
+    check_ids: list[str]
+
+
+@dataclass
+class Ledger:
+    """Every number on the score card, defined once. Counts and weights are tallied from the same results the score is computed
+    from, and every metric reads its numerator and denominator from the score block, so nothing here is a second formula."""
+    total_checks: int
+    applicable_checks: int
+    assessed_checks: int
+    passed_checks: int
+    partial_checks: int
+    failed_checks: int
+    unable_checks: int
+    not_applicable_checks: int
+    total_weight: int
+    applicable_weight: int
+    assessed_weight: int
+    earned_weight: float
+    penalty_weight: float
+    unable_weight: int
+    not_applicable_weight: int
+    metrics: list[LedgerMetric]
+    category_metrics: list[LedgerMetric]
+    status_rules: list[StatusRule]
+    penalty_note: str
+    security_score_note: str
+    not_applicable: list[dict]
+
+
+def _n(x: float) -> str:
+    return str(int(x)) if float(x).is_integer() else f"{x:.1f}"
+
+
+_STATUS_RULE_TEXT: dict[str, tuple[str, str, str, str, str]] = {
+    "met": ("Met", "Earns 100% of the check's weight (factor 1). No penalty.", "Weight added in full", "Counted", "Counted as assessed"),
+    "partially_met": ("Partially Met", "Earns 50% of the check's weight (factor 0.5). The other half is its penalty.",
+                      "Half the weight added", "Counted", "Counted as assessed"),
+    "not_met": ("Not Met", "Earns nothing (factor 0). Its whole weight is the penalty.", "Nothing added", "Counted",
+                "Counted as assessed"),
+    "unable_to_verify": ("Unable to Verify", "Not scored: there was not enough evidence. It is never counted as met or as not met, "
+                         "and carries no penalty.", "Not added", "Not counted", "Lowers coverage: its weight stays in the applicable total"),
+    "not_applicable": ("Not Applicable", "Left out: the check does not apply here, for the reason shown on the check. It is never "
+                       "counted as a pass.", "Not added", "Not counted", "Does not lower coverage: its weight is removed from the applicable total"),
+}
+
+
+def build_ledger(results: list[RequirementResult], block: ScoreBlock, in_force: ScoreBlock) -> Ledger:
+    """Tally the checks and weights behind the readiness score, and label each ratio with what it actually measures."""
+    def of(status: str) -> list[RequirementResult]:
+        return [r for r in results if r.status == status]
+
+    applicable = [r for r in results if r.status != NOT_APPLICABLE]
+    assessed = [r for r in results if r.counts_in_score]
+    unable = of("unable_to_verify")
+    na = of(NOT_APPLICABLE)
+    earned, lost = block.points_earned, sum(r.weight for r in assessed) - block.points_earned
+
+    score_meaning = (
+        "Of the weight we could test, the share the site earned. It says nothing about the weight we could not test."
+        if block.status == "scored" else f"No score is shown: {block.insufficient_reason}"
+    )
+    metrics = [
+        LedgerMetric("score", "Readiness score (weighted)", block.points_earned, block.points_assessed, block.score_percent,
+                     f"{_n(block.points_earned)} ÷ {block.points_assessed} × 100", score_meaning),
+        LedgerMetric("coverage", "Assessment coverage (by weight)", block.assessed_weight, block.applicable_weight, block.coverage_percent,
+                     f"{block.assessed_weight} ÷ {block.applicable_weight} × 100",
+                     "Of all the weight that applies to this site, the share a scan could test. It is by weight, not by number of checks."),
+        LedgerMetric("untested", "Applicable weight not verified", block.unable_to_verify_weight, block.applicable_weight,
+                     _pct(block.unable_to_verify_weight, block.applicable_weight) if block.applicable_weight else None,
+                     f"{block.unable_to_verify_weight} ÷ {block.applicable_weight} × 100",
+                     "The share of applicable weight left untested. Together with coverage it makes up the applicable weight when "
+                     "every applicable check is either assessed or unable to verify."),
+        LedgerMetric("in_force", "In-force score (duties already in force)", in_force.points_earned, in_force.points_assessed,
+                     in_force.score_percent, f"{_n(in_force.points_earned)} ÷ {in_force.points_assessed} × 100"
+                     if in_force.points_assessed else "no check is in force on the assessment date",
+                     "The same formula over only the duties already in force on the assessment date."
+                     if in_force.status == "scored" else (in_force.insufficient_reason or "Not scored.")),
+    ]
+    cat_metrics: list[LedgerMetric] = []
+    for c in block.categories:
+        cat_metrics.append(LedgerMetric(
+            f"score:{c['category']}", f"{c['category']}: score", c["points_earned"], c["assessed_weight"], c["score_percent"],
+            f"{_n(c['points_earned'])} ÷ {c['assessed_weight']} × 100" if c["assessed_weight"] else "nothing in this category was assessed",
+            "Earned weight over assessed weight within this category."))
+        cat_metrics.append(LedgerMetric(
+            f"coverage:{c['category']}", f"{c['category']}: coverage", c["assessed_weight"], c["applicable_weight"], c["coverage_percent"],
+            f"{c['assessed_weight']} ÷ {c['applicable_weight']} × 100",
+            "Assessed weight over applicable weight within this category."))
+    rules = []
+    for status in STATUSES:
+        label, rule, num, den, cov = _STATUS_RULE_TEXT[status]
+        rs = of(status)
+        rules.append(StatusRule(status, label, rule, num, den, cov, len(rs), sum(r.weight for r in rs), [r.id for r in rs]))
+    return Ledger(
+        total_checks=len(results), applicable_checks=len(applicable), assessed_checks=len(assessed),
+        passed_checks=len(of("met")), partial_checks=len(of("partially_met")), failed_checks=len(of("not_met")),
+        unable_checks=len(unable), not_applicable_checks=len(na),
+        total_weight=sum(r.weight for r in results), applicable_weight=block.applicable_weight, assessed_weight=block.assessed_weight,
+        earned_weight=earned, penalty_weight=lost, unable_weight=block.unable_to_verify_weight,
+        not_applicable_weight=sum(r.weight for r in na),
+        metrics=metrics, category_metrics=cat_metrics, status_rules=rules,
+        penalty_note=(
+            "This scoring has no separate penalty list. The penalty on a check is the weight it did not earn: 0 for Met, half the "
+            "weight for Partially Met, the whole weight for Not Met. The multipliers in the rules (1, 0.5, 0) are the share of the "
+            "weight a check EARNS, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and "
+            "Not Applicable carry no penalty because they are not scored."),
+        security_score_note=(
+            "There is no separate security score. The \"Security and breach\" category holds two duties a website scan cannot "
+            "observe, so it is shown as Not assessed and contributes nothing to any number here."),
+        not_applicable=[{"id": r.id, "reason": r.exclusion_reason or "", "duplicate_of": r.duplicate_of} for r in na],
+    )
+
+
+def _attach_contributions(results: list[RequirementResult], block: ScoreBlock) -> None:
+    """Per-check numbers for the check table: the penalty (weight not earned), the percentage points the check adds to the score,
+    and the share of the applicable weight the check represents. Read from the score block, so they always sum to its figures."""
+    for r in results:
+        if r.counts_in_score:
+            r.penalty_points = float(r.weight) - r.points_earned
+            r.score_contribution_percent = _pct(r.points_earned, block.points_assessed) if block.points_assessed else None
+        if r.status != NOT_APPLICABLE and block.applicable_weight:
+            r.coverage_share_percent = _pct(r.weight, block.applicable_weight)
+
+
+@dataclass
 class DpdpScore:
     methodology_version: str
     as_of: date
@@ -706,6 +901,9 @@ class DpdpScore:
     methodology: Methodology | None = None
     assessment: Assessment | None = None
     remediation_plan: list[findings.RemediationStep] = field(default_factory=list)
+    ledger: Ledger | None = None
+    # Which kind of website this looks like and which provisions depend on it. Informational: it never changes a score.
+    sector: sector_analysis.SectorAssessment | None = None
     thresholds: dict = field(default_factory=lambda: {
         "min_coverage_percent": MIN_COVERAGE_PERCENT, "min_assessed_requirements": MIN_ASSESSED_REQUIREMENTS,
     })
@@ -826,6 +1024,7 @@ def _attach_evidence_records(results: list[RequirementResult], ctx: ConsentConte
         res.timing = "in_force" if res.in_force else "future"
         res.check_type = "website" if req.scan_assessable else "business"
         res.applicability = APPLICABILITY_TEXT[res.id]
+        res.legal_note = LEGAL_BASIS_NOTES[res.id]
         res.confidence = _confidence(res, ctx)
         res.scoring_rationale = _rationale(res, req)
         if res.status in ("not_met", "partially_met"):
@@ -973,6 +1172,7 @@ def build_assessment(ctx: ConsentContext, as_of: date, scan_url: str | None, sca
 def assess(
     evidence: dict, as_of: date | None = None, applicability: Applicability | None = None,
     weights: dict[str, int] | None = None, scan_url: str | None = None, scanned_at: str | None = None,
+    business_sector: str | None = None,
 ) -> DpdpScore:
     """`weights` replaces the documented default weight of the requirements it names (validated; see resolve_weights).
     `scan_url` and `scanned_at` only describe the scan in the result; they never change a score."""
@@ -981,9 +1181,11 @@ def assess(
     ctx = build_consent_context(evidence)
     results = evaluate_requirements(evidence, as_of, applicability, ctx, resolved)
     human_review = review.build_human_review(ctx, results, as_of, MAX_WEB_PAGES)
+    readiness, in_force = _block("readiness", results), _block("in_force", results)
+    _attach_contributions(results, readiness)
     return DpdpScore(
         methodology_version=METHODOLOGY_VERSION, as_of=as_of, requirements=results,
-        readiness=_block("readiness", results), in_force=_block("in_force", results),
+        readiness=readiness, in_force=in_force,
         status_counts={st: sum(1 for r in results if r.status == st) for st in STATUSES},
         evidence_summary=review.summarise_evidence(ctx),
         breakdown=review.build_breakdown(results, human_review.items),
@@ -991,5 +1193,7 @@ def assess(
         finding_groups=findings.build_finding_groups(results, human_review.items, ctx, as_of),
         methodology=build_methodology(results, resolved),
         assessment=build_assessment(ctx, as_of, scan_url, scanned_at),
-        remediation_plan=findings.build_remediation_plan(results),
+        remediation_plan=findings.build_remediation_plan(results, readiness),
+        ledger=build_ledger(results, readiness, in_force),
+        sector=sector_analysis.assess_sector(evidence, scan_url, applicability, business_sector),
     )

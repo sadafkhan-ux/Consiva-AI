@@ -7,6 +7,7 @@ from app.db.session import async_session_factory
 from app.llm.client import NvidiaLLMClient
 from app.observability.stage_tracker import track_stage
 from app.rag.retriever import has_text, retrieve_many, text_only_query
+from app.rag.topic_embeddings import GENERAL_QUERY
 from app.rules.consent_rules import RULE_DPDP_TOPIC_HINTS
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ def _query_text(finding: dict) -> str:
 
 def _queries(rule_findings: list[dict]) -> list[str]:
     if not rule_findings:
-        return ["General DPDP Act consent, cookie, and website tracking compliance requirements"]
+        return [GENERAL_QUERY]
     # De-duplicated so two rule findings with the literal same summary (e.g. R-001
     # firing identically on two scans merged into one run) don't retrieve twice.
     return sorted({_query_text(f) for f in rule_findings})
@@ -108,6 +109,10 @@ async def retrieve_rag(state: AgentState) -> dict:
                     )
                 finally:
                     meta["timings"] = {k: stats[k] for k in ("embed_calls", "embed_ms", "search_ms", "cache_hits") if k in stats}
+                    # "text_search" means the embedding service did not answer and the chunks were found by keyword: said on the stage.
+                    meta["retrieval_mode"] = stats.get("mode", "embedding")
+                    if stats.get("embedding_error"):
+                        meta["embedding_error"] = stats["embedding_error"]
             if stats.get("knowledge_base_empty"):
                 meta["knowledge_base_empty"] = True   # visible on the stage: no provisions exist to cite
             for chunks_for_query in per_query:

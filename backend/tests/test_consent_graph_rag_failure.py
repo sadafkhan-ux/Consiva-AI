@@ -150,3 +150,31 @@ async def test_the_error_text_is_bounded(monkeypatch, stage):
     out = await retrieve_rag.retrieve_rag(_node_state("a finding"))
 
     assert len(out["error"]) < 400
+
+
+# ── the node records how it retrieved ────────────────────────────────────────────────────────
+
+async def test_the_stage_says_when_the_chunks_were_found_by_keyword_because_the_embedding_service_did_not_answer(monkeypatch, stage):
+    async def keyword_only(queries, *, stats, **kwargs):
+        stats.update(mode="text_search", embedding_error="APITimeoutError", embed_calls=1, embed_ms=12000, search_ms=5, cache_hits=0)
+        return [[] for _ in queries]
+
+    monkeypatch.setattr(retrieve_rag, "retrieve_many", keyword_only)
+
+    out = await retrieve_rag.retrieve_rag(_node_state("19 trackers fired before consent."))
+
+    assert out == {"rag_chunks": []}                        # the run goes on to the model: nothing failed
+    assert stage[0]["error"] is None
+    assert stage[0]["meta"]["retrieval_mode"] == "text_search" and stage[0]["meta"]["embedding_error"] == "APITimeoutError"
+
+
+async def test_the_stage_says_embedding_when_the_embedding_service_answered(monkeypatch, stage):
+    async def normal(queries, *, stats, **kwargs):
+        stats.update(mode="embedding", embed_calls=1, embed_ms=300, search_ms=5, cache_hits=0)
+        return [[] for _ in queries]
+
+    monkeypatch.setattr(retrieve_rag, "retrieve_many", normal)
+
+    await retrieve_rag.retrieve_rag(_node_state("a finding"))
+
+    assert stage[0]["meta"]["retrieval_mode"] == "embedding" and "embedding_error" not in stage[0]["meta"]

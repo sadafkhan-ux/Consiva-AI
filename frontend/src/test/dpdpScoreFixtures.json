@@ -46,7 +46,11 @@
     "check_type": "website",
     "applicability": "Every website. Assessed when pages were scanned and the scan recorded the three consent states.",
     "confidence": "medium",
-    "scoring_rationale": "Not Met earns 0 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state."
+    "scoring_rationale": "Not Met earns 0 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state.",
+    "legal_note": "Statutory duty: consent must be given by a clear affirmative action before processing that depends on it. The scan observes what runs before any choice. It cannot tell whether another lawful ground in the Act covers an item.",
+    "penalty_points": 5.0,
+    "score_contribution_percent": 0.0,
+    "coverage_share_percent": 13.5
    },
    {
     "id": "DPDP-C2",
@@ -89,7 +93,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Prerequisite for valid consent; observed directly."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Prerequisite for valid consent; observed directly.",
+    "legal_note": "Statutory duty: notice and a request for consent must reach the visitor. The scan observes whether a consent tool exists and was displayed. It does not assess whether the notice it carries meets the Rules.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 17.4,
+    "coverage_share_percent": 10.8
    },
    {
     "id": "DPDP-C3",
@@ -135,7 +143,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent mechanism exists and Reject could be operated; otherwise Not Applicable or Unable to Verify.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed.",
+    "legal_note": "Statutory duty: consent can be withdrawn and processing must stop. The scan tests this only after a Reject click that the banner confirmed, on the homepage.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 17.4,
+    "coverage_share_percent": 10.8
    },
    {
     "id": "DPDP-C4",
@@ -177,7 +189,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Not Met earns 0 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy."
+    "scoring_rationale": "Not Met earns 0 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy.",
+    "legal_note": "Statutory duty: refusing must be as easy as giving consent. The scan checks that a reject-all option is present. How prominent it is, and how many clicks it takes, are not measured.",
+    "penalty_points": 4.0,
+    "score_contribution_percent": 0.0,
+    "coverage_share_percent": 10.8
    },
    {
     "id": "DPDP-C5",
@@ -215,7 +231,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Counted under DPDP-C4, which already carries this gap. A banner with no reject option and no per-purpose choice is one gap, counted once."
+    "scoring_rationale": "Not scored: Counted under DPDP-C4, which already carries this gap. A banner with no reject option and no per-purpose choice is one gap, counted once.",
+    "legal_note": "Statutory duty: consent must be specific. The scan detects per-purpose choices from banner wording. It cannot judge whether the purposes listed are specific enough.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-N1",
@@ -258,7 +278,11 @@
     "check_type": "website",
     "applicability": "Every website.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate.",
+    "legal_note": "Statutory duty: a notice must be given with specified content. The scan checks that a privacy-policy page exists on the domain. It does not read the policy, so it cannot show the content the Rules require is there.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 17.4,
+    "coverage_share_percent": 10.8
    },
    {
     "id": "DPDP-N2",
@@ -302,7 +326,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Partially Met earns 1 of 2 points. Weight 2: Notice must itemise the personal data processed; a dedicated cookie policy is the observable proxy."
+    "scoring_rationale": "Partially Met earns 1 of 2 points. Weight 2: Notice must itemise the personal data processed; a dedicated cookie policy is the observable proxy.",
+    "legal_note": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy counts as partial evidence.",
+    "penalty_points": 1.0,
+    "score_contribution_percent": 4.3,
+    "coverage_share_percent": 5.4
    },
    {
     "id": "DPDP-R9",
@@ -340,7 +368,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 5.4
    },
    {
     "id": "DPDP-R14A",
@@ -380,7 +412,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.1
    },
    {
     "id": "DPDP-R14B",
@@ -419,7 +455,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.1
    },
    {
     "id": "DPDP-S6",
@@ -457,7 +497,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls.",
+    "legal_note": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.1
    },
    {
     "id": "DPDP-S7",
@@ -495,7 +539,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence, including its breach response times.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process.",
+    "legal_note": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.1
    },
    {
     "id": "DPDP-X4",
@@ -531,7 +579,11 @@
     "check_type": "business",
     "applicability": "Only a registered Consent Manager. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a registered Consent Manager. Included only when the organisation declares it is one.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X8",
@@ -567,7 +619,11 @@
     "check_type": "business",
     "applicability": "Only the Third Schedule classes (large e-commerce, online gaming, social media). Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty of the Third Schedule classes (erasure after the specified period, with 48 hours' notice). Included only when the organisation declares it is in such a class.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X10",
@@ -604,7 +660,11 @@
     "check_type": "business",
     "applicability": "Only where the organisation processes children's personal data. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty where children's data is processed (verifiable parental or guardian consent). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X13",
@@ -640,7 +700,11 @@
     "check_type": "business",
     "applicability": "Only a notified Significant Data Fiduciary. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a notified Significant Data Fiduciary (annual impact assessment and audit). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    }
   ],
   "readiness": {
@@ -708,7 +772,7 @@
    "categories": [],
    "caution": null
   },
-  "disclaimer": "A proposed, evidence-based readiness metric produced by Consiva from a website scan. It is not an officially prescribed legal formula, not a certification and not legal advice. It covers only what a public website scan can observe; requirements that need organisational evidence are listed as Unable to Verify.",
+  "disclaimer": "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a qualified legal professional before relying on it.",
   "status_counts": {
    "met": 3,
    "partially_met": 1,
@@ -1852,6 +1916,242 @@
     ]
    }
   ],
+  "ledger": {
+   "total_checks": 16,
+   "applicable_checks": 11,
+   "assessed_checks": 6,
+   "passed_checks": 3,
+   "partial_checks": 1,
+   "failed_checks": 2,
+   "unable_checks": 5,
+   "not_applicable_checks": 5,
+   "total_weight": 49,
+   "applicable_weight": 37,
+   "assessed_weight": 23,
+   "earned_weight": 13.0,
+   "penalty_weight": 10.0,
+   "unable_weight": 14,
+   "not_applicable_weight": 12,
+   "metrics": [
+    {
+     "key": "score",
+     "name": "Readiness score (weighted)",
+     "numerator": 13.0,
+     "denominator": 23,
+     "percent": 56.5,
+     "formula": "13 \u00f7 23 \u00d7 100",
+     "meaning": "Of the weight we could test, the share the site earned. It says nothing about the weight we could not test."
+    },
+    {
+     "key": "coverage",
+     "name": "Assessment coverage (by weight)",
+     "numerator": 23,
+     "denominator": 37,
+     "percent": 62.2,
+     "formula": "23 \u00f7 37 \u00d7 100",
+     "meaning": "Of all the weight that applies to this site, the share a scan could test. It is by weight, not by number of checks."
+    },
+    {
+     "key": "untested",
+     "name": "Applicable weight not verified",
+     "numerator": 14,
+     "denominator": 37,
+     "percent": 37.8,
+     "formula": "14 \u00f7 37 \u00d7 100",
+     "meaning": "The share of applicable weight left untested. Together with coverage it makes up the applicable weight when every applicable check is either assessed or unable to verify."
+    },
+    {
+     "key": "in_force",
+     "name": "In-force score (duties already in force)",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "no check is in force on the assessment date",
+     "meaning": "No requirement is in force on the assessment date."
+    }
+   ],
+   "category_metrics": [
+    {
+     "key": "score:Consent",
+     "name": "Consent: score",
+     "numerator": 8.0,
+     "denominator": 17,
+     "percent": 47.1,
+     "formula": "8 \u00f7 17 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Consent",
+     "name": "Consent: coverage",
+     "numerator": 17,
+     "denominator": 17,
+     "percent": 100.0,
+     "formula": "17 \u00f7 17 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Notice",
+     "name": "Notice: score",
+     "numerator": 5.0,
+     "denominator": 6,
+     "percent": 83.3,
+     "formula": "5 \u00f7 6 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Notice",
+     "name": "Notice: coverage",
+     "numerator": 6,
+     "denominator": 6,
+     "percent": 100.0,
+     "formula": "6 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Data principal rights",
+     "name": "Data principal rights: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Data principal rights",
+     "name": "Data principal rights: coverage",
+     "numerator": 0,
+     "denominator": 8,
+     "percent": 0.0,
+     "formula": "0 \u00f7 8 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Security and breach",
+     "name": "Security and breach: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Security and breach",
+     "name": "Security and breach: coverage",
+     "numerator": 0,
+     "denominator": 6,
+     "percent": 0.0,
+     "formula": "0 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    }
+   ],
+   "status_rules": [
+    {
+     "status": "met",
+     "label": "Met",
+     "rule": "Earns 100% of the check's weight (factor 1). No penalty.",
+     "in_numerator": "Weight added in full",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 3,
+     "weight": 12,
+     "check_ids": [
+      "DPDP-C2",
+      "DPDP-C3",
+      "DPDP-N1"
+     ]
+    },
+    {
+     "status": "partially_met",
+     "label": "Partially Met",
+     "rule": "Earns 50% of the check's weight (factor 0.5). The other half is its penalty.",
+     "in_numerator": "Half the weight added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 1,
+     "weight": 2,
+     "check_ids": [
+      "DPDP-N2"
+     ]
+    },
+    {
+     "status": "not_met",
+     "label": "Not Met",
+     "rule": "Earns nothing (factor 0). Its whole weight is the penalty.",
+     "in_numerator": "Nothing added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 2,
+     "weight": 9,
+     "check_ids": [
+      "DPDP-C1",
+      "DPDP-C4"
+     ]
+    },
+    {
+     "status": "unable_to_verify",
+     "label": "Unable to Verify",
+     "rule": "Not scored: there was not enough evidence. It is never counted as met or as not met, and carries no penalty.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Lowers coverage: its weight stays in the applicable total",
+     "count": 5,
+     "weight": 14,
+     "check_ids": [
+      "DPDP-R9",
+      "DPDP-R14A",
+      "DPDP-R14B",
+      "DPDP-S6",
+      "DPDP-S7"
+     ]
+    },
+    {
+     "status": "not_applicable",
+     "label": "Not Applicable",
+     "rule": "Left out: the check does not apply here, for the reason shown on the check. It is never counted as a pass.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Does not lower coverage: its weight is removed from the applicable total",
+     "count": 5,
+     "weight": 12,
+     "check_ids": [
+      "DPDP-C5",
+      "DPDP-X4",
+      "DPDP-X8",
+      "DPDP-X10",
+      "DPDP-X13"
+     ]
+    }
+   ],
+   "penalty_note": "This scoring has no separate penalty list. The penalty on a check is the weight it did not earn: 0 for Met, half the weight for Partially Met, the whole weight for Not Met. The multipliers in the rules (1, 0.5, 0) are the share of the weight a check EARNS, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and Not Applicable carry no penalty because they are not scored.",
+   "security_score_note": "There is no separate security score. The \"Security and breach\" category holds two duties a website scan cannot observe, so it is shown as Not assessed and contributes nothing to any number here.",
+   "not_applicable": [
+    {
+     "id": "DPDP-C5",
+     "reason": "Counted under DPDP-C4, which already carries this gap. A banner with no reject option and no per-purpose choice is one gap, counted once.",
+     "duplicate_of": "DPDP-C4"
+    },
+    {
+     "id": "DPDP-X4",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X8",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X10",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X13",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    }
+   ]
+  },
   "thresholds": {
    "min_coverage_percent": 30.0,
    "min_assessed_requirements": 2
@@ -1918,7 +2218,11 @@
     "check_type": "website",
     "applicability": "Every website. Assessed when pages were scanned and the scan recorded the three consent states.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state.",
+    "legal_note": "Statutory duty: consent must be given by a clear affirmative action before processing that depends on it. The scan observes what runs before any choice. It cannot tell whether another lawful ground in the Act covers an item.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 15.2
    },
    {
     "id": "DPDP-C2",
@@ -1959,7 +2263,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no consent mechanism was needed for it."
+    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no consent mechanism was needed for it.",
+    "legal_note": "Statutory duty: notice and a request for consent must reach the visitor. The scan observes whether a consent tool exists and was displayed. It does not assess whether the notice it carries meets the Rules.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-C3",
@@ -2003,7 +2311,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent mechanism exists and Reject could be operated; otherwise Not Applicable or Unable to Verify.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed.",
+    "legal_note": "Statutory duty: consent can be withdrawn and processing must stop. The scan tests this only after a Reject click that the banner confirmed, on the homepage.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 12.1
    },
    {
     "id": "DPDP-C4",
@@ -2043,7 +2355,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy.",
+    "legal_note": "Statutory duty: refusing must be as easy as giving consent. The scan checks that a reject-all option is present. How prominent it is, and how many clicks it takes, are not measured.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 12.1
    },
    {
     "id": "DPDP-C5",
@@ -2081,7 +2397,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Consent must be specific; per-purpose choices are a supporting signal and a banner design, not a standalone breach."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Consent must be specific; per-purpose choices are a supporting signal and a banner design, not a standalone breach.",
+    "legal_note": "Statutory duty: consent must be specific. The scan detects per-purpose choices from banner wording. It cannot judge whether the purposes listed are specific enough.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 6.1
    },
    {
     "id": "DPDP-N1",
@@ -2122,7 +2442,11 @@
     "check_type": "website",
     "applicability": "Every website.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate.",
+    "legal_note": "Statutory duty: a notice must be given with specified content. The scan checks that a privacy-policy page exists on the domain. It does not read the policy, so it cannot show the content the Rules require is there.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 12.1
    },
    {
     "id": "DPDP-N2",
@@ -2162,7 +2486,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no tracking disclosure was needed."
+    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no tracking disclosure was needed.",
+    "legal_note": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy counts as partial evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-R9",
@@ -2200,7 +2528,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 6.1
    },
    {
     "id": "DPDP-R14A",
@@ -2240,7 +2572,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 9.1
    },
    {
     "id": "DPDP-R14B",
@@ -2279,7 +2615,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 9.1
    },
    {
     "id": "DPDP-S6",
@@ -2317,7 +2657,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls.",
+    "legal_note": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 9.1
    },
    {
     "id": "DPDP-S7",
@@ -2355,7 +2699,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence, including its breach response times.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process.",
+    "legal_note": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 9.1
    },
    {
     "id": "DPDP-X4",
@@ -2391,7 +2739,11 @@
     "check_type": "business",
     "applicability": "Only a registered Consent Manager. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a registered Consent Manager. Included only when the organisation declares it is one.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X8",
@@ -2427,7 +2779,11 @@
     "check_type": "business",
     "applicability": "Only the Third Schedule classes (large e-commerce, online gaming, social media). Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty of the Third Schedule classes (erasure after the specified period, with 48 hours' notice). Included only when the organisation declares it is in such a class.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X10",
@@ -2464,7 +2820,11 @@
     "check_type": "business",
     "applicability": "Only where the organisation processes children's personal data. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty where children's data is processed (verifiable parental or guardian consent). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X13",
@@ -2500,7 +2860,11 @@
     "check_type": "business",
     "applicability": "Only a notified Significant Data Fiduciary. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a notified Significant Data Fiduciary (annual impact assessment and audit). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    }
   ],
   "readiness": {
@@ -2568,7 +2932,7 @@
    "categories": [],
    "caution": null
   },
-  "disclaimer": "A proposed, evidence-based readiness metric produced by Consiva from a website scan. It is not an officially prescribed legal formula, not a certification and not legal advice. It covers only what a public website scan can observe; requirements that need organisational evidence are listed as Unable to Verify.",
+  "disclaimer": "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a qualified legal professional before relying on it.",
   "status_counts": {
    "met": 0,
    "partially_met": 0,
@@ -3596,6 +3960,244 @@
    "nature_note": "This is an evidence-based assessment of website readiness for the DPDP Act and Rules, from the entered main domain only. It is not a guarantee, a certification or a statement of full legal compliance: organisational evidence and legal interpretation are needed for that."
   },
   "remediation_plan": [],
+  "ledger": {
+   "total_checks": 16,
+   "applicable_checks": 10,
+   "assessed_checks": 0,
+   "passed_checks": 0,
+   "partial_checks": 0,
+   "failed_checks": 0,
+   "unable_checks": 10,
+   "not_applicable_checks": 6,
+   "total_weight": 49,
+   "applicable_weight": 33,
+   "assessed_weight": 0,
+   "earned_weight": 0.0,
+   "penalty_weight": 0.0,
+   "unable_weight": 33,
+   "not_applicable_weight": 16,
+   "metrics": [
+    {
+     "key": "score",
+     "name": "Readiness score (weighted)",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "0 \u00f7 0 \u00d7 100",
+     "meaning": "No score is shown: Only 0 requirement(s) could be assessed; at least 2 are needed."
+    },
+    {
+     "key": "coverage",
+     "name": "Assessment coverage (by weight)",
+     "numerator": 0,
+     "denominator": 33,
+     "percent": 0.0,
+     "formula": "0 \u00f7 33 \u00d7 100",
+     "meaning": "Of all the weight that applies to this site, the share a scan could test. It is by weight, not by number of checks."
+    },
+    {
+     "key": "untested",
+     "name": "Applicable weight not verified",
+     "numerator": 33,
+     "denominator": 33,
+     "percent": 100.0,
+     "formula": "33 \u00f7 33 \u00d7 100",
+     "meaning": "The share of applicable weight left untested. Together with coverage it makes up the applicable weight when every applicable check is either assessed or unable to verify."
+    },
+    {
+     "key": "in_force",
+     "name": "In-force score (duties already in force)",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "no check is in force on the assessment date",
+     "meaning": "No requirement is in force on the assessment date."
+    }
+   ],
+   "category_metrics": [
+    {
+     "key": "score:Consent",
+     "name": "Consent: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Consent",
+     "name": "Consent: coverage",
+     "numerator": 0,
+     "denominator": 15,
+     "percent": 0.0,
+     "formula": "0 \u00f7 15 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Notice",
+     "name": "Notice: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Notice",
+     "name": "Notice: coverage",
+     "numerator": 0,
+     "denominator": 4,
+     "percent": 0.0,
+     "formula": "0 \u00f7 4 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Data principal rights",
+     "name": "Data principal rights: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Data principal rights",
+     "name": "Data principal rights: coverage",
+     "numerator": 0,
+     "denominator": 8,
+     "percent": 0.0,
+     "formula": "0 \u00f7 8 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Security and breach",
+     "name": "Security and breach: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Security and breach",
+     "name": "Security and breach: coverage",
+     "numerator": 0,
+     "denominator": 6,
+     "percent": 0.0,
+     "formula": "0 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    }
+   ],
+   "status_rules": [
+    {
+     "status": "met",
+     "label": "Met",
+     "rule": "Earns 100% of the check's weight (factor 1). No penalty.",
+     "in_numerator": "Weight added in full",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 0,
+     "weight": 0,
+     "check_ids": []
+    },
+    {
+     "status": "partially_met",
+     "label": "Partially Met",
+     "rule": "Earns 50% of the check's weight (factor 0.5). The other half is its penalty.",
+     "in_numerator": "Half the weight added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 0,
+     "weight": 0,
+     "check_ids": []
+    },
+    {
+     "status": "not_met",
+     "label": "Not Met",
+     "rule": "Earns nothing (factor 0). Its whole weight is the penalty.",
+     "in_numerator": "Nothing added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 0,
+     "weight": 0,
+     "check_ids": []
+    },
+    {
+     "status": "unable_to_verify",
+     "label": "Unable to Verify",
+     "rule": "Not scored: there was not enough evidence. It is never counted as met or as not met, and carries no penalty.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Lowers coverage: its weight stays in the applicable total",
+     "count": 10,
+     "weight": 33,
+     "check_ids": [
+      "DPDP-C1",
+      "DPDP-C3",
+      "DPDP-C4",
+      "DPDP-C5",
+      "DPDP-N1",
+      "DPDP-R9",
+      "DPDP-R14A",
+      "DPDP-R14B",
+      "DPDP-S6",
+      "DPDP-S7"
+     ]
+    },
+    {
+     "status": "not_applicable",
+     "label": "Not Applicable",
+     "rule": "Left out: the check does not apply here, for the reason shown on the check. It is never counted as a pass.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Does not lower coverage: its weight is removed from the applicable total",
+     "count": 6,
+     "weight": 16,
+     "check_ids": [
+      "DPDP-C2",
+      "DPDP-N2",
+      "DPDP-X4",
+      "DPDP-X8",
+      "DPDP-X10",
+      "DPDP-X13"
+     ]
+    }
+   ],
+   "penalty_note": "This scoring has no separate penalty list. The penalty on a check is the weight it did not earn: 0 for Met, half the weight for Partially Met, the whole weight for Not Met. The multipliers in the rules (1, 0.5, 0) are the share of the weight a check EARNS, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and Not Applicable carry no penalty because they are not scored.",
+   "security_score_note": "There is no separate security score. The \"Security and breach\" category holds two duties a website scan cannot observe, so it is shown as Not assessed and contributes nothing to any number here.",
+   "not_applicable": [
+    {
+     "id": "DPDP-C2",
+     "reason": "No analytics or marketing tracking was observed, so no consent mechanism was needed for it.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-N2",
+     "reason": "No analytics or marketing tracking was observed, so no tracking disclosure was needed.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X4",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X8",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X10",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X13",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    }
+   ]
+  },
   "thresholds": {
    "min_coverage_percent": 30.0,
    "min_assessed_requirements": 2
@@ -3666,7 +4268,11 @@
     "check_type": "website",
     "applicability": "Every website. Assessed when pages were scanned and the scan recorded the three consent states.",
     "confidence": "high",
-    "scoring_rationale": "Not Met earns 0 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state."
+    "scoring_rationale": "Not Met earns 0 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state.",
+    "legal_note": "Statutory duty: consent must be given by a clear affirmative action before processing that depends on it. The scan observes what runs before any choice. It cannot tell whether another lawful ground in the Act covers an item.",
+    "penalty_points": 5.0,
+    "score_contribution_percent": 0.0,
+    "coverage_share_percent": 13.5
    },
    {
     "id": "DPDP-C2",
@@ -3713,7 +4319,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Prerequisite for valid consent; observed directly."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Prerequisite for valid consent; observed directly.",
+    "legal_note": "Statutory duty: notice and a request for consent must reach the visitor. The scan observes whether a consent tool exists and was displayed. It does not assess whether the notice it carries meets the Rules.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 17.4,
+    "coverage_share_percent": 10.8
    },
    {
     "id": "DPDP-C3",
@@ -3763,7 +4373,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent mechanism exists and Reject could be operated; otherwise Not Applicable or Unable to Verify.",
     "confidence": "high",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed.",
+    "legal_note": "Statutory duty: consent can be withdrawn and processing must stop. The scan tests this only after a Reject click that the banner confirmed, on the homepage.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 17.4,
+    "coverage_share_percent": 10.8
    },
    {
     "id": "DPDP-C4",
@@ -3809,7 +4423,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "high",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy.",
+    "legal_note": "Statutory duty: refusing must be as easy as giving consent. The scan checks that a reject-all option is present. How prominent it is, and how many clicks it takes, are not measured.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 17.4,
+    "coverage_share_percent": 10.8
    },
    {
     "id": "DPDP-C5",
@@ -3853,7 +4471,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "high",
-    "scoring_rationale": "Met earns 2 of 2 points. Weight 2: Consent must be specific; per-purpose choices are a supporting signal and a banner design, not a standalone breach."
+    "scoring_rationale": "Met earns 2 of 2 points. Weight 2: Consent must be specific; per-purpose choices are a supporting signal and a banner design, not a standalone breach.",
+    "legal_note": "Statutory duty: consent must be specific. The scan detects per-purpose choices from banner wording. It cannot judge whether the purposes listed are specific enough.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 8.7,
+    "coverage_share_percent": 5.4
    },
    {
     "id": "DPDP-N1",
@@ -3900,7 +4522,11 @@
     "check_type": "website",
     "applicability": "Every website.",
     "confidence": "medium",
-    "scoring_rationale": "Not Met earns 0 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate."
+    "scoring_rationale": "Not Met earns 0 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate.",
+    "legal_note": "Statutory duty: a notice must be given with specified content. The scan checks that a privacy-policy page exists on the domain. It does not read the policy, so it cannot show the content the Rules require is there.",
+    "penalty_points": 4.0,
+    "score_contribution_percent": 0.0,
+    "coverage_share_percent": 10.8
    },
    {
     "id": "DPDP-N2",
@@ -3944,7 +4570,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Counted under DPDP-N1, which already carries this gap. A site with no notice at all is one gap, counted once."
+    "scoring_rationale": "Not scored: Counted under DPDP-N1, which already carries this gap. A site with no notice at all is one gap, counted once.",
+    "legal_note": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy counts as partial evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-R9",
@@ -3982,7 +4612,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 5.4
    },
    {
     "id": "DPDP-R14A",
@@ -4022,7 +4656,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.1
    },
    {
     "id": "DPDP-R14B",
@@ -4061,7 +4699,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.1
    },
    {
     "id": "DPDP-S6",
@@ -4099,7 +4741,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls.",
+    "legal_note": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.1
    },
    {
     "id": "DPDP-S7",
@@ -4137,7 +4783,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence, including its breach response times.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process.",
+    "legal_note": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.1
    },
    {
     "id": "DPDP-X4",
@@ -4173,7 +4823,11 @@
     "check_type": "business",
     "applicability": "Only a registered Consent Manager. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a registered Consent Manager. Included only when the organisation declares it is one.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X8",
@@ -4209,7 +4863,11 @@
     "check_type": "business",
     "applicability": "Only the Third Schedule classes (large e-commerce, online gaming, social media). Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty of the Third Schedule classes (erasure after the specified period, with 48 hours' notice). Included only when the organisation declares it is in such a class.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X10",
@@ -4246,7 +4904,11 @@
     "check_type": "business",
     "applicability": "Only where the organisation processes children's personal data. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty where children's data is processed (verifiable parental or guardian consent). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X13",
@@ -4282,7 +4944,11 @@
     "check_type": "business",
     "applicability": "Only a notified Significant Data Fiduciary. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a notified Significant Data Fiduciary (annual impact assessment and audit). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    }
   ],
   "readiness": {
@@ -4350,7 +5016,7 @@
    "categories": [],
    "caution": null
   },
-  "disclaimer": "A proposed, evidence-based readiness metric produced by Consiva from a website scan. It is not an officially prescribed legal formula, not a certification and not legal advice. It covers only what a public website scan can observe; requirements that need organisational evidence are listed as Unable to Verify.",
+  "disclaimer": "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a qualified legal professional before relying on it.",
   "status_counts": {
    "met": 4,
    "partially_met": 0,
@@ -5618,6 +6284,241 @@
     ]
    }
   ],
+  "ledger": {
+   "total_checks": 16,
+   "applicable_checks": 11,
+   "assessed_checks": 6,
+   "passed_checks": 4,
+   "partial_checks": 0,
+   "failed_checks": 2,
+   "unable_checks": 5,
+   "not_applicable_checks": 5,
+   "total_weight": 49,
+   "applicable_weight": 37,
+   "assessed_weight": 23,
+   "earned_weight": 14.0,
+   "penalty_weight": 9.0,
+   "unable_weight": 14,
+   "not_applicable_weight": 12,
+   "metrics": [
+    {
+     "key": "score",
+     "name": "Readiness score (weighted)",
+     "numerator": 14.0,
+     "denominator": 23,
+     "percent": 60.9,
+     "formula": "14 \u00f7 23 \u00d7 100",
+     "meaning": "Of the weight we could test, the share the site earned. It says nothing about the weight we could not test."
+    },
+    {
+     "key": "coverage",
+     "name": "Assessment coverage (by weight)",
+     "numerator": 23,
+     "denominator": 37,
+     "percent": 62.2,
+     "formula": "23 \u00f7 37 \u00d7 100",
+     "meaning": "Of all the weight that applies to this site, the share a scan could test. It is by weight, not by number of checks."
+    },
+    {
+     "key": "untested",
+     "name": "Applicable weight not verified",
+     "numerator": 14,
+     "denominator": 37,
+     "percent": 37.8,
+     "formula": "14 \u00f7 37 \u00d7 100",
+     "meaning": "The share of applicable weight left untested. Together with coverage it makes up the applicable weight when every applicable check is either assessed or unable to verify."
+    },
+    {
+     "key": "in_force",
+     "name": "In-force score (duties already in force)",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "no check is in force on the assessment date",
+     "meaning": "No requirement is in force on the assessment date."
+    }
+   ],
+   "category_metrics": [
+    {
+     "key": "score:Consent",
+     "name": "Consent: score",
+     "numerator": 14.0,
+     "denominator": 19,
+     "percent": 73.7,
+     "formula": "14 \u00f7 19 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Consent",
+     "name": "Consent: coverage",
+     "numerator": 19,
+     "denominator": 19,
+     "percent": 100.0,
+     "formula": "19 \u00f7 19 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Notice",
+     "name": "Notice: score",
+     "numerator": 0.0,
+     "denominator": 4,
+     "percent": 0.0,
+     "formula": "0 \u00f7 4 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Notice",
+     "name": "Notice: coverage",
+     "numerator": 4,
+     "denominator": 4,
+     "percent": 100.0,
+     "formula": "4 \u00f7 4 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Data principal rights",
+     "name": "Data principal rights: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Data principal rights",
+     "name": "Data principal rights: coverage",
+     "numerator": 0,
+     "denominator": 8,
+     "percent": 0.0,
+     "formula": "0 \u00f7 8 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Security and breach",
+     "name": "Security and breach: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Security and breach",
+     "name": "Security and breach: coverage",
+     "numerator": 0,
+     "denominator": 6,
+     "percent": 0.0,
+     "formula": "0 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    }
+   ],
+   "status_rules": [
+    {
+     "status": "met",
+     "label": "Met",
+     "rule": "Earns 100% of the check's weight (factor 1). No penalty.",
+     "in_numerator": "Weight added in full",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 4,
+     "weight": 14,
+     "check_ids": [
+      "DPDP-C2",
+      "DPDP-C3",
+      "DPDP-C4",
+      "DPDP-C5"
+     ]
+    },
+    {
+     "status": "partially_met",
+     "label": "Partially Met",
+     "rule": "Earns 50% of the check's weight (factor 0.5). The other half is its penalty.",
+     "in_numerator": "Half the weight added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 0,
+     "weight": 0,
+     "check_ids": []
+    },
+    {
+     "status": "not_met",
+     "label": "Not Met",
+     "rule": "Earns nothing (factor 0). Its whole weight is the penalty.",
+     "in_numerator": "Nothing added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 2,
+     "weight": 9,
+     "check_ids": [
+      "DPDP-C1",
+      "DPDP-N1"
+     ]
+    },
+    {
+     "status": "unable_to_verify",
+     "label": "Unable to Verify",
+     "rule": "Not scored: there was not enough evidence. It is never counted as met or as not met, and carries no penalty.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Lowers coverage: its weight stays in the applicable total",
+     "count": 5,
+     "weight": 14,
+     "check_ids": [
+      "DPDP-R9",
+      "DPDP-R14A",
+      "DPDP-R14B",
+      "DPDP-S6",
+      "DPDP-S7"
+     ]
+    },
+    {
+     "status": "not_applicable",
+     "label": "Not Applicable",
+     "rule": "Left out: the check does not apply here, for the reason shown on the check. It is never counted as a pass.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Does not lower coverage: its weight is removed from the applicable total",
+     "count": 5,
+     "weight": 12,
+     "check_ids": [
+      "DPDP-N2",
+      "DPDP-X4",
+      "DPDP-X8",
+      "DPDP-X10",
+      "DPDP-X13"
+     ]
+    }
+   ],
+   "penalty_note": "This scoring has no separate penalty list. The penalty on a check is the weight it did not earn: 0 for Met, half the weight for Partially Met, the whole weight for Not Met. The multipliers in the rules (1, 0.5, 0) are the share of the weight a check EARNS, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and Not Applicable carry no penalty because they are not scored.",
+   "security_score_note": "There is no separate security score. The \"Security and breach\" category holds two duties a website scan cannot observe, so it is shown as Not assessed and contributes nothing to any number here.",
+   "not_applicable": [
+    {
+     "id": "DPDP-N2",
+     "reason": "Counted under DPDP-N1, which already carries this gap. A site with no notice at all is one gap, counted once.",
+     "duplicate_of": "DPDP-N1"
+    },
+    {
+     "id": "DPDP-X4",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X8",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X10",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X13",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    }
+   ]
+  },
   "thresholds": {
    "min_coverage_percent": 30.0,
    "min_assessed_requirements": 2
@@ -5688,7 +6589,11 @@
     "check_type": "website",
     "applicability": "Every website. Assessed when pages were scanned and the scan recorded the three consent states.",
     "confidence": "high",
-    "scoring_rationale": "Not Met earns 0 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state."
+    "scoring_rationale": "Not Met earns 0 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state.",
+    "legal_note": "Statutory duty: consent must be given by a clear affirmative action before processing that depends on it. The scan observes what runs before any choice. It cannot tell whether another lawful ground in the Act covers an item.",
+    "penalty_points": 5.0,
+    "score_contribution_percent": 0.0,
+    "coverage_share_percent": 12.8
    },
    {
     "id": "DPDP-C2",
@@ -5733,7 +6638,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Prerequisite for valid consent; observed directly."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Prerequisite for valid consent; observed directly.",
+    "legal_note": "Statutory duty: notice and a request for consent must reach the visitor. The scan observes whether a consent tool exists and was displayed. It does not assess whether the notice it carries meets the Rules.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 16.0,
+    "coverage_share_percent": 10.3
    },
    {
     "id": "DPDP-C3",
@@ -5781,7 +6690,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent mechanism exists and Reject could be operated; otherwise Not Applicable or Unable to Verify.",
     "confidence": "high",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed.",
+    "legal_note": "Statutory duty: consent can be withdrawn and processing must stop. The scan tests this only after a Reject click that the banner confirmed, on the homepage.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 16.0,
+    "coverage_share_percent": 10.3
    },
    {
     "id": "DPDP-C4",
@@ -5825,7 +6738,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "high",
-    "scoring_rationale": "Not Met earns 0 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy."
+    "scoring_rationale": "Not Met earns 0 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy.",
+    "legal_note": "Statutory duty: refusing must be as easy as giving consent. The scan checks that a reject-all option is present. How prominent it is, and how many clicks it takes, are not measured.",
+    "penalty_points": 4.0,
+    "score_contribution_percent": 0.0,
+    "coverage_share_percent": 10.3
    },
    {
     "id": "DPDP-C5",
@@ -5867,7 +6784,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "high",
-    "scoring_rationale": "Met earns 2 of 2 points. Weight 2: Consent must be specific; per-purpose choices are a supporting signal and a banner design, not a standalone breach."
+    "scoring_rationale": "Met earns 2 of 2 points. Weight 2: Consent must be specific; per-purpose choices are a supporting signal and a banner design, not a standalone breach.",
+    "legal_note": "Statutory duty: consent must be specific. The scan detects per-purpose choices from banner wording. It cannot judge whether the purposes listed are specific enough.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 8.0,
+    "coverage_share_percent": 5.1
    },
    {
     "id": "DPDP-N1",
@@ -5912,7 +6833,11 @@
     "check_type": "website",
     "applicability": "Every website.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate.",
+    "legal_note": "Statutory duty: a notice must be given with specified content. The scan checks that a privacy-policy page exists on the domain. It does not read the policy, so it cannot show the content the Rules require is there.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 16.0,
+    "coverage_share_percent": 10.3
    },
    {
     "id": "DPDP-N2",
@@ -5956,7 +6881,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Partially Met earns 1 of 2 points. Weight 2: Notice must itemise the personal data processed; a dedicated cookie policy is the observable proxy."
+    "scoring_rationale": "Partially Met earns 1 of 2 points. Weight 2: Notice must itemise the personal data processed; a dedicated cookie policy is the observable proxy.",
+    "legal_note": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy counts as partial evidence.",
+    "penalty_points": 1.0,
+    "score_contribution_percent": 4.0,
+    "coverage_share_percent": 5.1
    },
    {
     "id": "DPDP-R9",
@@ -5994,7 +6923,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 5.1
    },
    {
     "id": "DPDP-R14A",
@@ -6034,7 +6967,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 7.7
    },
    {
     "id": "DPDP-R14B",
@@ -6073,7 +7010,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 7.7
    },
    {
     "id": "DPDP-S6",
@@ -6111,7 +7052,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls.",
+    "legal_note": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 7.7
    },
    {
     "id": "DPDP-S7",
@@ -6149,7 +7094,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence, including its breach response times.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process.",
+    "legal_note": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 7.7
    },
    {
     "id": "DPDP-X4",
@@ -6185,7 +7134,11 @@
     "check_type": "business",
     "applicability": "Only a registered Consent Manager. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a registered Consent Manager. Included only when the organisation declares it is one.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X8",
@@ -6221,7 +7174,11 @@
     "check_type": "business",
     "applicability": "Only the Third Schedule classes (large e-commerce, online gaming, social media). Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty of the Third Schedule classes (erasure after the specified period, with 48 hours' notice). Included only when the organisation declares it is in such a class.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X10",
@@ -6258,7 +7215,11 @@
     "check_type": "business",
     "applicability": "Only where the organisation processes children's personal data. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty where children's data is processed (verifiable parental or guardian consent). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X13",
@@ -6294,7 +7255,11 @@
     "check_type": "business",
     "applicability": "Only a notified Significant Data Fiduciary. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a notified Significant Data Fiduciary (annual impact assessment and audit). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    }
   ],
   "readiness": {
@@ -6399,7 +7364,7 @@
    ],
    "caution": null
   },
-  "disclaimer": "A proposed, evidence-based readiness metric produced by Consiva from a website scan. It is not an officially prescribed legal formula, not a certification and not legal advice. It covers only what a public website scan can observe; requirements that need organisational evidence are listed as Unable to Verify.",
+  "disclaimer": "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a qualified legal professional before relying on it.",
   "status_counts": {
    "met": 4,
    "partially_met": 1,
@@ -7483,6 +8448,237 @@
     ]
    }
   ],
+  "ledger": {
+   "total_checks": 16,
+   "applicable_checks": 12,
+   "assessed_checks": 7,
+   "passed_checks": 4,
+   "partial_checks": 1,
+   "failed_checks": 2,
+   "unable_checks": 5,
+   "not_applicable_checks": 4,
+   "total_weight": 49,
+   "applicable_weight": 39,
+   "assessed_weight": 25,
+   "earned_weight": 15.0,
+   "penalty_weight": 10.0,
+   "unable_weight": 14,
+   "not_applicable_weight": 10,
+   "metrics": [
+    {
+     "key": "score",
+     "name": "Readiness score (weighted)",
+     "numerator": 15.0,
+     "denominator": 25,
+     "percent": 60.0,
+     "formula": "15 \u00f7 25 \u00d7 100",
+     "meaning": "Of the weight we could test, the share the site earned. It says nothing about the weight we could not test."
+    },
+    {
+     "key": "coverage",
+     "name": "Assessment coverage (by weight)",
+     "numerator": 25,
+     "denominator": 39,
+     "percent": 64.1,
+     "formula": "25 \u00f7 39 \u00d7 100",
+     "meaning": "Of all the weight that applies to this site, the share a scan could test. It is by weight, not by number of checks."
+    },
+    {
+     "key": "untested",
+     "name": "Applicable weight not verified",
+     "numerator": 14,
+     "denominator": 39,
+     "percent": 35.9,
+     "formula": "14 \u00f7 39 \u00d7 100",
+     "meaning": "The share of applicable weight left untested. Together with coverage it makes up the applicable weight when every applicable check is either assessed or unable to verify."
+    },
+    {
+     "key": "in_force",
+     "name": "In-force score (duties already in force)",
+     "numerator": 15.0,
+     "denominator": 25,
+     "percent": 60.0,
+     "formula": "15 \u00f7 25 \u00d7 100",
+     "meaning": "The same formula over only the duties already in force on the assessment date."
+    }
+   ],
+   "category_metrics": [
+    {
+     "key": "score:Consent",
+     "name": "Consent: score",
+     "numerator": 10.0,
+     "denominator": 19,
+     "percent": 52.6,
+     "formula": "10 \u00f7 19 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Consent",
+     "name": "Consent: coverage",
+     "numerator": 19,
+     "denominator": 19,
+     "percent": 100.0,
+     "formula": "19 \u00f7 19 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Notice",
+     "name": "Notice: score",
+     "numerator": 5.0,
+     "denominator": 6,
+     "percent": 83.3,
+     "formula": "5 \u00f7 6 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Notice",
+     "name": "Notice: coverage",
+     "numerator": 6,
+     "denominator": 6,
+     "percent": 100.0,
+     "formula": "6 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Data principal rights",
+     "name": "Data principal rights: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Data principal rights",
+     "name": "Data principal rights: coverage",
+     "numerator": 0,
+     "denominator": 8,
+     "percent": 0.0,
+     "formula": "0 \u00f7 8 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Security and breach",
+     "name": "Security and breach: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Security and breach",
+     "name": "Security and breach: coverage",
+     "numerator": 0,
+     "denominator": 6,
+     "percent": 0.0,
+     "formula": "0 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    }
+   ],
+   "status_rules": [
+    {
+     "status": "met",
+     "label": "Met",
+     "rule": "Earns 100% of the check's weight (factor 1). No penalty.",
+     "in_numerator": "Weight added in full",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 4,
+     "weight": 14,
+     "check_ids": [
+      "DPDP-C2",
+      "DPDP-C3",
+      "DPDP-C5",
+      "DPDP-N1"
+     ]
+    },
+    {
+     "status": "partially_met",
+     "label": "Partially Met",
+     "rule": "Earns 50% of the check's weight (factor 0.5). The other half is its penalty.",
+     "in_numerator": "Half the weight added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 1,
+     "weight": 2,
+     "check_ids": [
+      "DPDP-N2"
+     ]
+    },
+    {
+     "status": "not_met",
+     "label": "Not Met",
+     "rule": "Earns nothing (factor 0). Its whole weight is the penalty.",
+     "in_numerator": "Nothing added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 2,
+     "weight": 9,
+     "check_ids": [
+      "DPDP-C1",
+      "DPDP-C4"
+     ]
+    },
+    {
+     "status": "unable_to_verify",
+     "label": "Unable to Verify",
+     "rule": "Not scored: there was not enough evidence. It is never counted as met or as not met, and carries no penalty.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Lowers coverage: its weight stays in the applicable total",
+     "count": 5,
+     "weight": 14,
+     "check_ids": [
+      "DPDP-R9",
+      "DPDP-R14A",
+      "DPDP-R14B",
+      "DPDP-S6",
+      "DPDP-S7"
+     ]
+    },
+    {
+     "status": "not_applicable",
+     "label": "Not Applicable",
+     "rule": "Left out: the check does not apply here, for the reason shown on the check. It is never counted as a pass.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Does not lower coverage: its weight is removed from the applicable total",
+     "count": 4,
+     "weight": 10,
+     "check_ids": [
+      "DPDP-X4",
+      "DPDP-X8",
+      "DPDP-X10",
+      "DPDP-X13"
+     ]
+    }
+   ],
+   "penalty_note": "This scoring has no separate penalty list. The penalty on a check is the weight it did not earn: 0 for Met, half the weight for Partially Met, the whole weight for Not Met. The multipliers in the rules (1, 0.5, 0) are the share of the weight a check EARNS, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and Not Applicable carry no penalty because they are not scored.",
+   "security_score_note": "There is no separate security score. The \"Security and breach\" category holds two duties a website scan cannot observe, so it is shown as Not assessed and contributes nothing to any number here.",
+   "not_applicable": [
+    {
+     "id": "DPDP-X4",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X8",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X10",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X13",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    }
+   ]
+  },
   "thresholds": {
    "min_coverage_percent": 30.0,
    "min_assessed_requirements": 2
@@ -7555,7 +8751,11 @@
     "check_type": "website",
     "applicability": "Every website. Assessed when pages were scanned and the scan recorded the three consent states.",
     "confidence": "high",
-    "scoring_rationale": "Not Met earns 0 of 8 points. Weight 8 (configured; documented default 5): Core consent obligation; the scan observes it directly in the pre-consent state."
+    "scoring_rationale": "Not Met earns 0 of 8 points. Weight 8 (configured; documented default 5): Core consent obligation; the scan observes it directly in the pre-consent state.",
+    "legal_note": "Statutory duty: consent must be given by a clear affirmative action before processing that depends on it. The scan observes what runs before any choice. It cannot tell whether another lawful ground in the Act covers an item.",
+    "penalty_points": 8.0,
+    "score_contribution_percent": 0.0,
+    "coverage_share_percent": 20.0
    },
    {
     "id": "DPDP-C2",
@@ -7600,7 +8800,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Prerequisite for valid consent; observed directly."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Prerequisite for valid consent; observed directly.",
+    "legal_note": "Statutory duty: notice and a request for consent must reach the visitor. The scan observes whether a consent tool exists and was displayed. It does not assess whether the notice it carries meets the Rules.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 15.4,
+    "coverage_share_percent": 10.0
    },
    {
     "id": "DPDP-C3",
@@ -7648,7 +8852,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent mechanism exists and Reject could be operated; otherwise Not Applicable or Unable to Verify.",
     "confidence": "high",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed.",
+    "legal_note": "Statutory duty: consent can be withdrawn and processing must stop. The scan tests this only after a Reject click that the banner confirmed, on the homepage.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 15.4,
+    "coverage_share_percent": 10.0
    },
    {
     "id": "DPDP-C4",
@@ -7692,7 +8900,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "high",
-    "scoring_rationale": "Not Met earns 0 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy."
+    "scoring_rationale": "Not Met earns 0 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy.",
+    "legal_note": "Statutory duty: refusing must be as easy as giving consent. The scan checks that a reject-all option is present. How prominent it is, and how many clicks it takes, are not measured.",
+    "penalty_points": 4.0,
+    "score_contribution_percent": 0.0,
+    "coverage_share_percent": 10.0
    },
    {
     "id": "DPDP-C5",
@@ -7730,7 +8942,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Counted under DPDP-C4, which already carries this gap. A banner with no reject option and no per-purpose choice is one gap, counted once."
+    "scoring_rationale": "Not scored: Counted under DPDP-C4, which already carries this gap. A banner with no reject option and no per-purpose choice is one gap, counted once.",
+    "legal_note": "Statutory duty: consent must be specific. The scan detects per-purpose choices from banner wording. It cannot judge whether the purposes listed are specific enough.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-N1",
@@ -7775,7 +8991,11 @@
     "check_type": "website",
     "applicability": "Every website.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate.",
+    "legal_note": "Statutory duty: a notice must be given with specified content. The scan checks that a privacy-policy page exists on the domain. It does not read the policy, so it cannot show the content the Rules require is there.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 15.4,
+    "coverage_share_percent": 10.0
    },
    {
     "id": "DPDP-N2",
@@ -7821,7 +9041,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Partially Met earns 1 of 2 points. Weight 2: Notice must itemise the personal data processed; a dedicated cookie policy is the observable proxy."
+    "scoring_rationale": "Partially Met earns 1 of 2 points. Weight 2: Notice must itemise the personal data processed; a dedicated cookie policy is the observable proxy.",
+    "legal_note": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy counts as partial evidence.",
+    "penalty_points": 1.0,
+    "score_contribution_percent": 3.8,
+    "coverage_share_percent": 5.0
    },
    {
     "id": "DPDP-R9",
@@ -7859,7 +9083,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 5.0
    },
    {
     "id": "DPDP-R14A",
@@ -7899,7 +9127,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 7.5
    },
    {
     "id": "DPDP-R14B",
@@ -7938,7 +9170,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 7.5
    },
    {
     "id": "DPDP-S6",
@@ -7976,7 +9212,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls.",
+    "legal_note": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 7.5
    },
    {
     "id": "DPDP-S7",
@@ -8014,7 +9254,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence, including its breach response times.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process.",
+    "legal_note": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 7.5
    },
    {
     "id": "DPDP-X4",
@@ -8050,7 +9294,11 @@
     "check_type": "business",
     "applicability": "Only a registered Consent Manager. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a registered Consent Manager. Included only when the organisation declares it is one.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X8",
@@ -8086,7 +9334,11 @@
     "check_type": "business",
     "applicability": "Only the Third Schedule classes (large e-commerce, online gaming, social media). Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty of the Third Schedule classes (erasure after the specified period, with 48 hours' notice). Included only when the organisation declares it is in such a class.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X10",
@@ -8123,7 +9375,11 @@
     "check_type": "business",
     "applicability": "Only where the organisation processes children's personal data. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty where children's data is processed (verifiable parental or guardian consent). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X13",
@@ -8159,7 +9415,11 @@
     "check_type": "business",
     "applicability": "Only a notified Significant Data Fiduciary. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a notified Significant Data Fiduciary (annual impact assessment and audit). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    }
   ],
   "readiness": {
@@ -8227,7 +9487,7 @@
    "categories": [],
    "caution": null
   },
-  "disclaimer": "A proposed, evidence-based readiness metric produced by Consiva from a website scan. It is not an officially prescribed legal formula, not a certification and not legal advice. It covers only what a public website scan can observe; requirements that need organisational evidence are listed as Unable to Verify.",
+  "disclaimer": "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a qualified legal professional before relying on it.",
   "status_counts": {
    "met": 3,
    "partially_met": 1,
@@ -9387,6 +10647,242 @@
     ]
    }
   ],
+  "ledger": {
+   "total_checks": 16,
+   "applicable_checks": 11,
+   "assessed_checks": 6,
+   "passed_checks": 3,
+   "partial_checks": 1,
+   "failed_checks": 2,
+   "unable_checks": 5,
+   "not_applicable_checks": 5,
+   "total_weight": 52,
+   "applicable_weight": 40,
+   "assessed_weight": 26,
+   "earned_weight": 13.0,
+   "penalty_weight": 13.0,
+   "unable_weight": 14,
+   "not_applicable_weight": 12,
+   "metrics": [
+    {
+     "key": "score",
+     "name": "Readiness score (weighted)",
+     "numerator": 13.0,
+     "denominator": 26,
+     "percent": 50.0,
+     "formula": "13 \u00f7 26 \u00d7 100",
+     "meaning": "Of the weight we could test, the share the site earned. It says nothing about the weight we could not test."
+    },
+    {
+     "key": "coverage",
+     "name": "Assessment coverage (by weight)",
+     "numerator": 26,
+     "denominator": 40,
+     "percent": 65.0,
+     "formula": "26 \u00f7 40 \u00d7 100",
+     "meaning": "Of all the weight that applies to this site, the share a scan could test. It is by weight, not by number of checks."
+    },
+    {
+     "key": "untested",
+     "name": "Applicable weight not verified",
+     "numerator": 14,
+     "denominator": 40,
+     "percent": 35.0,
+     "formula": "14 \u00f7 40 \u00d7 100",
+     "meaning": "The share of applicable weight left untested. Together with coverage it makes up the applicable weight when every applicable check is either assessed or unable to verify."
+    },
+    {
+     "key": "in_force",
+     "name": "In-force score (duties already in force)",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "no check is in force on the assessment date",
+     "meaning": "No requirement is in force on the assessment date."
+    }
+   ],
+   "category_metrics": [
+    {
+     "key": "score:Consent",
+     "name": "Consent: score",
+     "numerator": 8.0,
+     "denominator": 20,
+     "percent": 40.0,
+     "formula": "8 \u00f7 20 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Consent",
+     "name": "Consent: coverage",
+     "numerator": 20,
+     "denominator": 20,
+     "percent": 100.0,
+     "formula": "20 \u00f7 20 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Notice",
+     "name": "Notice: score",
+     "numerator": 5.0,
+     "denominator": 6,
+     "percent": 83.3,
+     "formula": "5 \u00f7 6 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Notice",
+     "name": "Notice: coverage",
+     "numerator": 6,
+     "denominator": 6,
+     "percent": 100.0,
+     "formula": "6 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Data principal rights",
+     "name": "Data principal rights: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Data principal rights",
+     "name": "Data principal rights: coverage",
+     "numerator": 0,
+     "denominator": 8,
+     "percent": 0.0,
+     "formula": "0 \u00f7 8 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Security and breach",
+     "name": "Security and breach: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Security and breach",
+     "name": "Security and breach: coverage",
+     "numerator": 0,
+     "denominator": 6,
+     "percent": 0.0,
+     "formula": "0 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    }
+   ],
+   "status_rules": [
+    {
+     "status": "met",
+     "label": "Met",
+     "rule": "Earns 100% of the check's weight (factor 1). No penalty.",
+     "in_numerator": "Weight added in full",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 3,
+     "weight": 12,
+     "check_ids": [
+      "DPDP-C2",
+      "DPDP-C3",
+      "DPDP-N1"
+     ]
+    },
+    {
+     "status": "partially_met",
+     "label": "Partially Met",
+     "rule": "Earns 50% of the check's weight (factor 0.5). The other half is its penalty.",
+     "in_numerator": "Half the weight added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 1,
+     "weight": 2,
+     "check_ids": [
+      "DPDP-N2"
+     ]
+    },
+    {
+     "status": "not_met",
+     "label": "Not Met",
+     "rule": "Earns nothing (factor 0). Its whole weight is the penalty.",
+     "in_numerator": "Nothing added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 2,
+     "weight": 12,
+     "check_ids": [
+      "DPDP-C1",
+      "DPDP-C4"
+     ]
+    },
+    {
+     "status": "unable_to_verify",
+     "label": "Unable to Verify",
+     "rule": "Not scored: there was not enough evidence. It is never counted as met or as not met, and carries no penalty.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Lowers coverage: its weight stays in the applicable total",
+     "count": 5,
+     "weight": 14,
+     "check_ids": [
+      "DPDP-R9",
+      "DPDP-R14A",
+      "DPDP-R14B",
+      "DPDP-S6",
+      "DPDP-S7"
+     ]
+    },
+    {
+     "status": "not_applicable",
+     "label": "Not Applicable",
+     "rule": "Left out: the check does not apply here, for the reason shown on the check. It is never counted as a pass.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Does not lower coverage: its weight is removed from the applicable total",
+     "count": 5,
+     "weight": 12,
+     "check_ids": [
+      "DPDP-C5",
+      "DPDP-X4",
+      "DPDP-X8",
+      "DPDP-X10",
+      "DPDP-X13"
+     ]
+    }
+   ],
+   "penalty_note": "This scoring has no separate penalty list. The penalty on a check is the weight it did not earn: 0 for Met, half the weight for Partially Met, the whole weight for Not Met. The multipliers in the rules (1, 0.5, 0) are the share of the weight a check EARNS, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and Not Applicable carry no penalty because they are not scored.",
+   "security_score_note": "There is no separate security score. The \"Security and breach\" category holds two duties a website scan cannot observe, so it is shown as Not assessed and contributes nothing to any number here.",
+   "not_applicable": [
+    {
+     "id": "DPDP-C5",
+     "reason": "Counted under DPDP-C4, which already carries this gap. A banner with no reject option and no per-purpose choice is one gap, counted once.",
+     "duplicate_of": "DPDP-C4"
+    },
+    {
+     "id": "DPDP-X4",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X8",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X10",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X13",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    }
+   ]
+  },
   "thresholds": {
    "min_coverage_percent": 30.0,
    "min_assessed_requirements": 2
@@ -9457,7 +10953,11 @@
     "check_type": "website",
     "applicability": "Every website. Assessed when pages were scanned and the scan recorded the three consent states.",
     "confidence": "high",
-    "scoring_rationale": "Met earns 5 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state."
+    "scoring_rationale": "Met earns 5 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state.",
+    "legal_note": "Statutory duty: consent must be given by a clear affirmative action before processing that depends on it. The scan observes what runs before any choice. It cannot tell whether another lawful ground in the Act covers an item.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 55.6,
+    "coverage_share_percent": 21.7
    },
    {
     "id": "DPDP-C2",
@@ -9498,7 +10998,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no consent mechanism was needed for it."
+    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no consent mechanism was needed for it.",
+    "legal_note": "Statutory duty: notice and a request for consent must reach the visitor. The scan observes whether a consent tool exists and was displayed. It does not assess whether the notice it carries meets the Rules.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-C3",
@@ -9542,7 +11046,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent mechanism exists and Reject could be operated; otherwise Not Applicable or Unable to Verify.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No consent mechanism exists to reject through; see DPDP-C2."
+    "scoring_rationale": "Not scored: No consent mechanism exists to reject through; see DPDP-C2.",
+    "legal_note": "Statutory duty: consent can be withdrawn and processing must stop. The scan tests this only after a Reject click that the banner confirmed, on the homepage.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-C4",
@@ -9582,7 +11090,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No consent banner was found, so there is no choice to compare; see DPDP-C2."
+    "scoring_rationale": "Not scored: No consent banner was found, so there is no choice to compare; see DPDP-C2.",
+    "legal_note": "Statutory duty: refusing must be as easy as giving consent. The scan checks that a reject-all option is present. How prominent it is, and how many clicks it takes, are not measured.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-C5",
@@ -9620,7 +11132,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No consent banner was found, so there are no choices to assess; see DPDP-C2."
+    "scoring_rationale": "Not scored: No consent banner was found, so there are no choices to assess; see DPDP-C2.",
+    "legal_note": "Statutory duty: consent must be specific. The scan detects per-purpose choices from banner wording. It cannot judge whether the purposes listed are specific enough.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-N1",
@@ -9665,7 +11181,11 @@
     "check_type": "website",
     "applicability": "Every website.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate.",
+    "legal_note": "Statutory duty: a notice must be given with specified content. The scan checks that a privacy-policy page exists on the domain. It does not read the policy, so it cannot show the content the Rules require is there.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 44.4,
+    "coverage_share_percent": 17.4
    },
    {
     "id": "DPDP-N2",
@@ -9705,7 +11225,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no tracking disclosure was needed."
+    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no tracking disclosure was needed.",
+    "legal_note": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy counts as partial evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-R9",
@@ -9743,7 +11267,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 8.7
    },
    {
     "id": "DPDP-R14A",
@@ -9783,7 +11311,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 13.0
    },
    {
     "id": "DPDP-R14B",
@@ -9822,7 +11354,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 13.0
    },
    {
     "id": "DPDP-S6",
@@ -9860,7 +11396,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls.",
+    "legal_note": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 13.0
    },
    {
     "id": "DPDP-S7",
@@ -9898,7 +11438,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence, including its breach response times.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process.",
+    "legal_note": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 13.0
    },
    {
     "id": "DPDP-X4",
@@ -9934,7 +11478,11 @@
     "check_type": "business",
     "applicability": "Only a registered Consent Manager. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a registered Consent Manager. Included only when the organisation declares it is one.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X8",
@@ -9970,7 +11518,11 @@
     "check_type": "business",
     "applicability": "Only the Third Schedule classes (large e-commerce, online gaming, social media). Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty of the Third Schedule classes (erasure after the specified period, with 48 hours' notice). Included only when the organisation declares it is in such a class.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X10",
@@ -10007,7 +11559,11 @@
     "check_type": "business",
     "applicability": "Only where the organisation processes children's personal data. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty where children's data is processed (verifiable parental or guardian consent). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X13",
@@ -10043,7 +11599,11 @@
     "check_type": "business",
     "applicability": "Only a notified Significant Data Fiduciary. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a notified Significant Data Fiduciary (annual impact assessment and audit). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    }
   ],
   "readiness": {
@@ -10111,7 +11671,7 @@
    "categories": [],
    "caution": null
   },
-  "disclaimer": "A proposed, evidence-based readiness metric produced by Consiva from a website scan. It is not an officially prescribed legal formula, not a certification and not legal advice. It covers only what a public website scan can observe; requirements that need organisational evidence are listed as Unable to Verify.",
+  "disclaimer": "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a qualified legal professional before relying on it.",
   "status_counts": {
    "met": 2,
    "partially_met": 0,
@@ -10915,6 +12475,260 @@
    "nature_note": "This is an evidence-based assessment of website readiness for the DPDP Act and Rules, from the entered main domain only. It is not a guarantee, a certification or a statement of full legal compliance: organisational evidence and legal interpretation are needed for that."
   },
   "remediation_plan": [],
+  "ledger": {
+   "total_checks": 16,
+   "applicable_checks": 7,
+   "assessed_checks": 2,
+   "passed_checks": 2,
+   "partial_checks": 0,
+   "failed_checks": 0,
+   "unable_checks": 5,
+   "not_applicable_checks": 9,
+   "total_weight": 49,
+   "applicable_weight": 23,
+   "assessed_weight": 9,
+   "earned_weight": 9.0,
+   "penalty_weight": 0.0,
+   "unable_weight": 14,
+   "not_applicable_weight": 26,
+   "metrics": [
+    {
+     "key": "score",
+     "name": "Readiness score (weighted)",
+     "numerator": 9.0,
+     "denominator": 9,
+     "percent": 100.0,
+     "formula": "9 \u00f7 9 \u00d7 100",
+     "meaning": "Of the weight we could test, the share the site earned. It says nothing about the weight we could not test."
+    },
+    {
+     "key": "coverage",
+     "name": "Assessment coverage (by weight)",
+     "numerator": 9,
+     "denominator": 23,
+     "percent": 39.1,
+     "formula": "9 \u00f7 23 \u00d7 100",
+     "meaning": "Of all the weight that applies to this site, the share a scan could test. It is by weight, not by number of checks."
+    },
+    {
+     "key": "untested",
+     "name": "Applicable weight not verified",
+     "numerator": 14,
+     "denominator": 23,
+     "percent": 60.9,
+     "formula": "14 \u00f7 23 \u00d7 100",
+     "meaning": "The share of applicable weight left untested. Together with coverage it makes up the applicable weight when every applicable check is either assessed or unable to verify."
+    },
+    {
+     "key": "in_force",
+     "name": "In-force score (duties already in force)",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "no check is in force on the assessment date",
+     "meaning": "No requirement is in force on the assessment date."
+    }
+   ],
+   "category_metrics": [
+    {
+     "key": "score:Consent",
+     "name": "Consent: score",
+     "numerator": 5.0,
+     "denominator": 5,
+     "percent": 100.0,
+     "formula": "5 \u00f7 5 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Consent",
+     "name": "Consent: coverage",
+     "numerator": 5,
+     "denominator": 5,
+     "percent": 100.0,
+     "formula": "5 \u00f7 5 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Notice",
+     "name": "Notice: score",
+     "numerator": 4.0,
+     "denominator": 4,
+     "percent": 100.0,
+     "formula": "4 \u00f7 4 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Notice",
+     "name": "Notice: coverage",
+     "numerator": 4,
+     "denominator": 4,
+     "percent": 100.0,
+     "formula": "4 \u00f7 4 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Data principal rights",
+     "name": "Data principal rights: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Data principal rights",
+     "name": "Data principal rights: coverage",
+     "numerator": 0,
+     "denominator": 8,
+     "percent": 0.0,
+     "formula": "0 \u00f7 8 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Security and breach",
+     "name": "Security and breach: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Security and breach",
+     "name": "Security and breach: coverage",
+     "numerator": 0,
+     "denominator": 6,
+     "percent": 0.0,
+     "formula": "0 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    }
+   ],
+   "status_rules": [
+    {
+     "status": "met",
+     "label": "Met",
+     "rule": "Earns 100% of the check's weight (factor 1). No penalty.",
+     "in_numerator": "Weight added in full",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 2,
+     "weight": 9,
+     "check_ids": [
+      "DPDP-C1",
+      "DPDP-N1"
+     ]
+    },
+    {
+     "status": "partially_met",
+     "label": "Partially Met",
+     "rule": "Earns 50% of the check's weight (factor 0.5). The other half is its penalty.",
+     "in_numerator": "Half the weight added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 0,
+     "weight": 0,
+     "check_ids": []
+    },
+    {
+     "status": "not_met",
+     "label": "Not Met",
+     "rule": "Earns nothing (factor 0). Its whole weight is the penalty.",
+     "in_numerator": "Nothing added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 0,
+     "weight": 0,
+     "check_ids": []
+    },
+    {
+     "status": "unable_to_verify",
+     "label": "Unable to Verify",
+     "rule": "Not scored: there was not enough evidence. It is never counted as met or as not met, and carries no penalty.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Lowers coverage: its weight stays in the applicable total",
+     "count": 5,
+     "weight": 14,
+     "check_ids": [
+      "DPDP-R9",
+      "DPDP-R14A",
+      "DPDP-R14B",
+      "DPDP-S6",
+      "DPDP-S7"
+     ]
+    },
+    {
+     "status": "not_applicable",
+     "label": "Not Applicable",
+     "rule": "Left out: the check does not apply here, for the reason shown on the check. It is never counted as a pass.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Does not lower coverage: its weight is removed from the applicable total",
+     "count": 9,
+     "weight": 26,
+     "check_ids": [
+      "DPDP-C2",
+      "DPDP-C3",
+      "DPDP-C4",
+      "DPDP-C5",
+      "DPDP-N2",
+      "DPDP-X4",
+      "DPDP-X8",
+      "DPDP-X10",
+      "DPDP-X13"
+     ]
+    }
+   ],
+   "penalty_note": "This scoring has no separate penalty list. The penalty on a check is the weight it did not earn: 0 for Met, half the weight for Partially Met, the whole weight for Not Met. The multipliers in the rules (1, 0.5, 0) are the share of the weight a check EARNS, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and Not Applicable carry no penalty because they are not scored.",
+   "security_score_note": "There is no separate security score. The \"Security and breach\" category holds two duties a website scan cannot observe, so it is shown as Not assessed and contributes nothing to any number here.",
+   "not_applicable": [
+    {
+     "id": "DPDP-C2",
+     "reason": "No analytics or marketing tracking was observed, so no consent mechanism was needed for it.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-C3",
+     "reason": "No consent mechanism exists to reject through; see DPDP-C2.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-C4",
+     "reason": "No consent banner was found, so there is no choice to compare; see DPDP-C2.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-C5",
+     "reason": "No consent banner was found, so there are no choices to assess; see DPDP-C2.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-N2",
+     "reason": "No analytics or marketing tracking was observed, so no tracking disclosure was needed.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X4",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X8",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X10",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X13",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    }
+   ]
+  },
   "thresholds": {
    "min_coverage_percent": 30.0,
    "min_assessed_requirements": 2
@@ -10983,7 +12797,11 @@
     "check_type": "website",
     "applicability": "Every website. Assessed when pages were scanned and the scan recorded the three consent states.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 5 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state."
+    "scoring_rationale": "Met earns 5 of 5 points. Weight 5: Core consent obligation; the scan observes it directly in the pre-consent state.",
+    "legal_note": "Statutory duty: consent must be given by a clear affirmative action before processing that depends on it. The scan observes what runs before any choice. It cannot tell whether another lawful ground in the Act covers an item.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 26.3,
+    "coverage_share_percent": 15.2
    },
    {
     "id": "DPDP-C2",
@@ -11024,7 +12842,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no consent mechanism was needed for it."
+    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no consent mechanism was needed for it.",
+    "legal_note": "Statutory duty: notice and a request for consent must reach the visitor. The scan observes whether a consent tool exists and was displayed. It does not assess whether the notice it carries meets the Rules.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-C3",
@@ -11070,7 +12892,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent mechanism exists and Reject could be operated; otherwise Not Applicable or Unable to Verify.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Consent that cannot be refused is not free; observed only when Reject was clicked and confirmed.",
+    "legal_note": "Statutory duty: consent can be withdrawn and processing must stop. The scan tests this only after a Reject click that the banner confirmed, on the homepage.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 21.1,
+    "coverage_share_percent": 12.1
    },
    {
     "id": "DPDP-C4",
@@ -11112,7 +12938,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: The Act requires withdrawal to be comparable in ease to giving consent; a reject-all option is the observable proxy.",
+    "legal_note": "Statutory duty: refusing must be as easy as giving consent. The scan checks that a reject-all option is present. How prominent it is, and how many clicks it takes, are not measured.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 21.1,
+    "coverage_share_percent": 12.1
    },
    {
     "id": "DPDP-C5",
@@ -11152,7 +12982,11 @@
     "check_type": "website",
     "applicability": "Applies when a consent banner is shown; otherwise Not Applicable.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 2 of 2 points. Weight 2: Consent must be specific; per-purpose choices are a supporting signal and a banner design, not a standalone breach."
+    "scoring_rationale": "Met earns 2 of 2 points. Weight 2: Consent must be specific; per-purpose choices are a supporting signal and a banner design, not a standalone breach.",
+    "legal_note": "Statutory duty: consent must be specific. The scan detects per-purpose choices from banner wording. It cannot judge whether the purposes listed are specific enough.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 10.5,
+    "coverage_share_percent": 6.1
    },
    {
     "id": "DPDP-N1",
@@ -11195,7 +13029,11 @@
     "check_type": "website",
     "applicability": "Every website.",
     "confidence": "medium",
-    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate."
+    "scoring_rationale": "Met earns 4 of 4 points. Weight 4: Notice must precede consent; the scan observes whether a policy page exists, not whether its content is adequate.",
+    "legal_note": "Statutory duty: a notice must be given with specified content. The scan checks that a privacy-policy page exists on the domain. It does not read the policy, so it cannot show the content the Rules require is there.",
+    "penalty_points": 0.0,
+    "score_contribution_percent": 21.1,
+    "coverage_share_percent": 12.1
    },
    {
     "id": "DPDP-N2",
@@ -11235,7 +13073,11 @@
     "check_type": "website",
     "applicability": "Applies when analytics or marketing tracking is observed; otherwise Not Applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no tracking disclosure was needed."
+    "scoring_rationale": "Not scored: No analytics or marketing tracking was observed, so no tracking disclosure was needed.",
+    "legal_note": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy counts as partial evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-R9",
@@ -11273,7 +13115,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 2: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 6.1
    },
    {
     "id": "DPDP-R14A",
@@ -11313,7 +13159,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 9.1
    },
    {
     "id": "DPDP-R14B",
@@ -11352,7 +13202,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan does not read policy text.",
+    "legal_note": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a scan; assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 9.1
    },
    {
     "id": "DPDP-S6",
@@ -11390,7 +13244,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's internal controls.",
+    "legal_note": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 9.1
    },
    {
     "id": "DPDP-S7",
@@ -11428,7 +13286,11 @@
     "check_type": "business",
     "applicability": "Every data fiduciary. A business check: the organisation must supply the evidence, including its breach response times.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process."
+    "scoring_rationale": "Not scored: it is left out of the score and counted against coverage, never treated as met. Weight 3: Statutory duty; the scan cannot see an organisation's incident process.",
+    "legal_note": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from a public website, so this is assessed only from organisational evidence.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": 9.1
    },
    {
     "id": "DPDP-X4",
@@ -11464,7 +13326,11 @@
     "check_type": "business",
     "applicability": "Only a registered Consent Manager. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a registered Consent Manager. Included only when the organisation declares it is one.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X8",
@@ -11500,7 +13366,11 @@
     "check_type": "business",
     "applicability": "Only the Third Schedule classes (large e-commerce, online gaming, social media). Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty of the Third Schedule classes (erasure after the specified period, with 48 hours' notice). Included only when the organisation declares it is in such a class.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X10",
@@ -11537,7 +13407,11 @@
     "check_type": "business",
     "applicability": "Only where the organisation processes children's personal data. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duty where children's data is processed (verifiable parental or guardian consent). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    },
    {
     "id": "DPDP-X13",
@@ -11573,7 +13447,11 @@
     "check_type": "business",
     "applicability": "Only a notified Significant Data Fiduciary. Included only when declared applicable.",
     "confidence": "none",
-    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable."
+    "scoring_rationale": "Not scored: Applies only to some organisations; excluded unless declared applicable.",
+    "legal_note": "Statutory duties of a notified Significant Data Fiduciary (annual impact assessment and audit). Included only when declared.",
+    "penalty_points": null,
+    "score_contribution_percent": null,
+    "coverage_share_percent": null
    }
   ],
   "readiness": {
@@ -11678,7 +13556,7 @@
    ],
    "caution": null
   },
-  "disclaimer": "A proposed, evidence-based readiness metric produced by Consiva from a website scan. It is not an officially prescribed legal formula, not a certification and not legal advice. It covers only what a public website scan can observe; requirements that need organisational evidence are listed as Unable to Verify.",
+  "disclaimer": "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a qualified legal professional before relying on it.",
   "status_counts": {
    "met": 5,
    "partially_met": 0,
@@ -12420,6 +14298,245 @@
    "nature_note": "This is an evidence-based assessment of website readiness for the DPDP Act and Rules, from the entered main domain only. It is not a guarantee, a certification or a statement of full legal compliance: organisational evidence and legal interpretation are needed for that."
   },
   "remediation_plan": [],
+  "ledger": {
+   "total_checks": 16,
+   "applicable_checks": 10,
+   "assessed_checks": 5,
+   "passed_checks": 5,
+   "partial_checks": 0,
+   "failed_checks": 0,
+   "unable_checks": 5,
+   "not_applicable_checks": 6,
+   "total_weight": 49,
+   "applicable_weight": 33,
+   "assessed_weight": 19,
+   "earned_weight": 19.0,
+   "penalty_weight": 0.0,
+   "unable_weight": 14,
+   "not_applicable_weight": 16,
+   "metrics": [
+    {
+     "key": "score",
+     "name": "Readiness score (weighted)",
+     "numerator": 19.0,
+     "denominator": 19,
+     "percent": 100.0,
+     "formula": "19 \u00f7 19 \u00d7 100",
+     "meaning": "Of the weight we could test, the share the site earned. It says nothing about the weight we could not test."
+    },
+    {
+     "key": "coverage",
+     "name": "Assessment coverage (by weight)",
+     "numerator": 19,
+     "denominator": 33,
+     "percent": 57.6,
+     "formula": "19 \u00f7 33 \u00d7 100",
+     "meaning": "Of all the weight that applies to this site, the share a scan could test. It is by weight, not by number of checks."
+    },
+    {
+     "key": "untested",
+     "name": "Applicable weight not verified",
+     "numerator": 14,
+     "denominator": 33,
+     "percent": 42.4,
+     "formula": "14 \u00f7 33 \u00d7 100",
+     "meaning": "The share of applicable weight left untested. Together with coverage it makes up the applicable weight when every applicable check is either assessed or unable to verify."
+    },
+    {
+     "key": "in_force",
+     "name": "In-force score (duties already in force)",
+     "numerator": 19.0,
+     "denominator": 19,
+     "percent": 100.0,
+     "formula": "19 \u00f7 19 \u00d7 100",
+     "meaning": "The same formula over only the duties already in force on the assessment date."
+    }
+   ],
+   "category_metrics": [
+    {
+     "key": "score:Consent",
+     "name": "Consent: score",
+     "numerator": 15.0,
+     "denominator": 15,
+     "percent": 100.0,
+     "formula": "15 \u00f7 15 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Consent",
+     "name": "Consent: coverage",
+     "numerator": 15,
+     "denominator": 15,
+     "percent": 100.0,
+     "formula": "15 \u00f7 15 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Notice",
+     "name": "Notice: score",
+     "numerator": 4.0,
+     "denominator": 4,
+     "percent": 100.0,
+     "formula": "4 \u00f7 4 \u00d7 100",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Notice",
+     "name": "Notice: coverage",
+     "numerator": 4,
+     "denominator": 4,
+     "percent": 100.0,
+     "formula": "4 \u00f7 4 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Data principal rights",
+     "name": "Data principal rights: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Data principal rights",
+     "name": "Data principal rights: coverage",
+     "numerator": 0,
+     "denominator": 8,
+     "percent": 0.0,
+     "formula": "0 \u00f7 8 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    },
+    {
+     "key": "score:Security and breach",
+     "name": "Security and breach: score",
+     "numerator": 0.0,
+     "denominator": 0,
+     "percent": null,
+     "formula": "nothing in this category was assessed",
+     "meaning": "Earned weight over assessed weight within this category."
+    },
+    {
+     "key": "coverage:Security and breach",
+     "name": "Security and breach: coverage",
+     "numerator": 0,
+     "denominator": 6,
+     "percent": 0.0,
+     "formula": "0 \u00f7 6 \u00d7 100",
+     "meaning": "Assessed weight over applicable weight within this category."
+    }
+   ],
+   "status_rules": [
+    {
+     "status": "met",
+     "label": "Met",
+     "rule": "Earns 100% of the check's weight (factor 1). No penalty.",
+     "in_numerator": "Weight added in full",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 5,
+     "weight": 19,
+     "check_ids": [
+      "DPDP-C1",
+      "DPDP-C3",
+      "DPDP-C4",
+      "DPDP-C5",
+      "DPDP-N1"
+     ]
+    },
+    {
+     "status": "partially_met",
+     "label": "Partially Met",
+     "rule": "Earns 50% of the check's weight (factor 0.5). The other half is its penalty.",
+     "in_numerator": "Half the weight added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 0,
+     "weight": 0,
+     "check_ids": []
+    },
+    {
+     "status": "not_met",
+     "label": "Not Met",
+     "rule": "Earns nothing (factor 0). Its whole weight is the penalty.",
+     "in_numerator": "Nothing added",
+     "in_denominator": "Counted",
+     "on_coverage": "Counted as assessed",
+     "count": 0,
+     "weight": 0,
+     "check_ids": []
+    },
+    {
+     "status": "unable_to_verify",
+     "label": "Unable to Verify",
+     "rule": "Not scored: there was not enough evidence. It is never counted as met or as not met, and carries no penalty.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Lowers coverage: its weight stays in the applicable total",
+     "count": 5,
+     "weight": 14,
+     "check_ids": [
+      "DPDP-R9",
+      "DPDP-R14A",
+      "DPDP-R14B",
+      "DPDP-S6",
+      "DPDP-S7"
+     ]
+    },
+    {
+     "status": "not_applicable",
+     "label": "Not Applicable",
+     "rule": "Left out: the check does not apply here, for the reason shown on the check. It is never counted as a pass.",
+     "in_numerator": "Not added",
+     "in_denominator": "Not counted",
+     "on_coverage": "Does not lower coverage: its weight is removed from the applicable total",
+     "count": 6,
+     "weight": 16,
+     "check_ids": [
+      "DPDP-C2",
+      "DPDP-N2",
+      "DPDP-X4",
+      "DPDP-X8",
+      "DPDP-X10",
+      "DPDP-X13"
+     ]
+    }
+   ],
+   "penalty_note": "This scoring has no separate penalty list. The penalty on a check is the weight it did not earn: 0 for Met, half the weight for Partially Met, the whole weight for Not Met. The multipliers in the rules (1, 0.5, 0) are the share of the weight a check EARNS, so 1 means met and no penalty, and 0 means not met and the full penalty. Unable to Verify and Not Applicable carry no penalty because they are not scored.",
+   "security_score_note": "There is no separate security score. The \"Security and breach\" category holds two duties a website scan cannot observe, so it is shown as Not assessed and contributes nothing to any number here.",
+   "not_applicable": [
+    {
+     "id": "DPDP-C2",
+     "reason": "No analytics or marketing tracking was observed, so no consent mechanism was needed for it.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-N2",
+     "reason": "No analytics or marketing tracking was observed, so no tracking disclosure was needed.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X4",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X8",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X10",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    },
+    {
+     "id": "DPDP-X13",
+     "reason": "Applies only to some organisations; excluded unless declared applicable.",
+     "duplicate_of": null
+    }
+   ]
+  },
   "thresholds": {
    "min_coverage_percent": 30.0,
    "min_assessed_requirements": 2

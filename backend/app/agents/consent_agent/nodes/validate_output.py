@@ -70,6 +70,56 @@ def _claims_tracking_before_consent(text: str) -> bool:
     return bool(_PRE_CONSENT_CLAIM_RE.search(text or ""))
 
 
+# A claim phrase that is only being DENIED is not a claim. "No tracker fired before consent" and "nothing continued after
+# Reject" are statements about an absence, and they are exactly what a clean site's findings say; flagging them as "named as
+# firing before consent" rejected correct findings and sent the whole analysis round again (measured: in 9 of 23 stored scans the
+# vendor-timing check failed attempt after attempt on findings of this kind, 4 scans ran out of attempts and fell back to rule
+# findings, and each retry re-sent the entire 4-11k token prompt).
+#
+# Deliberately narrow, so the check keeps catching an actual false assertion:
+#   - a negation must come BEFORE the phrase, in the same sentence, with no contrast word ("but", "however") in between;
+#   - "did not stop / failed to stop / did not wait / did not honour" are negations of a good behaviour, so they ASSERT the
+#     tracking happened and stay claims;
+#   - an exception after the phrase ("nothing before consent except Google Analytics") names a vendor and stays a claim.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+|\n+")
+_NEGATION_RE = re.compile(r"\b(?:no|not|never|none|nothing|neither|nor|without|cannot|nobody)\b|n't\b", re.IGNORECASE)
+_CONTRAST_RE = re.compile(r"\b(?:but|however|although|though|whereas|yet|while)\b", re.IGNORECASE)
+_CLAUSE_BREAK_RE = re.compile(r",\s*(?:and|so|then)\b", re.IGNORECASE)
+_EXCEPTION_RE = re.compile(r"\b(?:except|other than|apart from|besides|aside from)\b", re.IGNORECASE)
+_NEGATED_GOOD_BEHAVIOUR_RE = re.compile(
+    r"(?:\b(?:did|does|do|was|were|has|have|had|is|are)\s+not|n't|\bfail(?:ed|s)?\s+to|\bnever)\s+(?:\w+\s+)?"
+    r"(?:stop\w*|cease\w*|halt\w*|wait\w*|honou?r\w*|respect\w*|block\w*|prevent\w*|suppress\w*|pause\w*)",
+    re.IGNORECASE,
+)
+
+
+def _claim_is_denied(sentence: str, match: re.Match) -> bool:
+    """True when the claim phrase `match` in `sentence` is being denied rather than asserted."""
+    if _EXCEPTION_RE.search(sentence[match.end():]):
+        return False
+    before = sentence[:match.start()]
+    # A negation in an earlier, separate clause ("No banner was shown, and Google Analytics fired before consent") does not
+    # deny a claim made in a new clause.
+    clauses = list(_CLAUSE_BREAK_RE.finditer(before))
+    if clauses:
+        before = before[clauses[-1].end():]
+    contrasts = list(_CONTRAST_RE.finditer(before))
+    if contrasts:
+        before = before[contrasts[-1].end():]
+    if _NEGATED_GOOD_BEHAVIOUR_RE.search(before):
+        return False
+    return bool(_NEGATION_RE.search(before))
+
+
+def _asserts(text: str, pattern: re.Pattern) -> bool:
+    """Whether `text` ASSERTS what `pattern` describes in at least one sentence (a denied mention does not count)."""
+    for sentence in _SENTENCE_SPLIT_RE.split(text or ""):
+        for match in pattern.finditer(sentence):
+            if not _claim_is_denied(sentence, match):
+                return True
+    return False
+
+
 def _unsupported_vendor_claims(
     finding, pre_consent_vendors: list[str], post_reject_vendors: list[str]
 ) -> list[str]:
@@ -80,10 +130,13 @@ def _unsupported_vendor_claims(
     Ads firing only during the post_accept pass. `pre_consent_vendors`/
     `post_reject_vendors` are the same ground-truth lists handed to the model in the
     prompt (see llm/prompts.py:pre_post_reject_vendor_lists) -- checked here in code
-    because the model restating them correctly is not guaranteed."""
+    because the model restating them correctly is not guaranteed.
+
+    Only an ASSERTED timing counts (see _claim_is_denied): "no tracker fired before consent" is
+    true of a clean site and is not a claim that any vendor did."""
     text = f"{finding.finding} {finding.recommendation}"
-    claims_pre = _claims_tracking_before_consent(text)
-    claims_post_reject = _claims_tracking_after_reject(text)
+    claims_pre = _asserts(text, _PRE_CONSENT_CLAIM_RE)
+    claims_post_reject = _asserts(text, _POST_REJECT_CLAIM_RE)
     if not (claims_pre or claims_post_reject):
         return []
     lowered = text.lower()

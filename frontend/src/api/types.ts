@@ -8,6 +8,15 @@ export interface ScanResponse {
   status: string;
 }
 
+/** One row of the recent-scans list (GET /api/v1/consent/scans). */
+export interface ScanListItem {
+  id: string;
+  url: string;
+  status: string;
+  created_at: string | null;
+  completed_at: string | null;
+}
+
 export interface ScanStatusResponse extends ScanResponse {
   error: string | null;
   evidence_counts: {
@@ -66,6 +75,22 @@ export interface StageResponse {
 // backend/app/services/scan_service.py -- every key here is real and already
 // returned today, nothing added on the frontend side.
 
+export interface LanguageSignals {
+  pages_checked: number;
+  pages_with_indic_script: number;
+  indic_scripts: Record<string, number>;
+  switcher_scripts: string[];
+  hreflang: string[];
+  html_lang: string | null;
+}
+
+export interface SecuritySignals {
+  pages_total: number;
+  pages_https: number;
+  homepage_https?: boolean;
+  homepage_headers?: Record<"hsts" | "csp" | "x_frame_options" | "x_content_type_options" | "referrer_policy" | "permissions_policy", string | null>;
+}
+
 export interface WebsiteScanMetadata {
   pages_found?: number;
   cookies_found?: number;
@@ -91,6 +116,10 @@ export interface WebsiteScanMetadata {
   reject_scroll_steps?: number;
   policies_found?: number;
   third_party_services_found?: number;
+  /** What the pages showed about language (backend scanner/page_signals.py): an observation, never a finding. Absent on a scan made before this was recorded. */
+  language_signals?: LanguageSignals;
+  /** What the pages and the homepage's response showed about transport and browser safeguards. Absent on an older scan. */
+  security_signals?: SecuritySignals;
   // The crawl's own page accounting (crawler._crawl_full_site diagnostics), merged into this stage.
   page_limit?: number | null;
   stop_reason?: string | null; // "queue_exhausted" | "page_limit" | "deadline" | "cancelled"
@@ -116,6 +145,10 @@ export interface EvidencePageItem {
   id: string;
   url: string;
   title: string | null;
+  /** The HTTP status of a page that loaded; null for an attempt that did not. Absent on scans made before it was returned. */
+  http_status?: number | null;
+  /** How the page was found: "seed" (the entered address), "link", "sitemap" -- or "failed" / "timeout" for an attempt that did not load. */
+  discovered_via?: string | null;
 }
 
 export interface FormField {
@@ -129,6 +162,10 @@ export interface EvidenceFormItem {
   selector: string | null;
   fields: FormField[];
   purpose_guess: string | null;
+  /** Where the form posts to (null when it posts to its own page). Absent on an older response. */
+  submit_url?: string | null;
+  /** The page the form was on (null when not recorded). Absent on an older response. */
+  page_url?: string | null;
 }
 
 export interface EvidenceCookieItem {
@@ -144,6 +181,13 @@ export interface EvidenceCookieItem {
   // existed) -- shown as "Not available", never defaulted.
   path?: string | null;
   expiry?: string | null;
+  /** The provider of a recognised cookie, what it is for (from the provider's own description), and how that was known: "catalogue", "category" or "unknown". */
+  provider?: string | null;
+  purpose?: string;
+  purpose_source?: "catalogue" | "category" | "unknown" | string;
+  /** True for a session cookie. `lifetime_days` is days from when it was first seen to its expiry; null for a session cookie or when the sighting time was not recorded. */
+  is_session?: boolean;
+  lifetime_days?: number | null;
   secure?: boolean | null;
   http_only?: boolean | null;
   same_site?: string | null;
@@ -204,6 +248,52 @@ export interface ScanEvidenceResponse {
   consent_signals: EvidenceConsentSignalItem[];
 }
 
+/** The homepage preview of a scan (GET .../screenshot; backend app/api/v1/routes/consent_scans.py). `data` is the JPEG as base64; without a picture,
+ *  `message` says why in client-safe words. It carries the scan id and the domain it belongs to. */
+export interface ScanScreenshot {
+  scan_id: string;
+  domain: string;
+  status: "ok" | "blocked" | "timeout" | "failed" | "not_captured" | string;
+  available: boolean;
+  message: string | null;
+  page_url: string | null;
+  mime: string | null;
+  width: number | null;
+  height: number | null;
+  captured_at: string | null;
+  data: string | null;
+}
+
+/** What the scan's privacy and cookie policies say (GET .../policy-analysis; backend app/policy). Informational: it never changes the score. */
+export interface PolicyRequirementResult {
+  id: string;
+  title: string;
+  group: string;
+  /** "required" (the Act or Rules require it to be given or published) or "practice" (a duty stands behind it, but the policy is not stated to have to carry it). */
+  basis: "required" | "practice" | string;
+  provisions: string[];
+  status: "verified" | "partial" | "not_found" | "not_applicable" | string;
+  quote: string;
+  source_url: string | null;
+  detail: string;
+  fix: string;
+  /** Found beside the quoted passage (emails, phone numbers, links), for the contact points; null otherwise. */
+  contacts?: { emails: string[]; phones: string[]; urls: string[] } | null;
+  /** The grievance response period in days, when a period was quoted. */
+  response_days?: number | null;
+}
+export interface PolicyAnalysis {
+  status: "analysed" | "unavailable" | "not_run" | string;
+  reason: string | null;
+  sector: string | null;
+  documents: { url: string; policy_type: string; characters: number; source: string; truncated: boolean }[];
+  notes: string[];
+  summary: { applicable: number; verified: number; partial: number; not_found: number; not_applicable: number; quotes_rejected: number; completeness_percent: number | null } | null;
+  requirements: PolicyRequirementResult[];
+  limitations: string[];
+  model: Record<string, unknown> | null;
+}
+
 /** The proposed DPDP Compliance Score for one scan (backend app/scoring/dpdp_score.py; docs/DPDP_COMPLIANCE_SCORE.md). */
 export type DpdpStatus = "met" | "partially_met" | "not_met" | "unable_to_verify" | "not_applicable";
 
@@ -239,6 +329,56 @@ export interface DpdpRequirementResult {
   applicability: string;
   confidence: "high" | "medium" | "none";
   scoring_rationale: string;
+  legal_note: string;
+  penalty_points: number | null;
+  score_contribution_percent: number | null;
+  coverage_share_percent: number | null;
+}
+
+export interface DpdpLedgerMetric {
+  key: string;
+  name: string;
+  numerator: number;
+  denominator: number;
+  percent: number | null;
+  formula: string;
+  meaning: string;
+}
+
+export interface DpdpStatusRule {
+  status: DpdpStatus;
+  label: string;
+  rule: string;
+  in_numerator: string;
+  in_denominator: string;
+  on_coverage: string;
+  count: number;
+  weight: number;
+  check_ids: string[];
+}
+
+export interface DpdpLedger {
+  total_checks: number;
+  applicable_checks: number;
+  assessed_checks: number;
+  passed_checks: number;
+  partial_checks: number;
+  failed_checks: number;
+  unable_checks: number;
+  not_applicable_checks: number;
+  total_weight: number;
+  applicable_weight: number;
+  assessed_weight: number;
+  earned_weight: number;
+  penalty_weight: number;
+  unable_weight: number;
+  not_applicable_weight: number;
+  metrics: DpdpLedgerMetric[];
+  category_metrics: DpdpLedgerMetric[];
+  status_rules: DpdpStatusRule[];
+  penalty_note: string;
+  security_score_note: string;
+  not_applicable: { id: string; reason: string; duplicate_of: string | null }[];
 }
 
 export interface DpdpCategoryScore {
@@ -427,6 +567,11 @@ export interface DpdpRemediationStep {
   action: string;
   how_to_verify: string;
   legal_references: string[];
+  /** What fixing this one gap does to the readiness score, from the score's own weights (null when the score is withheld), and what the gap means in plain words. */
+  current_percent?: number | null;
+  percent_if_fixed?: number | null;
+  gain_percent?: number | null;
+  impact?: string;
 }
 
 export interface DpdpMethodology {
@@ -447,6 +592,27 @@ export interface DpdpMethodology {
   dedup: { group: string; requirement_ids: string[]; explanation: string }[];
 }
 
+/** Which kind of website this looks like and which provisions depend on it (backend app/scoring/sector.py). Informational: it never changes the score. */
+export interface SectorSignal { sector: string; source: string; match: string; seen_in: string; points: number }
+export interface SectorNote { id: string; title: string; provisions: string[]; text: string; observed: string[]; action: string }
+export interface SectorDeclaration { flag: string; requirement_id: string; label: string; why: string; declared: boolean | null }
+export interface SectorAssessment {
+  sector: string;
+  label: string;
+  confidence: "high" | "medium" | "low" | "declared";
+  summary: string;
+  signals: SectorSignal[];
+  also_possible: string[];
+  notes: SectorNote[];
+  declarations: SectorDeclaration[];
+  limitations: string[];
+  sector_scores?: Record<string, number>;
+  /** True when the organisation declared its own sector; `detected_sector` is then what the scan alone made of the site. */
+  declared?: boolean;
+  detected_sector?: string | null;
+  agrees_with_scan?: boolean | null;
+}
+
 export interface DpdpScoreResponse {
   methodology_version: string;
   as_of: string;
@@ -462,6 +628,9 @@ export interface DpdpScoreResponse {
   methodology: DpdpMethodology;
   assessment: DpdpAssessment;
   remediation_plan: DpdpRemediationStep[];
+  ledger: DpdpLedger;
+  /** Absent on a score from an older server. */
+  sector?: SectorAssessment | null;
   thresholds: { min_coverage_percent: number; min_assessed_requirements: number };
   out_of_scope: { provision: string; reason: string }[];
 }

@@ -4,6 +4,8 @@ approximation of tokens) rather than pulling in a tokenizer dependency for Phase
 import re
 from dataclasses import dataclass, field
 
+from app.rag.text_quality import is_readable_text
+
 _CHARS_PER_TOKEN_ESTIMATE = 4
 
 # Conservative on purpose: only explicit "Section"/"Rule"/"Chapter"-prefixed headings are
@@ -136,6 +138,8 @@ def chunk_pages(pages: list[dict], *, max_chars: int = 1500, overlap_chars: int 
     for page in pages:
         stripped = page["text"].strip()
         for piece, offset in _split_with_overlap(page["text"], max_chars, overlap_chars):
+            if not is_readable_text(piece):
+                continue   # legacy-encoded Hindi pages extract as garbage: see rag/text_quality.py
             chunks.append(Chunk(
                 content=piece,
                 chunk_index=len(chunks),

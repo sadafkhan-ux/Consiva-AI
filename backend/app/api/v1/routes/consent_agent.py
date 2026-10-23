@@ -313,7 +313,7 @@ _SCAN_DESCRIPTION = (
     summary="Start a web scan (maximum 5 pages)",
     description=(
         "Public website scan. The server limits it to `CONSENT_WEB_MAX_PAGES` unique pages "
-        "(default 3, and never more; the scan report says when the limit was reached) whatever `scan_options.max_pages` says -- a request can only lower the "
+        "(default 5, and never more; the scan report says when the limit was reached) whatever `scan_options.max_pages` says -- a request can only lower the "
         "limit.\n\n" + _SCAN_DESCRIPTION
     ),
 )

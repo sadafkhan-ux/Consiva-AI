@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.rules.consent_rules import ConsentContext
+from app.scanner.scan_profiles import MAX_WEB_PAGES
 from app.scoring.review import ReviewItem
 
 GROUPS = ("confirmed", "needs_review", "unable_to_verify", "future_readiness")
@@ -109,16 +110,26 @@ class RemediationStep:
     action: str
     how_to_verify: str
     legal_references: list[str]
+    current_percent: float | None = None
+    percent_if_fixed: float | None = None
+    gain_percent: float | None = None
+    impact: str = ""
 
 
-def build_remediation_plan(results: list) -> list[RemediationStep]:
+def build_remediation_plan(results: list, readiness=None) -> list[RemediationStep]:
     """The remediation actions of every failed check, in the order to do them, by a fixed rule that can be read off the result:
     duties already in force first; within that, Not Met before Partially Met; then the heavier documented weight; then by id.
     The same rule gives the same order for the same evidence."""
     gaps = [r for r in results if r.status in ("not_met", "partially_met") and r.sufficient]
     gaps.sort(key=lambda r: (0 if r.in_force else 1, 0 if r.status == "not_met" else 1, -r.default_weight, r.id))
     plan: list[RemediationStep] = []
+    # The effect of fixing each gap ON ITS OWN, from the weights the score itself uses: a Not Met check regains its whole weight, a Partially Met
+    # one the half it had not earned. No estimate and no invented metric: the same arithmetic as the score, run once more with one check fixed.
+    scored = readiness is not None and getattr(readiness, "status", None) == "scored" and getattr(readiness, "assessed_weight", 0)
     for rank, r in enumerate(gaps, start=1):
+        current = round(readiness.points_earned / readiness.assessed_weight * 100, 1) if scored else None
+        regained = r.weight * (1.0 if r.status == "not_met" else 0.5)
+        after = round(min(100.0, (readiness.points_earned + regained) / readiness.assessed_weight * 100), 1) if scored else None
         if r.in_force:
             priority = "Fix now" if r.status == "not_met" else "Improve"
             timing = "Current"
@@ -132,6 +143,8 @@ def build_remediation_plan(results: list) -> list[RemediationStep]:
                              f"{'a gap' if r.status == 'not_met' else 'partly met'}; documented weight {r.default_weight}; "
                              f"{r.confidence} confidence."),
             action=r.remediation, how_to_verify=r.verification, legal_references=list(r.provisions),
+            current_percent=current, percent_if_fixed=after, gain_percent=round(after - current, 1) if scored else None,
+            impact=BUSINESS_IMPACT.get(r.id, ""),
         ))
     return plan
 
@@ -190,7 +203,9 @@ def build_finding_groups(results: list, review_items: list[ReviewItem], ctx: Con
             row = rows_by_id.get(i, {})
             urls = [row["page_url"]] if row.get("page_url") else [
                 o["page_url"] for o in (row.get("observations") or []) if o.get("page_url")]
-            out += [u for u in urls if u not in out]
+            for u in urls:   # one at a time: a cookie seen in three consent states names its page three times
+                if u not in out:
+                    out.append(u)
         return out
 
     confirmed: list[FindingEntry] = []
@@ -229,14 +244,14 @@ def build_finding_groups(results: list, review_items: list[ReviewItem], ctx: Con
                 how_to_verify=_how_to_verify_missing(res, ctx), confidence="none",
             ))
 
-    if len(ctx.pages) >= 5:
+    if len(ctx.pages) >= MAX_WEB_PAGES:
         unable.append(FindingEntry(
-            id="page-limit", group="unable_to_verify", title="Pages beyond the first 5 of the main domain were not assessed",
+            id="page-limit", group="unable_to_verify", title=f"Pages beyond the first {MAX_WEB_PAGES} of the main domain were not assessed",
             requirement_ids=[], legal_references=[], outcome="Unable to Verify", severity=None,
             severity_note="Not rated: it is neither passing nor failing, the evidence is missing.", pages=[], consent_states=[],
             observed=[f"{len(ctx.pages)} pages were scanned, which is the limit."], evidence_ids=[], rule_ids=[],
             effective_date=None, timing_note="", business_impact="Pages that were not scanned, such as sign-up or checkout, may behave differently.",
-            explanation="The scan covers at most 5 pages of the main domain.",
+            explanation=f"The scan covers at most {MAX_WEB_PAGES} pages of the main domain.",
             missing=["Behaviour on pages that were not scanned."],
             how_to_verify="Scan the specific page directly, for example the one that collects personal data.",
         ))

@@ -260,6 +260,10 @@ class ConsentContext:
     three_pass: bool
 
 
+# How a page record ends when the attempt brought no page (scanner/schemas.py PageRecord.discovered_via).
+_PAGE_NOT_LOADED = frozenset({"failed", "timeout", "robots_disallowed"})
+
+
 def build_consent_context(evidence: dict) -> ConsentContext:
     cookies = evidence["cookies"]
     trackers = evidence["trackers"]
@@ -270,6 +274,10 @@ def build_consent_context(evidence: dict) -> ConsentContext:
         t for t in trackers if t["category"] in ("analytics", "marketing")
     ]
     interaction_evidence = (signals or {}).get("evidence", {}) or {}
+    # A page record also exists for an attempt that did not load ("failed", "timeout", "robots_disallowed"). Those pages brought no
+    # evidence, so they are not pages scanned: counting them overstated "pages scanned" and could hide a scan where nothing loaded.
+    # A record with no recorded outcome (a scan stored before it was kept) is still counted, as before.
+    pages = [p for p in evidence.get("pages", []) if p.get("discovered_via") not in _PAGE_NOT_LOADED]
     accept_outcome = interaction_evidence.get("accept_interaction")
     reject_outcome = interaction_evidence.get("reject_interaction")
     reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
@@ -283,7 +291,7 @@ def build_consent_context(evidence: dict) -> ConsentContext:
         e.get("consent_states") for e in (*cookies, *trackers)
     )
     return ConsentContext(
-        cookies=cookies, trackers=trackers, forms=evidence["forms"], pages=evidence.get("pages", []),
+        cookies=cookies, trackers=trackers, forms=evidence["forms"], pages=pages,
         policy_types=policy_types, signals=signals, mechanism_type=mechanism_type, non_essential=non_essential,
         interaction_evidence=interaction_evidence, accept_outcome=accept_outcome, reject_outcome=reject_outcome,
         reject_confirmed=reject_confirmed, interaction_page=interaction_evidence.get("interaction_page_url"),
@@ -323,7 +331,7 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             risk_level="high",
             summary=(
                 f"{len(pre_consent_hits)} analytics/marketing cookie(s)/script(s) fired BEFORE any "
-                "consent interaction — the most common real DPDP violation." + _observed_on(pre_consent_hits)
+                "consent interaction." + _observed_on(pre_consent_hits)
             ),
             evidence_ids=[e["id"] for e in pre_consent_hits],
             confidence="high",

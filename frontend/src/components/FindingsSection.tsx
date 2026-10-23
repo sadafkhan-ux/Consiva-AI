@@ -30,7 +30,7 @@ export function FindingsSection({
     return (
       <p className="empty-note">
         {analysisFailed
-          ? "No findings could be produced: the analysis stage failed and the deterministic rules matched nothing to fall back on. See Errors / Diagnostics below."
+          ? "No findings: the rules matched nothing on the scanned pages, and the analysis step that could add model-assisted findings did not complete. See Errors / Diagnostics below."
           : "No findings for this scan — no compliance rule matched the collected evidence."}
       </p>
     );

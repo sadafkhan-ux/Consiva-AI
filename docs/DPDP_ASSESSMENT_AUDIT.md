@@ -11,7 +11,7 @@ validated, and what it cannot claim. Written 21 Oct 2026. Nothing here is commit
 | Rules engine (`app/rules/consent_rules.py`) | Rules R-001 to R-012 producing findings; the facts they depend on were computed inline | The facts are now one function, `build_consent_context`, used by the rules and the score, so a finding and a check cannot disagree. Rules and their review workflow are untouched. |
 | Findings / LLM / RAG | LangGraph analysis with local LLM and RAG, human review gate, per-finding severity | Untouched. The four finding groups are derived from the requirement checks, not from LLM output, and the LLM/RAG path is not involved in the score. |
 | API | Scan, evidence, findings, audit routes, JWT auth, org scoping | One read-only route added, `GET /consent/scans/{id}/dpdp-score`, with the same authentication and org scoping as the evidence route. |
-| Dashboard / PDF | Evidence tables, findings with review actions, a PDF with a risk banner | A score section and PDF pages added; the PDF's "Overall risk" banner replaced by the score. Existing sections and actions remain. |
+| Dashboard / PDF | Evidence tables, findings with review actions, a PDF with a risk banner | A full score section on the dashboard. The PDF is a fixed two-page report with the score, the formula and the findings, and no legal wording; its "Overall risk" banner was replaced by the score. |
 | Tests | 2,700+ backend tests, frontend suite | Extended; no existing test was weakened except those that asserted the old three-page cap or the old risk banner. |
 
 **Gaps found** and closed: no legal mapping or effective dates; no evidence-based score; risk shown as the highest finding severity;
@@ -20,9 +20,9 @@ scope and scan time not stated in the report.
 
 ## 2. Scope decisions (read these)
 
-* **Page limit is 5, not 3.** The brief for this work mentions a "strict three-page scan limit"; an earlier instruction in this
-  project set the limit to **5 pages of the entered main domain**, and the code, settings clamp and tests enforce 5. Say if it should
-  return to 3: it is one constant (`MAX_WEB_PAGES`).
+* **The page limit is 5 pages of the entered main domain (confirmed by the owner on 22 Oct 2026).** It is one constant, `MAX_WEB_PAGES`;
+  the findings, the PDF brief, the methodology text and the API documentation all read that number instead of carrying their own, and tests
+  fail if they drift.
 * Only the entered main domain is assessed. Subdomains and other websites are not crawled, listed or reported. Third-party requests
   seen on the scanned pages are kept as evidence and are never treated as violations by themselves.
 * Authentication, org scoping, the local LLM/RAG architecture and the SSRF protections are unchanged.
@@ -36,7 +36,7 @@ scope and scan time not stated in the report.
 * **Backend assessment** (`app/scoring`): score, categories, coverage, status counts, four finding groups, remediation plan,
   Human Review box, methodology, scope and scan time. Reproducible: a pure function of the recorded evidence, the date and the declared
   applicability.
-* **Dashboard and PDF** render one shared view of that data.
+* **Dashboard and PDF** render one shared view of that data. The dashboard shows everything; the PDF is deliberately two pages and plain.
 * **Tests:** backend `test_dpdp_score`, `_checks`, `_review`, `_findings`, `_methodology`, `_assessment`; frontend `dpdpScore.test.tsx`,
   `dpdpScorePdf.test.ts` (which compare dashboard and PDF text for the same fixtures, generated from the backend).
 * **Validation harness:** `backend/scripts/validate_dpdp_score.py` (read-only).
@@ -86,5 +86,5 @@ only appears to some regions; scoring of pages beyond the first 5.
 | Legal mappings traceable | every result lists its provisions; `TestLegalMappingIsVersioned` pins the mapping to the version |
 | Unverified checks transparent | Unable to Verify group, coverage, "Insufficient Evidence", the caution |
 | Future vs current separated | Future Readiness group, readiness and in-force scores, effective dates |
-| Dashboard and PDF match | shared view, tests compare their text for the same fixtures |
+| Dashboard and PDF match | shared view; `twoPageReport.test.ts` compares score, coverage, categories, counts, findings and fix order with the dashboard for the same fixtures |
 | Website readiness distinguished from legal compliance | nature note in both, Human Review box |

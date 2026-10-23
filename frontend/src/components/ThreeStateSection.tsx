@@ -1,4 +1,5 @@
-import type { EvidenceTrackerItem, WebsiteScanMetadata } from "../api/types";
+import type { EvidenceCookieItem, EvidenceTrackerItem, WebsiteScanMetadata } from "../api/types";
+import { countByState, REQUEST_UNIT_NOTE } from "../report/stateCounts";
 import { InteractionPill } from "./shared";
 
 function domainOf(scriptSrc: string): string {
@@ -18,13 +19,18 @@ const STATES: { key: string; title: string }[] = [
 export function ThreeStateSection({
   meta,
   trackers,
+  cookies,
 }: {
   meta: WebsiteScanMetadata | null;
   trackers: EvidenceTrackerItem[];
+  /** The scan's cookie rows. When given, every figure is counted from the evidence rows exactly as the report counts them
+   *  (report/stateCounts.ts). When absent (evidence not loaded) the stored summary figures are shown instead. */
+  cookies?: EvidenceCookieItem[];
 }) {
   if (!meta) return null;
-  const cByState = meta.cookies_by_consent_state ?? {};
-  const tByState = meta.trackers_by_consent_state ?? {};
+  const counted = cookies ? countByState(cookies, trackers) : null;
+  const cByState = counted ? counted.cookies : (meta.cookies_by_consent_state ?? {});
+  const tByState = counted ? counted.requests : (meta.trackers_by_consent_state ?? {});
 
   return (
     <section className="section">
@@ -41,8 +47,9 @@ export function ThreeStateSection({
               <h3>{title}</h3>
               {pill ? <InteractionPill status={pill} /> : <span className="badge neutral">Baseline (no interaction)</span>}
               <div className="counts">
-                <div><b>{cByState[key] ?? 0}</b> cookies</div>
-                <div><b>{tByState[key] ?? 0}</b> third-party requests</div>
+                <div><b>{cByState[key as keyof typeof cByState] ?? 0}</b> cookies</div>
+                <div><b>{tByState[key as keyof typeof tByState] ?? 0}</b> third-party requests</div>
+                {counted && <div className="hint" style={{ margin: 0 }}><b>{counted.knownRequests[key as keyof typeof counted.knownRequests]}</b> analytics or marketing</div>}
               </div>
               {pill && pill !== "clicked" && (
                 <div className="hint" style={{ margin: "8px 0 0" }} data-testid={`state-untested-${key}`}>
@@ -66,10 +73,8 @@ export function ThreeStateSection({
           );
         })}
       </div>
-      <p className="hint" style={{ marginTop: 12 }}>
-        Trackers here represent every observed third-party script/network request (the backend does not separately
-        persist raw "script" vs "third-party resource" categories per consent state — a tracker record already
-        represents a detected third-party script or beacon).
+      <p className="hint" style={{ marginTop: 12 }} data-testid="state-unit-note">
+        {REQUEST_UNIT_NOTE} Cookies are counted the same way: once each, in every state they were seen.
       </p>
     </section>
   );

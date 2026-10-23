@@ -4,6 +4,9 @@ import type {
   FindingResponse,
   DpdpScoreResponse,
   ScanEvidenceResponse,
+  PolicyAnalysis,
+  ScanListItem,
+  ScanScreenshot,
   ScanResponse,
   ScanStatusResponse,
   StageResponse,
@@ -129,6 +132,15 @@ const STATUS_FALLBACKS: Record<number, string> = {
 };
 
 export const api = {
+  getScreenshot(scanId: string): Promise<ScanScreenshot> {
+    return request(`/api/v1/consent/scans/${scanId}/screenshot`);
+  },
+  getPolicyAnalysis(scanId: string): Promise<PolicyAnalysis> {
+    return request(`/api/v1/consent/scans/${scanId}/policy-analysis`);
+  },
+  listScans(limit = 15): Promise<ScanListItem[]> {
+    return request(`/api/v1/consent/scans?limit=${limit}`);
+  },
   createScan(url: string, authorized: boolean): Promise<ScanResponse> {
     return request("/api/v1/consent/scans", { method: "POST", body: JSON.stringify({ url, authorized }) });
   },

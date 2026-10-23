@@ -52,6 +52,9 @@ class ParsedPage:
     # is actually made of. Kept separate from visible_text because consent detection
     # must never match ordinary page prose; see control_text() below.
     control_text: str = ""
+    # What the page declares about its language: <html lang> and the hreflang of its rel=alternate links (read-only observations; see page_signals).
+    html_lang: str | None = None
+    hreflang: list[str] = field(default_factory=list)
 
 
 # MIME types a browser runs as script. Anything else (text/plain, text/template, ...) is inert.
@@ -120,9 +123,16 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
 
     visible_text = soup.get_text(separator=" ", strip=True)[:5000]
 
+    html_tag = soup.find("html")
+    html_lang = (html_tag.get("lang") or "").strip() or None if html_tag else None
+    hreflang = [
+        str(t.get("hreflang")).strip() for t in soup.find_all("link", attrs={"rel": lambda r: r and "alternate" in ([r] if isinstance(r, str) else r), "hreflang": True})
+        if str(t.get("hreflang")).strip()
+    ]
+
     return ParsedPage(
         title=title, scripts=scripts, links=links, forms=forms,
-        visible_text=visible_text, control_text=extract_control_text(soup),
+        visible_text=visible_text, control_text=extract_control_text(soup), html_lang=html_lang, hreflang=hreflang,
     )
 
 

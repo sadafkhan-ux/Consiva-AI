@@ -69,7 +69,7 @@ def normalize_url(url: str) -> str:
 
     Drops the fragment (never sent to a server, so it cannot select different
     content), lowercases scheme and host (both case-insensitive per RFC 3986 while
-    the path is not), drops a redundant default port, strips the tracking parameters
+    the path is not), folds a leading "www." away, drops a redundant default port, strips the tracking parameters
     above while preserving order-insensitivity for the rest, and removes a trailing
     slash from a non-root path. Returns the input unchanged if it cannot be parsed --
     a URL this cannot understand is passed through rather than mangled into something
@@ -84,6 +84,10 @@ def normalize_url(url: str) -> str:
 
     scheme = parts.scheme.lower()
     hostname = (parts.hostname or "").lower()
+    # `www.example.com/` and `example.com/` are one page of one site (the crawler already treats them as the same main domain). Keyed apart,
+    # they took two of the scan's five pages for the same content: seen live on swaransoft.com, where the apex and the www homepage were both scanned.
+    if hostname.startswith("www.") and hostname.count(".") >= 2:
+        hostname = hostname[4:]
     netloc = hostname
     if parts.port and str(parts.port) != _DEFAULT_PORTS.get(scheme):
         netloc = f"{hostname}:{parts.port}"

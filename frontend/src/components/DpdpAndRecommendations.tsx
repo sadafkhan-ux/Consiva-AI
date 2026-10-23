@@ -43,9 +43,17 @@ export function DpdpReferencesSection({
   );
 }
 
-export function RecommendationsSection({ findings }: { findings: FindingResponse[] }) {
+export function RecommendationsSection({ findings, analysisFailed = false }: { findings: FindingResponse[]; analysisFailed?: boolean }) {
   const all = findings.flatMap((f) => f.recommendations.map((r) => ({ rec: r, finding: f })));
-  if (all.length === 0) return <p className="empty-note">No recommendations have been generated yet for this scan.</p>;
+  if (all.length === 0) {
+    return (
+      <p className="empty-note">
+        {analysisFailed
+          ? "No recommendations: there are no findings to recommend against, and the analysis step that writes recommendations did not complete."
+          : "No recommendations have been generated yet for this scan."}
+      </p>
+    );
+  }
   return (
     <div>
       {all.map(({ rec, finding }) => (

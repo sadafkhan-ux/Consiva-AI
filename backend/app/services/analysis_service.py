@@ -93,6 +93,21 @@ async def run_analysis(agent_run_id: uuid.UUID, scan_id: uuid.UUID, org_id: uuid
         agent_run.langgraph_thread_id = thread_id
         await db.commit()
 
+    # Reads what the site's privacy and cookie policies SAY, beside the graph's reading of what the site DOES. Fail-soft by design: it
+    # never raises, and its stage always completes (an unavailable result is recorded in the stage metadata, not as a failed stage:
+    # a failed stage outside the analysis stages is read by the console as the whole run failing). Run before the graph so the result
+    # exists whenever the findings do.
+    try:
+        from app.observability.stage_tracker import track_stage
+        from app.policy import analysis as policy_analysis
+
+        async with track_stage(scan_id, "policy_analysis", agent_run_id=agent_run_id) as meta:
+            result = await policy_analysis.run(scan_id)
+            meta["status"] = result["status"]
+            meta["result"] = result
+    except Exception:
+        logger.warning("Policy analysis step could not run for scan %s", scan_id, exc_info=True)
+
     graph = await get_compiled_graph()
     initial_state = AgentState(scan_id=str(scan_id), org_id=str(org_id), agent_run_id=str(agent_run_id))
 

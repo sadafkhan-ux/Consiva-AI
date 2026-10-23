@@ -1,9 +1,13 @@
 import type {
-  EvidenceCookieItem, EvidenceTrackerItem, FindingResponse, ScanStatusResponse, WebsiteScanMetadata,
+  EvidenceCookieItem, EvidenceTrackerItem, FindingResponse, PolicyAnalysis, ScanEvidenceResponse, ScanScreenshot, ScanStatusResponse, WebsiteScanMetadata,
 } from "../api/types";
 import type { ScoreView } from "./dpdpScore";
+import { buildInsightSections, type InsightSection } from "./insights";
+import { buildReadinessReview, type ReadinessReview } from "./readiness";
 import { summariseTrackers } from "./trackerSummary";
 import { buildCookieInventory, type CookieInventory } from "./cookieInventory";
+import { buildScanPages, type ScanPagesView } from "./scanPages";
+import { buildReportVisual, type ReportVisual } from "./reportVisual";
 
 /** Risk ordering, worst first -- used both to pick the overall band and to decide which
  *  findings earn a place on a deliberately one-page summary. */
@@ -13,6 +17,10 @@ function riskRank(level: string): number {
   const i = RISK_ORDER.indexOf(level.toLowerCase() as (typeof RISK_ORDER)[number]);
   return i === -1 ? RISK_ORDER.length : i;
 }
+
+/** Said on the score card and in the PDF whenever the analysis step did not complete. */
+export const ANALYSIS_INCOMPLETE_NOTE =
+  "The analysis did not complete for this scan, so there are no explanations or citations. The score and the checks come from the scan evidence and do not depend on it.";
 
 export interface ReportModel {
   siteUrl: string;
@@ -34,11 +42,35 @@ export interface ReportModel {
   shownFindings: number;
   /** The complete cookie inventory, appended after the one-page summary. */
   cookies: CookieInventory;
+  /** Counts per consent state, technologies and privacy elements for the visual report. Null when the evidence was not loaded. */
+  visual: ReportVisual | null;
+  /** The pages this scan visited and how each one went, for the "Website Pages Scanned" section. Null when neither the page records nor the scan summary were loaded. */
+  scanPages: ScanPagesView | null;
+  /** Set when the analysis step did not complete, so the report says so beside the score. */
+  analysisNote: string | null;
+  /** The scan run this report describes: the same one the score card and the page list come from. */
+  scanId: string | null;
+  /** The scan's complete evidence (forms with every field, banner details, cookies, requests, policies, services), for the appendix. Null when it was not loaded. */
+  evidence: ScanEvidenceResponse | null;
+  /** What the site's policies say, for the appendix (the same object the dashboard section shows). Null when it was not loaded or not run. */
+  policyAnalysis: PolicyAnalysis | null;
+  /** The scanned homepage's preview, the same object the dashboard shows. Null when it was not loaded. */
+  screenshot: ScanScreenshot | null;
+  /** The dedicated sections beside the score (grievance officer, DPO, Indian-language support, children's data, security signals): the same ones the dashboard shows. */
+  insights: InsightSection[];
+  /** The five-page DPDP readiness review: the same one the dashboard shows. */
+  readiness: ReadinessReview;
 }
 
 /** Everything the one-page PDF needs, derived from data the app already has in state.
  *  Pure and side-effect free so it can be unit-tested and reasoned about separately
  *  from the rendering. */
+/** The consent states in which nothing was clicked. What the scan recorded for them is the same page seen again, not what happens after a choice. */
+export function untestedConsentStates(meta: WebsiteScanMetadata | null | undefined): string[] {
+  const clicked = (o: string | null | undefined) => o === "clicked";
+  return [...(meta && !clicked(meta.accept_interaction) ? ["post_accept"] : []), ...(meta && !clicked(meta.reject_interaction) ? ["post_reject"] : [])];
+}
+
 export function buildReportModel(
   scan: ScanStatusResponse | null,
   findings: FindingResponse[],
@@ -46,6 +78,10 @@ export function buildReportModel(
   cookies: EvidenceCookieItem[] = [],
   trackers: EvidenceTrackerItem[] = [],
   dpdpScore: ScoreView | null = null,
+  evidence: ScanEvidenceResponse | null = null,
+  analysisNote: string | null = null,
+  policyAnalysis: PolicyAnalysis | null = null,
+  screenshot: ScanScreenshot | null = null,
 ): ReportModel {
   const sorted = [...findings].sort((a, b) => riskRank(a.risk_level) - riskRank(b.risk_level));
   const provisional = findings.some((f) => f.status === "pending");
@@ -146,10 +182,7 @@ export function buildReportModel(
     : "Scope: not recorded for this scan.";
 
   // The consent states in which nothing was clicked. Their counts are the same page seen again.
-  const untestedStates = [
-    ...(meta && !tested(meta.accept_interaction) ? ["post_accept"] : []),
-    ...(meta && !tested(meta.reject_interaction) ? ["post_reject"] : []),
-  ];
+  const untestedStates = untestedConsentStates(meta);
 
   const headline = sorted.length
     ? `${sorted.length} ${sorted.length === 1 ? "finding" : "findings"} to review.`
@@ -171,6 +204,15 @@ export function buildReportModel(
     actions: actions.slice(0, MAX_ACTIONS),
     totalFindings: findings.length,
     shownFindings: Math.min(sorted.length, MAX_PROBLEMS),
-    cookies: buildCookieInventory(cookies, untestedStates),
+    cookies: buildCookieInventory(cookies.length ? cookies : evidence?.cookies ?? [], untestedStates),
+    visual: buildReportVisual(evidence, meta, dpdpScore, untestedStates),
+    scanPages: buildScanPages(evidence?.pages, meta, scan?.url ?? "", dpdpScore?.pageLimit ?? null),
+    scanId: scan?.id ?? null,
+    analysisNote,
+    evidence,
+    policyAnalysis: policyAnalysis && policyAnalysis.status !== "not_run" ? policyAnalysis : null,
+    screenshot,
+    insights: buildInsightSections({ policy: policyAnalysis, meta, evidence, sector: dpdpScore?.sector ?? null }),
+    readiness: buildReadinessReview({ siteUrl: scan?.url ?? "", evidence, meta, policy: policyAnalysis, sector: dpdpScore?.sector ?? null }),
   };
 }

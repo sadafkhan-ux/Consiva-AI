@@ -1,4 +1,4 @@
-import type { DpdpFindingEntry, DpdpGroupKey, DpdpNeed, DpdpScoreBlock, DpdpScoreResponse, DpdpStatus } from "../api/types";
+import type { DpdpFindingEntry, DpdpGroupKey, DpdpLedgerMetric, DpdpNeed, DpdpScoreBlock, DpdpScoreResponse, DpdpStatus, SectorAssessment } from "../api/types";
 
 /**
  * The ONE place the DPDP Compliance Score is turned into words. The dashboard section and the PDF both render this view, so
@@ -44,6 +44,20 @@ export interface ScoreRequirementView {
   evidenceIds: string[];
   rules: string[];
   note: string | null;
+  /** The check's verdict in the words of the score card table: Pass, Partial, Fail, Cannot Verify or N/A. */
+  verdict: string;
+  tone: "pass" | "partial" | "fail" | "unknown" | "na";
+  /** What kind of legal basis the check has and how far a scan can speak to it. */
+  legalNote: string;
+  /** "none (not scored)" or "1 of 2 points lost": the weight the check did not earn. */
+  penalty: string;
+  /** What the check adds to the score, or why it adds nothing and what it does to coverage. */
+  contribution: string;
+  /** Why a check is Unable to Verify or Not Applicable; empty for an assessed check. */
+  reason: string;
+  /** The first observation, or the exclusion reason: the one-line evidence for the table. */
+  evidenceLine: string;
+  effective: string;
 }
 
 export interface ScoreCategoryView {
@@ -160,12 +174,22 @@ export interface RemediationView {
   action: string;
   howToVerify: string;
   legal: string;
+  /** What fixing this one gap would do to the readiness score, in words ("" when the score is withheld), from the score's own weights. */
+  scoreLine: string;
+  /** What the gap means for the organisation, in plain words ("" when none is stated for this check). */
+  impact: string;
 }
 
 export interface ScoreView {
+  /** The sector reading, passed through from the server (absent on an older one). */
+  sector: SectorAssessment | null;
   title: string;
   /** "56.5%" or "Insufficient Evidence". Never a number when the score is withheld. */
   headline: string;
+  /** The score as a number, straight from the server (null when withheld). The headline text, the progress ring and the PDF all use this one value. */
+  scoreValue: number | null;
+  /** Assessment coverage as a number, straight from the server (null when there is none). */
+  coverageValue: number | null;
   scored: boolean;
   basisLine: string;
   coverageLine: string;
@@ -183,6 +207,13 @@ export interface ScoreView {
   /** What was assessed and when: the main domain, the pages, the scan time and the consent states tested. */
   scopeLines: string[];
   scanTimeLine: string;
+  /** The most pages one scan covers, as the server reported it (never a number typed into the report). */
+  pageLimit: number;
+  /** "21 Oct 2026, 06:41 UTC", or "not recorded". */
+  scanTime: string;
+  /** The score and coverage worked out with this scan's own numbers: "13 ÷ 23 × 100 = 56.5%". Null when there is nothing to work out. */
+  scoreWorking: string | null;
+  coverageWorking: string | null;
   /** "Scoring methodology v1.5.0 · Legal mapping v2026.10.1". */
   versionsLine: string;
   legalSources: string[];
@@ -221,6 +252,30 @@ export interface ScoreView {
   reviewStatement: string;
   reviewUncertain: ReviewItemView[];
   reviewMissing: ReviewItemView[];
+  /** Every number on the score card with its numerator, denominator, formula and the checks behind it. */
+  ledger: LedgerView;
+  /** All checks in registry order: the table below the score card and the PDF appendix. */
+  allChecks: ScoreRequirementView[];
+}
+
+export interface MetricView {
+  name: string;
+  numerator: string;
+  denominator: string;
+  result: string;
+  meaning: string;
+}
+
+export interface LedgerView {
+  counts: { label: string; value: string; note: string }[];
+  weights: { label: string; value: string; note: string }[];
+  metrics: MetricView[];
+  categoryMetrics: MetricView[];
+  statusRules: { label: string; rule: string; numerator: string; denominator: string; coverage: string; count: number; weight: number; checks: string }[];
+  penaltyNote: string;
+  securityNote: string;
+  notApplicable: { id: string; reason: string }[];
+  checkNote: string;
 }
 
 const pts = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
@@ -248,7 +303,7 @@ function blockLine(b: DpdpScoreBlock, asOf: string): string {
 /** A response that is not a whole score (an older server, a failed or malformed reply) is treated as no score at all. */
 export function isDpdpScore(x: unknown): x is DpdpScoreResponse {
   const s = x as Partial<DpdpScoreResponse> | null | undefined;
-  return !!s && Array.isArray(s.requirements) && !!s.readiness && !!s.in_force && Array.isArray(s.readiness.categories)
+  return !!s && Array.isArray(s.requirements) && !!s.ledger && Array.isArray(s.ledger.metrics) && !!s.readiness && !!s.in_force && Array.isArray(s.readiness.categories)
     && !!s.evidence_summary && !!s.breakdown && !!s.status_counts && Array.isArray(s.breakdown.readiness_gaps)
     && !!s.human_review && Array.isArray(s.human_review.items) && !!s.finding_groups && Array.isArray(s.finding_groups.confirmed)
     && !!s.methodology && Array.isArray(s.methodology.weights) && !!s.assessment && Array.isArray(s.remediation_plan);
@@ -281,6 +336,22 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 const inState = (c: { pre_consent: number; post_accept: number; post_reject: number }) =>
   `before consent ${c.pre_consent} · after Accept ${c.post_accept} · after Reject ${c.post_reject}`;
 
+const VERDICT: Record<DpdpStatus, { verdict: string; tone: ScoreRequirementView["tone"] }> = {
+  met: { verdict: "Pass", tone: "pass" },
+  partially_met: { verdict: "Partial", tone: "partial" },
+  not_met: { verdict: "Fail", tone: "fail" },
+  unable_to_verify: { verdict: "Cannot Verify", tone: "unknown" },
+  not_applicable: { verdict: "N/A", tone: "na" },
+};
+
+const metricView = (m: DpdpLedgerMetric): MetricView => ({
+  name: m.name,
+  numerator: pts(m.numerator),
+  denominator: pts(m.denominator),
+  result: m.percent === null ? "not shown" : `${m.percent}%`,
+  meaning: m.meaning,
+});
+
 export function buildScoreView(score: DpdpScoreResponse): ScoreView {
   const r = score.readiness;
   const pending = score.requirements.filter((q) => q.counts_in_score && !q.in_force).map((q) => q.effective).sort();
@@ -311,6 +382,19 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
     evidenceIds: q.evidence_ids,
     rules: q.rule_ids,
     note: q.exclusion_reason,
+    verdict: VERDICT[q.status].verdict,
+    tone: VERDICT[q.status].tone,
+    legalNote: q.legal_note,
+    penalty: q.penalty_points === null || q.penalty_points === undefined
+      ? "none: not scored" : `${pts(q.penalty_points)} of ${q.weight} points lost`,
+    contribution: q.counts_in_score
+      ? `${pts(q.points_earned)} of ${q.weight} points${q.score_contribution_percent === null ? "" : `, +${q.score_contribution_percent} score points`}`
+      : q.status === "unable_to_verify"
+        ? `0: not scored. Its ${q.weight} points stay in the coverage denominator${q.coverage_share_percent === null ? "" : ` (${q.coverage_share_percent}% of it)`}`
+        : "0: left out of the score and of coverage",
+    reason: q.counts_in_score ? "" : (q.status === "unable_to_verify" ? (q.observations[0] ?? q.sufficiency_reason) : (q.exclusion_reason ?? "")),
+    evidenceLine: q.observations[0] ?? q.exclusion_reason ?? "No observation recorded.",
+    effective: formatDate(q.effective),
   });
 
   const gap = (g: DpdpScoreResponse["breakdown"]["verified_gaps"][number]): GapView => ({
@@ -327,10 +411,14 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
   const ev = score.evidence_summary;
   const bd = score.breakdown;
   const rows = score.requirements.map(view);
+  const L = score.ledger;
   const unable = rows.filter((x) => x.statusKey === "unable_to_verify");
   return {
+    sector: score.sector ?? null,
     title: "DPDP Compliance Score (proposed methodology)",
     headline: r.status === "scored" && r.score_percent !== null ? `${r.score_percent}%` : "Insufficient Evidence",
+    scoreValue: r.status === "scored" ? r.score_percent : null,
+    coverageValue: r.coverage_percent,
     scored: r.status === "scored",
     basisLine: notYetInForce
       ? `Readiness against DPDP obligations that are not yet in force (they start on ${formatDate(pending[pending.length - 1])}, 18 months after the Rules were published).`
@@ -383,6 +471,11 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
       ...(score.assessment.pages_scanned.length ? [`Pages scanned: ${score.assessment.pages_scanned.join(", ")}`] : []),
       `Consent states tested: ${score.assessment.states_tested.length ? score.assessment.states_tested.join(", ") : "none"}${score.assessment.states_not_tested.length ? `. Not tested: ${score.assessment.states_not_tested.join(", ")}` : ""}.`,
     ],
+    pageLimit: score.assessment.page_limit,
+    scanTime: formatDateTimeUtc(score.assessment.scanned_at),
+    scoreWorking: r.status === "scored" && r.score_percent !== null
+      ? `${pts(r.points_earned)} ÷ ${r.points_assessed} × 100 = ${r.score_percent}%` : null,
+    coverageWorking: r.coverage_percent === null ? null : `${r.assessed_weight} ÷ ${r.applicable_weight} × 100 = ${r.coverage_percent}%`,
     scanTimeLine: `Scan time: ${formatDateTimeUtc(score.assessment.scanned_at)} · assessed against effective dates on ${formatDate(score.assessment.assessed_on)}`,
     versionsLine: `Scoring methodology v${score.methodology.version} · Legal mapping v${score.methodology.legal_mapping_version}`,
     legalSources: score.methodology.legal_sources.map((l) => `${l.name}: ${l.reference}`),
@@ -391,6 +484,9 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
     remediationPlan: score.remediation_plan.map((p) => ({
       rank: p.rank, title: `${p.requirement_id}  ${p.title}`, outcome: p.outcome, timing: p.timing, priority: p.priority,
       priorityReason: p.priority_reason, action: p.action, howToVerify: p.how_to_verify, legal: p.legal_references.join("; "),
+      scoreLine: p.current_percent != null && p.percent_if_fixed != null && p.gain_percent != null
+        ? `Fixing this alone would raise the readiness score from ${p.current_percent}% to ${p.percent_if_fixed}% (+${p.gain_percent} percentage points).` : "",
+      impact: p.impact ?? "",
     })),
     remediationNote: "In the order to do them: duties already in force first, then Not Met before Partially Met, then the heavier documented weight.",
     coverageHeadline: r.coverage_percent === null ? "n/a" : `${r.coverage_percent}%`,
@@ -408,7 +504,7 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
       versionLine: `Methodology v${score.methodology.version} · ${score.methodology.weights_source === "custom" ? "CUSTOM weights" : "documented default weights"}`,
       custom: score.methodology.weights_source === "custom",
       weightsNote: score.methodology.weights_note,
-      rules: [score.methodology.score_formula, score.methodology.coverage_formula, ...score.methodology.points_rules,
+      rules: [...score.methodology.points_rules,
         score.methodology.reliability_rule, score.methodology.duplicate_rule, score.methodology.timing_rule, score.methodology.scope_rule],
       categories: score.methodology.categories.map((c) => ({
         name: c.name, weight: c.weight, share: c.share_percent === null ? "n/a" : `${c.share_percent}%`,
@@ -436,5 +532,33 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
     reviewStatement: score.human_review.statement,
     reviewUncertain: score.human_review.items.filter((i) => i.category === "uncertain").map(item),
     reviewMissing: score.human_review.items.filter((i) => i.category === "missing_evidence").map(item),
+    allChecks: rows,
+    ledger: {
+      counts: [
+        { label: "Checks defined", value: String(L.total_checks), note: "Every check the system has, applicable or not." },
+        { label: "Applicable checks", value: String(L.applicable_checks), note: "Checks that apply to this site." },
+        { label: "Assessed checks", value: String(L.assessed_checks), note: `${L.passed_checks} pass, ${L.partial_checks} partial, ${L.failed_checks} fail. These are the checks in the score.` },
+        { label: "Cannot verify", value: String(L.unable_checks), note: "Applicable, but a scan could not obtain the evidence. Not in the score." },
+        { label: "Not applicable", value: String(L.not_applicable_checks), note: "Excluded under the applicability rule, with a reason on each check." },
+      ],
+      weights: [
+        { label: "Total weight, all checks", value: String(L.total_weight), note: "The combined weight of every check." },
+        { label: "Applicable weight", value: String(L.applicable_weight), note: "The combined weight of the checks that apply. Coverage is measured against it." },
+        { label: "Assessed weight", value: String(L.assessed_weight), note: "The combined weight of the checks that were scored." },
+        { label: "Earned weight", value: pts(L.earned_weight), note: "The weight earned under the rules: Met 100%, Partially Met 50%, Not Met 0%." },
+        { label: "Penalty weight", value: pts(L.penalty_weight), note: "The weight the assessed checks did not earn." },
+        { label: "Weight not verified", value: String(L.unable_weight), note: "Weight of the applicable checks a scan could not test. It lowers coverage and never raises or lowers the score." },
+      ],
+      metrics: L.metrics.map(metricView),
+      categoryMetrics: L.category_metrics.map(metricView),
+      statusRules: L.status_rules.map((r) => ({
+        label: r.label, rule: r.rule, numerator: r.in_numerator, denominator: r.in_denominator, coverage: r.on_coverage,
+        count: r.count, weight: r.weight, checks: r.check_ids.join(", ") || "none",
+      })),
+      penaltyNote: L.penalty_note,
+      securityNote: L.security_score_note,
+      notApplicable: L.not_applicable.map((n) => ({ id: n.id, reason: n.reason })),
+      checkNote: "Each check's contribution is rounded to one decimal, so the contributions can differ from the score by a few tenths.",
+    },
   };
 }

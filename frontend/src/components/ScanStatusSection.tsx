@@ -54,6 +54,8 @@ const STAGE_ORDER = [
   // evidence the rest of the graph reasons over, distinct from the scan job's
   // "classification" above (tracker/cookie vendor tagging).
   "normalize_evidence",
+  // Reads what the site's policies SAY. Fail-soft: it always completes, and an unavailable result is in its metadata.
+  "policy_analysis",
   "rules_check", "rag_retrieval", "llm_analysis", "output_validation",
   // Alternatives, not sequential steps: a run reaches findings_generated OR
   // rule_findings_generated, never both. Listed adjacently so whichever one ran
@@ -66,6 +68,7 @@ const STAGE_LABELS: Record<string, string> = {
   url_validation: "URL Validation", website_scan: "Website Scan",
   data_structuring: "Data Structuring", classification: "Tracker/Cookie Classification",
   normalize_evidence: "Loading Scan Evidence",
+  policy_analysis: "Privacy Policy Analysis",
   rules_check: "Rules Check", rag_retrieval: "RAG Retrieval",
   // Not "NVIDIA LLM Analysis". The provider is chosen at run time -- self-hosted
   // first, NVIDIA only as fallback -- so this label named the wrong one on every
@@ -91,7 +94,10 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
   if (state.phase === "idle") return null;
 
   const failureReason = state.phase === "failed" ? deriveFailureReason(state.error, state.websiteScanMeta) : null;
-  const label = failureReason ? `Failed — ${failureReason}` : PHASE_LABELS[state.phase];
+  // An analysis step that failed on a scan that completed: with findings they are ready but unexplained; with none, the scan is complete and the
+  // analysis is not.
+  const degradedNoFindings = state.phase === "degraded" && state.findings.length === 0;
+  const label = failureReason ? `Failed — ${failureReason}` : degradedNoFindings ? "Scan complete — analysis incomplete" : PHASE_LABELS[state.phase];
   const tone = PHASE_TONE[state.phase] ?? "progress";
 
   const byStage = summariseStages(state.stages);
