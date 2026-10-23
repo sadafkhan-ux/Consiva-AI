@@ -40,12 +40,13 @@ describe("the hero on the dashboard", () => {
     expect(within(screen.getByTestId("hero-score")).getByText("Compliance Score")).toBeInTheDocument();
   });
 
-  it("reads exactly the words the PDF reads: band, headline and coverage", () => {
+  it("reads exactly the words the PDF reads: band and headline, and shows no coverage", () => {
     render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
     const h = buildHeroView(score);
     expect(screen.getByTestId("hero-band")).toHaveTextContent(h.band);
     expect(screen.getByTestId("hero-headline")).toHaveTextContent(h.headline);
-    expect(screen.getByTestId("hero-coverage")).toHaveTextContent(h.coverageLine ?? "");
+    expect(screen.queryByTestId("hero-coverage")).not.toBeInTheDocument();
+    expect(screen.getByTestId("scan-hero").textContent ?? "").not.toMatch(/coverage/i);
   });
 
   it("names the domain once, and never repeats the address of a homepage", () => {
@@ -207,5 +208,41 @@ describe("the figure inside the ring", () => {
     expect(text().getAttribute("font-size")).toBe("13");
     expect(Number(text().getAttribute("y"))).toBeCloseTo(55 + 13 * 0.36, 5);
     expect(screen.queryByTestId("hero-ring-arc")).not.toBeInTheDocument();
+  });
+});
+
+describe("the hero shows the compliance score only, never coverage", () => {
+  const cases = Object.entries(F).map(([name, s]) => [name, s] as const);
+
+  it.each(cases)("%s: no coverage word or figure in the hero, and the percentage is the score the backend sent", (_name, s) => {
+    const { container } = render(<ScanHero score={buildScoreView(s)} siteUrl="https://x.test/" screenshot={undefined} />);
+    const hero = screen.getByTestId("scan-hero");
+    expect(hero.textContent ?? "").not.toMatch(/coverage/i);
+    expect(screen.queryByTestId("hero-coverage")).not.toBeInTheDocument();
+    const label = screen.getByTestId("hero-percent").textContent;
+    if (s.readiness.status === "scored") {
+      expect(label).toBe(`${s.readiness.score_percent}%`);                                      // the backend's own score, not coverage
+      expect(label).not.toBe(`${s.readiness.coverage_percent}%`);
+    } else {
+      expect(label).toBe("No score");
+      expect(hero.textContent).toContain("Compliance score unavailable");
+      expect(hero.textContent ?? "").not.toMatch(/\d+(\.\d+)?%/);                               // no number at all when the score is withheld
+    }
+    expect(container.querySelector("[data-testid=hero-ring-arc]") !== null).toBe(s.readiness.status === "scored" && (s.readiness.score_percent ?? 0) > 0);
+  });
+
+  it("says a withheld score is unavailable in the same few words however few checks could be assessed", () => {
+    const zero = JSON.parse(JSON.stringify(F.insufficient)) as DpdpScoreResponse;
+    zero.readiness.insufficient_reason = "Only 0 requirement(s) could be assessed; at least 2 are needed.";
+    const low = JSON.parse(JSON.stringify(F.insufficient)) as DpdpScoreResponse;
+    low.readiness.insufficient_reason = "Assessment coverage is 28.2%, below the 30% needed for a score.";
+    expect(buildHeroView(buildScoreView(zero)).headline).toBe(buildHeroView(buildScoreView(low)).headline);
+    expect(buildHeroView(buildScoreView(low)).headline).not.toMatch(/coverage|28\.2/i);
+  });
+
+  it("keeps the coverage in the score data the backend sent and the score card still reads it", () => {
+    const v = buildScoreView(F.mixed);
+    expect(v.coverageValue).toBe(F.mixed.readiness.coverage_percent);
+    expect(v.coverageLine).toContain("Assessment coverage");
   });
 });

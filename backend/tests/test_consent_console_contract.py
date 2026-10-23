@@ -65,8 +65,8 @@ def _normalise(path: str) -> str:
     return re.sub(r"\{\w+\}", "{}", path)
 
 
-def test_the_console_calls_the_fourteen_documented_endpoints():
-    assert len(_console_calls()) == 14, _console_calls()
+def test_the_console_calls_the_sixteen_documented_endpoints():
+    assert len(_console_calls()) == 16, _console_calls()
 
 
 @pytest.mark.parametrize("method,path", _console_calls())
@@ -125,6 +125,14 @@ PAIRS = [
     ("DpdpLedger", "DpdpLedger"),
     ("DpdpLedgerMetric", "DpdpLedgerMetric"),
     ("DpdpStatusRule", "DpdpStatusRule"),
+    ("UsageTotals", "UsageTotals"),
+    ("UsageCost", "UsageCost"),
+    ("UsageStage", "UsageStage"),
+    ("UsagePageRow", "UsagePageRow"),
+    ("UsageSharedRow", "UsageSharedRow"),
+    ("UsagePages", "UsagePages"),
+    ("ScanUsage", "UsageResponse"),
+    ("UsageHistoryItem", "UsageHistoryItem"),
 ]
 
 
@@ -150,6 +158,8 @@ ENDPOINTS = [
     ("GET", f"/api/v1/consent/scans/{SCAN}/stages", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/evidence", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/dpdp-score", None),
+    ("GET", f"/api/v1/consent/scans/{SCAN}/usage", None),
+    ("GET", "/api/v1/consent/scans/usage/history", None),
     ("POST", f"/api/v1/consent/scans/{SCAN}/analyze", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/findings", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/audit", None),
@@ -180,6 +190,7 @@ def test_every_console_endpoint_refuses_a_forged_token(method, path, body):
     "/api/v1/consent/scans/not-a-uuid/dpdp-score",
     "/api/v1/consent/scans/not-a-uuid/findings",
     "/api/v1/consent/scans/not-a-uuid/audit",
+    "/api/v1/consent/scans/not-a-uuid/usage",
 ])
 def test_a_malformed_scan_id_is_a_validation_error_not_a_server_error(path):
     assert client.get(path, headers=_headers()).status_code == 422

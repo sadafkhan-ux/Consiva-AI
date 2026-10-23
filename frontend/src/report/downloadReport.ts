@@ -6,6 +6,7 @@ import { buildHeroView, buildPreviewView } from "./hero";
 import { formatRef, formatRefShort, formatRefs } from "./legalRefs";
 import { buildPolicyView, POLICY_BASIS_LABEL, POLICY_STATUS_LABEL } from "./policyAnalysis";
 import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER } from "./reportScope";
+import { checkContribution, CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type FindingRow } from "./reportText";
 import { REQUEST_UNIT_NOTE } from "./stateCounts";
 
 // The report reads in order. Numbered sections 1 to 10: the score, scan summary, readiness, privacy areas and top findings (page 1); the consent
@@ -23,14 +24,7 @@ const M = 36;
 const CW = PAGE_W - M * 2;
 const FOOTER_Y = PAGE_H - 46;
 /** The report is three pages, so the pages table lists at most this many. A scan is limited to 5; an older one can hold more. */
-const MAX_LISTED_PAGES = 8;
-
-/** Where the call-to-action buttons point. Placeholders until the product team supplies the real destinations. */
-export const CTA_URLS = {
-  improve: "https://consiva.ai",
-  plan: "https://consiva.ai",
-  platform: "https://consiva.ai",
-};
+export { CTA_URLS };
 
 /** The header strip: the logo badge's own colour, so the logo sits in it without a visible edge. It runs the full width of the page,
  *  below the brand's gradient line, and the logo and every header word are drawn on it in white. */
@@ -96,11 +90,7 @@ export function gradientAt(t: number): Rgb {
 }
 
 // Review items that are purely about legal timing or which legal duties apply stay in the dashboard, not in this report.
-const LEGAL_ONLY_REVIEW = new Set(["not-yet-in-force", "entity-applicability"]);
-const stripRuleCodes = (t: string) => t.replace(/\s*\(rule R-\d+\)/g, "");
-const stripId = (t: string) => t.replace(/^DPDP-\w+\s+/, "");
 
-interface FindingRow { title: string; detail: string; label: string; tone: Tone }
 
 export async function downloadReport(model: ReportModel): Promise<void> {
   const { jsPDF } = await loadJsPdf();
@@ -412,11 +402,11 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   // The middle column: the reading of the score, its coverage, and the call to action.
   const headLines = wrapCell(hero.headline, hw, 10, true);
   const headTop = heroY + 44;
-  const covLines = hero.coverageLine ? wrapCell(hero.coverageLine, hw, 7.4) : [];
-  const covTop = headTop + headLines.length * 12.6 + 6;
-  const buttonTop = covTop + covLines.length * 9.2 + 8;
+  const buttonTop = headTop + headLines.length * 12.6 + 14;
   const midBottom = buttonTop + 22;
-  const ringBottom = heroY + 62 + RING_R + 4 + 3 + 16;
+  // The label under the ring is as wide as the column beside it allows: a longer one ("Compliance score unavailable") takes two lines.
+  const scoreLabelLines = wrapCell(hero.scoreLabel, 112, 8.5, true);
+  const ringBottom = heroY + 62 + RING_R + 4 + 3 + 16 + (scoreLabelLines.length - 1) * 10;
 
   const heroH = Math.round(Math.max(rightBottom, midBottom, ringBottom) - heroY + 14);
   box(M, heroY, CW, heroH, { bg: [243, 245, 255], border: RULE, r: 12 });
@@ -434,12 +424,11 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   } else {
     text(hero.percentLabel, ringX, ringY + 4, { size: 10, bold: true, color: MUTED, align: "center" });
   }
-  text(hero.scoreLabel, ringX, ringY + RING_R + 4 + 3 + 11, { size: 8.5, bold: true, color: MUTED, align: "center" });
+  scoreLabelLines.forEach((ln, k) => text(ln, ringX, ringY + RING_R + 4 + 3 + 11 + k * 10, { size: 8.5, bold: true, color: MUTED, align: "center" }));
 
   // middle
   pill(hero.band, hx, heroY + 14, hero.tone, 7.5);
   headLines.forEach((ln, k) => text(ln, hx, headTop + k * 12.6, { size: 10, bold: true }));
-  covLines.forEach((ln, k) => text(ln, hx, covTop + k * 9.2, { size: 7.4, color: MUTED }));
   button("Improve My Score with Consiva AI", hx, buttonTop, 176, 22, CTA_URLS.improve, "solid");
 
   // right: the domain above the homepage picture; the same picture the dashboard shows, or a plain panel that says why there is none
@@ -549,19 +538,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
 
   // --- top findings ---
   y = section("Top findings", y);
-  const rows: FindingRow[] = [];
-  if (v) {
-    const detailOf = (e: { observed: string[]; explanation: string; missing: string[] }, unable: boolean) =>
-      stripRuleCodes(unable ? (e.missing[0] ?? e.explanation) : (e.observed[0] ?? e.explanation));
-    const group = (k: string) => v.groups.find((g) => g.key === k)?.entries ?? [];
-    for (const e of group("confirmed")) rows.push({ title: stripId(e.title), detail: detailOf(e, false), label: e.outcome, tone: "bad" });
-    for (const e of group("future_readiness")) rows.push({ title: stripId(e.title), detail: detailOf(e, false), label: e.outcome, tone: "warn" });
-    for (const e of group("needs_review").filter((x) => !LEGAL_ONLY_REVIEW.has(x.id))) rows.push({ title: stripId(e.title), detail: detailOf(e, false), label: "Needs review", tone: "warn" });
-    const business = new Set(v.unableToVerify.filter((r) => r.checkType === "Business check").map((r) => r.id));
-    for (const e of group("unable_to_verify").filter((x) => !business.has(x.id))) rows.push({ title: stripId(e.title), detail: detailOf(e, true), label: "Could not verify", tone: "mute" });
-  } else {
-    for (const p of model.problems) rows.push({ title: p.text, detail: "", label: p.risk, tone: "warn" });
-  }
+  const rows: FindingRow[] = topFindingRows(model);
   const shown = rows.slice(0, 3);
   if (shown.length === 0) {
     text("No gaps were found in the checks we could test.", M, y + 12, { size: 9 });
@@ -700,11 +677,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     const checks = v.allChecks.filter((c) => isReportCategory(c.category));
     const listed = checks.filter((c) => c.statusKey !== "not_applicable");
     const notApplicable = checks.filter((c) => c.statusKey === "not_applicable");
-    const contributionOf = (r: (typeof checks)[number]) => {
-      if (r.statusKey === "unable_to_verify") return "Not scored";
-      const lost = /^([\d.]+) of [\d.]+ points lost/.exec(r.penalty);
-      return `${r.points}${lost && parseFloat(lost[1]) > 0 ? ` · penalty ${lost[1]}` : ""}`;
-    };
+    const contributionOf = checkContribution;
     if (y + 80 > FOOTER_Y - 14) {
       footer(doc.getNumberOfPages());
       doc.addPage("a4", "portrait");

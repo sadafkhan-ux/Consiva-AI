@@ -1634,3 +1634,34 @@ class PurposeFinding(Base):
     decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+
+
+class LlmUsageEvent(Base):
+    """One LLM call group made for a scan, as the provider reported it (migration 0041). See app/llm/usage_tracking.py."""
+
+    __tablename__ = "llm_usage_events"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    call_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True)
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("consent_scans.id", ondelete="CASCADE"), nullable=False, index=True)
+    agent_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    agent: Mapped[str] = mapped_column(String, nullable=False)
+    stage: Mapped[str | None] = mapped_column(String, nullable=True)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    request_ids: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, server_default=text("'{}'"))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    error_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    fallback_triggered: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 6), nullable=True)
+    currency: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'USD'"))
+    price_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    page_urls: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, server_default=text("'{}'"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

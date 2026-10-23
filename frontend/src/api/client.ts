@@ -6,6 +6,8 @@ import type {
   ScanEvidenceResponse,
   PolicyAnalysis,
   ScanListItem,
+  ScanUsage,
+  UsageHistoryItem,
   ScanScreenshot,
   ScanResponse,
   ScanStatusResponse,
@@ -117,6 +119,46 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/**
+ * The PDF report the server prints for one completed scan (GET /api/v1/consent/scans/{id}/report.pdf), as the file's bytes and the name the
+ * server gave it. The server renders the same report page the web shows, so the file and the page carry the same values.
+ */
+export async function fetchReportPdf(scanId: string, variant: "free" | "full" | "long" = "long"): Promise<{ blob: Blob; filename: string }> {
+  const token = getToken();
+  if (!token) {
+    handleUnauthorized();
+    throw new ApiError(401, "Not signed in.");
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}/api/v1/consent/scans/${encodeURIComponent(scanId)}/report.pdf?variant=${variant}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/pdf" } });
+  } catch {
+    throw new ApiError(0, "Network error -- could not reach the backend" + (BASE_URL ? ` at ${BASE_URL}` : "") + ". Check your connection and that the service is running.");
+  }
+  if (res.status === 401) handleUnauthorized();
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const detail = body && typeof body === "object" && "detail" in body && typeof body.detail === "string" ? body.detail : STATUS_FALLBACKS[res.status] ?? `Request failed with status ${res.status}`;
+    throw new ApiError(res.status, detail);
+  }
+  const blob = await res.blob();
+  if (!(res.headers.get("content-type") ?? "").includes("application/pdf")) throw new ApiError(502, "The server did not return a PDF.");
+  const named = /filename="?([^";]+)"?/i.exec(res.headers.get("content-disposition") ?? "")?.[1];
+  return { blob, filename: named ?? `consiva-privacy-report-${variant}-${scanId.slice(0, 8)}.pdf` };
+}
+
+/** Saves a blob as a file through a temporary link, then releases it. */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 const STATUS_FALLBACKS: Record<number, string> = {
   400: "The request was invalid.",
   401: "Not authenticated.",
@@ -137,6 +179,12 @@ export const api = {
   },
   getPolicyAnalysis(scanId: string): Promise<PolicyAnalysis> {
     return request(`/api/v1/consent/scans/${scanId}/policy-analysis`);
+  },
+  getScanUsage(scanId: string): Promise<ScanUsage> {
+    return request(`/api/v1/consent/scans/${scanId}/usage`);
+  },
+  getUsageHistory(limit = 20): Promise<UsageHistoryItem[]> {
+    return request(`/api/v1/consent/scans/usage/history?limit=${limit}`);
   },
   listScans(limit = 15): Promise<ScanListItem[]> {
     return request(`/api/v1/consent/scans?limit=${limit}`);

@@ -38,6 +38,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from typing import Literal, TypeVar
 
 import httpx
@@ -350,6 +351,8 @@ class BaseLLMClient:
                     timeout=call_timeout,
                 )
         usage = response.usage.model_dump() if response.usage else {}
+        if getattr(response, "id", None):
+            usage["request_id"] = response.id   # the provider's own id for this request, kept beside its token counts
         return response.choices[0].message.content or "", usage
 
     async def generate_structured(
@@ -378,9 +381,19 @@ class BaseLLMClient:
                     f"LLM wall-clock deadline exceeded before attempt {attempt}/{max_attempts} "
                     f"(shared budget across all retry layers); last error: {last_error}"
                 )
-            raw, usage = await self._chat(
-                messages, retry_meta=retry_meta, deadline_epoch=deadline_epoch, schema=schema
-            )
+            try:
+                raw, usage = await self._chat(
+                    messages, retry_meta=retry_meta, deadline_epoch=deadline_epoch, schema=schema
+                )
+            except Exception as exc:
+                billed = getattr(exc, "usage", None)   # set by a provider that answered and was then rejected (a refusal)
+                if billed:
+                    usage_by_attempt.append(billed)
+                if usage_sink is not None:
+                    usage_sink["attempts"] = attempt
+                    usage_sink["usage_by_attempt"] = usage_by_attempt
+                    usage_sink["chat_retries"] = retry_meta.get("chat_retries", [])
+                raise
             usage_by_attempt.append(usage)
             try:
                 parsed = schema.model_validate_json(raw)
@@ -504,6 +517,10 @@ class NvidiaLLMClient(BaseLLMClient):
             base_url=str(s.nvidia_api_base_url),
         )
         embeddings = [item.embedding for item in response.data]
+        used = getattr(response, "usage", None)
+        # What the provider reported for the request that answered (a hedged duplicate that lost the race is not visible here). Read by the stage record.
+        self.embed_tokens_total = getattr(self, "embed_tokens_total", 0) + int(getattr(used, "prompt_tokens", 0) or getattr(used, "total_tokens", 0) or 0)
+        self.embed_requests = getattr(self, "embed_requests", 0) + 1
         # The pgvector column is vector(1024) hardcoded in the SQL migration while this
         # dimension is env-configured -- a silent mismatch (model ignoring `dimensions`,
         # or .env changed without a schema migration) would otherwise surface later as a
@@ -743,12 +760,17 @@ class ClaudeLLMClient(BaseLLMClient):
                     output_config=output_config,
                     timeout=call_timeout,
                 )
+        usage = response.usage.model_dump() if response.usage else {}
+        request_id = getattr(response, "_request_id", None) or getattr(response, "id", None)
+        if request_id:
+            usage["request_id"] = request_id   # req_... / msg_...: the provider's own id for this request, kept beside its token counts
         # stop_details is only populated when stop_reason == "refusal" -- guarded per
         # the Claude API's own contract, not assumed.
         if response.stop_reason == "refusal":
             category = response.stop_details.category if response.stop_details else None
-            raise LLMOutputValidationError(f"Claude declined the request (stop_reason=refusal, category={category}).")
-        usage = response.usage.model_dump() if response.usage else {}
+            refusal = LLMOutputValidationError(f"Claude declined the request (stop_reason=refusal, category={category}).")
+            refusal.usage = usage   # a refused call was still billed: hand its usage to generate_structured so it is counted
+            raise refusal
         text = next((block.text for block in response.content if block.type == "text"), "")
         return text, usage
 
@@ -813,7 +835,8 @@ def _context_overflow(exc: Exception) -> tuple[int, int] | None:
 async def generate_structured_with_fallback(
     *, system: str, user: str, schema: type[T], settings: Settings | None = None,
     max_attempts: int = 3, usage_sink: dict | None = None, deadline_epoch: float | None = None,
-    agent: str = "unknown", scan_id: str | None = None,
+    agent: str = "unknown", scan_id: str | None = None, stage: str | None = None, agent_run_id: str | None = None,
+    page_urls: list[str] | None = None,
 ) -> tuple[T, dict]:
     """Tries the primary provider FIRST, falling back to settings.llm_provider's
     client (NVIDIA by default) ONLY if the primary genuinely fails -- never calls both
@@ -841,6 +864,14 @@ async def generate_structured_with_fallback(
     # this is the smallest fix: every caller's own usage_sink (if any) is still
     # populated exactly as before.
     _usage_sink = usage_sink if usage_sink is not None else {}
+    call_group = uuid.uuid4()   # one id for this whole call; each provider's row is derived from it, so a call reported twice is stored once
+
+    async def record(client: BaseLLMClient, sink: dict, role: str, started: float, exc: Exception | None) -> None:
+        await usage_tracking.record_llm_event(
+            provider=client.provider, model=client.model_name, agent=agent, usage_sink=sink, fallback_meta=fallback_meta, scan_id=scan_id,
+            agent_run_id=agent_run_id, stage=stage, status="success" if exc is None else "failed", error_type=None if exc is None else type(exc).__name__,
+            duration_ms=int((time.monotonic() - started) * 1000), call_group=call_group, role=role, page_urls=page_urls,
+        )
 
     primary_client: BaseLLMClient | None = None
     if settings.anthropic_api_key:
@@ -852,36 +883,24 @@ async def generate_structured_with_fallback(
         fallback_meta["primary_attempted"] = True
         fallback_meta["primary_provider"] = primary_client.provider
         fallback_meta["primary_model"] = primary_client.model_name
+        primary_sink: dict = {}   # this provider's own usage: a failed primary's billed attempts are not overwritten by the fallback's
+        started = time.monotonic()
         try:
             result = await primary_client.generate_structured(
                 system=system, user=user, schema=schema, max_attempts=max_attempts,
-                usage_sink=_usage_sink, deadline_epoch=deadline_epoch,
+                usage_sink=primary_sink, deadline_epoch=deadline_epoch,
             )
             fallback_meta["primary_status"] = "success"
-            usage_tracking.record_llm_call(
-                provider=primary_client.provider, model=primary_client.model_name,
-                agent=agent, usage_sink=_usage_sink, fallback_meta=fallback_meta, scan_id=scan_id,
-            )
+            _usage_sink.update(primary_sink)
+            await record(primary_client, primary_sink, "primary", started, None)
             return result, fallback_meta
         except Exception as exc:  # noqa: BLE001 -- ANY exhausted-retry failure from the primary (connection
-            # error, timeout, 5xx, or invalid/unparseable output after generate_structured's own internal
-            # retries) is exactly the "genuinely failed" condition this fallback exists for.
             fallback_meta["primary_status"] = "failed"
             fallback_meta["fallback_triggered"] = True
             fallback_meta["fallback_reason"] = f"{type(exc).__name__}: {exc}"
             overflow = _context_overflow(exc)
             fallback_meta["primary_failure_kind"] = "context_exceeded" if overflow else "other"
             if overflow:
-                # A permanent, self-inflicted misconfiguration, not a bad day upstream:
-                # the prompt cannot fit and every future call will fail identically
-                # until somebody resizes the server. Worth separating from a transient
-                # failure, because in the metadata the two were indistinguishable --
-                # `primary_status: "failed"` reads the same whether the self-hosted
-                # model blipped once or has not served a single request in weeks. It
-                # was the latter: llama-server ran `-c 32768 --parallel 8`, and
-                # llama.cpp divides context across slots, so each slot held 4096
-                # tokens against an ~11k-token prompt. Every analysis silently paid
-                # for a remote round trip instead, and nothing in the run said so.
                 prompt_tokens, ctx_tokens = overflow
                 fallback_meta["primary_prompt_tokens"] = prompt_tokens
                 fallback_meta["primary_context_tokens"] = ctx_tokens
@@ -898,16 +917,22 @@ async def generate_structured_with_fallback(
                     "Primary LLM (%s/%s) failed, falling back to %s: %s",
                     primary_client.provider, primary_client.model_name, settings.llm_provider, exc,
                 )
+            await record(primary_client, primary_sink, "primary", started, exc)
 
     fallback_client = get_reasoning_llm_client(settings)
     fallback_meta["fallback_provider"] = fallback_client.provider
     fallback_meta["fallback_model"] = fallback_client.model_name
-    result = await fallback_client.generate_structured(
-        system=system, user=user, schema=schema, max_attempts=max_attempts,
-        usage_sink=_usage_sink, deadline_epoch=deadline_epoch,
-    )
-    usage_tracking.record_llm_call(
-        provider=fallback_client.provider, model=fallback_client.model_name,
-        agent=agent, usage_sink=_usage_sink, fallback_meta=fallback_meta, scan_id=scan_id,
-    )
+    fallback_sink: dict = {}
+    started = time.monotonic()
+    try:
+        result = await fallback_client.generate_structured(
+            system=system, user=user, schema=schema, max_attempts=max_attempts,
+            usage_sink=fallback_sink, deadline_epoch=deadline_epoch,
+        )
+    except Exception as exc:  # recorded, then raised exactly as before
+        _usage_sink.update(fallback_sink)
+        await record(fallback_client, fallback_sink, "fallback", started, exc)
+        raise
+    _usage_sink.update(fallback_sink)
+    await record(fallback_client, fallback_sink, "fallback", started, None)
     return result, fallback_meta

@@ -20,13 +20,11 @@ export interface HeroView {
   percent: number | null;
   /** "56.5%", or "No score". */
   percentLabel: string;
-  /** "Compliance Score", or "Compliance Score withheld". */
+  /** "Compliance Score", or "Compliance score unavailable". */
   scoreLabel: string;
   band: string;
   tone: HeroTone;
   headline: string;
-  /** "Coverage 64.1%: …", or null when there is no coverage figure. */
-  coverageLine: string | null;
 }
 
 export function buildHeroView(v: ScoreView | null): HeroView {
@@ -34,20 +32,19 @@ export function buildHeroView(v: ScoreView | null): HeroView {
   const coverageValue = v ? v.coverageValue : null;
   const assessed = v ? v.assessed : [];
   const limited = !!v?.caution || (coverageValue !== null && coverageValue < 50);
-  const band = !v ? "Score not available" : scoreValue === null ? "Insufficient evidence" : `${scoreBand(scoreValue)}${limited ? " · limited coverage" : ""}`;
+  const band = !v ? "Score not available" : scoreValue === null ? "Insufficient evidence" : scoreBand(scoreValue);
   const tone: HeroTone = scoreValue === null ? "mute" : limited || scoreValue < 80 ? "warn" : "good";
   const headline = !v
     ? "The score could not be loaded for this report."
     : scoreValue === null
-      ? `No score is shown. ${v.withheldReason ?? "There was not enough evidence."}`
-      : `${assessed.length === 1 ? "The 1 check" : `The ${assessed.length} checks`} we could test scored ${v.headline}. ${v.unableToVerify.length ? `${v.unableToVerify.length} more could not be tested from outside, so read the score with the coverage.` : ""}`.trim();
+      ? "Compliance score unavailable. Too few of the checks that apply could be tested from outside to give a reliable score."
+      : `${assessed.length === 1 ? "The 1 check" : `The ${assessed.length} checks`} we could test scored ${v.headline}. ${v.unableToVerify.length ? `${v.unableToVerify.length} more could not be tested from outside.` : ""}`.trim();
   return {
     scored: !!v && v.scored,
     percent: scoreValue,
     percentLabel: v && v.scored ? v.headline : "No score",
-    scoreLabel: v && v.scored ? "Compliance Score" : "Compliance Score withheld",
+    scoreLabel: v && v.scored ? "Compliance Score" : "Compliance score unavailable",
     band, tone, headline,
-    coverageLine: v && coverageValue !== null ? `Coverage ${v.coverageHeadline}: the share of the checks that apply that a scan could test.` : null,
   };
 }
 

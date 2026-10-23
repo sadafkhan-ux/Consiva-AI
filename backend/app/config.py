@@ -187,6 +187,14 @@ class Settings(BaseSettings):
     scanner_timeout_seconds: int = 30
     scanner_user_agent: str = "ConsivaConsentAgent/0.1"
     scanner_max_scans_per_org_per_day: int = 50
+    # The PDF report (services/report_pdf_service.py): headless Chromium opens the web report page and prints it. `report_frontend_url` is where
+    # THIS process reaches the web app: the frontend service on the compose network by default, an address such as http://127.0.0.1:5173 when the API
+    # runs outside Docker. It is never taken from a request. A finished PDF is kept for `report_pdf_cache_seconds` so repeated downloads of one scan
+    # do not each start a browser; at most `report_pdf_max_concurrent` browsers run at once.
+    report_frontend_url: str = "http://frontend:8080"
+    report_pdf_timeout_seconds: int = Field(default=90, ge=10, le=600)
+    report_pdf_max_concurrent: int = Field(default=2, ge=1, le=8)
+    report_pdf_cache_seconds: int = Field(default=120, ge=0, le=3600)
     # Purpose Classifier (Agent 6): an assessment request can carry a caller-supplied
     # DSN/spec URL/CSV body that the worker will act on -- unbounded submissions let
     # one org occupy every slot in the single shared worker pool (jobs/worker.py's

@@ -21,3 +21,20 @@ export const OMITTED_DUTIES_NOTE =
   "Duties that depend on an organisation's own records, such as how requests from people are handled and internal security practice, cannot " +
   "be observed from a website and are not listed here. They are left out of the score and count as not tested in the coverage, so the " +
   "counts above include them.";
+
+/** The legal context the Full report's last pages state. Each date is from the notifications the product's score is built on (backend scoring/dpdp_score.py,
+ *  legal sources): the Act's key provisions and the Board from 13 Nov 2025, the Rules notified as G.S.R. 846(E) of 13 Nov 2025 and corrected by G.S.R. 892(E)
+ *  of 10 Dec 2025, and the duties that start after 18 months (13 May 2027). This is context for the reader, not a legal opinion. */
+export const CONSIVA_UPDATES = {
+  actStatus:
+    "The Digital Personal Data Protection Act, 2023 is in force with several key sections notified from 13 November 2025. The Data Protection Board of India has been established and will consist of four members (Gazette notifications dated 13 November 2025). Most duties on data fiduciaries start 18 months later, on 13 May 2027, so a gap in one of them is shown as readiness, not as a breach.",
+  cards: [
+    { title: "DPDP Act, 2023 (22 of 2023)", status: "Enacted", when: "Key sections from 13 Nov 2025" },
+    { title: "Key provisions in force", status: "In force", when: "From 13 Nov 2025" },
+    { title: "Data Protection Board of India", status: "Established", when: "4 members" },
+    { title: "DPDP Rules, 2025", status: "Notified", when: "G.S.R. 846(E), 13 Nov 2025" },
+    { title: "Corrigendum", status: "G.S.R. 892(E)", when: "10 Dec 2025" },
+  ],
+  scope:
+    "This report checks website-observable requirements aligned to the DPDP Act, 2023 and the Rules, 2025 on the latest notifications (13 Nov 2025 and the corrigendum of 10 Dec 2025). It does not assess duties that depend on an organisation's own records.",
+} as const;

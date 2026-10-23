@@ -422,3 +422,63 @@ def test_the_endpoint_is_scoped_to_the_callers_organisation_and_needs_a_token(mo
         assert client.get("/api/v1/consent/scans/not-a-uuid/screenshot", headers=_headers()).status_code == 422
     finally:
         app.dependency_overrides.pop(key, None)
+
+
+# ── a page that has answered but not yet drawn anything ─────────────────────────────────────────────────────────────────────────────
+
+class PaintingPage(FakePage):
+    """A page that shows nothing for its first `blank_for` looks and whose pictures are flat for the first `flat_for` shots."""
+
+    def __init__(self, *, blank_for=0, flat_for=0, **kw):
+        super().__init__(**kw)
+        self._blank_for, self._flat_for, self.looks, self.taken = blank_for, flat_for, 0, 0
+        self.context = SimpleNamespace(new_page=self._probe_page)
+
+    async def evaluate(self, js):
+        self.looks += 1
+        return self.looks > self._blank_for
+
+    async def wait_for_timeout(self, ms):
+        pass
+
+    async def screenshot(self, **kw):
+        self.taken += 1
+        return await super().screenshot(**kw)
+
+    async def _probe_page(self):
+        outer = self
+
+        class Probe:
+            async def evaluate(self, js, src):
+                return outer.taken <= outer._flat_for
+
+            async def close(self):
+                pass
+
+        return Probe()
+
+
+def test_the_capture_waits_until_the_page_has_drawn_something():
+    page = PaintingPage(blank_for=3)
+    out = capture(page)
+    assert out["status"] == "ok" and page.looks == 4                      # looked until there was something to photograph, then took the picture
+    assert page.taken == 1
+
+
+def test_a_flat_picture_is_retaken_and_the_second_one_is_kept():
+    page = PaintingPage(flat_for=1, shots=(JPEG, JPEG))
+    out = capture(page)
+    assert out["status"] == "ok" and page.taken == 2
+
+
+def test_a_picture_that_stays_one_flat_shade_is_recorded_as_blank_not_as_a_preview():
+    page = PaintingPage(flat_for=99)
+    out = capture(page)
+    assert out["status"] == "failed" and out["reason"] == "blank" and "image_b64" not in out
+    assert page.taken == crawler._SHOT_BLANK_RETRIES + 1                 # bounded: it does not retry for ever
+
+
+def test_a_page_that_never_draws_is_still_photographed_and_judged_by_its_pixels():
+    page = PaintingPage(blank_for=10_000)
+    out = capture(page)
+    assert out["status"] == "ok"                                          # nothing proves it flat, so the picture is kept

@@ -17,6 +17,130 @@ export interface ScanListItem {
   completed_at: string | null;
 }
 
+// ── Model usage of a scan (GET /api/v1/consent/scans/{id}/usage and .../usage/history; backend app/services/usage_service.py). Shown only in the console's
+// usage panel, never in the report or the PDF. A token field that is null is UNAVAILABLE (a model stage with no recorded usage), never zero.
+export interface UsageTotals {
+  calls: number;
+  failed_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  total_tokens: number;
+  /** Part of the output tokens the provider says was reasoning (already inside output_tokens). Null when no call reported it. */
+  reasoning_tokens: number | null;
+  priced_calls: number;
+  unpriced_calls: number;
+  cost: number | null;
+  embedding_tokens: number | null;
+}
+
+export interface UsageCost {
+  currency: string;
+  total: number | null;
+  input: number | null;
+  cache_read: number | null;
+  cache_write: number | null;
+  output: number | null;
+  priced_calls: number;
+  unpriced_calls: number;
+  complete: boolean;
+  price_source: string | null;
+}
+
+export interface UsageStage {
+  stage: string;
+  label: string;
+  /** "llm" calls a language model; "embedding" uses the embedding model (no LLM tokens); "non_llm" is ordinary code (zero LLM tokens). */
+  kind: "llm" | "embedding" | "non_llm" | string;
+  status: "running" | "completed" | "failed" | string;
+  runs: number;
+  duration_ms: number | null;
+  models: string[];
+  note: string | null;
+  calls: number;
+  failed_calls: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  total_tokens: number | null;
+  reasoning_tokens: number | null;
+  priced_calls: number;
+  unpriced_calls: number;
+  cost: number | null;
+  embedding_requests: number | null;
+  embedding_tokens: number | null;
+}
+
+export interface UsagePageRow {
+  url: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost: number | null;
+}
+
+export interface UsageSharedRow {
+  label: string;
+  reason: string;
+  stage: string | null;
+  page_urls: string[];
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost: number | null;
+}
+
+export interface UsagePages {
+  attributed: UsagePageRow[];
+  shared: UsageSharedRow[];
+  unattributed: UsageSharedRow | null;
+}
+
+export interface ScanUsage {
+  scan_id: string;
+  url: string;
+  domain: string;
+  scan_status: string;
+  state: "running" | "completed" | "failed" | string;
+  current_stage: string | null;
+  created_at: string | null;
+  completed_at: string | null;
+  pages_scanned: number | null;
+  /** "measured" (per-call records), "stage_records" (a scan made before per-call tracking) or "none". */
+  source: "measured" | "stage_records" | "none" | string;
+  /** False for a scan that was only crawled: its AI analysis never started, so there is no usage to record (not the same as usage that went missing). */
+  analysis_run: boolean;
+  totals: UsageTotals;
+  cost: UsageCost;
+  stages: UsageStage[];
+  pages: UsagePages;
+  notes: string[];
+}
+
+export interface UsageHistoryItem {
+  scan_id: string;
+  url: string;
+  domain: string;
+  status: string;
+  created_at: string | null;
+  completed_at: string | null;
+  pages_scanned: number | null;
+  calls: number;
+  failed_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost: number | null;
+  cost_complete: boolean;
+  currency: string;
+  source: string;
+  analysis_run: boolean;
+}
+
 export interface ScanStatusResponse extends ScanResponse {
   error: string | null;
   evidence_counts: {

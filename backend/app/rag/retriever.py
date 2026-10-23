@@ -305,15 +305,15 @@ async def retrieve_many(
     texts = [text_only_query(q) for q in queries]
     embeddings: dict[str, list[float]] = {}
     pending: list[str] = []
-    for text in texts:
-        if not has_text(text) or text in embeddings or text in pending:
+    for query_text in texts:
+        if not has_text(query_text) or query_text in embeddings or query_text in pending:
             continue
-        cached = _cache_get(text)
+        cached = _cache_get(query_text)
         if cached is not None:
-            embeddings[text] = cached
+            embeddings[query_text] = cached
             stats["cache_hits"] += 1
         else:
-            pending.append(text)
+            pending.append(query_text)
 
     if pending:
         started = time.perf_counter()
@@ -324,17 +324,17 @@ async def retrieve_many(
                 raise LLMOutputValidationError(
                     f"Embedding service returned {len(vectors)} vectors for {len(pending)} queries."
                 )
-            for text, vector in zip(pending, vectors, strict=True):
-                embeddings[text] = vector
-                _cache_put(text, vector)
+            for query_text, vector in zip(pending, vectors, strict=True):
+                embeddings[query_text] = vector
+                _cache_put(query_text, vector)
         except openai.BadRequestError as exc:
             if "image input" not in str(exc).lower():
                 raise
-            for text, original in ((t, q) for q in queries for t in [text_only_query(q)] if t in pending):
-                if text in embeddings:
+            for query_text, original in ((t, q) for q in queries for t in [text_only_query(q)] if t in pending):
+                if query_text in embeddings:
                     continue
                 stats["embed_calls"] += 1
-                embeddings[text] = await _embed_one(original, text, llm_client)
+                embeddings[query_text] = await _embed_one(original, query_text, llm_client)
         except _EMBEDDING_UNAVAILABLE as exc:
             # The service did not answer within its deadline (hedged requests included). Search the same chunks by keyword instead of
             # giving the analysis up: the provisions are still found and the checks on what the model cites still apply.
@@ -346,19 +346,19 @@ async def retrieve_many(
     started = time.perf_counter()
     results: list[list[RetrievedChunk]] = []
     used = {"topic": 0, "keyword": 0}
-    for text in texts:
-        if text in embeddings:
-            results.append(await _search(embeddings[text], db=db, top_k=top_k, max_distance=max_distance))
-        elif stats.get("mode") == "fallback" and has_text(text):
+    for query_text in texts:
+        if query_text in embeddings:
+            results.append(await _search(embeddings[query_text], db=db, top_k=top_k, max_distance=max_distance))
+        elif stats.get("mode") == "fallback" and has_text(query_text):
             # The service did not answer for this query. First choice: the stored embedding of the provision the query is about, which is
             # the same cosine search over the same chunks. Otherwise the words of the query.
-            stored = stored_vector(text)
+            stored = stored_vector(query_text)
             if stored is not None:
                 used["topic"] += 1
                 results.append(await _search(stored, db=db, top_k=top_k, max_distance=max_distance))
             else:
                 used["keyword"] += 1
-                results.append(await _text_search(text, db=db, top_k=top_k))
+                results.append(await _text_search(query_text, db=db, top_k=top_k))
         else:
             results.append([])      # nothing but an image: no sentence to retrieve provisions for
     if stats.get("mode") == "fallback":

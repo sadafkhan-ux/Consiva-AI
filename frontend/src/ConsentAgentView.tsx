@@ -16,12 +16,16 @@ import { InsightSections } from "./components/InsightSections";
 import { ReadinessReview } from "./components/ReadinessReview";
 import { PolicyAnalysisSection } from "./components/PolicyAnalysisSection";
 import { ScanHero } from "./components/ScanHero";
+import { TokenUsagePanel } from "./components/TokenUsagePanel";
 import { DpdpReferencesSection, RecommendationsSection } from "./components/DpdpAndRecommendations";
 import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnostics";
-import { ANALYSIS_INCOMPLETE_NOTE, buildReportModel, untestedConsentStates } from "./report/buildReport";
+import { ANALYSIS_INCOMPLETE_NOTE, untestedConsentStates } from "./report/buildReport";
+import { reportModelFromState } from "./report/modelFromState";
 import { buildInsightSections } from "./report/insights";
 import { buildReadinessReview } from "./report/readiness";
 import { downloadReport } from "./report/downloadReport";
+import { fetchReportPdf, saveBlob } from "./api/client";
+import { ApiError } from "./api/types";
 
 // The stages that turn rule results into findings; if one fails, "no findings" says nothing about what the rules found.
 const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
@@ -65,27 +69,29 @@ export function ConsentAgentView() {
     setReportError(null);
     setBuildingReport(true);
     try {
-      await downloadReport(
-        buildReportModel(
-          state.scan, state.findings, state.websiteScanMeta, state.evidence?.cookies ?? [], state.evidence?.trackers ?? [],
-          isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null,
-          state.evidence,
-          analysisNote,
-          state.policyAnalysis ?? null,
-          state.screenshot ?? null,
-        ),
-      );
+      // The server prints the same report page the web shows (GET .../report.pdf). Only when the server cannot be reached or cannot make it (a
+      // network or server error, not "not found" or "not allowed") is the PDF drawn here in the browser instead, from the same report model.
+      try {
+        if (!state.scanId) throw new ApiError(0, "No scan is open.");
+        const { blob, filename } = await fetchReportPdf(state.scanId);
+        saveBlob(blob, filename);
+      } catch (serverErr) {
+        const status = serverErr instanceof ApiError ? serverErr.status : 0;
+        if (status !== 0 && status < 500) throw serverErr;
+        await downloadReport(reportModelFromState(state));
+      }
     } catch (err) {
       // Surface it rather than failing silently -- the PDF library is fetched on
       // demand, so an offline/blocked load is a real possibility worth reporting.
-      setReportError(err instanceof Error ? err.message : "Could not generate the PDF report.");
+      setReportError(err instanceof ApiError ? err.detail : err instanceof Error ? err.message : "Could not generate the PDF report.");
     } finally {
       setBuildingReport(false);
     }
   }
 
   return (
-    <>
+    <div className="usage-layout">
+      <div className="usage-main">
       <div className="agent-intro">
         <h1>Consent Agent</h1>
         <div className="tagline">Enter a public website URL to run a real scan → three-state consent test → rules → RAG → NVIDIA LLM → findings → human review.</div>
@@ -146,14 +152,14 @@ export function ConsentAgentView() {
       {canDownloadReport && (
         <div className="report-bar">
           <div className="report-bar-text">
-            <strong>Three-page report</strong>
+            <strong>Privacy report</strong>
             <span>
-              Client-friendly headlines only — the DPDP Compliance Score, main problems, key consent issues, DPDP
-              references and recommended actions.
+              A front page with the Privacy Readiness Score and the scan summary, then every check, finding, fix and piece of evidence.
               {reportIsProvisional && " Marked provisional until every finding is reviewed."}
             </span>
             {reportError && <span className="report-error">{reportError}</span>}
           </div>
+          {state.scanId && <a className="report-link" href={`/?report=${state.scanId}`} target="_blank" rel="noreferrer" data-testid="open-web-report">Open web report</a>}
           <button className="report-btn" onClick={handleDownloadReport} disabled={buildingReport}>
             {buildingReport ? "Preparing…" : "Download Report (PDF)"}
           </button>
@@ -163,7 +169,7 @@ export function ConsentAgentView() {
       {reportPending && (
         <div className="report-bar" data-testid="report-pending">
           <div className="report-bar-text">
-            <strong>Three-page report</strong>
+            <strong>Privacy report</strong>
             <span>The PDF report becomes available when the scan finishes.</span>
           </div>
           <button className="report-btn" disabled>Download Report (PDF)</button>
@@ -266,6 +272,8 @@ export function ConsentAgentView() {
           </section>
         </>
       )}
-    </>
+      </div>
+      <TokenUsagePanel scanId={state.scanId} live={busy} status={busy ? "running" : state.phase === "failed" ? "failed" : state.phase === "idle" ? "idle" : "completed"} />
+    </div>
   );
 }

@@ -1,0 +1,178 @@
+/* The Consiva privacy compliance report: one design for the web report page and the PDF the server prints from it.
+   Colours are the PDF's own (report/downloadReport.ts), so the two look alike. Everything is scoped to .rpt. */
+
+.rpt {
+  --r-ink: #16163a; --r-muted: #5d6086; --r-rule: #e3e6f4; --r-tint: #f4f6ff; --r-blue: #2f6bff; --r-purple: #7a4dff; --r-cyan: #12c2e9; --r-deep: #4b3bd6;
+  --r-good-bg: #e3f6ee; --r-good: #0d7a55; --r-warn-bg: #fff1d6; --r-warn: #8f5600; --r-mute-bg: #ecf0f8; --r-mute: #555a85; --r-bad-bg: #fde4e7; --r-bad: #a8283a;
+  --ring-edge: #03070f; --ring-track: #e9ebf7; --ring-arc: #5a5bff;
+  color: var(--r-ink);
+  background: #fff;
+  font-family: Arial, "Liberation Sans", Helvetica, sans-serif;
+  font-size: 11px;
+  line-height: 1.45;
+  box-sizing: border-box;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0 34px 28px;
+  overflow-wrap: anywhere;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+/* Report mode: the console's own dark document settings (color-scheme, page background, heading font, 100% heights) do not apply to the report. */
+html.report-mode { color-scheme: light; background: #eef0f8; height: auto; }
+html.report-mode body { background: #eef0f8; color: #16163a; font-family: Arial, "Liberation Sans", Helvetica, sans-serif; height: auto; margin: 0; }
+html.report-mode #root { height: auto; }
+.rpt *, .rpt *::before, .rpt *::after { box-sizing: border-box; }
+.rpt h1, .rpt h2, .rpt h3 { font-family: inherit; font-weight: 700; }
+.rpt a { color: var(--r-deep); text-decoration: none; }
+.rpt h1, .rpt h2, .rpt h3, .rpt p, .rpt ol, .rpt figure { margin: 0; }
+
+.r-screen-brand { background: #03070f; color: #fff; font-weight: 700; padding: 14px 34px; margin: 0 -34px; border-top: 5px solid var(--r-purple); }
+.r-title { padding: 18px 0 10px; }
+.r-title h1 { font-size: 24px; letter-spacing: -0.01em; }
+.r-muted { color: var(--r-muted); }
+.r-small { font-size: 9.6px; }
+.r-bold { font-weight: 700; }
+.r-big { font-size: 19px; font-weight: 700; }
+.r-line { margin: 6px 0; }
+.r-break { overflow-wrap: anywhere; word-break: break-all; }
+.r-warn-text { color: var(--r-warn); }
+.r-badtext { color: var(--r-bad); }
+.r-indent { margin-left: 14px; }
+
+/* pills */
+.r-pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 9.2px; font-weight: 700; line-height: 1.5; white-space: normal; }
+.r-good { background: var(--r-good-bg); color: var(--r-good); }
+.r-warn { background: var(--r-warn-bg); color: var(--r-warn); }
+.r-mute { background: var(--r-mute-bg); color: var(--r-mute); }
+.r-bad { background: var(--r-bad-bg); color: var(--r-bad); }
+.r-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+
+/* hero: the score, what it means, and the site's preview, side by side in one container */
+.r-hero { display: grid; grid-template-columns: 150px minmax(0, 1fr) 232px; gap: 18px; align-items: center; background: #f3f5ff; border: 1px solid var(--r-rule); border-radius: 14px; padding: 16px 18px; margin: 6px 0 10px; }
+.r-hero-score { display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; color: var(--r-ink); }
+.r-hero-score svg { width: 124px; height: 124px; color: var(--r-ink); }
+.r-hero-label { font-weight: 700; font-size: 10.5px; color: var(--r-muted); }
+.r-hero-text { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
+.r-hero-headline { font-size: 13.5px; font-weight: 700; line-height: 1.4; }
+.r-cta { display: inline-block; background: var(--r-purple); color: #fff !important; font-weight: 700; font-size: 10.5px; padding: 8px 16px; border-radius: 999px; }
+.r-hero-preview { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.r-hero-domain { font-weight: 700; font-size: 12px; overflow-wrap: anywhere; }
+.r-hero-preview img { display: block; width: 100%; height: auto; max-height: 136px; aspect-ratio: 16 / 9; object-fit: cover; object-position: top; border: 1px solid var(--r-rule); border-radius: 6px; background: #fff; }
+.r-hero-missing { display: flex; flex-direction: column; gap: 3px; justify-content: center; text-align: center; aspect-ratio: 16 / 9; padding: 10px; border: 1px dashed #c9cde4; border-radius: 6px; background: #ecedf8; color: var(--r-muted); font-size: 9.6px; }
+
+/* contents */
+.r-contents { background: var(--r-tint); border: 1px solid var(--r-rule); border-radius: 10px; padding: 10px 14px; margin: 6px 0 12px; font-size: 9.6px; }
+.r-contents b { color: var(--r-muted); font-size: 9px; letter-spacing: .06em; }
+.r-contents ol { list-style: none; padding: 0; columns: 2; column-gap: 24px; margin-top: 4px; }
+.r-contents li { margin: 1px 0; break-inside: avoid; white-space: pre-wrap; }
+
+/* sections */
+.r-sec { margin: 16px 0 0; }
+.r-sec > h2 { display: flex; align-items: center; gap: 9px; font-size: 14px; margin-bottom: 8px; }
+.r-sec-title { flex: 1 1 auto; }
+.r-badge { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; background: var(--r-purple); color: #fff; font-size: 10.5px; font-weight: 700; }
+.r-appx > h2 { background: var(--r-tint); border-radius: 8px; padding: 6px 10px; }
+.rpt .r-h3 { font-size: 11.5px; color: var(--r-deep); margin: 10px 0 4px; }
+.r-p { margin: 3px 0; }
+.r-box { border: 1px solid var(--r-rule); border-radius: 10px; padding: 12px 14px; }
+.r-soft { background: #f7f8fc; }
+.r-framework { display: flex; gap: 26px; align-items: center; }
+
+/* tiles, areas, elements */
+.r-tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.r-tiles5 { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 6px; }
+.r-tile { background: var(--r-tint); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
+.r-tile b { font-size: 17px; }
+.r-tile span { font-size: 8.8px; color: var(--r-muted); }
+.r-areas { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; margin-top: 4px; }
+.r-area { border: 1px solid var(--r-rule); border-radius: 9px; padding: 9px 11px; display: flex; flex-direction: column; gap: 3px; }
+.r-bar { height: 5px; border-radius: 3px; background: #e9ebf7; overflow: hidden; }
+.r-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--r-blue), var(--r-purple), var(--r-cyan)); }
+.r-elements { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.r-element { border: 1px solid var(--r-rule); border-radius: 8px; padding: 8px 9px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.r-element b { font-size: 10px; }
+
+/* findings, items */
+.r-finding { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: start; border: 1px solid var(--r-rule); border-radius: 9px; padding: 8px 12px; margin: 0 0 6px; }
+.r-num-dot { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; color: #fff !important; font-weight: 700; font-size: 10px; }
+.r-num-dot.r-bad { background: #d13b4a; } .r-num-dot.r-warn { background: #c77a06; } .r-num-dot.r-mute { background: #8a8eb5; } .r-num-dot.r-good { background: #0d7a55; }
+.r-item { margin: 0 0 8px; }
+.r-item-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.r-callout { background: #eef3ff; border-left: 4px solid var(--r-purple); border-radius: 4px; padding: 9px 12px; margin: 8px 0; }
+.r-callout b { font-size: 9px; color: var(--r-deep); letter-spacing: .06em; }
+.r-callout p { margin-top: 3px; font-size: 11px; }
+.r-quote { margin: 5px 0 5px 14px; padding: 7px 10px 7px 12px; background: var(--r-tint); border-left: 3px solid var(--r-purple); border-radius: 3px; font-size: 10px; }
+.r-quote-src { margin-top: 3px; font-size: 9px; color: var(--r-deep); overflow-wrap: anywhere; }
+
+/* tables */
+.r-table { width: 100%; border-collapse: collapse; table-layout: auto; margin: 4px 0 6px; font-size: 10px; }
+.r-table th { background: var(--r-tint); color: var(--r-muted); text-align: left; font-size: 8.4px; letter-spacing: .05em; text-transform: uppercase; padding: 5px 7px; font-weight: 700; }
+.r-table td { padding: 6px 7px; border-bottom: 1px solid var(--r-rule); vertical-align: top; overflow-wrap: anywhere; }
+.r-table tbody tr:nth-child(even) td { background: #fafbff; }
+.r-num { text-align: right; }
+.r-center th:not(:first-child), .r-center td:not(:first-child) { text-align: center; }
+.r-count-cell { font-size: 13px; }
+.r-dense { font-size: 8.6px; }
+.r-dense th { font-size: 7.8px; }
+.r-dense td { padding: 4px 5px; }
+.r-failrow { color: var(--r-bad); }
+
+/* screenshots, about */
+.r-shots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.r-shots figure { border: 1px solid var(--r-rule); border-radius: 8px; padding: 8px; font-size: 9px; color: var(--r-muted); }
+.r-shots img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; object-position: top; border: 1px solid var(--r-rule); border-radius: 4px; margin-bottom: 6px; }
+.r-shot-missing { display: flex; align-items: center; justify-content: center; aspect-ratio: 16 / 9; background: #ecedf8; border: 1px dashed #c9cde4; border-radius: 4px; margin-bottom: 6px; text-align: center; padding: 8px; }
+.r-about { margin-top: 18px; background: #f1ecff; border-radius: 8px; padding: 10px 14px; font-size: 9.4px; color: var(--r-muted); }
+.r-about b { color: var(--r-deep); display: block; margin-bottom: 3px; font-size: 10.5px; }
+
+/* the web report page around the document */
+.r-page { background: #eef0f8; min-height: 100vh; padding: 12px 0 32px; }
+.r-toolbar { max-width: 860px; margin: 0 auto 10px; padding: 0 12px; display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.r-toolbar .r-status { font-size: 12px; color: #16163a; }
+.r-toolbar .r-error { color: #a8283a; font-weight: 700; }
+.r-toolbar button, .r-toolbar a.r-btn { background: #7a4dff; color: #fff; border: 0; border-radius: 999px; padding: 9px 18px; font-weight: 700; font-size: 12px; cursor: pointer; text-decoration: none; }
+.r-toolbar button:disabled { opacity: .6; cursor: default; }
+.r-page .rpt { box-shadow: 0 2px 14px rgba(22, 22, 58, .12); border-radius: 6px; }
+.r-loading { max-width: 860px; margin: 40px auto; padding: 24px; background: #fff; border-radius: 8px; text-align: center; color: #16163a; font-family: Arial, sans-serif; }
+
+/* smaller screens: the hero stacks, tables scroll inside themselves rather than widening the page */
+@media screen and (max-width: 760px) {
+  .rpt { padding: 0 14px 20px; font-size: 12px; }
+  .r-screen-brand { margin: 0 -14px; padding: 12px 14px; }
+  .r-hero { grid-template-columns: 1fr; }
+  .r-hero-score { flex-direction: row; justify-content: flex-start; text-align: left; gap: 14px; }
+  .r-tiles, .r-tiles5, .r-elements, .r-shots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .r-contents ol { columns: 1; }
+  .r-framework { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .r-table { display: block; overflow-x: auto; }
+}
+
+/* print: the server prints this page to PDF. The page header (logo, domain, scan time) and footer (disclaimer, page numbers) come from the
+   print engine's own header and footer, so they repeat on every page. */
+@media print {
+  .r-screen-brand, .r-toolbar { display: none !important; }
+  html, html.report-mode, html.report-mode body { background: #fff !important; }
+  .r-page { background: #fff; padding: 0; min-height: 0; }
+  .rpt { max-width: none; margin: 0; padding: 0 34px; box-shadow: none; border-radius: 0; font-size: 10.6px; }
+  .r-sec { margin-top: 14px; }
+  .r-sec > h2, .r-h3 { break-after: avoid; page-break-after: avoid; }
+  .r-table thead { display: table-header-group; }
+  .r-table tr, .r-item, .r-finding, .r-tile, .r-area, .r-element, .r-callout, .r-quote, .r-shots figure, .r-hero, .r-box, .r-contents li { break-inside: avoid; page-break-inside: avoid; }
+  .r-appendix-start { break-before: page; page-break-before: always; }
+  .r-contents ol { columns: 2; }
+  a { color: inherit; }
+}
+
+/* the variant switch in the web report's toolbar */
+.r-variants { display: flex; gap: 6px; flex-wrap: wrap; }
+.r-variants a { background: #fff; color: #16163a; border: 1px solid #c9cde4; border-radius: 999px; padding: 6px 12px; font-size: 11px; font-weight: 700; text-decoration: none; }
+.r-variants a.on { background: #7a4dff; border-color: #7a4dff; color: #fff; }
+/* the appendix that follows the fixed pages */
+.rpt-appendix { margin-top: 18px; }
+@media print { .rpt-appendix { margin-top: 0; } .r-variants { display: none !important; } }
+
+/* The server prints this page twice from one load (services/report_pdf_service.py): the fixed sheets first, then the flowing pages. It says which by setting
+   data-print-part on <html>; without it (the web report, a browser's own print) everything shows. */
+html[data-print-part="sheets"] .rpt { display: none !important; }
+html[data-print-part="flow"] .pg-doc { display: none !important; }

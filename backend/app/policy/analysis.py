@@ -356,7 +356,7 @@ async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) 
         reqs = [r for r in REQUIREMENTS if applicable(r, sector, child)[0]]
 
         if extractor is None:
-            extractor = _default_extractor(str(scan_id))
+            extractor = _default_extractor(str(scan_id), [d.url for d in docs])
         try:
             extraction, meta = await extractor(SYSTEM_PROMPT, build_prompt(docs, reqs))
         except Exception as exc:
@@ -371,7 +371,7 @@ async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) 
         return unavailable(f"The policy analysis could not run ({type(exc).__name__}).")
 
 
-def _default_extractor(scan_id: str):
+def _default_extractor(scan_id: str, page_urls: list[str] | None = None):
     from app.llm.client import generate_structured_with_fallback
 
     async def extractor(system: str, user: str):
@@ -381,7 +381,7 @@ def _default_extractor(scan_id: str):
         usage: dict = {}
         response, fb = await generate_structured_with_fallback(
             system=system, user=user, schema=PolicyExtraction, settings=settings, usage_sink=usage,
-            deadline_epoch=time.time() + 120, agent="consent-policy", scan_id=scan_id, max_attempts=2,
+            deadline_epoch=time.time() + 120, agent="consent-policy", scan_id=scan_id, stage="policy_analysis", page_urls=page_urls, max_attempts=2,
         )
         used = usage.get("usage_by_attempt") or []
         meta = {

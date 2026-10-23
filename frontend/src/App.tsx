@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { AUTH_BYPASSED, OPEN_ACCESS, autoLogin, getProfile, logout, type Profile } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
-import { BreachConsole } from "./components/BreachConsole";
 import { ConsentAgentView } from "./ConsentAgentView";
-import { DsrConsole } from "./components/DsrConsole";
 import { LoginScreen } from "./components/LoginScreen";
-import { PurposeConsole } from "./components/PurposeConsole";
-import { RegWatchConsole } from "./components/RegWatchConsole";
-import { RopaDashboard } from "./components/RopaDashboard";
 import { agentFromHash, writeHash } from "./components/dsrRoute";
+import { ReportPage } from "./report/print/ReportPage";
+
+// Each of the other five consoles is its own chunk: the sign-in screen and the Consent console (the one everybody opens first) no longer carry their code. The
+// report page stays in the main chunk on purpose: the server prints it, and a separate chunk to fetch added about 0.3 s to every PDF (measured).
+const BreachConsole = lazy(() => import("./components/BreachConsole").then((m) => ({ default: m.BreachConsole })));
+const DsrConsole = lazy(() => import("./components/DsrConsole").then((m) => ({ default: m.DsrConsole })));
+const PurposeConsole = lazy(() => import("./components/PurposeConsole").then((m) => ({ default: m.PurposeConsole })));
+const RegWatchConsole = lazy(() => import("./components/RegWatchConsole").then((m) => ({ default: m.RegWatchConsole })));
+const RopaDashboard = lazy(() => import("./components/RopaDashboard").then((m) => ({ default: m.RopaDashboard })));
 
 type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch" | "purpose";
 
@@ -17,6 +21,24 @@ type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch" | "purpose";
  * into ConsentAgentView; this file only adds the sign-in gate and the switcher.
  */
 export default function App() {
+  // The report for one scan has its own address (/?report=<scanId>); the server prints it (&print=1) to make the PDF. It shows only the report,
+  // with no console around it, and works from the session already in this tab.
+  const reportParams = new URLSearchParams(window.location.search);
+  const reportScanId = reportParams.get("report");
+  if (reportScanId) {
+    const variant = reportParams.get("variant");
+    const part = reportParams.get("part");
+    return (
+      <ReportPage
+        scanId={reportScanId} print={reportParams.get("print") === "1"}
+        variant={variant === "free" || variant === "full" ? variant : undefined} part={part === "pages" || part === "appendix" || part === "cover" || part === "body" ? part : undefined}
+      />
+    );
+  }
+  return <Console />;
+}
+
+function Console() {
   const [profile, setProfile] = useState<Profile | null>(() => getProfile());
   // The active agent lives in the address (#/dsr/...), so a reload returns to it instead of to Consent.
   const [agent, setAgentState] = useState<Agent>(() => agentFromHash(window.location.hash) ?? "consent");
@@ -138,11 +160,13 @@ export default function App() {
 
         <div className="shell-content">
           {agent === "consent" && <ConsentAgentView />}
-          {agent === "ropa" && <RopaDashboard />}
-          {agent === "dsr" && <DsrConsole onOpenRopa={() => setAgent("ropa")} />}
-          {agent === "breach" && <BreachConsole />}
-          {agent === "regwatch" && <RegWatchConsole />}
-          {agent === "purpose" && <PurposeConsole />}
+          <Suspense fallback={<div className="muted" style={{ padding: 16 }}>Loading…</div>}>
+            {agent === "ropa" && <RopaDashboard />}
+            {agent === "dsr" && <DsrConsole onOpenRopa={() => setAgent("ropa")} />}
+            {agent === "breach" && <BreachConsole />}
+            {agent === "regwatch" && <RegWatchConsole />}
+            {agent === "purpose" && <PurposeConsole />}
+          </Suspense>
         </div>
       </div>
     </div>

@@ -429,6 +429,29 @@ _SHOT_RETRY_QUALITY = 45
 _SHOT_MAX_BYTES = 450_000
 _SHOT_MIN_BYTES = 2_500       # a picture this small is a blank page, not a website
 _SHOT_TIMEOUT_MS = 8_000
+# A page can answer, fire its load event and still be showing nothing: a single-page site draws itself afterwards. A picture taken then is a white
+# rectangle that is large enough in bytes to pass the size test above, and it would be kept as the client's homepage (scan ef0cda3d stored one: a
+# 1280x720 picture of nothing). So the capture first waits, bounded, until the page has something painted, and a picture whose pixels are all one
+# shade is retaken and, if it stays that way, recorded as blank rather than as a preview.
+_SHOT_PAINT_WAIT_MS = 6_000
+_SHOT_PAINT_STEP_MS = 400
+_SHOT_BLANK_RETRIES = 2
+_SHOT_BLANK_RETRY_WAIT_MS = 1_500
+# Reads the page and changes nothing: true when it shows some text or a picture, a video, a canvas or a graphic of real size.
+_PAINTED_JS = """() => {
+  const text = document.body ? (document.body.innerText || '').trim().length : 0;
+  const media = [...document.querySelectorAll('img,video,canvas,svg')].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 40 && r.height > 40; }).length;
+  return text >= 20 || media > 0;
+}"""
+# Runs on a throwaway blank page of the same browser (never on the scanned page): true when the picture's brightest and darkest points differ by under 6 of 255.
+_UNIFORM_JS = """async (src) => {
+  const img = new Image(); img.src = src; await img.decode();
+  const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+  const g = c.getContext('2d'); g.drawImage(img, 0, 0, 64, 36);
+  const d = g.getImageData(0, 0, 64, 36).data; let lo = 255, hi = 0;
+  for (let i = 0; i < d.length; i += 4) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; if (l < lo) lo = l; if (l > hi) hi = l; }
+  return hi - lo < 6;
+}"""
 # A site that answers the scanner with a block, challenge or error page is not showing its homepage. That picture would put somebody
 # else's error screen in the client's report, so it is not kept.
 _BLOCK_TITLE = re.compile(
@@ -436,6 +459,32 @@ _BLOCK_TITLE = re.compile(
     r"are you a (?:robot|human)|please complete the captcha|40[0-9]\b|50[0-9]\b)",
     re.IGNORECASE,
 )
+
+
+async def _wait_until_painted(page: Page) -> bool:
+    """Waits, bounded, until the page shows something. True when it does, or when that cannot be told (never an obstacle to the capture)."""
+    waited = 0
+    while waited < _SHOT_PAINT_WAIT_MS:
+        try:
+            if await page.evaluate(_PAINTED_JS):
+                return True
+            await page.wait_for_timeout(_SHOT_PAINT_STEP_MS)
+        except Exception:  # noqa: BLE001 -- a page that cannot be asked is photographed as it stands
+            return True
+        waited += _SHOT_PAINT_STEP_MS
+    return False
+
+
+async def _is_uniform(page: Page, data: bytes) -> bool | None:
+    """True when the picture is one flat shade (nothing was drawn), False when it has content, None when that could not be told."""
+    try:
+        probe = await page.context.new_page()
+        try:
+            return bool(await probe.evaluate(_UNIFORM_JS, "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")))
+        finally:
+            await probe.close()
+    except Exception:  # noqa: BLE001 -- unknown is not blank: the picture is kept
+        return None
 
 
 async def _capture_homepage_screenshot(page: Page, *, http_status: int | None, final_url: str | None) -> dict:
@@ -451,11 +500,22 @@ async def _capture_homepage_screenshot(page: Page, *, http_status: int | None, f
         if (http_status is not None and http_status >= 400) or _BLOCK_TITLE.search(title):
             return {**info, "status": "blocked", "reason": "blocked"}
         shot = {"type": "jpeg", "full_page": False, "timeout": _SHOT_TIMEOUT_MS, "animations": "disabled", "caret": "hide"}
-        data = await page.screenshot(quality=_SHOT_QUALITY, **shot)
-        if len(data) > _SHOT_MAX_BYTES:
-            data = await page.screenshot(quality=_SHOT_RETRY_QUALITY, **shot)
-        if len(data) < _SHOT_MIN_BYTES:
-            return {**info, "status": "failed", "reason": "blank"}
+        await _wait_until_painted(page)
+
+        async def take() -> bytes:
+            picture = await page.screenshot(quality=_SHOT_QUALITY, **shot)
+            if len(picture) > _SHOT_MAX_BYTES:
+                picture = await page.screenshot(quality=_SHOT_RETRY_QUALITY, **shot)
+            return picture
+
+        data = await take()
+        for attempt in range(_SHOT_BLANK_RETRIES + 1):
+            if len(data) >= _SHOT_MIN_BYTES and await _is_uniform(page, data) is not True:
+                break
+            if attempt == _SHOT_BLANK_RETRIES:
+                return {**info, "status": "failed", "reason": "blank"}
+            await asyncio.sleep(_SHOT_BLANK_RETRY_WAIT_MS / 1000)
+            data = await take()
         size = page.viewport_size or {"width": 1280, "height": 720}
         return {**info, "status": "ok", "reason": None, "image_b64": base64.b64encode(data).decode("ascii"),
                 "width": int(size["width"]), "height": int(size["height"])}
@@ -695,7 +755,6 @@ async def _crawl_full_site(
     with `stop_reason="cancelled"`. That is how a scan cancelled through the API stops, without
     killing a browser mid-page -- which is what leaves orphaned Chromium processes."""
     site_domain = urlparse(root_url).netloc
-    site_registered = _registered_domain(site_domain)
 
     pages: list[PageRecord] = []
     forms: list[FormRecord] = []

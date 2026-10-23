@@ -21,7 +21,7 @@ describe("the PDF report option", () => {
     current = { phase: "completed", scanId: "s1", findings: [], startedAt: 1, completedAt: 2 };
     render(<ConsentAgentView />);
     expect(screen.getByRole("button", { name: REPORT })).toBeEnabled();
-    expect(screen.getByText("Three-page report")).toBeInTheDocument();
+    expect(screen.getByText("Privacy report")).toBeInTheDocument();
     expect(screen.queryByText("One-page summary")).not.toBeInTheDocument();
   });
 

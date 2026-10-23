@@ -113,6 +113,10 @@ async def retrieve_rag(state: AgentState) -> dict:
                     meta["retrieval_mode"] = stats.get("mode", "embedding")
                     if stats.get("embedding_error"):
                         meta["embedding_error"] = stats["embedding_error"]
+            if getattr(llm_client, "embed_requests", 0):
+                # What the embedding provider reported for the requests that answered (prompt tokens), so the retrieval stage carries a measured number.
+                meta["embed_requests"] = llm_client.embed_requests
+                meta["embed_tokens"] = llm_client.embed_tokens_total
             if stats.get("knowledge_base_empty"):
                 meta["knowledge_base_empty"] = True   # visible on the stage: no provisions exist to cite
             for chunks_for_query in per_query:

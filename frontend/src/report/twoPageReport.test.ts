@@ -220,7 +220,7 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
     const summary = p.page(0) + p.page(1);
     expect(summary).not.toMatch(/÷|×|Score = |Coverage = |This scan:/);
     expect(summary).toContain("56.5%");
-    expect(summary).toContain("Coverage 62.2%");
+    expect(summary).not.toContain("Coverage 62.2%");   // the overall coverage is not shown on the hero or the summary pages
   });
 
   it("shows the same percentage in the ring, the headline sentence and the framework card", async () => {
@@ -254,10 +254,22 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
     }
   });
 
+  it("puts the unavailable label under the ring on two centred lines that stay clear of the text beside it, and prints no coverage in the hero", async () => {
+    await pdf(insufficient);
+    const ring = recorded.circles.filter((c) => c.page === 0).sort((a, b) => b.r - a.r)[1];
+    const lines = recorded.calls.filter((c) => c.page === 0 && c.align === "center" && /^(Compliance score|unavailable)$/.test(c.t));
+    expect(lines.map((c) => c.t)).toEqual(["Compliance score", "unavailable"]);
+    for (const c of lines) expect(c.x).toBe(ring.x);                                          // centred under the ring
+    expect(lines[1].y).toBeGreaterThan(lines[0].y);
+    const heroTop = ring.y - 62;
+    const heroTexts = recorded.calls.filter((c) => c.page === 0 && c.y > heroTop && c.y < ring.y + ring.r + 40 && c.x > ring.x + 60);
+    expect(heroTexts.map((c) => c.t).join(" ")).not.toMatch(/coverage/i);
+  });
+
   it("shows Insufficient Evidence instead of a number", async () => {
     const t = (await pdf(insufficient)).page(0);
     expect(t).toContain("Insufficient evidence");
-    expect(t).toContain("Compliance Score withheld");
+    expect(t).toContain("Compliance score unavailable");
     expect(t).toContain("No score");
   });
 
@@ -584,7 +596,7 @@ describe("what every generated report says about itself, and what it leaves out"
     const v = buildScoreView(mixed);
     const t = (await pdf(mixed)).page(0);
     expect(t).toContain(v.headline);
-    expect(t).toContain(`Coverage ${v.coverageHeadline}`);
+    expect(t).not.toContain(`Coverage ${v.coverageHeadline}`);   // kept in the data (v.coverageHeadline), not printed in the hero
     expect(v.ledger.counts.find((c) => c.label === "Cannot verify")!.value).toBe(String(mixed.ledger.unable_checks));   // still every check
   });
 });
@@ -1052,22 +1064,23 @@ describe("the hero: score top left, domain above the homepage picture top right"
 });
 
 describe("the hero's words and facts, worked out once for the dashboard and the PDF", () => {
-  it("reads the score into a band, a headline and a coverage line", () => {
+  it("reads the score into a band and a headline, with no coverage in either", () => {
     const h = buildHeroView(buildScoreView(mixed));
     expect(h.scored).toBe(true);
     expect(h.percentLabel).toBe("56.5%");
     expect(h.scoreLabel).toBe("Compliance Score");
     expect(h.headline).toContain("we could test scored 56.5%");
-    expect(h.coverageLine).toMatch(/^Coverage [\d.]+%: the share of the checks that apply that a scan could test\.$/);
+    expect(JSON.stringify(h)).not.toMatch(/coverage/i);
     expect(["good", "warn", "mute"]).toContain(h.tone);
   });
 
   it("says plainly when there is no score, and never shows a number for one", () => {
-    expect(buildHeroView(null)).toMatchObject({ scored: false, percentLabel: "No score", scoreLabel: "Compliance Score withheld", band: "Score not available", tone: "mute", coverageLine: null });
+    expect(buildHeroView(null)).toMatchObject({ scored: false, percentLabel: "No score", scoreLabel: "Compliance score unavailable", band: "Score not available", tone: "mute" });
     const withheld = buildHeroView(buildScoreView(insufficient));
     expect(withheld.scored).toBe(false);
     expect(withheld.percent).toBeNull();
-    expect(withheld.headline.startsWith("No score is shown.")).toBe(true);
+    expect(withheld.headline.startsWith("Compliance score unavailable.")).toBe(true);
+    expect(JSON.stringify(withheld)).not.toMatch(/coverage/i);
   });
 
   it("names the domain and tells a bare homepage from a deeper page", async () => {

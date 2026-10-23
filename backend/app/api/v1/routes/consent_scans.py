@@ -2,14 +2,16 @@ import base64
 import uuid
 from dataclasses import asdict
 from datetime import date, datetime
+from typing import Literal
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ScanNotReadyError
 from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import (
     audit_repository,
@@ -21,7 +23,7 @@ from app.db.session import get_db
 from app.llm.schemas import DpdpReference
 from app.scoring import dpdp_score
 from app.scoring.sector import SECTORS
-from app.services import analysis_service, scan_service
+from app.services import analysis_service, report_pdf_service, scan_service, usage_service
 
 router = APIRouter(prefix="/api/v1/consent/scans", tags=["consent-scans"])
 
@@ -607,6 +609,128 @@ class DpdpScoreResponse(BaseModel):
     out_of_scope: list[dict]
 
 
+class UsageTotals(BaseModel):
+    calls: int
+    failed_calls: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    total_tokens: int
+    reasoning_tokens: int | None = None
+    priced_calls: int
+    unpriced_calls: int
+    cost: float | None = None
+    embedding_tokens: int | None = None
+
+
+class UsageCost(BaseModel):
+    currency: str
+    total: float | None = None
+    input: float | None = None
+    cache_read: float | None = None
+    cache_write: float | None = None
+    output: float | None = None
+    priced_calls: int
+    unpriced_calls: int
+    complete: bool
+    price_source: str | None = None
+
+
+class UsageStage(BaseModel):
+    """One pipeline stage that ran. `kind`: llm (calls a language model), embedding (embedding model, no LLM tokens), non_llm (ordinary code: zero LLM tokens).
+    A token field is null when the stage calls a model but no usage was recorded: unavailable, never zero."""
+    stage: str
+    label: str
+    kind: str
+    status: str
+    runs: int
+    duration_ms: int | None = None
+    models: list[str] = []
+    note: str | None = None
+    calls: int
+    failed_calls: int
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    total_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    priced_calls: int = 0
+    unpriced_calls: int = 0
+    cost: float | None = None
+    embedding_requests: int | None = None
+    embedding_tokens: int | None = None
+
+
+class UsagePageRow(BaseModel):
+    url: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost: float | None = None
+
+
+class UsageSharedRow(BaseModel):
+    label: str
+    reason: str
+    stage: str | None = None
+    page_urls: list[str] = []
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost: float | None = None
+
+
+class UsagePages(BaseModel):
+    attributed: list[UsagePageRow]
+    shared: list[UsageSharedRow]
+    unattributed: UsageSharedRow | None = None
+
+
+class UsageResponse(BaseModel):
+    """The model usage of one scan, for the usage panel in the console. Never part of the report or the PDF. `source`: measured (per-call records),
+    stage_records (a scan made before per-call tracking: the usage its stage records kept) or none."""
+    scan_id: str
+    url: str
+    domain: str
+    scan_status: str
+    state: str
+    current_stage: str | None = None
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
+    pages_scanned: int | None = None
+    source: str
+    analysis_run: bool = True
+    totals: UsageTotals
+    cost: UsageCost
+    stages: list[UsageStage]
+    pages: UsagePages
+    notes: list[str]
+
+
+class UsageHistoryItem(BaseModel):
+    scan_id: str
+    url: str
+    domain: str
+    status: str
+    created_at: datetime | None = None
+    completed_at: datetime | None = None
+    pages_scanned: int | None = None
+    calls: int
+    failed_calls: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost: float | None = None
+    cost_complete: bool
+    currency: str
+    source: str
+    analysis_run: bool = True
+
+
 class ScanListItem(BaseModel):
     id: uuid.UUID
     url: str
@@ -624,6 +748,32 @@ async def list_scans(
     """The caller's organisation's recent scans, newest first, so the console can reopen one after a reload."""
     rows = await scan_repository.list_recent_scans(db, uuid.UUID(user.org_id), max(1, min(limit, 50)))
     return [ScanListItem(id=s.id, url=s.url, status=s.status, created_at=s.created_at, completed_at=s.completed_at) for s in rows]
+
+
+@router.get("/usage/history", response_model=list[UsageHistoryItem])
+async def get_usage_history(
+    limit: int = 30,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The model usage of the organisation's recent scans, newest first, for the usage panel's history. A scan made before usage was recorded per call shows
+    what its stage records kept, marked `stage_records`; a scan with neither shows source `none`. Read-only: it never regenerates anything."""
+    scans = await scan_repository.list_recent_scans(db, uuid.UUID(user.org_id), max(1, min(limit, 100)))
+    return await usage_service.load_history(db, scans)
+
+
+@router.get("/{scan_id}/usage", response_model=UsageResponse)
+async def get_scan_usage(
+    scan_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The model usage of one scan so far: totals, by stage, by page where a call read exactly one page, and the cost, read from the per-call records as each
+    response arrives (so it moves while the scan runs). The caller's organisation must own the scan."""
+    scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
+    if scan is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    return await usage_service.load_scan_usage(db, scan)
 
 
 @router.post("", response_model=ScanResponse, status_code=202)
@@ -857,6 +1007,50 @@ class PolicyAnalysisResponse(BaseModel):
     requirements: list[PolicyRequirementModel] = []
     limitations: list[str] = []
     model: dict | None = None
+
+
+@router.get(
+    "/{scan_id}/report.pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}, "description": "The PDF report for the scan."}},
+)
+async def get_scan_report_pdf(
+    scan_id: uuid.UUID,
+    request: Request,
+    variant: Literal["free", "full", "long"] = Query(
+        "long", description="long (default): the full report, opening with the Free report's front page; free: the two-page Free Scan report; full: the eight-page Full Scan report with its evidence appendix.",
+    ),
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The PDF report of one completed scan: the same report the web page /?report=<scan id> shows, printed by headless Chromium
+    (services/report_pdf_service.py). The caller must belong to the organisation that owns the scan and its website; a scan of another organisation is
+    "not found", exactly as everywhere else in this API. A scan that has not completed has no report (409). If the PDF cannot be made, the answer is
+    503 with a plain message (the cause is in the server log), and the scan and its data are unaffected."""
+    org_id = uuid.UUID(user.org_id)
+    scan = await scan_repository.get_scan(db, scan_id, org_id)
+    if scan is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    website = await scan_repository.get_website_by_id(db, scan.website_id)
+    if website is None or website.org_id != scan.org_id:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    if scan.status != "completed":
+        raise ScanNotReadyError(f"Scan {scan_id} is not completed yet (status={scan.status}), so it has no report")
+    auth = request.headers.get("authorization", "")
+    token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
+    rendered = await report_pdf_service.render_report_pdf(
+        scan_id, version=scan.completed_at.isoformat() if scan.completed_at else "", token=token,
+        user_id=user.user_id, org_id=user.org_id, role=user.role, settings=get_settings(), variant=variant,
+    )
+    return Response(
+        content=rendered.pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{rendered.filename}"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/{scan_id}/policy-analysis", response_model=PolicyAnalysisResponse)

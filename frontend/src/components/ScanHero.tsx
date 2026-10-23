@@ -3,7 +3,7 @@ import { buildHeroView, buildPreviewView } from "../report/hero";
 import type { ScoreView } from "../report/dpdpScore";
 
 /** The ring: the score as an arc round a circle, the percentage inside it. Drawn from the one number the server sent. */
-function ScoreRing({ percent, label }: { percent: number | null; label: string }) {
+export function ScoreRing({ percent, label }: { percent: number | null; label: string }) {
   const R = 44;
   const C = 2 * Math.PI * R;
   // The words inside the ring: a longer figure ("45.5%") gets a smaller size so it keeps clear of the ring, and the baseline sits half a capital's
@@ -41,7 +41,6 @@ export function ScanHero({ score, siteUrl, screenshot, scanId = null }: { score:
       <div className="hero-text">
         <span className={`badge ${hero.tone === "good" ? "ok" : hero.tone === "warn" ? "warn" : "neutral"}`} data-testid="hero-band">{hero.band}</span>
         <p className="hero-headline" data-testid="hero-headline">{hero.headline}</p>
-        {hero.coverageLine && <p className="muted small" data-testid="hero-coverage">{hero.coverageLine}</p>}
       </div>
       <figure className="hero-preview" data-testid="hero-preview">
         <figcaption className="hero-domain" data-testid="hero-domain">{preview.domain}</figcaption>

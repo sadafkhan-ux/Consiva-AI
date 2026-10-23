@@ -57,7 +57,8 @@ async def _llm_reasoning_inner(state: AgentState) -> dict:
             response, fallback_meta = await generate_structured_with_fallback(
                 system=SYSTEM_PROMPT, user=user_prompt, schema=ConsentAnalysisResponse,
                 settings=settings, usage_sink=usage_sink, deadline_epoch=deadline_epoch,
-                agent="consent", scan_id=state.scan_id,
+                agent="consent", scan_id=state.scan_id, stage="llm_analysis", agent_run_id=state.agent_run_id,
+                page_urls=[p["url"] for p in (state.scan_evidence or {}).get("pages", []) if p.get("url") and p.get("discovered_via") not in ("failed", "timeout")],
             )
         except Exception as exc:
             # Degrade, do not explode.

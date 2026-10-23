@@ -865,3 +865,74 @@ table.check-table td.num { text-align: right; font-variant-numeric: tabular-nums
   .scan-hero { grid-template-columns: 1fr; }
   .hero-score { flex-direction: row; justify-content: flex-start; gap: 14px; }
 }
+
+.report-link { align-self: center; margin-right: 12px; font-weight: 600; white-space: nowrap; }
+
+
+/* ── Token usage panel: the right-hand side of the Consent Agent console. It is part of the console only; the report and the PDF never include it. ── */
+.shell-content:has(.usage-layout) { max-width: none; padding-right: 20px; }
+.usage-layout { display: grid; grid-template-columns: minmax(0, 1fr) 392px; gap: 24px; align-items: start; }
+.usage-main { min-width: 0; max-width: 1180px; }
+.usage-panel { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 14px 12px; font-size: 12px; }
+.usage-panel.collapsed { padding: 6px; max-height: none; }
+.usage-panel h3 { margin: 0; font-size: 14px; flex: 1; }
+.usage-panel h4 { margin: 14px 0 6px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.usage-head { display: flex; align-items: center; gap: 8px; }
+.usage-toggle { background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 12px; }
+.usage-chip { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: rgba(143, 154, 179, 0.15); color: var(--muted); text-transform: capitalize; }
+.usage-chip-running { background: rgba(198, 149, 47, 0.18); color: var(--accent-strong); }
+.usage-chip-completed { background: rgba(91, 143, 122, 0.18); color: var(--green); }
+.usage-chip-failed { background: rgba(193, 84, 74, 0.18); color: var(--red); }
+.usage-current { margin-top: 8px; display: flex; align-items: center; gap: 6px; color: var(--accent-strong); font-weight: 600; }
+.usage-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent-strong); animation: usage-pulse 1.1s ease-in-out infinite; }
+@keyframes usage-pulse { 50% { opacity: 0.25; } }
+.usage-scan { margin-top: 6px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.usage-viewing { margin-top: 8px; padding: 6px 8px; border: 1px dashed var(--border); border-radius: 6px; color: var(--muted); }
+.usage-link { background: none; border: 0; padding: 0; color: var(--accent-strong); cursor: pointer; font-size: 11px; text-decoration: underline; }
+.usage-muted { color: var(--muted); margin: 4px 0; }
+.usage-panel .small { font-size: 10.5px; }
+.usage-error { color: var(--red); margin: 6px 0; }
+.usage-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.usage-stat { background: var(--panel-2); border-radius: 8px; padding: 7px 9px; }
+.usage-stat-value { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.usage-stat-label { font-size: 10.5px; color: var(--muted); }
+.usage-stat-sub { font-size: 10px; color: var(--muted); opacity: 0.8; }
+.usage-source { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.usage-live { color: var(--accent-strong); font-size: 10.5px; display: inline-flex; align-items: center; gap: 5px; }
+.usage-mark { font-size: 9.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; text-transform: none; letter-spacing: 0; }
+.usage-mark-measured { background: rgba(91, 143, 122, 0.18); color: var(--green); }
+.usage-mark-calculated { background: rgba(198, 149, 47, 0.18); color: var(--accent-strong); }
+.usage-mark-unavailable { background: rgba(143, 154, 179, 0.18); color: var(--muted); }
+.usage-mark-stage_records { background: rgba(201, 138, 59, 0.18); color: var(--amber); }
+.usage-table-wrap { overflow-x: auto; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 10.5px; table-layout: auto; }
+.usage-table th { text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 4px 4px; border-bottom: 1px solid var(--border); }
+.usage-table td { padding: 5px 3px; border-bottom: 1px solid rgba(143, 154, 179, 0.12); vertical-align: top; }
+.usage-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-stage-name { font-weight: 600; display: flex; align-items: center; gap: 5px; }
+.usage-stage-sub { font-size: 10px; color: var(--muted); }
+.usage-stage-non_llm td, .usage-stage-embedding td { opacity: 0.72; }
+.usage-stage.running td { background: rgba(198, 149, 47, 0.07); }
+.usage-failed { color: var(--red); }
+.usage-url { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-pages summary { cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 14px 0 6px; font-weight: 700; }
+.usage-shared { margin: 6px 0; padding: 6px 8px; background: var(--panel-2); border-radius: 6px; }
+.usage-shared ul { margin: 4px 0 0; padding-left: 16px; color: var(--muted); font-size: 10.5px; }
+.usage-cost { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; margin: 0; }
+.usage-cost dt { color: var(--muted); }
+.usage-cost dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.usage-cost .total { color: var(--text); font-weight: 700; border-top: 1px solid var(--border); padding-top: 4px; margin-top: 2px; }
+.usage-history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.usage-history li { background: var(--panel-2); border: 1px solid transparent; border-radius: 8px; padding: 7px 9px; }
+.usage-history li.current { border-color: var(--accent); }
+.usage-history-top { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.usage-history-nums { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 3px 0; font-variant-numeric: tabular-nums; }
+.usage-legend { margin-top: 12px; color: var(--muted); line-height: 1.9; }
+
+@media (max-width: 1100px) {
+  .shell-content:has(.usage-layout) { padding-right: 16px; }
+  .usage-layout { grid-template-columns: minmax(0, 1fr); }
+  .usage-panel { position: static; max-height: none; order: -1; }
+}
+
+.report-btn-alt { background: transparent; color: var(--accent-strong); border: 1px solid var(--accent); }

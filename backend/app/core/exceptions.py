@@ -136,3 +136,10 @@ class InvalidEditError(ConsivaError):
     an out-of-enum string would be persisted where every other writer is schema-bound."""
 
     status_code = 422
+
+
+class ReportGenerationError(ConsivaError):
+    """The PDF report could not be produced (the browser that prints it was unavailable, the report page did not finish, or the output was not a PDF).
+    status_code=503: the scan and its data are fine and the caller may retry. The message is client-safe; the cause is in the server log."""
+
+    status_code = 503
