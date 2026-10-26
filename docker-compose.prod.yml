@@ -126,6 +126,12 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      # Connections the API may hold. The application default (3 + 2) was sized for a 15-connection hosted pooler; on this deployment's own database (100 connections)
+      # it let five simultaneous requests exhaust it. Every request now returns its connection before doing slow work, and 10 + 10 lets a hundred or more people
+      # poll their scans at once. Add up the services before raising: backend + each worker replica (WORKER_DB_POOL_SIZE + WORKER_DB_MAX_OVERFLOW) must stay
+      # under the database's max_connections, or put a connection pooler (PgBouncer) in front. See docs/SCALING.md.
+      DB_POOL_SIZE: "${BACKEND_DB_POOL_SIZE:-10}"
+      DB_MAX_OVERFLOW: "${BACKEND_DB_MAX_OVERFLOW:-10}"
       # Explicit override point; everything else is inherited from env_file above.
       #
       # This used to be pinned to development because the SPA's only auth path was
@@ -201,7 +207,7 @@ services:
       WEBHOOK_SIGNING_SECRET: "${WEBHOOK_SIGNING_SECRET:-}"
       # Scans per organisation per hour through the integration API, on top of the
       # existing per-day ceiling. A scan is a real browser crawl plus a model call.
-      CONSENT_API_SCANS_PER_HOUR: "${CONSENT_API_SCANS_PER_HOUR:-20}"
+      CONSENT_API_SCANS_PER_HOUR: "${CONSENT_API_SCANS_PER_HOUR:-0}"
     volumes:
       # Source PDFs for the RAG knowledge base. Read-only, and deliberately a mount
       # rather than a COPY: they live at the repo root, outside this service's
@@ -243,6 +249,9 @@ services:
     image: consiva-backend:latest
     restart: unless-stopped
     command: ["python", "-m", "app.jobs.worker"]
+    # Every scan starts Chromium, and a browser that is killed or crashes leaves child processes behind. As PID 1 the worker does not reap them, so over days of
+    # scans they pile up as zombies; a minimal init (tini) in front of it does, and also passes SIGTERM through for the graceful shutdown below.
+    init: true
     env_file:
       - ./backend/.env
     environment:
@@ -262,10 +271,14 @@ services:
       # and 151s end to end, which is what made the UI report a backend timeout over
       # a scan that completed fine.
       #
-      # 4 is deliberately modest. The ceiling is not CPU -- the work is network-bound
-      # -- it is that each concurrent scan drives its own Chromium, so memory and
-      # /dev/shm below are what actually bound this. Raise both together.
-      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-4}"
+      # 0 = decide from the machine (app/jobs/capacity.py): at most one job per CPU, and
+      # a new one is taken only while the CPU is under WORKER_TARGET_CPU_PERCENT (85) and
+      # memory remains for it, a step at a time. A fixed 4 left a large idle machine
+      # mostly unused while 100 scans waited (median 86 s in the queue at 32% CPU) and
+      # was already too many on a small one (four real scans measured 790% of eight
+      # cores). A number above 0 caps it instead; the CPU and memory limits still apply.
+      # /dev/shm below still has to hold every browser: it is scaled with the slots.
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-0}"
       # Must be raised WITH WORKER_CONCURRENCY. The app default is 3+2=5 connections
       # per process, sized years ago for Supabase's 15-client session pooler; this
       # deployment is on the local `db` container instead, where max_connections is

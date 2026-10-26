@@ -314,7 +314,7 @@ class TestTraceability:
 
     def test_methodology_is_versioned_and_labelled_as_proposed(self):
         s = assess(evidence(), TODAY)
-        assert s.methodology_version == ds.METHODOLOGY_VERSION == "1.5.0"
+        assert s.methodology_version == ds.METHODOLOGY_VERSION == "1.6.0"
         assert "for informational purposes only" in s.disclaimer and "does not constitute legal advice" in s.disclaimer
 
 

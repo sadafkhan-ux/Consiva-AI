@@ -1,5 +1,6 @@
 import type { ScanEvidenceResponse, StageResponse } from "../api/types";
 import { serverSpanMs, summariseStages, unaccountedMs } from "../components/stageTiming";
+import { scriptFailureNote } from "./consentObservation";
 import type { ScoreView } from "./dpdpScore";
 import type { ScanPagesView } from "./scanPages";
 import type { ReportVisual } from "./reportVisual";
@@ -138,7 +139,7 @@ export function buildTransparency(input: {
   const banner = !signal ? "No consent mechanism information was recorded."
     : framed && signal.mechanism_type === "none" ? `No banner was seen on the wrapper page; the framed site (${framed}) may have its own, which was not scanned.`
       : signal.mechanism_type === "none" ? "No consent banner was detected on the scanned pages."
-        : bannerNotShown ? `A consent tool${signal.cmp_vendor ? ` (${signal.cmp_vendor})` : ""} is loaded but no banner was shown to the scanner, so Accept and Reject could not be tested.`
+        : bannerNotShown ? `A consent tool${signal.cmp_vendor ? ` (${signal.cmp_vendor})` : ""} is loaded but no banner was shown to the scanner, so Accept and Reject could not be tested.${scriptFailureNote(signal)}`
           : `A consent mechanism was detected${signal.cmp_vendor ? ` (${signal.cmp_vendor})` : ""}.`;
 
   const action = (name: "accept" | "reject"): ConsentStateRow => {

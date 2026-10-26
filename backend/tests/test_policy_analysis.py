@@ -175,7 +175,7 @@ def test_the_childrens_requirement_applies_only_where_children_are_plausible():
 def test_the_completeness_figure_counts_partial_as_half_and_leaves_out_what_does_not_apply():
     out = analyse(ext(res("retention", "Contact form submissions are retained for 24 months."),
                       res("grievance_contact", "Our Grievance Officer is Saurabh Kumar of Swaran Soft Support Solutions Private Limited.")),
-                  [PolicyDocument("https://x.test/p", "privacy_policy", POLICY + " Our Grievance Officer is Saurabh Kumar of Swaran Soft Support Solutions Private Limited. " + "Filler text. " * 50, "crawl")],
+                  [PolicyDocument("https://x.test/p", "privacy_policy", "Contact form submissions are retained for 24 months. " + "Filler text. " * 50 + "Our Grievance Officer is Saurabh Kumar of Swaran Soft Support Solutions Private Limited. " + "Filler text. " * 50, "crawl")],
                   "it", False)
     s = out["summary"]
     assert s["applicable"] == len(REQUIREMENTS) - 1 and s["not_applicable"] == 1

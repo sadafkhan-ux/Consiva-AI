@@ -1,6 +1,7 @@
 import type { DpdpScoreResponse, SectorAssessment } from "../api/types";
 import { buildScoreView, isDpdpScore, type FindingGroupView, type FindingView, type LedgerView, type ScoreRequirementView } from "../report/dpdpScore";
 import { formatRefs } from "../report/legalRefs";
+import { CheckCoverage } from "../report/print/CheckCoverage";
 import { isReportCategory, isReportMetric, OMITTED_DUTIES_NOTE } from "../report/reportScope";
 
 function Row({ r }: { r: ScoreRequirementView }) {
@@ -41,8 +42,8 @@ function Row({ r }: { r: ScoreRequirementView }) {
 }
 
 /** Every number on the score card: what it counts, its numerator and denominator, the formula and the result. */
-function ScoreLedger({ l }: { l: LedgerView }) {
-  const categoryMetrics = l.categoryMetrics.filter((m) => isReportMetric(m.name));
+function ScoreLedger({ l, assessed }: { l: LedgerView; assessed: ReadonlySet<string> }) {
+  const categoryMetrics = l.categoryMetrics.filter((m) => isReportMetric(m.name, assessed));
   const metricTable = (rows: LedgerView["metrics"], testId: string) => (
     <div className="check-table-wrap">
       <table className="check-table" data-testid={testId}>
@@ -255,7 +256,7 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
   const v = buildScoreView(score);
   // The score card follows the report: data-rights and security duties are not shown (a website scan cannot observe them). They stay in
   // the score and the counts as not tested, and a note under the check table says so.
-  const hiddenIds = new Set(v.allChecks.filter((c) => !isReportCategory(c.category)).map((c) => c.id));
+  const hiddenIds = new Set(v.allChecks.filter((c) => !isReportCategory(c.category, v.assessedCategories)).map((c) => c.id));
   const shownChecks = v.allChecks.filter((c) => !hiddenIds.has(c.id));
   const groups = v.groups.map((g) => {
     const entries = g.entries.filter((e) => !hiddenIds.has(e.id));
@@ -298,11 +299,15 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
       {v.unableLine && <p className="small" data-testid="dpdp-unable">{v.unableLine}</p>}
 
       <CheckTable checks={shownChecks} />
+      <section data-testid="dpdp-check-coverage">
+        <h3>What was tested and what was not</h3>
+        <CheckCoverage checks={v.allChecks} />
+      </section>
       <p className="muted small" data-testid="dpdp-omitted-note">{OMITTED_DUTIES_NOTE}</p>
       {/* The score card shows the final percentages only. The arithmetic behind them is one click away, for anyone auditing it. */}
       <details data-testid="dpdp-calculation-details">
         <summary><b>Calculation details</b> <span className="muted small">counts, weights and penalty rules, for audit</span></summary>
-        <ScoreLedger l={v.ledger} />
+        <ScoreLedger l={v.ledger} assessed={v.assessedCategories} />
         <PenaltyRules l={v.ledger} hiddenIds={hiddenIds} />
       </details>
 
@@ -323,7 +328,7 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
       <table className="table" data-testid="dpdp-categories">
         <thead><tr><th>Category</th><th>Score</th><th>Coverage</th><th>Assessed</th></tr></thead>
         <tbody>
-          {v.categories.filter((c) => isReportCategory(c.name)).map((c) => (
+          {v.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).map((c) => (
             <tr key={c.name}><td>{c.name}</td><td>{c.score}</td><td>{c.coverage}</td><td>{c.weights}</td></tr>
           ))}
         </tbody>
@@ -367,7 +372,7 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
         <div className="small"><b>Category weights</b></div>
         <table className="table" data-testid="dpdp-category-weights">
           <thead><tr><th>Category</th><th>Weight</th><th>Share</th><th>Why</th></tr></thead>
-          <tbody>{v.methodology.categories.filter((c) => isReportCategory(c.name)).map((c) => (
+          <tbody>{v.methodology.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).map((c) => (
             <tr key={c.name}><td>{c.name}</td><td>{c.weight}</td><td>{c.share}</td><td className="small">{c.rationale}</td></tr>
           ))}</tbody>
         </table>

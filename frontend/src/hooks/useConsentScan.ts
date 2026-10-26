@@ -119,6 +119,19 @@ export function scanEvidenceUnavailable(
   return true;
 }
 
+export type EvidenceStatus = "loading" | "loaded" | "unavailable";
+
+/** Whether a section that lists evidence may say "none detected": only once the evidence has been read. Before that it is loading, and if reading it failed it is unavailable, never an empty list. */
+export function evidenceStatus(state: Partial<Pick<ConsentScanState, "evidence" | "evidenceFailed">>): EvidenceStatus {
+  if (state.evidence) return "loaded";
+  return state.evidenceFailed ? "unavailable" : "loading";
+}
+
+/** A scan that failed after it had collected pages: its evidence is real and stays visible, but the assessment is not complete. */
+export function hasPartialResults(state: Pick<ConsentScanState, "phase" | "scan" | "stages"> & Partial<Pick<ConsentScanState, "evidence">>): boolean {
+  return state.phase === "failed" && (state.scan?.evidence_counts.pages ?? 0) > 0 && !scanEvidenceUnavailable(state);
+}
+
 /** The pipeline stage a failed scan stopped at, for the "not scanned" notice. */
 export function failedStageName(stages: StageResponse[]): string | null {
   return stages.find((s) => s.status === "failed")?.stage ?? null;
@@ -143,6 +156,9 @@ export function analysisStagesAreDone(stages: StageResponse[]): boolean {
 
 export function deriveFailureReason(scanError: string | null, meta: WebsiteScanMetadata | null): string | null {
   if (scanError && scanError.includes("Could not reach the site at all")) return "Page Unreachable";
+  // robots.txt: either the site does not allow the scanner (nothing was scanned), or the file could not be read so permission is unknown (the scan is retried, then fails).
+  if (scanError && scanError.includes("Could not read the robots.txt")) return "robots.txt Unreadable";
+  if (scanError && scanError.includes("robots.txt") && scanError.includes("does not allow")) return "Blocked by robots.txt";
   if (!meta) return null;
   if (meta.accept_interaction === "click_failed") return "Accept Failed";
   if (meta.reject_interaction === "click_failed") return "Reject Failed";
@@ -160,6 +176,8 @@ export interface ConsentScanState {
   findings: FindingResponse[];
   audit: AuditLogResponse[];
   evidence: ScanEvidenceResponse | null;
+  /** True when the evidence could not be read (the request failed). Together with `evidence` it tells "still loading" from "could not be loaded"; optional so state built before it existed keeps working. */
+  evidenceFailed?: boolean;
   /** The proposed DPDP Compliance Score. Null until loaded, and left null if it could not be (the page shows nothing rather
    *  than a made-up number). Optional so state built before it existed keeps working. */
   dpdpScore?: DpdpScoreResponse | null;
@@ -221,6 +239,7 @@ export function useConsentScan() {
       findings: findings ?? s.findings,
       audit: audit ?? s.audit,
       evidence: evidence ?? s.evidence,
+      evidenceFailed: !(evidence ?? s.evidence),
       dpdpScore: dpdpScore ?? s.dpdpScore ?? null,
       policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null,
       screenshot: screenshot ?? s.screenshot ?? null,
@@ -241,8 +260,12 @@ export function useConsentScan() {
       api.getPolicyAnalysis(scanId).catch(() => null),
       api.getScreenshot(scanId).catch(() => null),
     ]);
-    if (runIdRef.current !== myRunId || !evidence) return;
-    setState((s) => ({ ...s, evidence, dpdpScore: dpdpScore ?? s.dpdpScore ?? null, policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null, screenshot: screenshot ?? s.screenshot ?? null }));
+    if (runIdRef.current !== myRunId) return;
+    if (!evidence) {
+      setState((s) => ({ ...s, evidenceFailed: !s.evidence }));
+      return;
+    }
+    setState((s) => ({ ...s, evidence, evidenceFailed: false, dpdpScore: dpdpScore ?? s.dpdpScore ?? null, policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null, screenshot: screenshot ?? s.screenshot ?? null }));
   }, []);
 
   const pollStagesUntilAuditOrPending = useCallback(
@@ -423,6 +446,7 @@ export function useConsentScan() {
     await refreshFindingsAuditEvidence(scanId, myRunId);
     const stages = await api.getStages(scanId);
     const byName = Object.fromEntries(stages.map((s) => [s.stage, s]));
+    if (runIdRef.current !== myRunId) return;     // another scan was opened while the stages loaded: this scan's stages must not land on it
     if (byName.audit_saved?.status === "completed" || byName.audit_saved?.status === "failed") {
       setState((s) => ({
         ...s,

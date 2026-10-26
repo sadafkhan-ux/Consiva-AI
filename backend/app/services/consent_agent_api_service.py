@@ -20,9 +20,20 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
-    AgentRun, AgentRunStage, ConsentFinding, ConsentRecommendation, ConsentScan,
+    AgentRun,
+    AgentRunStage,
+    ConsentFinding,
+    ConsentRecommendation,
+    ConsentScan,
 )
 from app.db.repositories import scan_repository
+from app.scanner.failure_catalog import (
+    PARTIALLY_COMPLETED,
+    FailureCategory,
+    classify_message,
+    describe,
+    scan_outcome,
+)
 
 # The pipeline's stages in order, with the share of total progress each represents.
 #
@@ -123,9 +134,13 @@ def _api_status(scan: ConsentScan, run: AgentRun | None, stages: list[AgentRunSt
 
 def _page_stats(stages: list[AgentRunStage]) -> dict[str, int]:
     meta = next((s.stage_metadata or {} for s in stages if s.stage == "website_scan"), {})
+    # `pages_found` is the number of page records the scan produced (at most the page limit, plus failed ones), NOT how many pages the site has: the crawler's own
+    # `pages_discovered` / `pages_scanned` are the real figures (a 562-page site scanned to its 5-page limit has discovered 562 and scanned 5). Scans stored before
+    # those existed fall back to the old derivation.
+    found = int(meta.get("pages_found") or 0)
     return {
-        "pages_discovered": int(meta.get("pages_found") or 0),
-        "pages_scanned": int(meta.get("pages_found") or 0) - int(meta.get("pages_failed") or 0),
+        "pages_discovered": int(meta["pages_discovered"]) if meta.get("pages_discovered") is not None else found,
+        "pages_scanned": int(meta["pages_scanned"]) if meta.get("pages_scanned") is not None else found - int(meta.get("pages_failed") or 0),
         "pages_failed": int(meta.get("pages_failed") or 0),
         "pages_timeout": int(meta.get("pages_timeout") or 0),
         "pages_blocked_robots": int(meta.get("pages_blocked_robots") or 0),
@@ -271,8 +286,10 @@ async def get_status(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
     status = _api_status(scan, run, stages)
     stats = _page_stats(stages)
     error = None
+    derived = failure_and_outcome(scan, stages)
     if scan.error:
-        error = {"code": "SCAN_FAILED", "message": scan.error}
+        # `code` and `message` are unchanged (integrators match on them); `failure` is the shared description: category, whether a retry can help, who must act, and the next step.
+        error = {"code": "SCAN_FAILED", "message": scan.error, "failure": derived["failure"]}
     else:
         failed = next((s for s in stages if s.status == "failed"), None)
         if failed is not None:
@@ -288,6 +305,8 @@ async def get_status(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
         "scan_id": scan.id,
         "website_url": scan.url,
         "status": status,
+        "outcome": derived["outcome"],
+        "failure": derived["failure"],
         "progress": _progress(stages, status),
         "pages_discovered": stats["pages_discovered"],
         "pages_scanned": stats["pages_scanned"],
@@ -305,6 +324,61 @@ async def get_findings(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
     return {"scan_id": scan.id, "findings": [_finding_out(r, recs.get(r.id)) for r in rows]}
 
 
+def failure_and_outcome(scan: ConsentScan, stages: list[AgentRunStage]) -> dict[str, Any]:
+    """The shared description of why a scan failed (scanner/failure_catalog.py) and its lifecycle word, derived from what is already stored: the scan's error text, and what the crawl
+    recorded about its pages. Nothing is written, so scans stored before this existed are described the same way.
+
+    `outcome` is never COMPLETED for a scan that assessed no page, and PARTIALLY_COMPLETED when requested pages failed, timed out or were refused. `failure` is None for a scan with no error,
+    and for a partial one it names PARTIAL_SCAN with the counts."""
+    meta = next((s.stage_metadata or {} for s in stages if s.stage == "website_scan"), {})
+    stats = _page_stats(stages)
+    not_assessed = stats["pages_failed"] + stats["pages_timeout"] + stats["pages_blocked_robots"]
+    states = _consent_states_tested(meta, stats["pages_scanned"])
+    warnings = not (states["accept"] and states["reject"]) or meta.get("stop_reason") in ("slow_site", "attempt_limit", "deadline")
+    status = scan.status
+    outcome = scan_outcome(
+        "completed" if status == "completed" and stages else status, error=scan.error,
+        pages_scanned=stats["pages_scanned"] if (status == "completed" and stages) else None, pages_not_assessed=not_assessed, warnings=warnings,
+    )
+    info = classify_message(scan.error, url=scan.url)
+    if info is None and outcome == PARTIALLY_COMPLETED:
+        info = describe(
+            FailureCategory.PARTIAL_SCAN, url=scan.url,
+            detail=f"{stats['pages_scanned']} scanned; {stats['pages_failed']} failed, {stats['pages_timeout']} timed out, {stats['pages_blocked_robots']} refused by robots.txt; {stats['pages_discovered']} found",
+        )
+    return {"outcome": outcome, "failure": info.as_dict() if info else None}
+
+
+async def describe_scan(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
+    """`failure_and_outcome` for a scan, reading its stages: what the dashboard's status endpoint adds beside the scan's own status."""
+    return failure_and_outcome(scan, await _stages(db, scan.id))
+
+
+def _consent_states_tested(scan_meta: dict, pages_scanned: int) -> dict[str, bool]:
+    """Which consent states the scan actually observed, by the same rule the score and the report use. "Tested" means the pass operated the control and (for Reject) the banner
+    observably responded, not that a click was attempted. Before-consent needs at least one page that was really scanned: a failed attempt is a page record, not an observation. A scan stored
+    before the confirmation was kept in the stage record (no `reject_click_confirmed` key) is read as it always was, from the click alone."""
+    reject_confirmed = scan_meta.get("reject_click_confirmed")
+    return {
+        "before": pages_scanned > 0,
+        "accept": scan_meta.get("accept_interaction") == "clicked",
+        "reject": scan_meta.get("reject_interaction") == "clicked" and reject_confirmed is not False,
+    }
+
+
+def _compliance_status(status: str, by_severity: dict[str, int], has_findings: bool, *, pages_scanned: int, accept_tested: bool, reject_tested: bool) -> str:
+    """The summary's one-word verdict. "compliant" means only that this scan found nothing wrong in everything it could test, and it is said only when the scan really
+    tested: at least one page was scanned and both the Accept and Reject paths were exercised. A scan that found nothing because it could not look (no page scanned, the
+    banner not operable) is "review_required", never "compliant". It is not a legal conclusion either way; the DPDP score and the report carry the coverage."""
+    if status != "completed":
+        return "unknown"
+    if by_severity["critical"] or by_severity["high"]:
+        return "issues_found"
+    if has_findings or pages_scanned <= 0 or not (accept_tested and reject_tested):
+        return "review_required"
+    return "compliant"
+
+
 async def get_summary(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
     stages = await _stages(db, scan.id)
     run = await scan_repository.latest_agent_run(db, scan.id)
@@ -320,17 +394,10 @@ async def get_summary(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
     mechanism = scan_meta.get("consent_mechanism")
     status = _api_status(scan, run, stages)
 
-    if status != "completed":
-        compliance = "unknown"
-    elif by_severity["critical"] or by_severity["high"]:
-        compliance = "issues_found"
-    elif rows:
-        compliance = "review_required"
-    else:
-        compliance = "compliant"
-
-    accept = scan_meta.get("accept_interaction")
-    reject = scan_meta.get("reject_interaction")
+    states = _consent_states_tested(scan_meta, _page_stats(stages)["pages_scanned"])
+    compliance = _compliance_status(
+        status, by_severity, bool(rows), pages_scanned=_page_stats(stages)["pages_scanned"], accept_tested=states["accept"], reject_tested=states["reject"],
+    )
     return {
         "scan_id": scan.id,
         "website": scan.url,
@@ -341,13 +408,7 @@ async def get_summary(db: AsyncSession, scan: ConsentScan) -> dict[str, Any]:
         "cmp_detected": mechanism in ("banner", "cmp"),
         "cmp_vendor": scan_meta.get("cmp_vendor"),
         "cmp_confidence": scan_meta.get("cmp_confidence"),
-        # "tested" means the pass actually operated the control, not that it was
-        # attempted -- only `clicked` establishes the consent state it is named after.
-        "consent_states_tested": {
-            "before": bool(scan_meta.get("pages_found")),
-            "accept": accept == "clicked",
-            "reject": reject == "clicked",
-        },
+        "consent_states_tested": states,
         "findings": by_severity,
         "compliance_status": compliance,
     }

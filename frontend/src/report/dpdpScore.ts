@@ -1,4 +1,5 @@
 import type { DpdpFindingEntry, DpdpGroupKey, DpdpLedgerMetric, DpdpNeed, DpdpScoreBlock, DpdpScoreResponse, DpdpStatus, SectorAssessment } from "../api/types";
+import { assessedCategories } from "./reportScope";
 
 /**
  * The ONE place the DPDP Compliance Score is turned into words. The dashboard section and the PDF both render this view, so
@@ -44,7 +45,7 @@ export interface ScoreRequirementView {
   evidenceIds: string[];
   rules: string[];
   note: string | null;
-  /** The check's verdict in the words of the score card table: Pass, Partial, Fail, Cannot Verify or N/A. */
+  /** The check's verdict in the words of the score card table: Pass, Partial, Fail, Unable to Verify or N/A. */
   verdict: string;
   tone: "pass" | "partial" | "fail" | "unknown" | "na";
   /** What kind of legal basis the check has and how far a scan can speak to it. */
@@ -57,6 +58,11 @@ export interface ScoreRequirementView {
   reason: string;
   /** The first observation, or the exclusion reason: the one-line evidence for the table. */
   evidenceLine: string;
+  /** How the check was (or could be) answered: the website scan, the privacy policy text, or only the organisation's own records. */
+  methodKey: "website_scan" | "policy_text" | "organisation_records";
+  methodLabel: string;
+  /** The records that would settle a check left unverified; empty for a tested check. */
+  neededEvidence: string[];
   effective: string;
 }
 
@@ -256,6 +262,8 @@ export interface ScoreView {
   ledger: LedgerView;
   /** All checks in registry order: the table below the score card and the PDF appendix. */
   allChecks: ScoreRequirementView[];
+  /** The categories with at least one assessed check: a category the report normally leaves out is shown once it has one. */
+  assessedCategories: ReadonlySet<string>;
 }
 
 export interface MetricView {
@@ -340,7 +348,7 @@ const VERDICT: Record<DpdpStatus, { verdict: string; tone: ScoreRequirementView[
   met: { verdict: "Pass", tone: "pass" },
   partially_met: { verdict: "Partial", tone: "partial" },
   not_met: { verdict: "Fail", tone: "fail" },
-  unable_to_verify: { verdict: "Cannot Verify", tone: "unknown" },
+  unable_to_verify: { verdict: "Unable to Verify", tone: "unknown" },
   not_applicable: { verdict: "N/A", tone: "na" },
 };
 
@@ -351,6 +359,15 @@ const metricView = (m: DpdpLedgerMetric): MetricView => ({
   result: m.percent === null ? "not shown" : `${m.percent}%`,
   meaning: m.meaning,
 });
+
+const METHOD_LABEL = { website_scan: "Website scan", policy_text: "Privacy policy text", organisation_records: "Organisation's records" } as const;
+type MethodKey = keyof typeof METHOD_LABEL;
+
+/** How a check is answered. A score from an older server names none, so the check type decides (a website check, or one that needs the organisation's records). */
+function methodOf(q: { method?: string; check_type: string }): MethodKey {
+  if (q.method === "website_scan" || q.method === "policy_text" || q.method === "organisation_records") return q.method;
+  return q.check_type === "website" ? "website_scan" : "organisation_records";
+}
 
 export function buildScoreView(score: DpdpScoreResponse): ScoreView {
   const r = score.readiness;
@@ -368,7 +385,7 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
     inForce: q.in_force ? "in force" : `in force from ${formatDate(q.effective)}`,
     timingNote: !q.in_force && (q.status === "not_met" || q.status === "partially_met")
       ? `Readiness gap: applies from ${formatDate(q.effective)}` : null,
-    checkType: q.check_type === "website" ? "Website check" : "Business check",
+    checkType: methodOf(q) === "website_scan" ? "Website check" : methodOf(q) === "policy_text" ? "Policy check" : "Business check",
     applicability: q.applicability,
     confidence: q.confidence === "none" ? "None" : q.confidence === "high" ? "High" : "Medium",
     scoringRationale: q.scoring_rationale,
@@ -394,6 +411,9 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
         : "0: left out of the score and of coverage",
     reason: q.counts_in_score ? "" : (q.status === "unable_to_verify" ? (q.observations[0] ?? q.sufficiency_reason) : (q.exclusion_reason ?? "")),
     evidenceLine: q.observations[0] ?? q.exclusion_reason ?? "No observation recorded.",
+    methodKey: methodOf(q),
+    methodLabel: METHOD_LABEL[methodOf(q)],
+    neededEvidence: q.needed_evidence ?? [],
     effective: formatDate(q.effective),
   });
 
@@ -445,8 +465,12 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
     breakdownLine: `${plural(bd.verified_gaps.length, "current gap", "current gaps")} · ${plural(bd.readiness_gaps.length, "readiness gap", "readiness gaps")} (duty not yet in force) · ${bd.partially_satisfied.length} partially satisfied · ${plural(bd.missing_evidence.length, "requirement", "requirements")} with missing evidence · ${bd.uncertain_count} uncertain, for review`,
     checkTypesLine: (() => {
       const live = score.requirements.filter((q) => q.status !== "not_applicable");
-      const web = live.filter((q) => q.check_type === "website").length;
-      const biz = live.filter((q) => q.check_type === "business").length;
+      const web = live.filter((q) => methodOf(q) === "website_scan").length;
+      const policy = live.filter((q) => methodOf(q) === "policy_text").length;
+      const biz = live.filter((q) => methodOf(q) === "organisation_records").length;
+      if (policy > 0) {
+        return `${plural(web, "website check", "website checks")}, ${plural(policy, "policy check", "policy checks")} and ${plural(biz, "business check", "business checks")} apply. A scan assesses website checks by observing the site and policy checks from passages quoted word for word from the privacy policy; business checks need internal documents, business information, integrations or legal review. A check that could not be tested is never counted as met or as failed.`;
+      }
       return `${plural(web, "website check", "website checks")} and ${plural(biz, "business check", "business checks")} apply. A scan can assess only the website checks; business checks need internal documents, business information, integrations or legal review, and are never counted as met.`;
     })(),
     statusCountsLine: (["met", "partially_met", "not_met", "unable_to_verify", "not_applicable"] as DpdpStatus[])
@@ -533,12 +557,13 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
     reviewUncertain: score.human_review.items.filter((i) => i.category === "uncertain").map(item),
     reviewMissing: score.human_review.items.filter((i) => i.category === "missing_evidence").map(item),
     allChecks: rows,
+    assessedCategories: assessedCategories(rows),
     ledger: {
       counts: [
         { label: "Checks defined", value: String(L.total_checks), note: "Every check the system has, applicable or not." },
         { label: "Applicable checks", value: String(L.applicable_checks), note: "Checks that apply to this site." },
         { label: "Assessed checks", value: String(L.assessed_checks), note: `${L.passed_checks} pass, ${L.partial_checks} partial, ${L.failed_checks} fail. These are the checks in the score.` },
-        { label: "Cannot verify", value: String(L.unable_checks), note: "Applicable, but a scan could not obtain the evidence. Not in the score." },
+        { label: "Unable to verify", value: String(L.unable_checks), note: "Applicable, but a scan could not obtain the evidence. Not in the score." },
         { label: "Not applicable", value: String(L.not_applicable_checks), note: "Excluded under the applicability rule, with a reason on each check." },
       ],
       weights: [

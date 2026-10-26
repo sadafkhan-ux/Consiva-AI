@@ -205,14 +205,16 @@ async def _submit_scan(
     # Hourly quota, on top of the per-day ceiling scan_service already enforces. A
     # browser crawl plus an LLM call is expensive enough that an integrator looping on
     # this endpoint is a capacity problem long before the daily limit notices.
-    recent = await api_service.count_scans_since(
-        db, org_id=org_id, since=datetime.now(UTC) - timedelta(hours=1)
-    )
-    if recent >= settings.consent_api_scans_per_hour:
-        raise RateLimitExceededError(
-            f"Scan quota reached ({settings.consent_api_scans_per_hour}/hour for this "
-            "organisation). Retry later or contact support to raise the limit."
+    # 0 = unlimited (the default): a burst queues and is worked through fairly rather than refused.
+    if settings.consent_api_scans_per_hour:
+        recent = await api_service.count_scans_since(
+            db, org_id=org_id, since=datetime.now(UTC) - timedelta(hours=1)
         )
+        if recent >= settings.consent_api_scans_per_hour:
+            raise RateLimitExceededError(
+                f"Scan quota reached ({settings.consent_api_scans_per_hour}/hour for this "
+                "organisation). Retry later or contact support to raise the limit."
+            )
 
     if body.webhook_url:
         # Checked before the scan is accepted, not at delivery time twenty minutes

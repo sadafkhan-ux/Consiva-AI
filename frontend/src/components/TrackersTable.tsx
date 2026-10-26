@@ -1,3 +1,5 @@
+import type { EvidenceStatus } from "../hooks/useConsentScan";
+import { EvidenceNotice } from "./EvidenceNotice";
 import { useMemo, useState } from "react";
 import type { EvidenceTrackerItem } from "../api/types";
 
@@ -14,7 +16,11 @@ function domainOf(scriptSrc: string): string {
 // A real, deterministic risk read from the ALREADY-classified category/consent_states
 // -- never a guess: firing pre_consent is the exact condition R-001 (the backend's own
 // rule) flags as high risk; still firing post_reject is exactly R-003/R-009's territory.
-function trackerRisk(t: EvidenceTrackerItem): "high" | "medium" | "low" {
+// A category the classifier did not recognise (none, "other") is "unknown", never "low": nothing has established that it is harmless.
+const KNOWN_CATEGORIES = new Set(["analytics", "marketing", "functional", "essential"]);
+
+function trackerRisk(t: EvidenceTrackerItem): "high" | "medium" | "low" | "unknown" {
+  if (!t.category || !KNOWN_CATEGORIES.has(t.category)) return "unknown";
   const nonEssential = t.category === "analytics" || t.category === "marketing";
   if (nonEssential && t.consent_states.includes("pre_consent")) return "high";
   if (nonEssential && t.consent_states.includes("post_reject")) return "high";
@@ -31,7 +37,7 @@ function pageLabel(url: string): string {
   }
 }
 
-export function TrackersTable({ trackers }: { trackers: EvidenceTrackerItem[] }) {
+export function TrackersTable({ trackers, status = "loaded" }: { trackers: EvidenceTrackerItem[]; status?: EvidenceStatus }) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("consent_states");
   const [sortAsc, setSortAsc] = useState(false);
@@ -65,6 +71,7 @@ export function TrackersTable({ trackers }: { trackers: EvidenceTrackerItem[] })
     }
   }
 
+  if (status !== "loaded") return <EvidenceNotice status={status} what="trackers" />;
   if (trackers.length === 0) return <p className="empty-note">No trackers were detected on this scan.</p>;
 
   return (
@@ -107,7 +114,7 @@ export function TrackersTable({ trackers }: { trackers: EvidenceTrackerItem[] })
                 <td className="mono" style={{ fontSize: 11 }} title={t.page_url ?? undefined}>
                   {t.page_url ? pageLabel(t.page_url) : <span className="muted">not recorded</span>}
                 </td>
-                <td><span className={`badge ${trackerRisk(t)}`}>{trackerRisk(t)}</span></td>
+                <td><span className={`badge ${trackerRisk(t) === "unknown" ? "neutral" : trackerRisk(t)}`}>{trackerRisk(t) === "unknown" ? "Unknown risk" : trackerRisk(t)}</span></td>
                 <td className="mono" style={{ fontSize: 11 }}>{t.id.slice(0, 8)}</td>
               </tr>
             ))}

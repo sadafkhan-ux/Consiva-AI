@@ -27,6 +27,7 @@ import os
 import signal
 import socket
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -70,7 +71,7 @@ from app.config import get_settings
 from app.db.models import AgentJob
 from app.db.repositories import ropa_repository
 from app.db.session import async_session_factory
-from app.jobs import queue
+from app.jobs import capacity, queue
 from app.services import (
     analysis_service,
     consent_api_chain_service,
@@ -98,6 +99,8 @@ POLL_INTERVAL_SECONDS = 0.5
 # three cross-tenant queries off the database 15x less often, which matters more now
 # that several workers may each be running them.
 MAINTENANCE_INTERVAL_SECONDS = 30
+# How often the worker logs what it is doing about capacity (running, CPU, memory, why it is holding), so an operator can see why jobs are waiting.
+CAPACITY_REPORT_SECONDS = 30
 WORKER_ID = f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
 
 
@@ -239,7 +242,8 @@ async def _run_job(job: AgentJob) -> None:
     except Exception as exc:  # a bad job must not kill the worker loop
         logger.exception("Job %s (%s) failed", job.id, job.job_type)
         async with async_session_factory() as db:
-            await queue.mark_failed(db, job.id, str(exc))
+            # A failure that running the job again cannot cure (ScanNotPossible) is not retried.
+            await queue.mark_failed(db, job.id, str(exc), retryable=getattr(exc, "retryable", True))
             await db.commit()
     else:
         async with async_session_factory() as db:
@@ -345,13 +349,21 @@ async def _maintenance_loop(stopping: asyncio.Event) -> None:
         await _sleep_or_stop(stopping, MAINTENANCE_INTERVAL_SECONDS)
 
 
-async def _job_pump(stopping: asyncio.Event, concurrency: int) -> None:
-    """Keep up to `concurrency` jobs running, and never await one inline."""
+async def _job_pump(stopping: asyncio.Event, governor: capacity.Governor) -> None:
+    """Keep as many jobs running as the machine can take right now (app/jobs/capacity.py), and never await one inline."""
+    if isinstance(governor, int):
+        governor = capacity.FixedSlots(governor)
     in_flight: set[asyncio.Task] = set()
+    last_report = 0.0
 
     while not stopping.is_set():
         claimed: list[AgentJob] = []
-        free = concurrency - len(in_flight)
+        free = governor.claimable(len(in_flight))
+        if time.monotonic() - last_report >= CAPACITY_REPORT_SECONDS:
+            last_report = time.monotonic()
+            cpu, mem = governor.load.cpu_busy_percent(), governor.load.memory_available_mb()
+            logger.info("Capacity: %d of up to %d jobs running; CPU %s, memory available %s; %s", len(in_flight), governor.slots,
+                        f"{cpu:.0f}%" if cpu is not None else "unknown", f"{mem:.0f} MB" if mem is not None else "unknown", governor.last_reason)
         if free > 0:
             try:
                 async with async_session_factory() as db:
@@ -391,8 +403,10 @@ async def _job_pump(stopping: asyncio.Event, concurrency: int) -> None:
 
 
 async def run_forever() -> None:
-    concurrency = max(1, get_settings().worker_concurrency)
-    logger.info("Worker %s starting with %d concurrent slot(s)", WORKER_ID, concurrency)
+    settings = get_settings()
+    governor = capacity.governor_for(settings)
+    logger.info("Worker %s starting: up to %d jobs at once (%s), taking more only while CPU is under %d%% and memory remains", WORKER_ID, governor.slots,
+                "set by WORKER_CONCURRENCY" if settings.worker_concurrency > 0 else "from the CPU count", settings.worker_target_cpu_percent)
 
     stopping = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -404,7 +418,7 @@ async def run_forever() -> None:
 
     tasks = {
         asyncio.create_task(_maintenance_loop(stopping), name="maintenance"),
-        asyncio.create_task(_job_pump(stopping, concurrency), name="job-pump"),
+        asyncio.create_task(_job_pump(stopping, governor), name="job-pump"),
     }
 
     # If either loop ends -- shutdown signal, or a bug that got past its own handlers

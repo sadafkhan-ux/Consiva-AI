@@ -3,17 +3,23 @@ multiple worker processes can safely share one queue without external infra. Swa
 Celery/arq later if throughput demands it; callers (services/, worker.py) only use the
 four functions below, so that swap wouldn't ripple outward."""
 
+import random
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.config import get_settings
 from app.db.models import AgentJob, AgentRunStage
 from app.scanner import scan_profiles
 
-_MAX_ATTEMPTS = 3
+# How many times a job may be run before it is left failed (Settings.job_max_attempts). It was 3 with a wait of 30 s then 60 s, so a scan or an analysis was
+# lost to any trouble that lasted more than about two minutes (a provider outage, a database restart, a deploy). The wait now doubles (see mark_failed).
+_MAX_ATTEMPTS = get_settings().job_max_attempts
+_RETRY_BASE_SECONDS = 30
+_RETRY_MAX_SECONDS = 900
 
 # Headroom ON TOP OF the longest a job is allowed to legitimately run, not the whole
 # allowance. Covers the parts of a job that sit outside the budgeted step -- claiming
@@ -92,8 +98,28 @@ async def enqueue(db: AsyncSession, *, org_id: uuid.UUID, job_type: str, payload
     return job
 
 
+def _fair_candidates(limit: int):
+    """The ids of the next `limit` runnable jobs, taking turns between organisations.
+
+    A queue ordered only by age lets one organisation that submits a hundred scans at once hold every worker slot until they are done, while everyone else
+    waits behind them. Here each queued job gets a turn number: its place in its own organisation's queue (1 = that organisation's oldest) plus how many of
+    that organisation's jobs are already running. Jobs are taken by turn number, then by age, so every organisation's first job goes before anyone's second,
+    and an organisation already using several slots yields to one using none. With a single organisation this is exactly oldest first, as before."""
+    running = aliased(AgentJob)
+    running_for_org = (
+        select(func.count()).where(running.org_id == AgentJob.org_id, running.status == "running").correlate(AgentJob).scalar_subquery()
+    )
+    place_in_org = func.row_number().over(partition_by=AgentJob.org_id, order_by=(AgentJob.created_at, AgentJob.id))
+    return (
+        select(AgentJob.id)
+        .where(AgentJob.status == "queued", AgentJob.run_after <= datetime.now(UTC))
+        .order_by(place_in_org + running_for_org, AgentJob.created_at, AgentJob.id)
+        .limit(limit)
+    )
+
+
 async def dequeue_batch(db: AsyncSession, *, worker_id: str, limit: int) -> list[AgentJob]:
-    """Claim up to `limit` runnable jobs in one round trip, oldest first.
+    """Claim up to `limit` runnable jobs in one round trip, taking turns between organisations and oldest first within one (see _fair_candidates).
 
     Same SKIP LOCKED contract as before -- this changes only how many rows a single
     call claims, so neither two worker processes nor two concurrent slots inside one
@@ -107,11 +133,12 @@ async def dequeue_batch(db: AsyncSession, *, worker_id: str, limit: int) -> list
     """
     if limit <= 0:
         return []
+    # The candidates are chosen by turn (a window function cannot be locked in the same statement), then locked. A candidate another worker locked first is
+    # skipped, so a claim can come back with fewer than `limit` jobs; the next poll fills the slot.
     stmt = (
         select(AgentJob)
-        .where(AgentJob.status == "queued", AgentJob.run_after <= datetime.now(UTC))
+        .where(AgentJob.id.in_(_fair_candidates(limit).scalar_subquery()), AgentJob.status == "queued")
         .order_by(AgentJob.created_at)
-        .limit(limit)
         .with_for_update(skip_locked=True)
     )
     jobs = list((await db.execute(stmt)).scalars().all())
@@ -138,16 +165,25 @@ async def mark_done(db: AsyncSession, job_id: uuid.UUID) -> None:
         await db.flush()
 
 
-async def mark_failed(db: AsyncSession, job_id: uuid.UUID, error: str) -> None:
+def retry_delay_seconds(attempts: int) -> float:
+    """How long to wait before the next attempt: 30 s, 1 min, 2 min, 4 min ... at most 15 min, plus up to 10% so a burst of jobs that failed together (an outage
+    that ended) does not come back in the same second."""
+    base = min(_RETRY_MAX_SECONDS, _RETRY_BASE_SECONDS * 2 ** max(0, attempts - 1))
+    return base * (1 + random.uniform(0, 0.1))
+
+
+async def mark_failed(db: AsyncSession, job_id: uuid.UUID, error: str, *, retryable: bool = True) -> None:
+    """Record a failed attempt. A job whose failure cannot be cured by running it again (`retryable=False`: a site that refuses the scanner, an address that
+    does not serve a page) is left failed at once instead of being run, and failed, again and again."""
     job = await db.get(AgentJob, job_id)
     if job is None:
         return
     job.error = error
-    if job.attempts >= _MAX_ATTEMPTS:
+    if not retryable or job.attempts >= _MAX_ATTEMPTS:
         job.status = "failed"
     else:
         job.status = "queued"
-        job.run_after = datetime.now(UTC) + timedelta(seconds=30 * job.attempts)  # linear backoff
+        job.run_after = datetime.now(UTC) + timedelta(seconds=retry_delay_seconds(job.attempts))
     await db.flush()
 
 

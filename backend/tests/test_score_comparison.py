@@ -126,9 +126,14 @@ def call(monkeypatch, latest, previous, evidence_by_id, against=None):
 
     monkeypatch.setattr(scan_repository, "get_scan", get_scan)
     monkeypatch.setattr(scan_repository, "previous_completed_scan", prior)
-    monkeypatch.setattr(scan_repository, "get_scan_evidence_summary_concurrent", ev)
+    monkeypatch.setattr(scan_repository, "get_scan_evidence_for_score", ev)
     user = SimpleNamespace(org_id=str(ORG), user_id=str(uuid.uuid4()), role="member")
-    return asyncio.run(consent_scans.compare_scan_dpdp_score(latest.id, against, TODAY, user, None))
+
+    class _Db:
+        async def rollback(self):
+            return None
+
+    return asyncio.run(consent_scans.compare_scan_dpdp_score(latest.id, against, TODAY, user, _Db()))
 
 
 def test_the_endpoint_compares_a_scan_with_the_previous_completed_scan_of_the_site(monkeypatch):
@@ -160,3 +165,26 @@ def test_with_no_earlier_scan_there_is_nothing_to_compare_and_the_answer_is_409(
     new = scan(2)
     with pytest.raises(ScanNotReadyError):
         call(monkeypatch, new, None, {new.id: evidence()})
+
+
+def test_reading_the_policy_in_only_one_scan_is_a_coverage_difference_not_a_change_in_the_website():
+    from tests.test_policy_backed_checks import DPO_OK, analysis
+
+    plain = evidence(policies=("privacy_policy",))
+    read = {**evidence(policies=("privacy_policy",)), "policy_analysis": analysis(DPO_OK)}
+    out = comparison.compare_scans(plain, read, as_of=TODAY, previous_info={"scan_id": "a", "scanned_at": None, "url": "https://x.test"}, latest_info={"scan_id": "b", "scanned_at": None, "url": "https://x.test"})
+    change = next(c for c in out["changes"] if c["id"] == "DPDP-R9")
+    assert (change["previous"]["status"], change["latest"]["status"]) == ("unable_to_verify", "met")
+    assert change["cause"] == "scan_coverage"
+    assert any(i["name"] == "privacy_policy_text_read" and i["latest"] is True for i in out["changed_inputs"])
+
+
+def test_a_policy_that_changed_between_two_readings_is_the_website_behaving_differently():
+    from tests.test_policy_backed_checks import DPO_OK, analysis, row
+
+    before = {**evidence(policies=("privacy_policy",)), "policy_analysis": analysis(DPO_OK)}
+    after = {**evidence(policies=("privacy_policy",)), "policy_analysis": analysis(row("dpo_contact", "not_found"))}
+    out = comparison.compare_scans(before, after, as_of=TODAY, previous_info={"scan_id": "a", "scanned_at": None, "url": "https://x.test"}, latest_info={"scan_id": "b", "scanned_at": None, "url": "https://x.test"})
+    change = next(c for c in out["changes"] if c["id"] == "DPDP-R9")
+    assert (change["previous"]["status"], change["latest"]["status"]) == ("met", "unable_to_verify")
+    assert "policy_statements_verified" in [i["name"] for i in out["changed_inputs"]]

@@ -112,6 +112,12 @@ async function pdf(score: DpdpScoreResponse | null, findings: FindingResponse[] 
   };
 }
 
+/** The report names every applicable check once, in "What was tested and what was not", with the reason for each that was not verified. The rest of the report
+ *  (the check table, the areas, the findings) still leaves out the data-rights and security checks that could not be tested. */
+const COVERAGE_START = "WHAT WAS TESTED AND WHAT WAS NOT";
+const withoutCoverage = (t: string) => { const i = t.indexOf(COVERAGE_START); if (i < 0) return t; const j = t.indexOf("PRIORITISED FIXES", i); return t.slice(0, i) + (j < 0 ? "" : t.slice(j)); };
+const coverageOf = (t: string) => { const i = t.indexOf(COVERAGE_START); if (i < 0) return ""; const j = t.indexOf("PRIORITISED FIXES", i); return t.slice(i, j < 0 ? undefined : j); };
+
 /** The PDF wraps long lines and the recording stand-in keeps each line apart, so long strings are compared without whitespace. */
 const flat = (x: string) => x.replace(/\s+/g, "");
 
@@ -360,7 +366,7 @@ describe("the compact check table on page 2", () => {
   });
 
   it("leaves out data-rights and security checks, and says once that such duties are counted but not listed", async () => {
-    const t = (await pdf(mixed)).all();
+    const t = withoutCoverage((await pdf(mixed)).all());
     for (const id of ["DPDP-R9", "R9 ", "R14A", "R14B", "S6 ", "S7 "]) expect(t, id).not.toContain(id);
     expect(flat((await pdf(mixed)).checks())).toContain(flat(OMITTED_DUTIES_NOTE));   // the whole note, not an excerpt
     expect((await pdf(mixed)).page(0)).not.toContain("not listed here");
@@ -522,7 +528,7 @@ describe("the score card: ledger and check table", () => {
     expect(within(container.querySelector(`[data-testid="dpdp-check-row-${fail.id}"]`) as HTMLElement).getByTestId(`dpdp-verdict-${fail.id}`).className).toContain("fail");
     const unable = confirmed.requirements.find((r) => r.status === "unable_to_verify" && isReportCategory(r.category));
     if (unable) {
-      expect(container.querySelector(`[data-testid="dpdp-verdict-${unable.id}"]`)).toHaveTextContent("Cannot Verify");
+      expect(container.querySelector(`[data-testid="dpdp-verdict-${unable.id}"]`)).toHaveTextContent("Unable to Verify");
       expect(container.querySelector(`[data-testid="dpdp-verdict-${unable.id}"]`)!.className).toContain("unknown");
     }
     const na = confirmed.requirements.find((r) => r.status === "not_applicable")!;
@@ -538,7 +544,7 @@ describe("the score card: ledger and check table", () => {
   it("does not call an untested check a violation, or a not-applicable check a pass", () => {
     const v = buildScoreView(mixed);
     for (const c of v.allChecks) {
-      if (c.statusKey === "unable_to_verify") expect(c.verdict).toBe("Cannot Verify");
+      if (c.statusKey === "unable_to_verify") expect(c.verdict).toBe("Unable to Verify");
       if (c.statusKey === "not_applicable") expect(c.verdict).toBe("N/A");
       if (c.statusKey === "met") expect(c.verdict).toBe("Pass");
       if (c.statusKey === "not_met") expect(c.verdict).toBe("Fail");
@@ -575,16 +581,24 @@ describe("what every generated report says about itself, and what it leaves out"
   it("shows how many pages were scanned out of how many were found", async () => {
     const meta = { ...(META as object), pages_discovered: 12, pages_scanned: 5 } as never;
     const p = await pdf(mixed, [], EVIDENCE, meta);
-    expect(p.page(0)).toContain("5 of 12 pages scanned");   // the scan's own counts: 5 scanned of 12 found
+    expect(p.page(0)).toContain("5 pages scanned of 12 found");   // the scan's own counts: 5 scanned of 12 found
   });
 
   it.each(Object.keys(F))("%s: no GDPR, CCPA, data-rights or security section anywhere in the PDF", async (key) => {
-    const t = (await pdf(F[key])).all();
+    const t = withoutCoverage((await pdf(F[key])).all());
     for (const word of ["GDPR", "CCPA", "Data principal rights", "Security and breach", "Security safeguards", "Rights request channel", "Grievance process",
       "Contact for data questions"]) {
       expect(t, `${key}: ${word}`).not.toContain(word);
     }
     for (const id of ["DPDP-R9", "DPDP-R14A", "DPDP-R14B", "DPDP-S6", "DPDP-S7"]) expect(t, `${key}: ${id}`).not.toContain(id);
+  });
+
+  it.each(Object.keys(F))("%s: what was tested and what was not names every applicable check, and each one it did not verify says why", async (key) => {
+    const v = buildScoreView(F[key]);
+    const t = coverageOf((await pdf(F[key])).all());
+    expect(t, key).toContain(COVERAGE_START);
+    for (const c of v.allChecks.filter((x) => x.statusKey !== "not_applicable")) expect(flat(t), `${key}: ${c.id}`).toContain(flat(c.title).slice(0, 40));
+    expect(t).toContain("never counted as met or as failed");
   });
 
   it.each(Object.keys(F))("%s: no formula or raw expression anywhere in the PDF", async (key) => {
@@ -597,7 +611,7 @@ describe("what every generated report says about itself, and what it leaves out"
     const t = (await pdf(mixed)).page(0);
     expect(t).toContain(v.headline);
     expect(t).not.toContain(`Coverage ${v.coverageHeadline}`);   // kept in the data (v.coverageHeadline), not printed in the hero
-    expect(v.ledger.counts.find((c) => c.label === "Cannot verify")!.value).toBe(String(mixed.ledger.unable_checks));   // still every check
+    expect(v.ledger.counts.find((c) => c.label === "Unable to verify")!.value).toBe(String(mixed.ledger.unable_checks));   // still every check
   });
 });
 
@@ -676,7 +690,7 @@ describe("the black header strip", () => {
   it("leaves what is below the strip where it was", async () => {
     await pdf(mixed);
     const strip = recorded.rects.find((r) => r.page === 0 && r.fill.join() === BLACK.join() && r.w >= 595)!;
-    const title = recorded.calls.find((c) => c.page === 0 && c.t === "Privacy Compliance Report")!;
+    const title = recorded.calls.find((c) => c.page === 0 && c.t === "Privacy Readiness Report")!;
     expect(title.y).toBe(74);
     expect(title.y - 0.72 * 20).toBeGreaterThan(strip.y + strip.h);   // the top of the 20pt title's capitals sits clear of the strip
   });
@@ -878,7 +892,7 @@ describe("the layout: sequential sections, a true contents, nothing cut, nothing
   it("continues the pages-scanned list on the page the table of checks ended on when it fits, with no empty page", async () => {
     await pdf(mixed, [], FULL_EVIDENCE_FOR_LAYOUT);
     const summaryEnd = recorded.pages.findIndex((p) => p.texts.join("").includes("Everything the scan recorded for this site"));
-    for (let i = 0; i < summaryEnd; i++) expect(recorded.pages[i].texts.length, `page ${i + 1}`).toBeGreaterThan(20);   // no page is left nearly empty (the pages-scanned page of this one-page fixture is short)
+    for (let i = 0; i < summaryEnd; i++) expect(recorded.pages[i].texts.length, `page ${i + 1}`).toBeGreaterThan(10);   // no page is left holding only a heading or nothing (a page that carries the end of a section is short, not empty)
   });
 });
 
@@ -948,7 +962,7 @@ describe("the hero: score top left, domain above the homepage picture top right"
     await pdfWith(shot());
     const [img] = photo();
     expect(img.w * img.h).toBeLessThan(595.28 * 841.89 * 0.08);
-    const title = recorded.calls.find((c) => c.page === 0 && c.t === "Privacy Compliance Report")!;
+    const title = recorded.calls.find((c) => c.page === 0 && c.t === "Privacy Readiness Report")!;
     expect(img.y).toBeGreaterThan(title.y);
   });
 
@@ -1213,7 +1227,8 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
 
   it("prints the five sections with the same facts the dashboard shows", async () => {
     const { summary } = await build();
-    const t = flat(summary);
+    // A note can cross a page; the running header at the top of a page and the footer (the disclaimer and the page number) are not part of the note.
+    const t = flat(summary).split(flat("x.testScanned 21 Oct 2026, 06:41 UTC")).join("").split(flat(REPORT_DISCLAIMER)).join("").replace(/Page\d+of\d+/g, "");
     const sections = buildInsightSections({ policy: POLICY, meta: META_SIGNALS, evidence: EVID, sector: buildScoreView(scoreWithImpact()).sector });
     expect(sections).toHaveLength(5);
     for (const s of sections) {
@@ -1374,7 +1389,7 @@ describe("the five-page readiness review in the PDF", () => {
     const { summary, model } = await build();
     const t = flat(summary);
     const rv = model.readiness;
-    for (const k of ["Compliant", "Gap", "Not Found", "Cannot Verify", "Requires document review"] as const) expect(t).toContain(flat(`${rv.counts[k]} ${k}`));
+    for (const k of ["Passes this technical check", "Gap", "Not Found", "Unable to Verify", "Requires document review"] as const) expect(t).toContain(flat(`${rv.counts[k]} ${k}`));
     expect(t).toContain(flat(`Five-page review score: ${rv.scoreLine}`));
     expect(rv.topGaps.length).toBeGreaterThan(0);
     for (const g of rv.topGaps) { expect(t).toContain(flat(`${g.rank}. ${g.row.check}`)); expect(t).toContain(flat(`${g.row.page}: ${g.row.status}. Fix: ${g.row.fix}`)); }

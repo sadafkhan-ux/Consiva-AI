@@ -64,6 +64,14 @@ _PRIORITY_PATTERNS: tuple[tuple[int, tuple[str, ...]], ...] = (
 )
 
 
+# A path with one of these as a whole segment is editorial content (a post, an article, a press item), whatever its slug says. The slug names the TOPIC of the content, not what the page
+# is: /blog/dpdp-act-2023-compliance-guide matched "dpdp" and outranked the contact page, so a scan of swaransoft.com spent one of its five pages on a blog post and never loaded /contact.
+_CONTENT_SECTIONS = frozenset({
+    "blog", "blogs", "news", "article", "articles", "post", "posts", "insights", "press", "stories", "magazine",
+    "tag", "tags", "category", "categories", "archive", "archives", "author", "authors",
+})
+
+
 def normalize_url(url: str) -> str:
     """Canonical spelling of `url`, for dedup and for the crawl queue's identity key.
 
@@ -114,6 +122,19 @@ def normalize_url(url: str) -> str:
     return urlunsplit((scheme, netloc, path, query, ""))
 
 
+def section_of(url: str) -> str:
+    """The first directory of a URL's path ("in-en" for https://x.com/in-en/index.html), or "" for a front-door or file path. Large sites run one section per country or language under one host,
+    and an entered address inside one of them (/in-en/) is a request to look at that section."""
+    try:
+        path = urlsplit(url).path or "/"
+    except ValueError:
+        return ""
+    segments = [s for s in path.lower().split("/") if s]
+    if len(segments) < 2 and not path.endswith("/"):
+        return ""                      # "/index.html" or "/privacy": a file or a page, not a section
+    return segments[0] if segments and "." not in segments[0] else ""
+
+
 def priority(url: str) -> int:
     """Lower sorts earlier. The seed/root page is 0 -- it is the page both interaction
     passes re-visit and the one most likely to carry the consent banner."""
@@ -124,6 +145,8 @@ def priority(url: str) -> int:
     path = (parts.path or "/").lower()
     if path in ("", "/"):
         return 0
+    if any(segment in _CONTENT_SECTIONS for segment in path.split("/")):
+        return 5
     haystack = f"{path}?{(parts.query or '').lower()}"
     for rank, needles in _PRIORITY_PATTERNS:
         if any(needle in haystack for needle in needles):

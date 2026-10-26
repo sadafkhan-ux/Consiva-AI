@@ -2,7 +2,8 @@
 // could add authentication and a second agent around it. Nothing in this view's
 // behaviour changed -- only the function name and its new home.
 import { useState } from "react";
-import { failedStageName, scanEvidenceUnavailable, useConsentScan } from "./hooks/useConsentScan";
+import { FailureNotice } from "./components/FailureNotice";
+import { evidenceStatus, failedStageName, hasPartialResults, scanEvidenceUnavailable, useConsentScan } from "./hooks/useConsentScan";
 import { ScanStatusSection } from "./components/ScanStatusSection";
 import { ConsentSummarySection } from "./components/ConsentSummarySection";
 import { buildScoreView, isDpdpScore } from "./report/dpdpScore";
@@ -53,6 +54,8 @@ export function ConsentAgentView() {
   // A failed scan that collected nothing must not render "none detected" sections: see
   // scanEvidenceUnavailable. The status and diagnostics sections stay -- they carry the failure.
   const notScanned = scanEvidenceUnavailable(state);
+  const evStatus = evidenceStatus(state);
+  const partial = hasPartialResults(state);
 
   // Offered once the analysis has actually produced findings -- i.e. from the
   // human-review pause (analysis done, audit not yet saved) onward, and still after
@@ -117,8 +120,11 @@ export function ConsentAgentView() {
       <div className="hint">SSRF-protected — private/internal/loopback addresses are always rejected regardless of this checkbox.</div>
 
       {state.phase === "failed" && state.error && (
-        <div className="error-box">{state.error}</div>
+        state.scan?.failure
+          ? <FailureNotice failure={state.scan.failure} outcome={state.scan.outcome} />
+          : <div className="error-box">{state.error}</div>
       )}
+      {state.phase !== "failed" && state.scan?.outcome === "PARTIALLY_COMPLETED" && <FailureNotice failure={state.scan.failure} outcome={state.scan.outcome} />}
       {state.phase === "degraded" && state.findings.length > 0 && (
         <div className="info-box" data-testid="degraded-notice">
           The findings below were produced by the deterministic rules from evidence the scan actually collected, so what
@@ -205,6 +211,12 @@ export function ConsentAgentView() {
             </section>
           ) : (
         <>
+          {partial && (
+            <div className="status-banner warn" role="status" data-testid="partial-results" style={{ marginBottom: 14 }}>
+              <strong>Failed — Partial Results Available.</strong> The scan did not complete. What it collected before it failed is shown below and is real, but the assessment is
+              incomplete: absent evidence here is not a clean result, and nothing below is the outcome of a completed scan.
+            </div>
+          )}
           <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} />
           <ConsentSummarySection meta={state.websiteScanMeta} />
           <DpdpScoreSection score={state.dpdpScore} analysisNote={analysisNote} />
@@ -220,7 +232,7 @@ export function ConsentAgentView() {
               Requests the scanned main-domain pages made to other services. A request shows the browser contacted a service; it
               does not show that a tracker ran or what it sent, and it is not by itself a violation.
             </p>
-            <TrackersTable trackers={state.evidence?.trackers ?? []} />
+            <TrackersTable trackers={state.evidence?.trackers ?? []} status={evStatus} />
           </section>
 
           <section className="section">
@@ -228,17 +240,17 @@ export function ConsentAgentView() {
             <p className="hint" data-testid="cookies-scope">
               Cookies stored while the scanned main-domain pages loaded. A cookie is not by itself a violation; what it is for decides that.
             </p>
-            <CookiesTable cookies={state.evidence?.cookies ?? []} untestedStates={untestedConsentStates(state.websiteScanMeta)} />
+            <CookiesTable status={evStatus} cookies={state.evidence?.cookies ?? []} untestedStates={untestedConsentStates(state.websiteScanMeta)} />
           </section>
 
           <section className="section">
             <h2>6. Forms</h2>
-            <FormsSection forms={state.evidence?.forms ?? []} />
+            <FormsSection forms={state.evidence?.forms ?? []} status={evStatus} />
           </section>
 
           <section className="section">
             <h2>7. Policies</h2>
-            <PoliciesSection policies={state.evidence?.policies ?? []} />
+            <PoliciesSection policies={state.evidence?.policies ?? []} status={evStatus} />
           </section>
 
           <section className="section">

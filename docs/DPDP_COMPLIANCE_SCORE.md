@@ -385,3 +385,46 @@ The scoring formula and the deduction explanation are **not** in the client-faci
 ## Report headers
 
 Every page after the cover now uses the same dark header with white text, in the long report (print header), the Full and Free fixed sheets (`.pg-head-dark`), on the web and in the PDF. Covers keep their own light header.
+
+## Why one website can score 100 in one scan and 80 in another (2026-10-26)
+
+Investigated on a website that scored 100 in nine scans and 80.0 / 76.2 in two. The scoring is a pure function of the stored evidence: 14 real scans, each re-scored from 150 shuffled row orders, gave no difference, and `assess()` now sorts every evidence list into one canonical order (`canonical_evidence`) so row order can never matter. The scans differed in what they RECORDED: in the two lower scans the site's Google Tag Manager and Analytics requests and cookies were observed before consent (6-9 requests, 3 cookies); in the other nine they were not. That moves DPDP-C1 (weight 5) from Met to Not Met, which is exactly 20 points of the 25 assessed. Nothing is forced to 100 and nothing is hidden: a scan that sees a pre-consent request scores it.
+
+What was ruled out by experiment: scrolling or time-on-page counting as consent (no), consent carried from one scan's Accept click to the next (no: five back-to-back scans, none), and machine load (no: four scans running alongside, none). Whether a site fires its tags early on an occasional visit is the site's behaviour, and one visit per page can miss it; re-scan to confirm either result. `GET /scans/{id}/dpdp-score/compare` explains the difference between two scans check by check.
+
+The report also prints a second, separate number, the five-page review score, from its own check list. It is labelled as such and says it is not the headline score. Regression tests: `backend/tests/test_score_consistency.py` (row order, separate processes with different hash seeds, one pre-consent request is the whole 100-to-lower gap, no score from too little evidence) and `frontend/src/report/scoreConsistency.test.tsx` (every fixture score on the dashboard card, long report, Free and Full sheets).
+
+## Checks tested from the privacy policy (methodology 1.6.0, 2026-10-26)
+
+Five checks used to be "not tested from outside" because a website scan cannot see them. Every applicable check now carries a **method**: `website_scan` (observed on the pages), `policy_text` (read from the privacy policy) or `organisation_records` (only the organisation's own records can settle it), and a check that is left unverified lists the records that would settle it (`needed_evidence`).
+
+| Check | Method | Met | Partially Met | Unable to Verify |
+|---|---|---|---|---|
+| DPDP-R9 contact of the DPO or answering person | policy text | quoted, with an email, phone or form beside it | a role is named, no way to reach it | not found in the policy text read, or the policy could not be read |
+| DPDP-R14A means to exercise rights | policy text | quoted, with a concrete means | rights mentioned, no means | as above |
+| DPDP-R14B grievance system and response period | policy text | a reachable contact and a period of at most 90 days, in a sentence about grievances, complaints or requests | a contact without a way to reach it, or a stated period above 90 days | no contact, no period, or a period not about grievances |
+| DPDP-S6 security safeguards | organisation records | never | never | always; the policy's own description is shown beside it and is explicitly not evidence |
+| DPDP-S7 breach intimation | organisation records | never | never | always, same rule |
+
+How it stays accurate and costs nothing: the policy analysis (`app/policy/analysis.py`) already runs once per analysis and returns passages that were checked to appear word for word in the policy page, with contact details and the response period parsed by fixed rules. The score reads that stored result (`scan_repository.get_scan_evidence_for_score`, the one loader every scorer uses); no further model call is made. A statement not found in the text is never a failure, because the site may publish it elsewhere. A policy cannot prove what it only describes. Before the analysis has run, the five checks are unverified exactly as before.
+
+On the real swaransoft scans this lifts requirement coverage from 64.1% to 84.6% (R9, R14A and R14B Met from quotations; S6 and S7 stay unverified) with the score unchanged at 100.
+
+The report gains "What was tested and what was not": every applicable check, how it was tested, and for each one not verified why and what would settle it (long report, Full appendix, dashboard, browser-PDF fallback). A category the report normally leaves out (Data principal rights, Security and breach) is shown as soon as one of its checks was assessed, so the tables always agree with the score. The score comparison records whether the policy text was read in each scan and which statements it contained, so a change caused by that is explained as coverage or as the site changing its policy.
+
+**Why the policy checks do not depend on the model's luck.** Reading the policy is one model call, and a model can miss a statement that is plainly on the page (it did, once, where nine other runs on the same page found the officer's contact: the check flipped between scans). So for the four statements that are recognised by fixed words plus a concrete detail (the contact of an officer or answering person, the means of making a rights request, the grievance contact, the grievance response period), a fixed pattern searches the policy text itself when the model reports "not found" (`locate_by_pattern` in `app/policy/analysis.py`). A passage is accepted only if it is an exact slice of the page, names the role or topic, and carries the contact detail (looked for around the passage exactly as the judging rule does) or, for the period, a "within N days" in the same sentence. It never overrides a passage the model offered, finds nothing in a policy that lacks the statement, and costs no tokens. Results stored by an older version are not reused (`ANALYSIS_VERSION`). Checked against the real stored policy text of the scan where the model had missed the contact: it finds the Grievance Officer's contact, the rights-request portal and the sentence "acknowledge your grievance within 48 hours and resolve it within 30 days".
+
+## Verification status of dates and legal mappings (27 Oct 2026)
+
+The commencement dates used (publication 13 Nov 2025; Rule 4 and Act s.6(9) after one year, 13 Nov 2026; Rules 3, 5-16 and most of the Act after eighteen months, 13 May 2027) agree with secondary published summaries of G.S.R. 843(E) and 846(E).
+They have **not been verified against the official Gazette notifications**, and sources disagree on the G.S.R. numbers, on 13 versus 14 Nov 2025 for the first tranche, and on 12 versus 13 May 2027.
+The mapping of each check to a provision (`LEGAL_MAPPING_VERSION` 2026.10.1) has not had legal review. Treat both as requiring verification by a qualified professional before they are relied on.
+A check that passes (labelled "Passes this technical check" in the readiness review) means only that this technical test found what it looked for; it is not a finding that the website complies with the law.
+
+## Consent-tool evidence rules (27 Oct 2026)
+
+* A consent tool's script on a page is not a banner on screen. `has_reject_all` and `has_granular_choices` are facts about a displayed banner: they are recorded only when Accept or Reject wording was seen, or when an Accept/Reject click proves the banner was displayed. A footer "manage cookies" link alone records neither (unknown), for every recognised tool.
+* Reports apply the same rule to scans stored earlier: a tool whose banner was never shown, with no click, reads "Unable to Verify" / "Not observed" for the banner, Reject, and per-purpose choices, never Gap and never Found.
+* The crawl ranks pages by what they are: an article (a path segment such as blog, news, articles, posts, press) is ranked last whatever its slug says, so /blog/dpdp-act-compliance-guide no longer outranks /contact. The five-page review excludes such pages when it picks its sign-up, contact, account and grievance pages.
+
+* The rule lives in one backend module, `app/rules/consent_observation.py` (`banner_not_displayed`, `banner_displayed`, `observed_signal`). The consent rules, the DPDP score and the findings read it through `ConsentContext`; the evidence API applies `observed_signal` to every stored consent signal, so a scan stored by an older scanner is read the same way and the response carries `banner_displayed` (false, true or null). The public API summary's `consent_states_tested` uses the score's own rule: before-consent needs a really scanned page, Reject needs the banner to have responded (`reject_click_confirmed`).

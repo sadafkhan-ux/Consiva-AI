@@ -1,0 +1,152 @@
+# Load-test stack: the fixture sites, a copy of the API and any number of workers that resolve every name to the fixture (backend/loadtest/patch.py).
+# Use it WITHOUT the normal worker, which would pick the test scans up and fail them (it refuses private addresses, correctly):
+#
+#   docker compose -f docker-compose.prod.yml stop worker
+#   docker compose -f docker-compose.prod.yml -f docker-compose.loadtest.yml up -d --build fixture api-lt
+#   docker compose -f docker-compose.prod.yml -f docker-compose.loadtest.yml up -d --scale worker-lt=N worker-lt
+#   docker compose -f docker-compose.prod.yml -f docker-compose.loadtest.yml exec api-lt python -m loadtest.run_load
+#
+# Test tooling only: never part of a deployment.
+services:
+  fixture:
+    image: consiva-backend:latest
+    command: ["python", "-m", "loadtest.run_fixture"]
+    environment:
+      LOADTEST_HEAVY: "${LOADTEST_HEAVY:-0}"
+      LOADTEST_BUSY_MS: "${LOADTEST_BUSY_MS:-220}"
+    volumes: ["./backend/loadtest:/app/loadtest:ro"]
+    # Real DNS names on the container network: robots.txt, the sitemap and the policy fetch go through Node/Python HTTP clients, which ignore the browser's resolver rule.
+    networks:
+      consiva:
+        aliases:
+          - site-000.loadtest.example
+          - site-001.loadtest.example
+          - site-002.loadtest.example
+          - site-003.loadtest.example
+          - site-004.loadtest.example
+          - site-005.loadtest.example
+          - site-006.loadtest.example
+          - site-007.loadtest.example
+          - site-008.loadtest.example
+          - site-009.loadtest.example
+          - site-010.loadtest.example
+          - site-011.loadtest.example
+          - site-012.loadtest.example
+          - site-013.loadtest.example
+          - site-014.loadtest.example
+          - site-015.loadtest.example
+          - site-016.loadtest.example
+          - site-017.loadtest.example
+          - site-018.loadtest.example
+          - site-019.loadtest.example
+          - site-020.loadtest.example
+          - site-021.loadtest.example
+          - site-022.loadtest.example
+          - site-023.loadtest.example
+          - site-024.loadtest.example
+          - site-025.loadtest.example
+          - site-026.loadtest.example
+          - site-027.loadtest.example
+          - site-028.loadtest.example
+          - site-029.loadtest.example
+          - site-030.loadtest.example
+          - site-031.loadtest.example
+          - site-032.loadtest.example
+          - site-033.loadtest.example
+          - site-034.loadtest.example
+          - site-035.loadtest.example
+          - site-036.loadtest.example
+          - site-037.loadtest.example
+          - site-038.loadtest.example
+          - site-039.loadtest.example
+          - site-040.loadtest.example
+          - site-041.loadtest.example
+          - site-042.loadtest.example
+          - site-043.loadtest.example
+          - site-044.loadtest.example
+          - site-045.loadtest.example
+          - site-046.loadtest.example
+          - site-047.loadtest.example
+          - site-048.loadtest.example
+          - site-049.loadtest.example
+          - site-050.loadtest.example
+          - site-051.loadtest.example
+          - site-052.loadtest.example
+          - site-053.loadtest.example
+          - site-054.loadtest.example
+          - site-055.loadtest.example
+          - site-056.loadtest.example
+          - site-057.loadtest.example
+          - site-058.loadtest.example
+          - site-059.loadtest.example
+          - site-060.loadtest.example
+          - site-061.loadtest.example
+          - site-062.loadtest.example
+          - site-063.loadtest.example
+          - site-064.loadtest.example
+          - site-065.loadtest.example
+          - site-066.loadtest.example
+          - site-067.loadtest.example
+          - site-068.loadtest.example
+          - site-069.loadtest.example
+          - site-070.loadtest.example
+          - site-071.loadtest.example
+          - site-072.loadtest.example
+          - site-073.loadtest.example
+          - site-074.loadtest.example
+          - site-075.loadtest.example
+          - site-076.loadtest.example
+          - site-077.loadtest.example
+          - site-078.loadtest.example
+          - site-079.loadtest.example
+          - site-080.loadtest.example
+          - site-081.loadtest.example
+          - site-082.loadtest.example
+          - site-083.loadtest.example
+          - site-084.loadtest.example
+          - site-085.loadtest.example
+          - site-086.loadtest.example
+          - site-087.loadtest.example
+          - site-088.loadtest.example
+          - site-089.loadtest.example
+          - site-090.loadtest.example
+          - site-091.loadtest.example
+          - site-092.loadtest.example
+          - site-093.loadtest.example
+          - site-094.loadtest.example
+          - site-095.loadtest.example
+          - site-096.loadtest.example
+          - site-097.loadtest.example
+          - site-098.loadtest.example
+          - site-099.loadtest.example
+
+  api-lt:
+    image: consiva-backend:latest
+    command: ["python", "-m", "loadtest.run_api"]
+    volumes: ["./backend/loadtest:/app/loadtest:ro"]
+    env_file: [./backend/.env]
+    environment:
+      APP_ENV: "${APP_ENV:?set APP_ENV}"
+      DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/consiva
+      LOADTEST_FIXTURE_HOST: fixture
+      DB_POOL_SIZE: "${BACKEND_DB_POOL_SIZE:-10}"
+      DB_MAX_OVERFLOW: "${BACKEND_DB_MAX_OVERFLOW:-10}"
+    networks: [consiva]
+    depends_on: [fixture]
+
+  worker-lt:
+    image: consiva-backend:latest
+    command: ["python", "-m", "loadtest.run_worker"]
+    volumes: ["./backend/loadtest:/app/loadtest:ro"]
+    init: true
+    env_file: [./backend/.env]
+    environment:
+      APP_ENV: "${APP_ENV:?set APP_ENV}"
+      DATABASE_URL: postgresql+asyncpg://consiva:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/consiva
+      LOADTEST_FIXTURE_HOST: fixture
+      WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-0}"
+      DB_POOL_SIZE: "${WORKER_DB_POOL_SIZE:-10}"
+      DB_MAX_OVERFLOW: "${WORKER_DB_MAX_OVERFLOW:-5}"
+    shm_size: "4gb"
+    networks: [consiva]
+    depends_on: [fixture]

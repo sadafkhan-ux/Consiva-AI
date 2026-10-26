@@ -2,6 +2,8 @@
 run against links aggregated across the whole crawl (a policy is commonly only linked
 from the footer, not necessarily itself crawled)."""
 
+import re
+
 from app.scanner._domain import registered_domain
 from app.scanner.page_parser import ParsedLink
 from app.scanner.schemas import PolicyRecord
@@ -18,8 +20,14 @@ _KEYWORDS = {
 }
 
 
+# A class or id that names the link as a policy ("privacy-notice-link", "cookie_policy"): read only in this narrow form, so that "cookie-banner" or "privacy-icon" styling does not make a link a policy.
+_ATTR_POLICY = re.compile(r"(privacy|cookie)[-_ ]?(policy|notice|statement)")
+
+
 def _classify_link(link: ParsedLink) -> str | None:
-    haystack = f"{link.href.lower()} {link.text.lower()}"
+    # Every policy word the class/id names (a link merged from two occurrences can carry "ot-cookie-policy-link privacy-notice-link"): the first match alone made it a cookie policy.
+    named_by_attrs = " ".join(m.group(1) for m in _ATTR_POLICY.finditer(link.attrs))
+    haystack = f"{link.href.lower()} {link.text.lower()} {named_by_attrs}"
     for policy_type, keywords in _KEYWORDS.items():
         if any(kw in haystack for kw in keywords):
             return policy_type

@@ -4,7 +4,7 @@ import { InteractionPill } from "./shared";
 export function ConsentSummarySection({ meta }: { meta: WebsiteScanMetadata | null }) {
   if (!meta) return null;
   const bannerPresent = meta.consent_mechanism && meta.consent_mechanism !== "none";
-  const bannerLabel = meta.consent_mechanism == null ? "UNKNOWN" : bannerPresent ? "DETECTED" : "NOT DETECTED";
+  const bannerLabel = meta.consent_mechanism == null || meta.consent_mechanism === "unknown" ? "UNKNOWN" : bannerPresent ? "DETECTED" : "NOT DETECTED";
   const cmpLabel = meta.cmp_vendor ?? (meta.consent_mechanism === "banner" ? "Generic banner (vendor unknown)" : "UNKNOWN");
   const confidencePct = meta.cmp_confidence != null ? `${Math.round(meta.cmp_confidence * 100)}%` : "—";
 

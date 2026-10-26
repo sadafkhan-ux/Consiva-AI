@@ -64,7 +64,7 @@ function FirstPage({ model, view, frame, tag, numbered = true }: { model: Report
 export function ReportCover({ model }: { model: ReportModel }) {
   const view = buildPageReport(model, "free");
   const frame = { variant: "free" as const, of: 1, domain: view.domain, scannedAt: view.scannedAt, headerPages: view.headerPages, reportId: view.reportId };
-  return <div className="pg-doc" data-testid="report-cover"><SheetPageStyle /><FirstPage model={model} view={view} frame={frame} tag="PRIVACY COMPLIANCE REPORT" numbered={false} /></div>;
+  return <div className="pg-doc" data-testid="report-cover"><SheetPageStyle /><FirstPage model={model} view={view} frame={frame} tag="PRIVACY READINESS REPORT" numbered={false} /></div>;
 }
 
 /**

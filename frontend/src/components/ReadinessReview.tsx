@@ -1,7 +1,7 @@
 import { READINESS_STATUS_TONE, type ReadinessReview as Review, type ReadinessStatus } from "../report/readiness";
 
 const BADGE = { good: "ok", bad: "bad", warn: "warn", mute: "neutral" } as const;
-const ORDER: ReadinessStatus[] = ["Compliant", "Gap", "Not Found", "Cannot Verify", "Requires document review"];
+const ORDER: ReadinessStatus[] = ["Passes this technical check", "Gap", "Not Found", "Unable to Verify", "Requires document review"];
 
 /**
  * The five-page DPDP readiness review: which five pages were chosen and why, one row per check with its status, the evidence behind it and the

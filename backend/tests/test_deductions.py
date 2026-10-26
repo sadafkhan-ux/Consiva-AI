@@ -160,7 +160,7 @@ class TestBackendRecord:
             recorded.update(kw)
 
         monkeypatch.setattr(svc.scan_repository, "get_scan", get_scan)
-        monkeypatch.setattr(svc.scan_repository, "get_scan_evidence_summary_concurrent", get_evidence)
+        monkeypatch.setattr(svc.scan_repository, "get_scan_evidence_for_score", get_evidence)
         monkeypatch.setattr(svc.audit_repository, "record", record)
         with caplog.at_level(logging.INFO, logger="consiva.score_deductions"):
             d = await svc.record_scan_deductions(None, scan_id=uuid.UUID(int=7), org_id=uuid.UUID(int=8))

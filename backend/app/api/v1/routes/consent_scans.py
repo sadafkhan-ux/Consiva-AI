@@ -24,7 +24,14 @@ from app.llm.schemas import DpdpReference
 from app.scoring import comparison as score_comparison
 from app.scoring import dpdp_score
 from app.scoring.sector import SECTORS
-from app.services import analysis_service, report_cache_service, report_pdf_service, scan_service, usage_service
+from app.services import (
+    analysis_service,
+    consent_agent_api_service,
+    report_cache_service,
+    report_pdf_service,
+    scan_service,
+    usage_service,
+)
 
 router = APIRouter(prefix="/api/v1/consent/scans", tags=["consent-scans"])
 
@@ -88,6 +95,9 @@ class ScanStatusResponse(ScanResponse):
     # false-negative the rest of this platform is built to refuse.
     analysis_status: str | None = None
     findings_complete: bool = False
+    # The lifecycle word and the shared description of why a scan could not be completed (scanner/failure_catalog.py): derived from what is stored, so older scans carry them too.
+    outcome: str | None = None
+    failure: dict | None = None
 
 
 class AgentRunResponse(BaseModel):
@@ -230,6 +240,8 @@ class EvidenceConsentSignalItem(BaseModel):
     has_reject_all: bool | None
     has_granular_choices: bool | None
     evidence: dict
+    # False when the consent tool's banner was never displayed to the scanner (what it "offers" is then null, not false); True when it was; null when unknown or no consent tool.
+    banner_displayed: bool | None = None
 
 
 class ScanEvidenceResponse(BaseModel):
@@ -279,6 +291,9 @@ class DpdpRequirementResult(BaseModel):
     penalty_points: float | None = None
     score_contribution_percent: float | None = None
     coverage_share_percent: float | None = None
+    # How the check was (or could be) answered: website_scan, policy_text or organisation_records; and, while it is unverified, the records that would settle it.
+    method: str = "website_scan"
+    needed_evidence: list[str] = []
 
 
 class DpdpCategoryScore(BaseModel):
@@ -805,6 +820,7 @@ async def get_scan(
     website = await scan_repository.get_website_by_id(db, scan.website_id)
     counts = await scan_repository.get_scan_counts(db, scan_id)
     run = await scan_repository.latest_agent_run(db, scan_id)
+    derived = await consent_agent_api_service.describe_scan(db, scan)
     # `findings_complete` is true ONLY when analysis reached a state where the finding
     # list is the whole answer. `paused` counts: that is the human-review gate, and the
     # findings are all present and waiting on a decision. Everything else -- never run,
@@ -815,6 +831,7 @@ async def get_scan(
         evidence_counts=counts,
         analysis_status=run.status if run else None,
         findings_complete=bool(run and run.status in ("completed", "paused")),
+        **derived,
     )
 
 
@@ -870,6 +887,7 @@ async def get_scan_evidence(
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
+    await db.rollback()   # give this request's connection back before the evidence is loaded on others (see scan_repository._evidence_slot)
     # With the cookie audit columns (expiry, flags, where/when seen) the agent's own
     # copy leaves out -- see scan_repository._cookie_detail.
     evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)
@@ -897,14 +915,18 @@ async def get_scan_dpdp_score(
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
-    evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)
+    # Read what is needed from the scan, then give this request's connection back BEFORE the evidence is loaded on others. A request that kept its connection
+    # while it opened seven more deadlocked the pool as soon as a handful ran together: every holder waited for connections the other holders were keeping.
+    scan_url = scan.url
+    when = scan.completed_at or scan.started_at or scan.created_at
+    await db.rollback()
+    evidence = await scan_repository.get_scan_evidence_for_score(scan_id)
     result = dpdp_score.assess(
         evidence, as_of,
         dpdp_score.Applicability(processes_children_data, significant_data_fiduciary, consent_manager, erasure_class),
         get_settings().dpdp_score_weights or None,
-        scan_url=scan.url,
-        scanned_at=(scan.completed_at or scan.started_at or scan.created_at).isoformat()
-        if (scan.completed_at or scan.started_at or scan.created_at) else None,
+        scan_url=scan_url,
+        scanned_at=when.isoformat() if when else None,
         business_sector=business_sector,
     )
     # The deductions (scoring/deductions.py) are for the operators of the agent: they go to the server log and the audit table
@@ -958,10 +980,12 @@ async def compare_scan_dpdp_score(
         when = scan.completed_at or scan.started_at or scan.created_at
         return {"scan_id": str(scan.id), "url": scan.url, "scanned_at": when.isoformat() if when else None, "status": scan.status}
 
-    evidence_prev = await scan_repository.get_scan_evidence_summary_concurrent(previous.id, include_cookie_detail=True)
-    evidence_latest = await scan_repository.get_scan_evidence_summary_concurrent(latest.id, include_cookie_detail=True)
+    previous_info, latest_info, previous_id, latest_id = info(previous), info(latest), previous.id, latest.id
+    await db.rollback()   # the connection goes back before the evidence of both scans is loaded on others (see scan_repository._evidence_slot)
+    evidence_prev = await scan_repository.get_scan_evidence_for_score(previous_id)
+    evidence_latest = await scan_repository.get_scan_evidence_for_score(latest_id)
     result = score_comparison.compare_scans(
-        evidence_prev, evidence_latest, as_of=as_of or dpdp_score.today_in_india(), previous_info=info(previous), latest_info=info(latest),
+        evidence_prev, evidence_latest, as_of=as_of or dpdp_score.today_in_india(), previous_info=previous_info, latest_info=latest_info,
         weights=get_settings().dpdp_score_weights or None,
     )
     return ScoreComparisonResponse(**result)

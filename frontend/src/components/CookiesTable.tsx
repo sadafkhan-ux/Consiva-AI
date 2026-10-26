@@ -1,3 +1,5 @@
+import type { EvidenceStatus } from "../hooks/useConsentScan";
+import { EvidenceNotice } from "./EvidenceNotice";
 import { Fragment, useMemo, useState } from "react";
 import type { EvidenceCookieItem } from "../api/types";
 import { buildCookieInventory, NOT_AVAILABLE, type CookieRow, type GroupCount } from "../report/cookieInventory";
@@ -76,7 +78,7 @@ function CookieDetail({ row }: { row: CookieRow }) {
   );
 }
 
-export function CookiesTable({ cookies, untestedStates = [] }: { cookies: EvidenceCookieItem[]; untestedStates?: readonly string[] }) {
+export function CookiesTable({ cookies, untestedStates = [], status = "loaded" }: { cookies: EvidenceCookieItem[]; untestedStates?: readonly string[]; status?: EvidenceStatus }) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const inventory = useMemo(() => buildCookieInventory(cookies, untestedStates), [cookies, untestedStates]);
@@ -87,6 +89,7 @@ export function CookiesTable({ cookies, untestedStates = [] }: { cookies: Eviden
     return inventory.rows.filter((r) => r.searchText.includes(q));
   }, [inventory, search]);
 
+  if (status !== "loaded") return <EvidenceNotice status={status} what="cookies" />;
   if (cookies.length === 0) return <p className="empty-note">No cookies were detected on this scan.</p>;
 
   const toggle = (id: string) => setExpanded((cur) => (cur === id ? null : id));

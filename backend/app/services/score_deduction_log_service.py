@@ -50,7 +50,7 @@ async def record_scan_deductions(db: AsyncSession, *, scan_id: uuid.UUID, org_id
     scan = await scan_repository.get_scan(db, scan_id, org_id)
     if scan is None:
         return None
-    evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)
+    evidence = await scan_repository.get_scan_evidence_for_score(scan_id)
     when = scan.completed_at or scan.started_at or scan.created_at
     result = dpdp_score.assess(
         evidence, None, None, get_settings().dpdp_score_weights or None, scan_url=scan.url, scanned_at=when.isoformat() if when else None,

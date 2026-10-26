@@ -32,7 +32,8 @@ export function buildHeroView(v: ScoreView | null): HeroView {
   const coverageValue = v ? v.coverageValue : null;
   const assessed = v ? v.assessed : [];
   const limited = !!v?.caution || (coverageValue !== null && coverageValue < 50);
-  const band = !v ? "Score not available" : scoreValue === null ? "Insufficient evidence" : scoreBand(scoreValue);
+  // A good reading on little evidence is not a strong one: the band says so when the score rests on a small share of the checks (the coverage beside it says how small).
+  const band = !v ? "Score not available" : scoreValue === null ? "Insufficient evidence" : limited && scoreValue >= 60 ? `${scoreBand(scoreValue)}, on limited evidence` : scoreBand(scoreValue);
   const tone: HeroTone = scoreValue === null ? "mute" : limited || scoreValue < 80 ? "warn" : "good";
   const headline = !v
     ? "The score could not be loaded for this report."

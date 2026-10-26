@@ -62,7 +62,7 @@ describe("one header for every page", () => {
       const { container } = render(<R model={m} />);
       const first = container.querySelector("header.pg-head")!;
       expect(first.querySelector("b")!.textContent).toBe("x.test");
-      expect(first.textContent).toMatch(/Scanned .+ UTC · 1 of 1 pages? scanned/);
+      expect(first.textContent).toMatch(/Scanned .+ UTC · 1 pages? scanned of 1 found/);
       cleanup();
     }
   });

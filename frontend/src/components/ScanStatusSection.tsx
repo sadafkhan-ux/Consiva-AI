@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ConsentScanState } from "../hooks/useConsentScan";
-import { deriveFailureReason } from "../hooks/useConsentScan";
+import { deriveFailureReason, hasPartialResults } from "../hooks/useConsentScan";
 import { formatMs, formatTimestamp } from "./shared";
 import { serverSpanMs, stuckStages, summariseStages, unaccountedMs } from "./stageTiming";
 
@@ -93,11 +93,15 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
 
   if (state.phase === "idle") return null;
 
+  // "Pages Scanned" is what the crawler reports as scanned. The evidence count also includes pages that failed or timed out, so it is only the fallback for a scan stored before the
+  // crawler's figure existed. Failed or timed-out pages are warnings too, not just a scan-level error.
+  const pagesScanned = state.websiteScanMeta?.pages_scanned ?? state.scan?.evidence_counts.pages;
+  const hasErrorsOrWarnings = Boolean(state.error) || (state.websiteScanMeta?.pages_failed ?? 0) > 0 || (state.websiteScanMeta?.pages_timeout ?? 0) > 0;
   const failureReason = state.phase === "failed" ? deriveFailureReason(state.error, state.websiteScanMeta) : null;
   // An analysis step that failed on a scan that completed: with findings they are ready but unexplained; with none, the scan is complete and the
   // analysis is not.
   const degradedNoFindings = state.phase === "degraded" && state.findings.length === 0;
-  const label = failureReason ? `Failed — ${failureReason}` : degradedNoFindings ? "Scan complete — analysis incomplete" : PHASE_LABELS[state.phase];
+  const label = state.phase === "failed" && hasPartialResults(state) ? "Failed — Partial Results Available" : failureReason ? `Failed — ${failureReason}` : degradedNoFindings ? "Scan complete — analysis incomplete" : PHASE_LABELS[state.phase];
   const tone = PHASE_TONE[state.phase] ?? "progress";
 
   const byStage = summariseStages(state.stages);
@@ -231,8 +235,8 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
           </div>
           <div className="l">Current Stage</div>
         </div>
-        <div className="stat"><div className="n">{state.scan?.evidence_counts.pages ?? "—"}</div><div className="l">Pages Scanned</div></div>
-        <div className="stat"><div className="n">{state.error ? "Yes" : "No"}</div><div className="l">Errors / Warnings</div></div>
+        <div className="stat"><div className="n">{pagesScanned ?? "—"}</div><div className="l">Pages Scanned</div></div>
+        <div className="stat"><div className="n">{hasErrorsOrWarnings ? "Yes" : "No"}</div><div className="l">Errors / Warnings</div></div>
       </div>
 
       <div className="stages">

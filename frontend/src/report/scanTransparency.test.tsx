@@ -180,14 +180,14 @@ describe("a framed wrapper limits only the checks that rest on nothing being see
   const wrapper = (extra = {}) => evidence("wrapper.example", { framed, mechanism: "none", policies: [], ...extra });
   const rowsOf = (m: ReturnType<typeof model>) => m.readiness.rows;
 
-  it("rows that say nothing was found become Cannot Verify, are not scored, and say why", () => {
+  it("rows that say nothing was found become Unable to Verify, are not scored, and say why", () => {
     const m = model("wrapper.example", wrapper(), {}, "insufficient");
     for (const r of rowsOf(m).filter((r) => r.pageN > 0 && r.evidence.includes("wrapper"))) {
-      expect(r.status).toBe("Cannot Verify");
+      expect(r.status).toBe("Unable to Verify");
       expect(r.scored).toBe(false);
     }
     expect(rowsOf(m).some((r) => r.status === "Not Found")).toBe(false);
-    expect(rowsOf(m).some((r) => r.status === "Compliant" && r.evidenceKind === "Not seen")).toBe(false);
+    expect(rowsOf(m).some((r) => r.status === "Passes this technical check" && r.evidenceKind === "Not seen")).toBe(false);
     expect(m.readiness.scoreLine).toMatch(/Not enough could be verified/);
     expect(m.readiness.notes[0]).toContain(framed);
   });
@@ -202,7 +202,7 @@ describe("a framed wrapper limits only the checks that rest on nothing being see
     const withTracker = wrapper({ trackers: [tracker("1", "analytics", ["pre_consent"], "wrapper.example")] });
     const m = model("wrapper.example", withTracker, {}, "insufficient");
     const observed = rowsOf(m).filter((r) => r.evidenceKind === "Observed" || r.status === "Gap");
-    expect(observed.length).toBeGreaterThanOrEqual(0);                     // present, never rewritten to Cannot Verify by the frame rule
+    expect(observed.length).toBeGreaterThanOrEqual(0);                     // present, never rewritten to Unable to Verify by the frame rule
     expect(rowsOf(m).filter((r) => r.status === "Gap").every((r) => r.scored)).toBe(true);
   });
 

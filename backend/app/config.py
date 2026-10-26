@@ -124,7 +124,15 @@ class Settings(BaseSettings):
     # demand is bursty rather than sustained -- but N slots can still collide on a
     # 3+2 pool and then block for pool_timeout. Raise DB_POOL_SIZE with this value:
     # the worker service in docker-compose.prod.yml does exactly that.
-    worker_concurrency: int = 4
+    worker_concurrency: int = Field(default=0, ge=0, le=256)
+    # 0 (the default) = decide from the machine: at most one job per CPU, taken only while the CPU is below the target and memory remains for another job (app/jobs/capacity.py).
+    # A number above 0 caps the jobs this process runs at once; the CPU and memory limits below still apply to it. Either way it is also bounded by the database
+    # connections this process holds (DB_POOL_SIZE + DB_MAX_OVERFLOW, less three).
+    worker_target_cpu_percent: int = Field(default=85, ge=30, le=100)
+    # What one running job is expected to need, used to decide whether memory remains for another. 700 MB was measured for a scan (about 0.55 GB, with margin); raise it for
+    # heavier sites. Not a capacity claim: it is divided into the memory actually available at the moment.
+    worker_memory_per_job_mb: int = Field(default=700, ge=100)
+    worker_min_free_memory_mb: int = Field(default=768, ge=0)
 
     # Scanner
     scanner_headless: bool = True
@@ -186,7 +194,41 @@ class Settings(BaseSettings):
         return value
     scanner_timeout_seconds: int = 30
     scanner_user_agent: str = "ConsivaConsentAgent/0.1"
-    scanner_max_scans_per_org_per_day: int = 50
+    # What to do when the site's robots.txt cannot be READ (a network error or timeout, HTTP 5xx or 429, a redirect to another site), so what the site permits is unknown.
+    #   disallow (default, RFC 9309): do not scan on a guess. The scan fails with a retryable error, the queue tries again with growing waits, and if the file stays unreadable the
+    #            scan ends as failed with the reason and nothing is assessed.
+    #   allow:   scan anyway, with a WARNING in the worker log. Only for a deployment that accepts visiting pages a site might have excluded.
+    # A robots.txt that answers 4xx (the site publishes none) or exceeds 5 redirects is "unavailable" under the RFC and never blocks a scan, whichever is set.
+    scanner_robots_unreadable_policy: Literal["disallow", "allow"] = "disallow"
+    # 0 = no limit (the default). Requests are never refused for volume: they queue, and the worker takes them as the machine has room (app/jobs/capacity.py), fairly
+    # between organisations. A number above 0 is an opt-in cost ceiling that answers HTTP 429 once reached.
+    scanner_max_scans_per_org_per_day: int = Field(default=0, ge=0)
+    # Most scans one organisation may have WAITING (status "queued", not yet taken by a worker) at once. 0 = no ceiling (the default, nothing changes). Above 0, a new scan is
+    # refused with HTTP 429 while that many are already waiting, so a flood from one organisation cannot grow the queue without bound; scans that are running or finished do not count.
+    scanner_max_queued_scans_per_org: int = Field(default=0, ge=0)
+    # A scheduled (monitoring) scan is not started again for this many hours after the website's last scan failed for a reason that scanning again cannot change (robots.txt disallows the scanner,
+    # an expired or invalid certificate, access denied, a login required: scanner/failure_catalog.py). Without it a schedule repeats the same refused request every interval, for as long as the
+    # site's owner has not fixed it. The schedule is moved on as usual, so it tries again once the pause is over. A scan someone requests by hand is never held back. 0 = no pause.
+    scheduled_scan_permanent_failure_pause_hours: int = Field(default=24, ge=0, le=720)
+    # How long a navigation that fails for a reason that can pass (a timeout, a resolver blip, the site answering "try again") is retried, with growing waits
+    # between attempts, before it is given up. A TIME window rather than a fixed number of attempts: a short outage no longer ends a scan after three
+    # immediate tries, and an error that retrying cannot fix (a bad certificate, an HTTP 403) is not retried at all. The entered address gets the longer window
+    # (without it there is no scan); any other page, the shorter one (it is skipped and the crawl goes on).
+    scanner_nav_retry_seconds_seed: int = Field(default=120, ge=5, le=900)
+    scanner_nav_retry_seconds_page: int = Field(default=45, ge=5, le=600)
+    # After this many pages in a row time out (a page that loads in between starts the count again), the crawl stops starting new pages: a site whose pages keep timing out
+    # will not answer the next one either, and each try costs a worker slot for about a minute (measured: one such site held a slot for 184 s while the median scan took
+    # 5 s). The scan completes with what it has and the report says the site was too slow. 0 = never stop early.
+    scanner_stop_after_consecutive_timeouts: int = Field(default=3, ge=0, le=50)
+    # How many page navigations may be in flight at once in ONE worker process, across every scan it is running. Each scan crawls several pages and runs two
+    # more browsers' worth of passes; with several scans per worker the total could far exceed what the machine can load, and pages then time out on each other.
+    # Above this number a navigation waits its turn (its own timeout starts when it does), so more concurrent scans take longer instead of failing.
+    # 0 = decide from the machine: twice the CPU count, between 6 and 32.
+    scanner_max_concurrent_navigations: int = Field(default=0, ge=0, le=256)
+    # How many times a job (a scan, an analysis) may be run before it is left failed. A job that cannot succeed (ScanNotPossible) is never retried, whatever
+    # this says. The wait before a retry doubles each time (30 s, 1 min, 2 min, 4 min, 8 min ... at most 15 min), so six attempts ride out an outage of about
+    # 15 minutes; raise it to ride out a longer one.
+    job_max_attempts: int = Field(default=6, ge=1, le=20)
     # The PDF report (services/report_pdf_service.py): headless Chromium opens the web report page and prints it. `report_frontend_url` is where
     # THIS process reaches the web app: the frontend service on the compose network by default, an address such as http://127.0.0.1:5173 when the API
     # runs outside Docker. It is never taken from a request. A finished PDF is kept for `report_pdf_cache_seconds` so repeated downloads of one scan
@@ -304,7 +346,8 @@ class Settings(BaseSettings):
     # existing per-day ceiling. A browser crawl costs real CPU and a real LLM call, so
     # an integrator looping on POST /scans is a cost-and-capacity problem well before
     # the daily limit notices.
-    consent_api_scans_per_hour: int = 20
+    # 0 = no limit (the default); see scanner_max_scans_per_org_per_day.
+    consent_api_scans_per_hour: int = Field(default=0, ge=0)
 
     notification_webhook_timeout_seconds: int = 10
 

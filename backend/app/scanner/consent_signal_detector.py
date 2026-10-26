@@ -99,12 +99,17 @@ def detect_consent_signal(
         return ConsentSignalRecord(
             mechanism_type="cmp",
             cmp_vendor=cmp_match.cmp_vendor,
-            has_reject_all=has_reject_all if established else None,
-            has_granular_choices=has_granular if established else None,
+            # Both are facts ABOUT A DISPLAYED BANNER, so they are recorded only when banner wording (an Accept or Reject control) was seen. A footer "manage cookies" link
+            # alone used to make the signal "established", which recorded "no reject-all" (False) and "granular choices" (True) for a banner no one had seen.
+            has_reject_all=has_reject_all if banner_wording_seen else None,
+            has_granular_choices=has_granular if banner_wording_seen else None,
             evidence={
                 "matched_cmp": cmp_match.cmp_vendor, "global_vars": detected_global_vars,
                 "confidence": confidence, "detection_source": detection_source,
                 "banner_ui_observed": banner_ui_observed,
+                # What the page's control text said, kept even when it is not recorded as a fact about a banner (see above), so that a later click that proves the banner WAS
+                # displayed (crawler._reconcile_banner_presence) can restore it.
+                "text_has_reject_all": has_reject_all, "text_has_granular_choices": has_granular,
             },
         )
     if established:

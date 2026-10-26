@@ -102,7 +102,7 @@ def verify_quote(quote: str, doc_text: str) -> bool:
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _PHONE = re.compile(r"(?:\+?\d[\d\s().-]{8,}\d)")
-_FORM = re.compile(r"https?://\S+|\b(?:contact|grievance|support|request)\s+(?:form|portal|page)\b|\bform\b|\bportal\b", re.I)
+_FORM = re.compile(r"https?://\S+|\b(?:contact|grievance|support|request)\s+(?:form|portal|page)\b|\bform\b|\bportal\b", re.IGNORECASE)
 _WINDOW = 400
 
 
@@ -113,14 +113,14 @@ def _window(quote: str, doc_text: str) -> str:
     return nd[max(0, i - _WINDOW): i + len(nq) + _WINDOW] if i >= 0 else nq
 
 
-_URL = re.compile(r"https?://[^\s)\]>\"']+", re.I)
+_URL = re.compile(r"https?://[^\s)\]>\"']+", re.IGNORECASE)
 _CONTACT_REQS = ("grievance_contact", "dpo_contact", "rights_means")
 
 
 def _raw_window(quote: str, doc_text: str) -> str:
     """The quote and the text around it as the policy wrote it (case and punctuation kept), where contact details are read from."""
     words = [re.escape(w) for w in quote.split()]
-    m = re.search(r"\s+".join(words), doc_text, re.I) if words else None
+    m = re.search(r"\s+".join(words), doc_text, re.IGNORECASE) if words else None
     if not m:
         return _window(quote, doc_text)
     return doc_text[max(0, m.start() - _WINDOW): m.end() + _WINDOW]
@@ -275,6 +275,68 @@ def judge(req: PolicyRequirement, quote: str, doc: PolicyDocument) -> tuple[str,
     return VERIFIED, "Quoted from the policy."
 
 
+# ---------------------------------------------------------------------------------------------------------------------------
+# A fixed-pattern second look for the statements a model can miss
+# ---------------------------------------------------------------------------------------------------------------------------
+#
+# The contact of an officer, the means of making a rights request, the grievance contact and the grievance response period are all statements that sit in one
+# or two sentences and are recognised by fixed words plus a concrete detail (an address, a number, a period). A model asked to find them can miss one that is
+# plainly there (it did, on one run of a policy that nine other runs read correctly), and then the check flips between scans of an unchanged page. So when the
+# model reports one of these as not found, the policy text itself is searched with a fixed pattern. A passage is accepted only if it is an exact slice of the
+# page, names the role or topic AND carries the concrete detail (a contact, or a period in the same sentence), and it is then judged by the same rules as a
+# passage the model offered. The pattern never overrides a passage the model found, and it finds nothing a person could not point to on the page.
+
+_RESCUE_TOPIC: dict[str, re.Pattern[str]] = {
+    "dpo_contact": re.compile(
+        r"data protection officer|\bDPO\b|privacy officer|grievance officer|data protection (?:lead|team|office)|person responsible for (?:data|privacy)|"
+        r"privacy[- ]related (?:questions|queries|enquiries|concerns)|privacy (?:team|office)", re.IGNORECASE),
+    "rights_means": re.compile(
+        r"exercise (?:any of )?(?:your|these|such|the) (?:data )?(?:protection )?rights|rights request|data (?:subject|principal) request|submit a request|"
+        r"request (?:access|a copy|deletion|erasure)", re.IGNORECASE),
+    "grievance_contact": re.compile(r"grievance|complaint", re.IGNORECASE),
+    "grievance_timeline": re.compile(r"grievance|complaint|redress", re.IGNORECASE),
+}
+_SENTENCE_START = re.compile(r"[.!?]\s+")
+
+
+def _slice_at_words(text: str, start: int, end: int) -> str:
+    """text[start:end] trimmed so it neither starts nor ends in the middle of a word."""
+    while start > 0 and start < len(text) and not text[start - 1].isspace():
+        start += 1
+    while end < len(text) and end > start and not text[end].isspace():
+        end -= 1
+    return text[start:end].strip()
+
+
+def locate_by_pattern(req_id: str, docs: list[PolicyDocument]) -> tuple[str, PolicyDocument] | None:
+    """A passage of one of the documents that states this requirement, found by a fixed pattern, or None. The first match in document order wins; the result is
+    always an exact slice of that document's text, between the minimum and maximum length of a quotation."""
+    topic = _RESCUE_TOPIC.get(req_id)
+    if topic is None:
+        return None
+    for doc in docs:
+        text = doc.text
+        for m in topic.finditer(text):
+            before = text[max(0, m.start() - 200): m.start()]
+            last = [s.end() for s in _SENTENCE_START.finditer(before)]
+            start = max(0, m.start() - 200) + last[-1] if last else max(0, m.start() - 100)
+            if req_id == "grievance_timeline":
+                stop = _SENTENCE_START.search(text, m.end())
+                end = min(stop.start() + 1 if stop else len(text), start + MAX_QUOTE_CHARS)
+                quote = _slice_at_words(text, start, end)
+                if response_days(quote) is None:
+                    continue
+            else:
+                quote = _slice_at_words(text, start, min(len(text), start + MAX_QUOTE_CHARS))
+                # The contact may follow the passage by a few words (an address, then "Email: ..."), so it is looked for in the text around the passage, exactly as
+                # `judge` does when it decides whether a passage is verified.
+                if not has_contact(_window(quote, text)):
+                    continue
+            if verify_quote(quote, text):
+                return quote, doc
+    return None
+
+
 def analyse(
     extraction: PolicyExtraction | None, docs: list[PolicyDocument], sector: str | None, child_signal: bool,
 ) -> dict:
@@ -305,6 +367,17 @@ def analyse(
                         row["contacts"] = extract_contacts(_raw_window(res.quote, doc.text))
                     if req.id == "grievance_timeline":
                         row["response_days"] = response_days(res.quote)
+        if ok and row["status"] == NOT_FOUND:
+            found = locate_by_pattern(req.id, docs)
+            if found is not None:
+                quote, doc = found
+                row["status"], row["detail"] = judge(req, quote, doc)
+                row["detail"] += " Found by a fixed pattern in the policy text, not offered by the model."
+                row["quote"], row["source_url"], row["found_by"] = quote, doc.url, "pattern"
+                if req.id in _CONTACT_REQS:
+                    row["contacts"] = extract_contacts(_raw_window(quote, doc.text))
+                if req.id == "grievance_timeline":
+                    row["response_days"] = response_days(quote)
         rows.append(row)
     live = [r for r in rows if r["status"] != NOT_APPLICABLE]
     verified = sum(1 for r in live if r["status"] == VERIFIED)
@@ -336,10 +409,14 @@ def _child_signal(evidence: dict) -> bool:
     return bool(_matching_fields(evidence, _CHILD_FIELD))
 
 
+#: Bump when the analysis of a model answer changes (a stored result made by an older version is then not reused).
+ANALYSIS_VERSION = 2
+
+
 def input_hash(system: str, user: str, sector: str | None, child: bool, model_id: str) -> str:
     """Identifies everything the model's answer depends on: the instructions, the policy text and requirement list it is asked about, the sector and child
     reading that shape the answer, and which model answers. The same hash means the same question put to the same model."""
-    payload = json.dumps([system, user, sector, bool(child), model_id], ensure_ascii=False, sort_keys=True)
+    payload = json.dumps([ANALYSIS_VERSION, system, user, sector, bool(child), model_id], ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -448,4 +525,4 @@ def _default_extractor(scan_id: str, page_urls: list[str] | None = None):
     return extractor
 
 
-__all__ = ["run", "analyse", "verify_quote", "response_days", "collect_documents", "build_prompt", "BY_ID"]
+__all__ = ["BY_ID", "analyse", "build_prompt", "collect_documents", "response_days", "run", "verify_quote"]

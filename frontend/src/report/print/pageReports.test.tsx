@@ -231,7 +231,7 @@ describe("the long report's front page", () => {
     const cover = screen.getByTestId("pg-free-1");
     expect(cover).toHaveTextContent(/Website Privacy\s*Readiness Report/);
     expect(cover).not.toHaveTextContent(/Page \d+ of/);
-    expect(cover).toHaveTextContent("PRIVACY COMPLIANCE REPORT");
+    expect(cover).toHaveTextContent("PRIVACY READINESS REPORT");
     expect(within(cover).getByTestId("pg-hero-screenshot")).toBeInTheDocument();
     expect(screen.queryByTestId("rpt-hero")).toBeNull();
     expect(screen.getByTestId("rpt-sec-checks")).toBeInTheDocument();     // every later section is still there

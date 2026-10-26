@@ -51,13 +51,21 @@ async def request_scan(
     domain = site_host(url)
 
     settings = get_settings()
-    recent_count = await scan_repository.count_scans_since(
-        db, org_id=org_id, since=datetime.now(UTC) - timedelta(days=1)
-    )
-    if recent_count >= settings.scanner_max_scans_per_org_per_day:
-        raise RateLimitExceededError(
-            f"Scan rate limit reached ({settings.scanner_max_scans_per_org_per_day}/day for this org)."
+    if settings.scanner_max_scans_per_org_per_day:        # 0 = unlimited: scans queue instead of being refused
+        recent_count = await scan_repository.count_scans_since(
+            db, org_id=org_id, since=datetime.now(UTC) - timedelta(days=1)
         )
+        if recent_count >= settings.scanner_max_scans_per_org_per_day:
+            raise RateLimitExceededError(
+                f"Scan rate limit reached ({settings.scanner_max_scans_per_org_per_day}/day for this org)."
+            )
+
+    if settings.scanner_max_queued_scans_per_org:         # 0 = no ceiling on waiting scans
+        waiting = await scan_repository.count_queued_scans(db, org_id=org_id)
+        if waiting >= settings.scanner_max_queued_scans_per_org:
+            raise RateLimitExceededError(
+                f"This organisation already has {waiting} scans waiting to run (limit {settings.scanner_max_queued_scans_per_org}). Wait for some to start, then try again."
+            )
 
     website = await scan_repository.get_or_create_website(db, org_id=org_id, domain=domain)
 
@@ -176,6 +184,8 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
             meta["cmp_detection_source"] = scan_result.consent_signals.evidence.get("detection_source")
             meta["accept_interaction"] = scan_result.consent_signals.evidence.get("accept_interaction")
             meta["reject_interaction"] = scan_result.consent_signals.evidence.get("reject_interaction")
+            # Whether the banner observably responded to the Reject click. A click alone does not establish the state (the score and the report require this), so the API summary needs it too.
+            meta["reject_click_confirmed"] = scan_result.consent_signals.evidence.get("reject_click_confirmed")
             # Real, observed retry/scroll/failure diagnostics from this specific scan
             # run (scanner-hardening audit) -- never fabricated, straight from crawler.py.
             meta.update(scan_result.scan_diagnostics)

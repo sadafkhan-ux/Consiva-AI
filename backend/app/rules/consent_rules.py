@@ -10,6 +10,7 @@ Two distinct stages, matching docs/architecture §D/§E:
   evidence back out of the database as plain dicts.
 """
 
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -17,6 +18,8 @@ import tldextract
 from pydantic import BaseModel, Field
 
 from app.lookup.matcher import LookupEntry, match_cookie_lookup
+from app.rules.consent_observation import banner_not_displayed as _banner_not_displayed
+from app.rules.consent_observation import script_failure_note
 from app.rules.tracker_catalog import match_vendor
 from app.scanner.schemas import CookieRecord, ScanResult, ThirdPartyServiceRecord, TrackerRecord
 
@@ -70,7 +73,19 @@ def _is_likely_static_asset(tracker: TrackerRecord) -> bool:
     consistently carry a query string (tracking ids/session params), which a plain
     static asset URL essentially never does. Requiring BOTH signals together is what
     keeps this from silently reclassifying a real disguised-as-image tracking pixel."""
-    return tracker.resource_type in _STATIC_ASSET_RESOURCE_TYPES and "?" not in tracker.script_src
+    return tracker.resource_type in _STATIC_ASSET_RESOURCE_TYPES and "?" not in tracker.script_src and not _looks_like_a_beacon(tracker.script_src)
+
+
+# Words that name a request as a measurement beacon, in the host's first label or a path segment: "/pixel.gif", "/collect", "analytics.example.net/i.png". An image request that carries one is
+# NOT called a static asset even without a query string: that would label a tracking pixel "functional" and let a "no analytics before consent" check pass on it. It stays unclassified, which
+# the score reports as "unclassified items fired before consent" for a reviewer (rule R-008), not as a pass.
+_BEACON_WORDS = re.compile(r"(?:^|[/._-])(?:pixel|pixels|beacon|beacons|track|tracker|tracking|collect|analytics|impression|impressions|pageview|spacer|telemetry|1x1)(?:$|[/._-])", re.IGNORECASE)
+
+
+def _looks_like_a_beacon(url: str) -> bool:
+    parts = urlparse(url)
+    first_label = (parts.hostname or "").split(".")[0]
+    return bool(_BEACON_WORDS.search(f"/{first_label}") or _BEACON_WORDS.search(parts.path or ""))
 
 
 def classify_tracker(tracker: TrackerRecord) -> TrackerRecord:
@@ -258,6 +273,9 @@ class ConsentContext:
     banner_not_displayed: bool
     # True when the scan carries the three-pass consent-state record (accept_interaction present, or any item has states).
     three_pass: bool
+    # The result of reading the site's privacy and cookie policy text (app/policy/analysis.py), when there is one. The consent rules never read it; the DPDP
+    # score uses it for the checks that are answered by what the policy says (contact, means to exercise rights, grievance system).
+    policy_analysis: dict | None = None
 
 
 # How a page record ends when the attempt brought no page (scanner/schemas.py PageRecord.discovered_via).
@@ -282,11 +300,7 @@ def build_consent_context(evidence: dict) -> ConsentContext:
     reject_outcome = interaction_evidence.get("reject_interaction")
     reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
     framed_sites = list(interaction_evidence.get("framed_sites") or [])
-    observed = interaction_evidence.get("banner_ui_observed")
-    banner_not_displayed = (
-        mechanism_type == "cmp" and observed is False
-        and accept_outcome != "clicked" and reject_outcome != "clicked"
-    )
+    banner_not_displayed = _banner_not_displayed(mechanism_type, interaction_evidence)
     three_pass = "accept_interaction" in interaction_evidence or any(
         e.get("consent_states") for e in (*cookies, *trackers)
     )
@@ -296,6 +310,7 @@ def build_consent_context(evidence: dict) -> ConsentContext:
         interaction_evidence=interaction_evidence, accept_outcome=accept_outcome, reject_outcome=reject_outcome,
         reject_confirmed=reject_confirmed, interaction_page=interaction_evidence.get("interaction_page_url"),
         framed_sites=framed_sites, banner_not_displayed=banner_not_displayed, three_pass=three_pass,
+        policy_analysis=evidence.get("policy_analysis"),
     )
 
 
@@ -459,6 +474,7 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
                     f"A consent tool ({signals.get('cmp_vendor') or mechanism_type}) is loaded, but no consent banner was "
                     "displayed to the scanner, so Accept and Reject could not be tested. Some sites show the banner only "
                     "to visitors in certain regions; scan from the audience's region, or scan a page where it appears."
+                    + script_failure_note(ctx.interaction_evidence)
                     if banner_not_displayed else
                     f"A consent mechanism ({mechanism_type}"
                     + (f", {signals.get('cmp_vendor')}" if signals.get("cmp_vendor") else "")

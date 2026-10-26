@@ -3,8 +3,8 @@ elements like GTM-loaded scripts or consent banners are present in the DOM). Bea
 only — no JS execution happens here, that's the crawler's job via Playwright.
 """
 
-from dataclasses import dataclass, field
 import re
+from dataclasses import dataclass, field
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -39,6 +39,8 @@ class ParsedForm:
 class ParsedLink:
     href: str
     text: str
+    #: The link's class and id, lower-cased. Not shown to a reader, but "privacy-notice-link" names what the link is when its text is an icon (policy_detector reads it, narrowly).
+    attrs: str = ""
 
 
 @dataclass
@@ -83,16 +85,26 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
         for tag in soup.find_all("script")
     ]
 
-    seen_hrefs: set[str] = set()
+    index_by_href: dict[str, int] = {}
     links: list[ParsedLink] = []
     for a in soup.find_all("a", href=True):
         if a["href"].startswith(("mailto:", "tel:", "javascript:", "#")):
             continue
         href = urljoin(page_url, a["href"])
-        if href in seen_hrefs:
+        # What the link says: its visible text, else its accessible name. A policy link that is an icon or an image (konicaminolta.com's OneTrust "privacy-notice-link": no text, an
+        # aria-label "More information about your privacy rights") has no text at all, and was missed.
+        text = a.get_text(strip=True) or str(a.get("aria-label") or a.get("title") or "").strip()
+        attrs = " ".join([*(a.get("class") or []), str(a.get("id") or "")]).lower().strip()
+        if href in index_by_href:
+            # The same address linked twice: keep what either occurrence says (the first used to win, even when it was an empty icon link and the second said "Privacy Policy").
+            first = links[index_by_href[href]]
+            if not first.text and text:
+                first.text = text
+            if attrs and attrs not in first.attrs:
+                first.attrs = f"{first.attrs} {attrs}".strip()
             continue
-        seen_hrefs.add(href)
-        links.append(ParsedLink(href=href, text=a.get_text(strip=True)))
+        index_by_href[href] = len(links)
+        links.append(ParsedLink(href=href, text=text, attrs=attrs))
 
     forms = []
     for i, form_tag in enumerate(soup.find_all("form")):
@@ -149,7 +161,7 @@ _CONTROL_SELECTORS = (
 # common), which keeps the check from being defeated by sloppy markup.
 _CONSENT_CONTAINER_HINT = re.compile(
     r"(cookie|consent|gdpr|ccpa|cmp|privacy)[-_]?(banner|bar|notice|dialog|modal|popup|consent)?",
-    re.I,
+    re.IGNORECASE,
 )
 
 

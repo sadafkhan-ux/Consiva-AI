@@ -4,6 +4,7 @@ import { CONSIVA_UPDATES, OMITTED_DUTIES_NOTE } from "../reportScope";
 import { AreasBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, UpgradeBand } from "./Blocks";
 import { Icon, PageFrame, Pill, SecHead, SheetPageStyle, type IconName } from "./PageParts";
 import { ScanTransparency } from "./Transparency";
+import { pagesTileValue } from "../scanPages";
 import "./pages.css";
 
 // The Full Scan report: eight fixed A4 pages, laid out as the scope document's Full Scan benchmark (section 2.2), as a readable report rather than a
@@ -159,7 +160,7 @@ export function FullReport({ model }: { model: ReportModel }) {
       <PageFrame {...frame} n={6}>
         <SecHead n={10} title="Every Check Behind the Score" note={`All checks, their weight, status and evidence. ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet} of ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet + view.framework.counts.unverified} applicable checks tested from outside.`} />
         <ul className="pg-legend pg-legend-status">
-          {([["Pass", "good"], ["Partially met", "warn"], ["Not met", "bad"], ["Could not verify", "mute"], ["Not applicable", "mute"]] as const).map(([s, t]) => <li key={s}><Pill s={{ label: s, tone: t }} /></li>)}
+          {([["Pass", "good"], ["Partially met", "warn"], ["Not met", "bad"], ["Unable to Verify", "mute"], ["Not applicable", "mute"]] as const).map(([s, t]) => <li key={s}><Pill s={{ label: s, tone: t }} /></li>)}
         </ul>
         <table className="pg-table pg-checks" data-testid="pg-checks">
           <thead><tr><th>ID</th><th>What is checked</th><th>Weight</th><th>Status</th><th>Evidence</th></tr></thead>
@@ -207,7 +208,7 @@ export function FullReport({ model }: { model: ReportModel }) {
           <dl>
             <dt>Domain</dt><dd>{view.domain}</dd>
             <dt>Scan time</dt><dd>{view.scannedAt}</dd>
-            <dt>Pages scanned</dt><dd>{vis ? `${vis.pagesScanned} of ${view.pagesLine.includes("of") ? view.pagesLine.split(" of ")[1] : vis.pagesScanned}${vis.pageLimit ? ` (limit ${vis.pageLimit})` : ""}` : "Not recorded"}</dd>
+            <dt>Pages scanned</dt><dd>{vis ? `${pagesTileValue(vis.pagesScanned, vis.pagesFound)}${vis.pageLimit ? ` (limit ${vis.pageLimit})` : ""}` : "Not recorded"}</dd>
             <dt>Consent states tested</dt><dd>{vis ? `${vis.statesTested} (Before, ${vis.consent.acceptTested ? "After Accept" : "After Accept not tested"}, ${vis.consent.rejectTested ? "After Reject" : "After Reject not tested"})` : "Not recorded"}</dd>
             <dt>Report ID</dt><dd>{view.reportId}</dd>
             <dt>Scoring and rule versions</dt><dd>{model.dpdpScore ? model.dpdpScore.versionsLine : "Not recorded"}</dd>

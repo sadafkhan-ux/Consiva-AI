@@ -130,6 +130,10 @@ class ScanStatusResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     error: dict[str, Any] | None = None
+    # The lifecycle word (QUEUED, RUNNING, COMPLETED, COMPLETED_WITH_WARNINGS, PARTIALLY_COMPLETED, BLOCKED, FAILED, CANCELLED) and, when there is something to say, why a scan could not be completed
+    # in full: a stable category code, whether retrying can help, who must act and the next step (scanner/failure_catalog.py). Both are derived, so scans stored earlier carry them too.
+    outcome: str | None = None
+    failure: dict[str, Any] | None = None
 
 
 class EvidenceRef(BaseModel):

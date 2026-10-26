@@ -33,7 +33,7 @@ describe("the five-page readiness review on the dashboard", () => {
     expect(rows).toHaveLength(review.rows.length + 1);
     expect(screen.getAllByRole("columnheader").map((h) => h.textContent)).toEqual(expect.arrayContaining(["Page", "DPDP section", "Check", "Status", "Evidence", "Fix"]));
     const counts = screen.getByTestId("readiness-counts").textContent ?? "";
-    for (const s of ["Compliant", "Gap", "Not Found", "Cannot Verify", "Requires document review"]) expect(counts).toContain(s);
+    for (const s of ["Passes this technical check", "Gap", "Not Found", "Unable to Verify", "Requires document review"]) expect(counts).toContain(s);
     expect(screen.getByText(/Tag Co \(analytics\)/)).toBeInTheDocument();
   });
 

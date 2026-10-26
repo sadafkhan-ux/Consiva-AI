@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 
+from app.rules.consent_observation import script_failure_note
 from app.rules.consent_rules import ConsentContext
 
 STATEMENT = (
@@ -236,7 +237,7 @@ def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_page
             id="banner-not-displayed", category="missing_evidence",
             topic="The consent banner was not displayed to the scanner",
             needs=["more_evidence", "business_context"],
-            known=["A consent tool is loaded on the page, but no banner appeared, so Accept and Reject could not be tested."],
+            known=["A consent tool is loaded on the page, but no banner appeared, so Accept and Reject could not be tested." + script_failure_note(ctx.interaction_evidence)],
             missing=["What visitors in the audience region see, and how Accept and Reject behave."],
             decision="Say which regions the site is meant for, then re-scan from there or on a page where the banner appears.",
             requirement_ids=["DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-C5"],
@@ -291,11 +292,11 @@ def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_page
             id="organisational-requirements", category="missing_evidence",
             topic="Requirements that need organisational evidence",
             needs=["business_context", "more_evidence"],
-            known=["None of these can be observed through a public website scan: " + "; ".join(r.title for r in organisational) + ".",
+            known=["These could not be established from the website or from what its privacy policy says: " + "; ".join(r.title for r in organisational) + ".",
                    ("This scan makes no statement about whether retention rules, a DPIA, grievance handling, breach response times, "
                    "or a record of processing activities (ROPA) exist or are complete. A ROPA is not required by name under the "
                    "DPDP Act or Rules; if the organisation keeps one, it is supporting evidence, not a scored check.")],
-             missing=["Policies, procedures, logs, records and contact details held by the organisation."],
+             missing=sorted({line for r in organisational for line in r.needed_evidence}) or ["Policies, procedures, logs, records and contact details held by the organisation."],
             decision="Provide the evidence for each, or assess it outside this scan.",
             provisions=sorted({p for r in organisational for p in r.provisions}),
             requirement_ids=[r.id for r in organisational],

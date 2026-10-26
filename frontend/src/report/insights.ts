@@ -234,8 +234,24 @@ const HEADER_LABELS: Record<string, string> = {
   permissions_policy: "Permissions-Policy",
 };
 
-export function buildSecuritySection(meta: WebsiteScanMetadata | null | undefined, evidence: ScanEvidenceResponse | null | undefined): InsightSection {
+/** Which page the header and HTTPS signals describe. They are read from the entered address, so when that is the bare front door it IS the homepage; when the scan started from a deeper address
+ *  it is that page, named, and calling it "the homepage" would put another page's headers on the homepage. With no address known, the older wording is kept. */
+export function securityPageName(siteUrl: string | null | undefined): { onThe: string; title: string } {
+  if (!siteUrl) return { onThe: "the homepage", title: "Homepage" };
+  let host = siteUrl;
+  let path = "";
+  try {
+    const u = new URL(/^https?:\/\//.test(siteUrl) ? siteUrl : `https://${siteUrl}`);
+    host = u.hostname;
+    path = `${u.pathname === "/" ? "" : u.pathname}${u.search}`;
+  } catch { /* keep the text as given */ }
+  if (!path) return { onThe: `the homepage (${host})`, title: "Homepage" };
+  return { onThe: `the entered page (${host}${path})`, title: `Entered page (${host}${path})` };
+}
+
+export function buildSecuritySection(meta: WebsiteScanMetadata | null | undefined, evidence: ScanEvidenceResponse | null | undefined, siteUrl?: string | null): InsightSection {
   const sig = meta?.security_signals;
+  const page = securityPageName(siteUrl);
   const facts: Fact[] = [];
   const notRecorded = (label: string): Fact => ({ label, value: "Not recorded for this scan", tone: "mute" });
   let observed = 0;
@@ -247,16 +263,16 @@ export function buildSecuritySection(meta: WebsiteScanMetadata | null | undefine
   };
   if (sig) {
     signal("Scanned pages served over HTTPS", sig.pages_total > 0 && sig.pages_https === sig.pages_total, `${sig.pages_https} of ${sig.pages_total}`, `${sig.pages_https} of ${sig.pages_total}: not all`);
-    if (sig.homepage_https !== undefined) signal("Homepage served over HTTPS", sig.homepage_https, "Yes", "No");
+    if (sig.homepage_https !== undefined) signal(`${page.title} served over HTTPS`, sig.homepage_https, "Yes", "No");
     const h = sig.homepage_headers;
     if (h) {
       for (const key of Object.keys(HEADER_LABELS) as (keyof typeof h)[]) {
         const present = key === "x_frame_options" ? !!h.x_frame_options || /frame-ancestors/i.test(h.csp ?? "") : !!h[key];
-        signal(HEADER_LABELS[key], present, "Observed on the homepage", "Not observed on the homepage");
+        signal(HEADER_LABELS[key], present, `Observed on ${page.onThe}`, `Not observed on ${page.onThe}`);
       }
     }
   } else {
-    for (const l of ["Scanned pages served over HTTPS", "Homepage served over HTTPS", ...Object.values(HEADER_LABELS)]) facts.push(notRecorded(l));
+    for (const l of ["Scanned pages served over HTTPS", `${page.title} served over HTTPS`, ...Object.values(HEADER_LABELS)]) facts.push(notRecorded(l));
   }
   const cookies = evidence?.cookies ?? [];
   if (cookies.length) {
@@ -283,7 +299,7 @@ export function buildSecuritySection(meta: WebsiteScanMetadata | null | undefine
     status: !sig ? "Not recorded for this scan" : `${observed} of ${counted} signals observed`,
     tone: !sig ? "mute" : all ? "good" : "warn", knowledge: sig ? "Observed" : "Not verified",
     summary: sig
-      ? "What a visitor's browser can see of the site's transport and safeguards: whether pages are served over HTTPS, and which protective headers the homepage sends."
+      ? "What a visitor's browser can see of the site's transport and safeguards: whether pages are served over HTTPS, and which protective headers ${page.onThe} sends."
       : "This scan was made before these signals were recorded, so nothing can be said about them.",
     facts, quote: null,
     legal: formatRefs(["DPDP Act s.8(5)", "DPDP Rules r.6"]),
@@ -296,10 +312,12 @@ export function buildSecuritySection(meta: WebsiteScanMetadata | null | undefine
 
 export function buildInsightSections(args: {
   policy: PolicyAnalysis | null | undefined; meta: WebsiteScanMetadata | null | undefined; evidence: ScanEvidenceResponse | null | undefined; sector: SectorAssessment | null | undefined;
+  /** The address that was entered: the security signals describe that page. */
+  siteUrl?: string | null;
 }): InsightSection[] {
   return [
     buildGrievanceSection(args.policy), buildDpoSection(args.policy), buildLanguageSection(args.meta, args.policy),
-    buildChildrenSection(args.sector, args.evidence, args.policy), buildSecuritySection(args.meta, args.evidence),
+    buildChildrenSection(args.sector, args.evidence, args.policy), buildSecuritySection(args.meta, args.evidence, args.siteUrl),
   ];
 }
 

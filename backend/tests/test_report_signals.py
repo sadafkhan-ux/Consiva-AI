@@ -171,7 +171,10 @@ def test_the_timeline_row_carries_the_period_in_days_and_other_rows_carry_neithe
 def test_a_point_that_was_not_found_has_no_contacts():
     doc = PolicyDocument("https://x.test/privacy", "privacy_policy", POLICY, "crawl")
     out = analyse(PolicyExtraction(results=[]), [doc], None, False)
-    assert all(r["contacts"] is None and r["response_days"] is None for r in out["requirements"])
+    # A row the model did not offer and the page-text pattern did not find has nothing to carry. (A row the pattern did find is not "not found": it has its own quotation.)
+    still_missing = [r for r in out["requirements"] if r["status"] == "not_found"]
+    assert still_missing and all(r["contacts"] is None and r["response_days"] is None and not r["quote"] for r in still_missing)
+    assert all(r.get("found_by") == "pattern" and r["quote"] for r in out["requirements"] if r["status"] in ("verified", "partial"))
 
 
 # ── what fixing each gap does to the score ──────────────────────────────────────────────────────────────────────────────────────────

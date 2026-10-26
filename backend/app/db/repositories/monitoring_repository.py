@@ -87,6 +87,13 @@ async def mark_dispatched(db: AsyncSession, schedule: ScanSchedule, *, triggered
     await db.flush()
 
 
+async def postpone(db: AsyncSession, schedule: ScanSchedule) -> None:
+    """Moves a schedule on by one interval without starting a scan (used while a permanent failure is being given time to be fixed)."""
+    schedule.next_run_at = datetime.now(UTC) + timedelta(hours=schedule.interval_hours)
+    schedule.updated_at = datetime.now(UTC)
+    await db.flush()
+
+
 async def create_diff(
     db: AsyncSession, *, org_id: uuid.UUID, website_id: uuid.UUID, baseline_scan_id: uuid.UUID,
     new_scan_id: uuid.UUID, added: dict, removed: dict, changed: dict, has_material_change: bool,

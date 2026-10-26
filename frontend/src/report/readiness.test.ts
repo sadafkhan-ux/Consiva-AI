@@ -71,7 +71,7 @@ describe("choosing the five pages", () => {
     const meta = { ...META, skipped_pages: [{ url: "https://x.test/register", reason: "page_cap" }] } as unknown as WebsiteScanMetadata;
     const r = run({ ev: evidence({ pages: BASE_PAGES.filter((p) => !p.url.includes("signup")) }), meta });
     expect(r.pages[0]).toMatchObject({ url: "https://x.test/register", scanned: false });
-    expect(rowsOf(r, 1).every((x) => x.status === "Cannot Verify" || x.status === "Requires document review")).toBe(true);
+    expect(rowsOf(r, 1).every((x) => x.status === "Unable to Verify" || x.status === "Requires document review")).toBe(true);
     expect(find(r, "HTTPS").evidence).toContain("was not loaded in this scan");
   });
 
@@ -89,16 +89,16 @@ describe("choosing the five pages", () => {
 });
 
 describe("the checks on each page", () => {
-  it("never marks what the scan cannot see as Compliant: notice wording, pre-ticked boxes, account features", () => {
+  it("never marks what the scan cannot see as Passes this technical check: notice wording, pre-ticked boxes, account features", () => {
     const r = run();
-    expect(find(r, "notice is shown at the point of collection").status).toBe("Cannot Verify");
-    expect(find(r, "Consent is free, specific").status).toBe("Cannot Verify");
+    expect(find(r, "notice is shown at the point of collection").status).toBe("Unable to Verify");
+    expect(find(r, "Consent is free, specific").status).toBe("Unable to Verify");
     expect(rowsOf(r, 4)).toHaveLength(5);
-    expect(rowsOf(r, 4).every((x) => x.status === "Cannot Verify")).toBe(true);
+    expect(rowsOf(r, 4).every((x) => x.status === "Unable to Verify")).toBe(true);
     expect(rowsOf(r, 4)[0].evidence).toContain("only be tested after signing in");
     const withAccount = run({ ev: evidence({ pages: [...BASE_PAGES, page("https://x.test/account/settings")] }) });
     expect(withAccount.pages[3].url).toBe("https://x.test/account/settings");
-    expect(rowsOf(withAccount, 4).every((x) => x.status === "Cannot Verify" && x.evidence.includes("does not sign in"))).toBe(true);
+    expect(rowsOf(withAccount, 4).every((x) => x.status === "Unable to Verify" && x.evidence.includes("does not sign in"))).toBe(true);
   });
 
   it("marks a required marketing opt-in on the sign-up form as a Gap, from the form's fields", () => {
@@ -118,7 +118,7 @@ describe("the checks on each page", () => {
   });
 
   it("checks HTTPS and personal data in the URL on the page's own address", () => {
-    expect(find(run(), "served over HTTPS").status).toBe("Compliant");
+    expect(find(run(), "served over HTTPS").status).toBe("Passes this technical check");
     const http = run({ ev: evidence({ pages: [...BASE_PAGES.filter((p) => !p.url.includes("signup")), page("http://x.test/signup")] }) });
     expect(find(http, "served over HTTPS").status).toBe("Gap");
     const leak = run({ ev: evidence({ pages: [...BASE_PAGES.filter((p) => !p.url.includes("signup")), page("https://x.test/signup?email=a@b.com")] }) });
@@ -142,26 +142,26 @@ describe("the checks on each page", () => {
     expect(row.evidence).not.toContain("A CDN");
     expect(row.evidence).not.toContain("Late Tag");
     expect(row.risk).toBe(5);
-    expect(find(run(), "No analytics or advertising tag fires").status).toBe("Compliant");
+    expect(find(run(), "No analytics or advertising tag fires").status).toBe("Passes this technical check");
   });
 
   it("reads the banner: present, absent, and Reject as easy as Accept", () => {
-    expect(find(run(), "A cookie banner appears").status).toBe("Compliant");
+    expect(find(run(), "A cookie banner appears").status).toBe("Passes this technical check");
     const none = run({ meta: { ...META, consent_mechanism: "none" } as WebsiteScanMetadata, ev: evidence({ consent_signals: [] }) });
     expect(find(none, "A cookie banner appears").status).toBe("Not Found");
-    expect(find(none, "Reject is as easy").status).toBe("Cannot Verify");
-    expect(find(run(), "Reject is as easy").status).toBe("Compliant");
+    expect(find(none, "Reject is as easy").status).toBe("Unable to Verify");
+    expect(find(run(), "Reject is as easy").status).toBe("Passes this technical check");
     const noReject = run({ ev: evidence({ consent_signals: [{ mechanism_type: "banner", cmp_vendor: null, has_reject_all: false, has_granular_choices: null, evidence: {} }] }) });
     expect(find(noReject, "Reject is as easy").status).toBe("Gap");
     const notClicked = run({ meta: { ...META, reject_interaction: "click_failed" } as WebsiteScanMetadata });
-    expect(find(notClicked, "Reject is as easy").status).toBe("Cannot Verify");
-    expect(find(run({ meta: null, ev: evidence({ consent_signals: [] }) }), "A cookie banner appears").status).toBe("Cannot Verify");
+    expect(find(notClicked, "Reject is as easy").status).toBe("Unable to Verify");
+    expect(find(run({ meta: null, ev: evidence({ consent_signals: [] }) }), "A cookie banner appears").status).toBe("Unable to Verify");
   });
 
   it("lists the third-party services and domains but does not claim where the data goes", () => {
     const ev = evidence({ third_party_services: [{ id: "s", service_name: "Stripe", category: "payments", domains: ["js.stripe.com"] }] });
     const row = find(run({ ev }), "Third-party scripts are listed");
-    expect(row.status).toBe("Cannot Verify");
+    expect(row.status).toBe("Unable to Verify");
     expect(row.evidence).toContain("Stripe");
     expect(row.evidence).toContain("js.stripe.com");
     expect(row.evidence).toContain("not determined");
@@ -169,29 +169,29 @@ describe("the checks on each page", () => {
 
   it("recognises an age gate a consent tool showed, and otherwise does not call the absence a gap", () => {
     const gate = evidence({ consent_signals: [{ mechanism_type: "cmp", cmp_vendor: "CMP", has_reject_all: true, has_granular_choices: null, evidence: { consent_gate: { post_accept: { kind: "age_gate", cmp: "CMP", answer: "adult", outcome: "passed" } } } }] });
-    expect(find(run({ ev: gate }), "age gate").status).toBe("Compliant");
-    expect(find(run(), "age gate").status).toBe("Cannot Verify");
+    expect(find(run({ ev: gate }), "age gate").status).toBe("Passes this technical check");
+    expect(find(run(), "age gate").status).toBe("Unable to Verify");
   });
 
-  it("marks advertising trackers on a site that appears to handle children as a Gap, and otherwise Cannot Verify", () => {
+  it("marks advertising trackers on a site that appears to handle children as a Gap, and otherwise Unable to Verify", () => {
     const trackers = [{ id: "1", script_src: "https://ads.example/a.js", vendor: "AdCo", category: "marketing", source: "rule", consent_states: ["post_accept"] }];
     const kids = run({ ev: evidence({ trackers, forms: [form("https://x.test/signup", [{ name: "date_of_birth", field_type: "date", required: true }])] }) });
     expect(find(kids, "aimed at children").status).toBe("Gap");
-    expect(find(run({ ev: evidence({ trackers }) }), "aimed at children").status).toBe("Cannot Verify");
+    expect(find(run({ ev: evidence({ trackers }) }), "aimed at children").status).toBe("Unable to Verify");
   });
 
-  it("takes the Indian-language check as Compliant only when English and Indian-script content were both observed", () => {
+  it("takes the Indian-language check as Passes this technical check only when English and Indian-script content were both observed", () => {
     const lang = (html: string, indic: number) => ({ ...META, language_signals: { pages_checked: 3, pages_with_indic_script: indic, indic_scripts: indic ? { Tamil: 10 } : {}, switcher_scripts: [], hreflang: [], html_lang: html } }) as unknown as WebsiteScanMetadata;
-    expect(find(run({ meta: lang("en", 1) }), "English or any Eighth Schedule").status).toBe("Compliant");
-    expect(find(run({ meta: lang("en", 0) }), "English or any Eighth Schedule").status).toBe("Cannot Verify");
+    expect(find(run({ meta: lang("en", 1) }), "English or any Eighth Schedule").status).toBe("Passes this technical check");
+    expect(find(run({ meta: lang("en", 0) }), "English or any Eighth Schedule").status).toBe("Unable to Verify");
     expect(find(run({ meta: META }), "English or any Eighth Schedule").evidence).toContain("Not recorded");
   });
 });
 
 describe("the privacy notice and the grievance page rest on the policy's own words", () => {
-  it("marks a point quoted as Compliant with the quotation and its page", () => {
+  it("marks a point quoted as Passes this technical check with the quotation and its page", () => {
     const row = find(run(), "itemised list");
-    expect(row).toMatchObject({ status: "Compliant", evidenceKind: "Quoted", pageN: 3 });
+    expect(row).toMatchObject({ status: "Passes this technical check", evidenceKind: "Quoted", pageN: 3 });
     expect(row.evidence).toContain("Words for notice_data_itemised.");
     expect(row.evidence).toContain("https://x.test/privacy");
   });
@@ -204,11 +204,11 @@ describe("the privacy notice and the grievance page rest on the policy's own wor
     expect(find(r, "How to exercise rights").evidence).toContain("not found in the policy text");
   });
 
-  it("says Not Found for every policy point when there is no privacy policy, and Cannot Verify when the text was not read", () => {
+  it("says Not Found for every policy point when there is no privacy policy, and Unable to Verify when the text was not read", () => {
     const none = run({ ev: evidence({ pages: BASE_PAGES.filter((p) => !p.url.includes("privacy")), policies: [] }), pol: null });
     expect(find(none, "itemised list").status).toBe("Not Found");
     const unread = run({ pol: { ...policy(), status: "unavailable", reason: "The policy page could not be read.", requirements: [] } as PolicyAnalysis });
-    expect(find(unread, "itemised list").status).toBe("Cannot Verify");
+    expect(find(unread, "itemised list").status).toBe("Unable to Verify");
     expect(find(unread, "itemised list").evidence).toBe("The policy page could not be read.");
   });
 
@@ -216,20 +216,20 @@ describe("the privacy notice and the grievance page rest on the policy's own wor
     const r = run({ pol: policy("verified", { grievance_timeline: "not_found", dpo_contact: "partial", grievance_contact: "partial" }) });
     expect(find(r, "response period of 90 days or less").status).toBe("Not Found");
     expect(find(r, "named Data Protection Officer or contact person").status).toBe("Gap");
-    expect(find(run(), "response period of 90 days or less").status).toBe("Compliant");
+    expect(find(run(), "response period of 90 days or less").status).toBe("Passes this technical check");
   });
 
   it("takes the identifier a request needs from the form on the grievance page, and otherwise cannot verify it", () => {
     const f = form("https://x.test/grievance", [{ name: "email", field_type: "email", required: true }, { name: "customer_id", field_type: "text", required: false }]);
     const ok = find(run({ ev: evidence({ forms: [f] }) }), "which identifier is needed");
-    expect(ok.status).toBe("Compliant");
+    expect(ok.status).toBe("Passes this technical check");
     expect(ok.evidence).toContain("customer_id");
-    expect(find(run(), "which identifier is needed").status).toBe("Cannot Verify");
+    expect(find(run(), "which identifier is needed").status).toBe("Unable to Verify");
   });
 
   it("does not judge the effective date, and sends breach, impact assessments and retention schedules to document review", () => {
     const r = run();
-    expect(find(r, "effective date").status).toBe("Cannot Verify");
+    expect(find(r, "effective date").status).toBe("Unable to Verify");
     const doc = r.rows.filter((x) => x.status === "Requires document review");
     expect(doc.map((x) => x.check)).toEqual(expect.arrayContaining([
       "Where no consent is taken, a valid legitimate use applies", "Personal data breach reporting",
@@ -249,20 +249,20 @@ describe("the privacy notice and the grievance page rest on the policy's own wor
 });
 
 describe("the summary", () => {
-  it("scores the checks the scan could assess, counting Cannot Verify and document review in neither side", () => {
+  it("scores the checks the scan could assess, counting Unable to Verify and document review in neither side", () => {
     const r = run();
-    const scored = r.rows.filter((x) => x.scored && ["Compliant", "Gap", "Not Found"].includes(x.status));
-    const ok = scored.filter((x) => x.status === "Compliant").length;
+    const scored = r.rows.filter((x) => x.scored && ["Passes this technical check", "Gap", "Not Found"].includes(x.status));
+    const ok = scored.filter((x) => x.status === "Passes this technical check").length;
     expect(r.assessed).toBe(scored.length);
     expect(r.scorePercent).toBe(Math.round((ok / scored.length) * 100));
-    expect(r.counts.Compliant + r.counts.Gap + r.counts["Not Found"] + r.counts["Cannot Verify"] + r.counts["Requires document review"]).toBe(r.rows.length);
+    expect(r.counts["Passes this technical check"] + r.counts.Gap + r.counts["Not Found"] + r.counts["Unable to Verify"] + r.counts["Requires document review"]).toBe(r.rows.length);
     expect(r.scoreLine).toContain(`${r.scorePercent} out of 100`);
     expect(r.scoreLine).toContain("not counted");
   });
 
   it("gives no score when nothing could be assessed", () => {
     const r = run({ ev: evidence({ forms: [], consent_signals: [] }), meta: null, pol: null });
-    expect(r.rows.filter((x) => x.scored && ["Compliant", "Gap", "Not Found"].includes(x.status)).length).toBe(r.assessed);
+    expect(r.rows.filter((x) => x.scored && ["Passes this technical check", "Gap", "Not Found"].includes(x.status)).length).toBe(r.assessed);
     const bare = buildReadinessReview({ siteUrl: "x", evidence: evidence({ policies: [], pages: [page("https://x.test/", "seed")], consent_signals: [] }), meta: null, policy: null, sector: null });
     expect(typeof bare.scorePercent === "number" || bare.scorePercent === null).toBe(true);
     if (bare.scorePercent === null) expect(bare.scoreLine).toContain("Not enough could be verified");
@@ -302,12 +302,66 @@ describe("the summary", () => {
 
   it("gives every row a status from the five, an evidence kind, a fix and a risk from 1 to 5", () => {
     for (const x of run({ pol: policy("not_found") }).rows) {
-      expect(["Compliant", "Gap", "Not Found", "Cannot Verify", "Requires document review"]).toContain(x.status);
+      expect(["Passes this technical check", "Gap", "Not Found", "Unable to Verify", "Requires document review"]).toContain(x.status);
       expect(["Quoted", "Observed", "Not seen", "Not captured"]).toContain(x.evidenceKind);
       expect(x.fix.length).toBeGreaterThan(5);
       expect(x.evidence.length).toBeGreaterThan(5);
       expect(x.risk).toBeGreaterThanOrEqual(1);
       expect(x.risk).toBeLessThanOrEqual(5);
     }
+  });
+});
+
+describe("a consent tool whose banner was never shown (the scan could not see a banner)", () => {
+  // What an older scan stored for a site whose consent tool loaded and showed nothing: the page text had a footer "cookie settings" link, so reject-all was recorded as false
+  // and granular choices as true, with banner_ui_observed false and neither Accept nor Reject clicked.
+  const notShown = (over: Record<string, unknown> = {}) => run({
+    meta: { ...META, accept_interaction: "cmp_not_automatable", reject_interaction: "cmp_not_automatable" } as WebsiteScanMetadata,
+    ev: evidence({ consent_signals: [{ mechanism_type: "cmp", cmp_vendor: "Some CMP", has_reject_all: false, has_granular_choices: true, evidence: { banner_ui_observed: false, accept_interaction: "cmp_not_automatable", reject_interaction: "cmp_not_automatable", ...over } }] }),
+  });
+
+  it("does not say a banner appears: a script is not a banner", () => {
+    const row = find(notShown(), "A cookie banner appears");
+    expect(row.status).toBe("Unable to Verify");
+    expect(row.evidence).toContain("no banner was shown to the scanner");
+  });
+
+  it("does not report a missing Reject option it never saw", () => {
+    const row = find(notShown(), "Reject is as easy");
+    expect(row.status).toBe("Unable to Verify");
+    expect(notShown().rows.some((r) => r.status === "Gap")).toBe(false);
+  });
+
+  it("is not counted against the score: no gap, so the five-page score is not lowered by something unobserved", () => {
+    expect(notShown().counts.Gap).toBe(0);
+  });
+
+  it("still reports a real missing Reject when the banner was displayed", () => {
+    const shown = run({ ev: evidence({ consent_signals: [{ mechanism_type: "cmp", cmp_vendor: "Some CMP", has_reject_all: false, has_granular_choices: false, evidence: { banner_ui_observed: true } }] }) });
+    expect(find(shown, "Reject is as easy").status).toBe("Gap");
+  });
+
+  it("an older scan with no observation flag is unknown, not 'not displayed'", () => {
+    const old = run({ ev: evidence({ consent_signals: [{ mechanism_type: "cmp", cmp_vendor: "Some CMP", has_reject_all: false, has_granular_choices: null, evidence: {} }] }) });
+    expect(find(old, "Reject is as easy").status).toBe("Gap");
+  });
+});
+
+describe("the five pages are not chosen from article slugs", () => {
+  const page = (url: string, title = "") => ({ id: url, url, title, discovered_via: "link", http_status: 200 });
+
+  it("a blog post about a topic is not the page for that topic", () => {
+    const ev = evidence({ pages: [
+      page("https://x.test/"), page("https://x.test/privacy"),
+      page("https://x.test/blog/get-started-with-dpdp-compliance"), page("https://x.test/blog/contact-us-tips-for-founders"),
+    ] as never });
+    const r = run({ ev });
+    const urls = r.pages.map((p) => p.url ?? "");
+    expect(urls.some((u) => u.includes("/blog/"))).toBe(false);
+  });
+
+  it("the real contact page is still chosen over an article about contacting", () => {
+    const ev = evidence({ pages: [page("https://x.test/"), page("https://x.test/privacy"), page("https://x.test/contact"), page("https://x.test/blog/contact-us-tips-for-founders")] as never });
+    expect(run({ ev }).pages.map((p) => p.url ?? "")).toContain("https://x.test/contact");
   });
 });

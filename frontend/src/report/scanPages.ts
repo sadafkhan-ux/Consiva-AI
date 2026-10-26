@@ -53,12 +53,15 @@ const STOP_REASON: Record<string, string> = {
   queue_exhausted: "The scan stopped because no more pages of the entered domain were found to scan.",
   page_limit: "The scan stopped because it reached the page limit.",
   deadline: "The scan stopped at its time limit, so pages that were still queued were not scanned.",
+  slow_site: "The scan stopped early because the pages it tried kept timing out, so the site was too slow to scan more of it.",
+  attempt_limit: "The scan stopped because too many of the pages it tried could not be scanned (they failed, timed out, or led away from the entered domain).",
   cancelled: "The scan was cancelled before every queued page was scanned.",
 };
 
 // The crawler's own reasons (backend scanner/crawler.py, `_skip`). The last four are pages that were queued when the scan stopped.
 const SKIP_REASON: Record<string, string> = {
   robots_disallowed: "blocked by the site's robots.txt",
+  slow_site: "not tried: the site's pages kept timing out",
   duplicate_url: "the same address as a page already queued",
   redirected_to_already_scanned_page: "redirected to a page already scanned",
   page_limit: "found after the page limit was reached",
@@ -92,10 +95,15 @@ function statusOf(p: EvidencePageItem): { text: string; scanned: boolean } {
   return { text: "Recorded; load result not stored for this scan", scanned: false };
 }
 
-/** "5 of 12 pages scanned", or "5 pages scanned" when the scan did not record how many pages it found. */
+/** "5 pages scanned of 12 found", or "5 pages scanned" when the scan did not record how many pages it found. Found is not the size of the site: it is the pages the crawler came across. */
 export function pagesCoverageLine(scanned: number, found: number | null | undefined): string {
   if (found === null || found === undefined || found < scanned) return `${scanned} ${scanned === 1 ? "page" : "pages"} scanned`;
-  return `${scanned} of ${found} ${found === 1 ? "page" : "pages"} scanned`;
+  return `${scanned} ${scanned === 1 ? "page" : "pages"} scanned of ${found} found`;
+}
+
+/** The value of a "Pages scanned" tile: "3 (of 40 found)", or just "3" when the number found was not recorded. */
+export function pagesTileValue(scanned: number, found: number | null | undefined): string {
+  return found === null || found === undefined || found < scanned ? String(scanned) : `${scanned} (of ${found} found)`;
 }
 
 export function buildScanPages(

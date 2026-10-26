@@ -31,6 +31,7 @@ import heapq
 import itertools
 import logging
 import os
+import random
 import re
 import subprocess
 import sys
@@ -47,7 +48,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from app.config import Settings, get_settings
 from app.core.exceptions import ScanAuthorizationError, ScanTimeoutError
-from app.rules.tracker_catalog import CMP_CATALOG
+from app.rules.tracker_catalog import CMP_CATALOG, match_cmp
 from app.scanner._domain import registered_domain as _registered_domain
 from app.scanner.consent_interactor import (
     click_accept,
@@ -62,10 +63,32 @@ from app.scanner.cookie_detector import (
     detect_cookies,
     parse_set_cookie_headers,
 )
+from app.scanner.failures import (
+    DNS,
+    PERMANENT,
+    REFUSED,
+    NavigationHttpError,
+    RobotsUnreadable,
+    ScanNotPossible,
+    certificate_failure,
+    classify_navigation_failure,
+    explain_seed_failure,
+    first_line,
+    is_certificate_error,
+    parse_retry_after,
+)
 from app.scanner.form_detector import detect_forms
 from app.scanner.page_parser import ParsedScript, parse_page
-from app.scanner.page_signals import indic_script_counts, merge_language, merge_security, response_headers
+from app.scanner.page_signals import (
+    indic_script_counts,
+    merge_language,
+    merge_security,
+    response_headers,
+)
 from app.scanner.policy_detector import detect_policies
+from app.scanner.robots import RobotsRules, parse_robots
+from app.scanner.tls_diagnostics import describe_certificate
+from app.scanner.tls_diagnostics import sentence as tls_sentence
 from app.scanner.scan_profiles import APPLICATION, MAX_WEB_PAGES, ScanProfile, resolve_profile
 from app.scanner.schemas import (
     ConsentSignalRecord,
@@ -79,7 +102,7 @@ from app.scanner.schemas import (
 )
 from app.scanner.sitemap import discover_sitemap_urls
 from app.scanner.tracker_detector import detect_trackers
-from app.scanner.url_normalize import normalize_url, priority
+from app.scanner.url_normalize import normalize_url, priority, section_of
 from app.scanner.url_safety import assert_safe_url
 
 logger = logging.getLogger(__name__)
@@ -174,8 +197,56 @@ _SCROLL_QUIET_STEPS = 3
 # connection-retry). Applies to the seed URL, secondary crawl pages, and the homepage
 # interaction passes alike; only the seed's own exhaustion is treated as fatal to the
 # whole scan -- every other caller records the outcome and continues.
-_NAV_MAX_ATTEMPTS = 3  # 1 initial try + 2 retries
-_NAV_RETRY_BACKOFF_S = (1.0, 2.0)  # wait before retry #1, then before retry #2
+#
+# Retries are now bounded by TIME and by KIND of error, not by a fixed count of three for everything (scanner/failures.py explains the three kinds). A
+# transient failure is retried with a doubling wait (1, 2, 4 ... 30 s, with a little jitter) until the retry window (Settings.scanner_nav_retry_seconds_*)
+# runs out; a refusal (the connection reset or emptied) only within a short window; a permanent error never. _NAV_MAX_ATTEMPTS is a safety net against a
+# loop that somehow does not advance in time, not a limit anything is expected to reach.
+_NAV_MAX_ATTEMPTS = 10
+_NAV_BACKOFF_BASE_S = 1.0
+_NAV_BACKOFF_MAX_S = 30.0
+_NAV_REFUSED_WINDOW_S = 10.0
+
+# A page, a context or a browser that is closed after a navigation that broke can fail to answer (observed: page.close() never returned after
+# net::ERR_HTTP2_PROTOCOL_ERROR on zomato.com, so the scan sat until the whole-scan ceiling killed it). Closing is bounded; what does not close in time is left
+# to the browser's own shutdown.
+_CLOSE_TIMEOUT_S = 10.0
+
+# Page attempts that did not become a scanned page (a navigation that failed, a redirect to a page already scanned or to another site) used to spend the page
+# budget as if they had: a scan with a limit of 5 could end having scanned 1. The budget now counts SCANNED pages; attempts have their own ceiling, so a site
+# whose pages mostly fail cannot keep the crawl going for ever.
+_EXTRA_ATTEMPTS_MIN = 5
+
+# A page that answers HTTP 404 or 410 is a definitive, cheap answer: the address is dead (a stale sitemap entry), not a site that is slow or refusing. Such attempts do not use up the attempt
+# ceiling above, up to this many per scan (beyond it they count like any other, so a sitemap of thousands of dead addresses still stops). Seen live on masterclass.gignaati.com: nine dead sitemap
+# pages used the whole ceiling and the scan covered 1 of its 5 pages.
+_DEAD_PAGE_ALLOWANCE = 30
+_DEAD_PAGE_STATUSES = frozenset({404, 410})
+
+_nav_slots: dict[int, asyncio.Semaphore] = {}
+
+
+def _max_concurrent_navigations() -> int:
+    configured = get_settings().scanner_max_concurrent_navigations
+    return configured if configured > 0 else min(32, max(6, 2 * (os.cpu_count() or 4)))
+
+
+def _nav_slot() -> asyncio.Semaphore:
+    """One limit on simultaneous navigations for the whole process, whichever scans they belong to (see Settings.scanner_max_concurrent_navigations)."""
+    loop_id = id(asyncio.get_running_loop())
+    if loop_id not in _nav_slots:
+        _nav_slots[loop_id] = asyncio.Semaphore(_max_concurrent_navigations())
+    return _nav_slots[loop_id]
+
+
+async def _close_quietly(target, label: str) -> None:
+    """target.close(), bounded: never raises and never waits longer than _CLOSE_TIMEOUT_S."""
+    try:
+        await asyncio.wait_for(target.close(), timeout=_CLOSE_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning("Closing %s did not finish within %.0fs; leaving it to the browser's own shutdown", label, _CLOSE_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 -- closing is cleanup, never a reason to fail a scan
+        logger.debug("Closing %s failed: %s", label, exc)
 
 # Iframe coverage for the initial consent-signal classification pass (detect_consent_
 # signal). page.content() only ever returns the main frame's DOM -- confirmed by
@@ -209,8 +280,18 @@ _SHADOW_DOM_CONTROL_TEXT_JS = """() => {
     const SEL = 'button, a, input, summary, label, [role=button], [role=dialog],' +
                 '[role=alertdialog], [aria-modal=true]';
     const HINT = /(cookie|consent|gdpr|ccpa|cmp|privacy)/i;
+    // Only what a visitor can see. A consent tool renders its second layer (the preference centre, with "Reject All Cookies") into the page hidden, so reading hidden controls
+    // made every such banner look as if it offered Reject on its first layer (konicaminolta.com: Accept All + Cookie Settings visible, Reject All only inside the closed panel).
+    function shown(el) {
+        if (!el.getClientRects || !el.getClientRects().length) return false;           // display:none on the element or an ancestor
+        const cs = getComputedStyle(el);
+        if (cs.visibility === 'hidden' || cs.visibility === 'collapse') return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+    }
     function grab(root, out) {
         for (const el of root.querySelectorAll(SEL)) {
+            if (!shown(el)) continue;
             out.push(el.innerText || el.textContent || '');
             for (const a of ['value', 'aria-label', 'title']) {
                 const v = el.getAttribute && el.getAttribute(a);
@@ -219,7 +300,7 @@ _SHADOW_DOM_CONTROL_TEXT_JS = """() => {
         }
         for (const el of root.querySelectorAll('[class], [id]')) {
             const key = (el.className || '') + ' ' + (el.id || '');
-            if (HINT.test(key)) out.push(el.innerText || el.textContent || '');
+            if (HINT.test(key) && shown(el)) out.push(el.innerText || el.textContent || '');
         }
     }
     function walk(root, depth, out) {
@@ -266,43 +347,57 @@ async def _guard_navigation(route: Route) -> None:
     await route.continue_()
 
 
-async def _fetch_robots(context: BrowserContext, root_url: str) -> tuple[set[str], list[str]]:
-    """Best-effort robots.txt fetch: (Disallow prefixes for the '*' user-agent group,
-    Sitemap: URLs). Not a full RFC-9309 parser (no wildcard/pattern matching, no
-    per-agent groups beyond '*') — enough to honor an explicit "don't crawl this path"
-    without pulling in a new dependency. `Sitemap:` lines are not group-scoped, so they
-    are collected wherever they appear; sitemap.py re-checks each one's scope."""
+_ROBOTS_MAX_REDIRECTS = 5
+
+
+async def _fetch_robots(context: BrowserContext, root_url: str, user_agent: str = "") -> tuple[RobotsRules, list[str]]:
+    """Best-effort robots.txt fetch: (the rules that apply to the scanner, Sitemap: URLs), read as RFC 9309 says (scanner/robots.py: Allow, wildcards, the group written for this
+    scanner by name, longest match wins). `Sitemap:` lines are not group-scoped, so they are collected wherever they appear; sitemap.py re-checks each one's scope.
+    What each answer means (RFC 9309): 2xx is parsed (lines that make no sense are skipped); 4xx (404, 403, ...) is "unavailable", the site publishes no rules, so everything is allowed; more than
+    five redirects is also "unavailable". Anything that leaves the permission unknown -- a network error or timeout, HTTP 5xx or 429, a redirect to another site or to an unsafe address -- is
+    "unreadable", and settings.scanner_robots_unreadable_policy decides: "disallow" (default) raises RobotsUnreadable, "allow" proceeds with a WARNING."""
     parsed = urlparse(root_url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    disallowed: set[str] = set()
-    sitemaps: list[str] = []
+    site = _registered_domain(parsed.netloc)
+    rules = RobotsRules()
+    unreadable = ""
     try:
         # `context.request` is a standalone API client, not the page-level network
-        # stack -- it is NOT intercepted by `_guard_navigation` above, and follows
-        # redirects by default. A hostile site's own robots.txt could otherwise 30x
-        # this backend-issued request to an internal/metadata address (SSRF via
-        # redirect). max_redirects=0 closes that: a redirect response is returned
-        # as-is (fails the `.ok` check below and is skipped) rather than followed.
+        # stack -- it is NOT intercepted by `_guard_navigation` above. A hostile site's
+        # own robots.txt could 30x this backend-issued request to an internal/metadata
+        # address (SSRF via redirect), so the client never follows redirects
+        # (max_redirects=0). RFC 9309 asks for up to five hops, and http->https or
+        # bare->www is how many sites serve robots.txt, so they are followed here one
+        # at a time, each hop checked as a navigation is (assert_safe_url) and kept on
+        # the scanned site. Ignoring the redirect used to read as "no robots.txt".
         response = await context.request.get(robots_url, timeout=5000, max_redirects=0)
+        for _hop in range(_ROBOTS_MAX_REDIRECTS):
+            location = (response.headers or {}).get("location") if 300 <= response.status < 400 else None
+            if not location:
+                break
+            robots_url = urljoin(robots_url, location)
+            if not _is_same_site(robots_url, site):
+                unreadable = f"it redirects to another site, {urlparse(robots_url).netloc}"
+                break
+            await assert_safe_url(robots_url)
+            response = await context.request.get(robots_url, timeout=5000, max_redirects=0)
         if response.ok:
-            applies = False
-            for line in (await response.text()).splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.lower().startswith("user-agent:"):
-                    applies = line.split(":", 1)[1].strip() == "*"
-                elif applies and line.lower().startswith("disallow:"):
-                    path = line.split(":", 1)[1].strip()
-                    if path:
-                        disallowed.add(path)
-                elif line.lower().startswith("sitemap:"):
-                    sitemap = line.split(":", 1)[1].strip()
-                    if sitemap and sitemap not in sitemaps:
-                        sitemaps.append(sitemap)
-    except Exception as exc:  # noqa: BLE001 — robots.txt is best-effort, never fatal
-        logger.info("Could not fetch robots.txt for %s: %s", root_url, exc)
-    return disallowed, sitemaps
+            rules = parse_robots(await response.text(), user_agent or get_settings().scanner_user_agent)
+        elif response.status >= 500 or response.status == 429:
+            unreadable = f"it answered HTTP {response.status}"
+        elif 300 <= response.status < 400 and not unreadable:
+            logger.info("robots.txt of %s redirected more than %d times or without a location: treated as unavailable, no restrictions", root_url, _ROBOTS_MAX_REDIRECTS)
+    except Exception as exc:  # noqa: BLE001 — whatever went wrong, the file was not read
+        if is_certificate_error(exc):
+            # Permanent: not "unreadable, retry later". The certificate the site presents is read (public fields only, scanner/tls_diagnostics.py) so the report can say which one failed and why.
+            host = urlparse(root_url).hostname
+            raise certificate_failure(root_url, first_line(exc), tls_sentence(host or "", await describe_certificate(host))) from exc
+        unreadable = first_line(exc) or type(exc).__name__
+    if unreadable:
+        if get_settings().scanner_robots_unreadable_policy == "disallow":
+            raise RobotsUnreadable(parsed.netloc, unreadable)
+        logger.warning("Could not read robots.txt of %s (%s): the site's restrictions are not applied to this scan (SCANNER_ROBOTS_UNREADABLE_POLICY=allow)", root_url, unreadable)
+    return rules, rules.sitemaps
 
 
 def _is_same_site(url: str, site_registered: str) -> bool:
@@ -313,9 +408,23 @@ def _is_same_site(url: str, site_registered: str) -> bool:
     return parsed.scheme in ("http", "https") and _registered_domain(parsed.netloc) == site_registered
 
 
-def _is_robots_disallowed(url: str, disallowed_prefixes: set[str]) -> bool:
+def _is_robots_disallowed(url: str, disallowed_prefixes: RobotsRules | set[str]) -> bool:
+    """True when robots.txt does not let the scanner visit `url`. Takes the parsed rules, or (as before) a plain set of Disallow prefixes."""
+    if isinstance(disallowed_prefixes, RobotsRules):
+        return not disallowed_prefixes.allows(url)
     path = urlparse(url).path or "/"
     return any(path.startswith(prefix) for prefix in disallowed_prefixes)
+
+
+def _no_pages_scanned(root_url: str, diagnostics: dict) -> ScanNotPossible:
+    """Why a crawl that ended normally scanned no page, in plain words."""
+    if diagnostics.get("pages_blocked_robots") and not diagnostics.get("pages_attempted"):
+        return ScanNotPossible(
+            f"The robots.txt of {urlparse(root_url).netloc} does not allow the scanner to visit {root_url} (or any page found on it), and the scanner honours "
+            "robots.txt, so no page was scanned and nothing was assessed. Allow the scanner in robots.txt, or scan a page the site permits.", "robots_disallowed")
+    return ScanNotPossible(
+        f"No page of {root_url} could be scanned ({diagnostics.get('pages_failed', 0)} failed, {diagnostics.get('pages_timeout', 0)} timed out, "
+        f"{diagnostics.get('pages_blocked_robots', 0)} blocked by robots.txt), so nothing was assessed.", "no_pages")
 
 
 class _SeedUnreachable(Exception):
@@ -374,49 +483,62 @@ async def _drain_set_cookie_reads(pending: list[asyncio.Task]) -> None:
         task.cancel()
 
 
-async def _navigate_with_retry(browser_page: Page, url: str, timeout_ms: int) -> tuple[object | None, str, Exception | None, int]:
-    """Attempts browser_page.goto() up to _NAV_MAX_ATTEMPTS times with backoff, for ANY
-    transient failure (network error or timeout) -- never retries forever, and never
-    hides the original error: it's returned (not swallowed) so the caller can decide
-    what a permanent failure means (fail the whole scan for the seed, or record+skip
-    for anything else) and can log/persist the real cause, not a generic message.
+async def _navigate_with_retry(
+    browser_page: Page, url: str, timeout_ms: int, window_s: float | None = None,
+) -> tuple[object | None, str, Exception | None, int]:
+    """goto() with retries that fit the failure (scanner/failures.py): a transient one (a timeout, a resolver blip, the site answering HTTP 408/425/429/500/502/
+    503/504) is retried with a doubling wait until `window_s` runs out; a refusal (the connection reset or emptied) only within a short window; a permanent one
+    (a bad certificate, an invalid address, any other HTTP error status) not at all. Never retries without end, and never hides the original error: it is
+    returned so the caller can decide what a permanent failure means (fail the scan for the seed address, record and skip any other page) and persist the
+    real cause.
 
-    wait_until="domcontentloaded", not "load" -- measured live against a real site
-    (honda2wheelersindia.com) whose "load" event hangs on slow/flaky THIRD-PARTY
-    stragglers unrelated to the page itself (a live-chat widget's long-poll script,
-    CDN-hosted banner media, ad/analytics beacons): reproduced 3x with one shared
-    context navigating 4 pages concurrently, "load" timed out on all 4 pages twice
-    and on 1 of 4 the third time, while a direct domcontentloaded probe against the
-    same URL returned the complete, genuine page (correct title, full HTML, zero
-    bot-challenge markers) in 1.56s every time. domcontentloaded does not lose
-    evidence quality here: the fixed _TRACKER_SETTLE_MS wait and the adaptive
-    _progressive_scroll pass both already run AFTER whichever milestone goto()
-    resolves on, and were already relied on (instead of "networkidle") to give
-    async-loading trackers/CMP banners their chance to fire -- that mechanism is
-    unchanged and unaffected by which milestone goto() itself waited for.
+    An HTTP error status is a failed navigation, not a page: before this, a 403 "Access Denied" or a 503 page was scanned as if it were the site and produced a
+    score and findings about the error page.
 
-    Returns (response, status, exception, attempts_used). status is "success",
-    "failed" (any non-timeout navigation error), or "timeout" (Playwright's own
-    TimeoutError specifically) -- distinguished so callers can record which."""
+    wait_until="domcontentloaded", not "load" -- measured live against a real site (honda2wheelersindia.com) whose "load" event hangs on slow third-party
+    stragglers unrelated to the page itself (a live-chat widget, CDN-hosted banner media, ad beacons): "load" timed out on every page twice and on one of four
+    the third time, while a direct domcontentloaded probe returned the complete, genuine page in 1.56s every time. domcontentloaded does not lose evidence
+    quality here: the fixed _TRACKER_SETTLE_MS wait and the adaptive _progressive_scroll pass both run AFTER whichever milestone goto() resolves on.
+
+    Returns (response, status, exception, attempts_used). status is "success", "failed" (any non-timeout failure, including an HTTP error status) or "timeout"
+    (Playwright's own TimeoutError) -- distinguished so callers can record which."""
+    window = float(window_s) if window_s is not None else float(get_settings().scanner_nav_retry_seconds_page)
+    started = time.monotonic()
     last_exc: Exception | None = None
     status = "failed"
-    for attempt in range(_NAV_MAX_ATTEMPTS):
+    attempt = 0
+    while attempt < _NAV_MAX_ATTEMPTS:
+        attempt += 1
+        retry_after: float | None = None
         try:
-            response = await browser_page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
-            return response, "success", None, attempt + 1
+            async with _nav_slot():   # waits its turn when the process is already loading as many pages as it should; the timeout below starts after the wait
+                response = await browser_page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+            code = getattr(response, "status", None)
+            if isinstance(code, int) and code >= 400:
+                headers = getattr(response, "headers", None)
+                retry_after = parse_retry_after(headers.get("retry-after") if isinstance(headers, dict) else None)
+                raise NavigationHttpError(code, url, retry_after)
+            return response, "success", None, attempt
+        except NavigationHttpError as exc:
+            last_exc, status, retry_after = exc, "failed", exc.retry_after
         except PlaywrightTimeoutError as exc:
-            last_exc = exc
-            status = "timeout"
-        except Exception as exc:  # noqa: BLE001 -- any other navigation failure is equally retryable
-            last_exc = exc
-            status = "failed"
-        if attempt < _NAV_MAX_ATTEMPTS - 1:
-            logger.warning(
-                "Navigation attempt %d/%d failed for %s (%s): %s -- retrying in %.0fs",
-                attempt + 1, _NAV_MAX_ATTEMPTS, url, status, last_exc, _NAV_RETRY_BACKOFF_S[attempt],
-            )
-            await asyncio.sleep(_NAV_RETRY_BACKOFF_S[attempt])
-    return None, status, last_exc, _NAV_MAX_ATTEMPTS
+            last_exc, status = exc, "timeout"
+        except Exception as exc:  # noqa: BLE001 -- any other navigation failure is classified below
+            last_exc, status = exc, "failed"
+
+        kind = classify_navigation_failure(last_exc)
+        if kind == PERMANENT:
+            return None, status, last_exc, attempt          # retrying cannot change the answer
+        limit = min(window, _NAV_REFUSED_WINDOW_S) if kind in (REFUSED, DNS) else window
+        backoff = retry_after if retry_after else min(_NAV_BACKOFF_MAX_S, _NAV_BACKOFF_BASE_S * 2 ** (attempt - 1)) * (1 + random.uniform(0, 0.25))
+        if attempt >= _NAV_MAX_ATTEMPTS or time.monotonic() - started + backoff >= limit:
+            return None, status, last_exc, attempt
+        logger.warning(
+            "Navigation attempt %d failed for %s (%s, %s): %s -- retrying in %.1fs",
+            attempt, url, kind, status, first_line(last_exc), backoff,
+        )
+        await asyncio.sleep(backoff)
+    return None, status, last_exc, attempt
 
 
 # --- the homepage preview ---------------------------------------------------------------------------------------------------------
@@ -640,16 +762,26 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         "request", lambda req, _r=request_records: _r.append((req.url, req.resource_type))
     )
     set_cookie_events, set_cookie_reads = _watch_set_cookies(browser_page, url)
+    cmp_script_failures: list[dict] = []
+
+    def _note_cmp_failure(request_url: str, resource_type: str, error: str) -> None:
+        # A consent tool whose script cannot be fetched never runs, so its banner never appears. Only scripts of a recognised consent tool are recorded.
+        if resource_type == "script" and match_cmp(script_src=request_url) is not None and not any(f["url"] == request_url for f in cmp_script_failures):
+            cmp_script_failures.append({"url": request_url[:300], "error": error[:200]})
+
+    browser_page.on("requestfailed", lambda req: _note_cmp_failure(req.url, req.resource_type, str(req.failure or "the request failed")))
+    browser_page.on("response", lambda resp: _note_cmp_failure(resp.url, resp.request.resource_type, f"HTTP {resp.status}") if resp.status >= 400 else None)
 
     try:
         response, status, exc, attempts = await _navigate_with_retry(
-            browser_page, url, settings.scanner_timeout_seconds * 1000
+            browser_page, url, settings.scanner_timeout_seconds * 1000,
+            window_s=settings.scanner_nav_retry_seconds_seed if is_seed else settings.scanner_nav_retry_seconds_page,
         )
         if status != "success":
-            logger.warning("Failed to load %s after %d attempt(s) (%s): %s", url, attempts, status, exc)
+            logger.warning("Failed to load %s after %d attempt(s) (%s): %s", url, attempts, status, first_line(exc))
             if is_seed:
                 raise _SeedUnreachable(url, exc, attempts=attempts)
-            return {"url": url, "status": status, "attempts": attempts, "error": str(exc)}
+            return {"url": url, "status": status, "attempts": attempts, "error": first_line(exc, 300), "http_status": getattr(exc, "status", None)}
 
         final_url = getattr(browser_page, "url", None) or url
         # Bounded settle window (see _TRACKER_SETTLE_MS) replacing "networkidle" --
@@ -675,7 +807,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         except PlaywrightError as exc:
             logger.debug("Could not collect shadow-DOM text for %s: %s", url, exc)
             rendered_text = ""
-            rendered_control_text = ""
+            rendered_control_text = None        # not collected: the serialised HTML's controls are then the fallback (an EMPTY string means "no visible controls", and is kept)
     except _SeedUnreachable:
         raise
     except Exception as exc:  # page loaded (or retries exhausted) but post-load processing failed
@@ -686,7 +818,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
     finally:
         await _drain_set_cookie_reads(set_cookie_reads)
         if not browser_page.is_closed():
-            await browser_page.close()
+            await _close_quietly(browser_page, "a crawled page")
 
     parsed = parse_page(html, url)
     # Read-only observations for the language and security sections of the report (scanner/page_signals.py); they change nothing about the scan.
@@ -699,7 +831,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
     return {
         "page_signals": page_signals,
         "url": url, "status": "success", "attempts": attempts, "http_status": http_status, "title": parsed.title,
-        "request_records": request_records, "parsed": parsed, "global_vars": set(global_vars_present),
+        "request_records": request_records, "parsed": parsed, "global_vars": set(global_vars_present), "cmp_script_failures": cmp_script_failures,
         "scroll_steps": scroll_steps, "iframe_scripts": iframe_scripts, "iframe_text": iframe_text,
         "iframe_control_text": iframe_control_text,
         "rendered_text": rendered_text,
@@ -712,7 +844,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
 
 
 async def _crawl_full_site(
-    context: BrowserContext, root_url: str, settings: Settings, disallowed_prefixes: set[str],
+    context: BrowserContext, root_url: str, settings: Settings, disallowed_prefixes: RobotsRules | set[str],
     sitemap_urls: list[str] | None = None,
     *,
     profile: ScanProfile | None = None,
@@ -764,6 +896,7 @@ async def _crawl_full_site(
     crawled_page_text = {}
     all_visible_text_parts = []
     all_control_text_parts = []
+    all_cmp_script_failures: list[dict] = []
     all_scripts_flat = []
     detected_global_vars: set[str] = set()
     budget = settings.scanner_max_pages if profile is None else profile.max_pages
@@ -812,6 +945,8 @@ async def _crawl_full_site(
         if len(diagnostics["skipped_pages"]) < _MAX_SKIPPED_PAGES_LISTED:
             diagnostics["skipped_pages"].append({"url": url, "reason": reason})
 
+    seed_section = section_of(root_url)
+
     def _discover(url: str, via: str) -> None:
         if via != "seed" and _host_key(url) != main_host:
             # The scan stays on the entered main domain. A link to a subdomain or to another website is neither followed
@@ -834,7 +969,10 @@ async def _crawl_full_site(
             diagnostics["pages_blocked_robots"] += 1
             _skip(url, "robots_disallowed")
             return
-        rank: float = -1 if via == "seed" else priority(url)
+        # Within one priority class, pages of the entered address's own section (/in-en/) come before the same kind of page in another section (/ae-en/, /ar-es/). Only a tie-break: a
+        # higher-priority page (a privacy page) anywhere still comes first. Seen live: a scan of konicaminolta.com/in-en/ spent four of its five pages on /contact of other countries.
+        out_of_section = 0.5 if seed_section and section_of(url) != seed_section else 0.0
+        rank: float = -1 if via == "seed" else priority(url) + out_of_section
         heapq.heappush(queue, (rank, next(order), url, via))
         if via == "sitemap":
             diagnostics["pages_from_sitemap"] += 1
@@ -854,18 +992,28 @@ async def _crawl_full_site(
     scanned_keys: set[str] = set()
     framed_sites: set[str] = set()
 
+    consecutive_timeouts = 0
+    seed_processed = False
+
     def _record_result(url: str, via: str, result: dict) -> None:
+        nonlocal consecutive_timeouts, seed_processed
+        if via == "seed":
+            seed_processed = True
         page_local_id = f"page-{len(pages)}"
+        if via != "seed":
+            consecutive_timeouts = consecutive_timeouts + 1 if result["status"] == "timeout" else 0
 
         if result["status"] != "success":
             # Never silently skip: a secondary page that failed after bounded
             # retries still gets an explicit PageRecord, distinguishing "timeout"
             # from any other "failed" -- never left out of the pages list.
             pages.append(PageRecord(
-                local_id=page_local_id, url=url, title=None, http_status=None,
+                local_id=page_local_id, url=url, title=None, http_status=result.get("http_status"),
                 discovered_via=result["status"],  # "failed" | "timeout"
             ))
             diagnostics["pages_timeout" if result["status"] == "timeout" else "pages_failed"] += 1
+            if via != "seed" and result["status"] == "failed" and result.get("http_status") in _DEAD_PAGE_STATUSES:
+                diagnostics["pages_dead"] = diagnostics.get("pages_dead", 0) + 1
             return
 
         if via != "seed":
@@ -910,9 +1058,9 @@ async def _crawl_full_site(
         # crawled_page_text/policy_detector above, which is unaffected.
         all_visible_text_parts.append(result["rendered_text"] or parsed.visible_text)
         # Consent detection reads ONLY this -- see detect_consent_signal.
-        all_control_text_parts.append(
-            result.get("rendered_control_text") or parsed.control_text
-        )
+        all_cmp_script_failures.extend(f for f in result.get("cmp_script_failures", []) if f not in all_cmp_script_failures)
+        rendered_controls = result.get("rendered_control_text")
+        all_control_text_parts.append(rendered_controls if rendered_controls is not None else parsed.control_text)
         if result.get("iframe_control_text"):
             all_control_text_parts.append(result["iframe_control_text"])
         if result["iframe_text"]:
@@ -936,12 +1084,24 @@ async def _crawl_full_site(
     # permitting), so a slow page only ever blocks its own slot.
     in_flight: dict[asyncio.Task, tuple[str, str]] = {}
 
+    # A page that failed, timed out or redirected away used to spend the budget as if it had been scanned, so a scan limited to 5 could end having scanned 1 (hdfcbank.com,
+    # icicibank.com). The limit is on SCANNED pages; the attempts it may take to get them are limited separately.
+    attempt_ceiling = None if budget is None else budget + max(_EXTRA_ATTEMPTS_MIN, budget)
+
     def _budget_left() -> bool:
         # `budget` is None for an uncapped (application-profile) scan: there is no page limit to run out of.
-        return budget is None or diagnostics["pages_attempted"] + len(in_flight) < budget
+        if budget is None:
+            return True
+        dead_not_counted = min(diagnostics.get("pages_dead", 0), _DEAD_PAGE_ALLOWANCE)
+        return (diagnostics["pages_scanned"] + len(in_flight) < budget
+                and diagnostics["pages_attempted"] - dead_not_counted + len(in_flight) < attempt_ceiling)
 
     def _fill_pool() -> None:
-        while queue and len(in_flight) < max_concurrent and _budget_left():
+        # The entered address is loaded ALONE first. The pages are chosen by priority (privacy and cookie pages first), but the links that rank highest are only
+        # found when the seed has loaded; with the pool already full of the sitemap's addresses, a slow seed let the fastest pages (often dead sitemap entries) use the
+        # whole attempt budget before any priority link was known, so which pages were scanned depended on timing (heavy pages: 10 of 100 scans of the same kind of site
+        # skipped the privacy page). Waiting for the seed costs one page load and makes the choice the same every time.
+        while queue and len(in_flight) < max_concurrent and _budget_left() and (seed_processed or not in_flight):
             _rank, _n, url, via = heapq.heappop(queue)
             in_flight[asyncio.create_task(_fetch_one_page(context, url, root_url, settings))] = (url, via)
 
@@ -950,6 +1110,9 @@ async def _crawl_full_site(
         page already in flight finishes (each is bounded by its own navigation timeout) and none is launched."""
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             return "deadline"
+        limit = settings.scanner_stop_after_consecutive_timeouts
+        if limit and consecutive_timeouts >= limit:
+            return "slow_site"
         if should_stop is not None and await should_stop():
             return "cancelled"
         return None
@@ -977,9 +1140,7 @@ async def _crawl_full_site(
                     other.cancel()
                 if in_flight:
                     await asyncio.gather(*in_flight.keys(), return_exceptions=True)
-                raise RuntimeError(
-                    f"Could not reach the site at all: {exc.url} after {exc.attempts} attempt(s) ({exc.cause})"
-                ) from exc.cause
+                raise explain_seed_failure(exc.url, exc.cause, exc.attempts) from exc.cause
 
         try:
             jar = await context.cookies()
@@ -1005,17 +1166,22 @@ async def _crawl_full_site(
     if stop_launching is not None:
         stop_reason = stop_launching
     elif queue and not _budget_left():
-        stop_reason = "page_limit"
+        stop_reason = "page_limit" if budget is not None and diagnostics["pages_scanned"] >= budget else "attempt_limit"
 
     diagnostics["framed_sites"] = sorted(framed_sites)
     diagnostics["stop_reason"] = stop_reason
     for _rank, _n, queued_url, _via in sorted(queue):
-        _skip(queued_url, {"page_limit": "page_limit", "deadline": "time_limit", "cancelled": "scan_cancelled"}.get(stop_reason, "not_reached"))
+        _skip(queued_url, {"page_limit": "page_limit", "deadline": "time_limit", "cancelled": "scan_cancelled", "slow_site": "slow_site"}.get(stop_reason, "not_reached"))
     if stop_reason == "deadline":
         diagnostics["pages_not_attempted_deadline_exceeded"] = len(queue)
         diagnostics["pages_not_attempted_budget_exhausted"] = 0
     else:
         diagnostics["pages_not_attempted_budget_exhausted"] = len(queue)
+
+    # A scan that scanned nothing is not a scan. It used to be reported as completed, with no pages and no reason (npci.org.in: its robots.txt disallows every
+    # crawler but named search engines, which the scanner honours, so every address was skipped and the scan "finished" in two seconds). The reason is stated.
+    if diagnostics["pages_scanned"] == 0 and stop_reason in ("queue_exhausted", "page_limit", "attempt_limit"):
+        raise _no_pages_scanned(root_url, diagnostics)
 
     raw_cookies = await context.cookies()
     cookies = detect_cookies(raw_cookies, site_domain)
@@ -1029,6 +1195,8 @@ async def _crawl_full_site(
         detected_global_vars=sorted(detected_global_vars),
         control_text=" ".join(all_control_text_parts),
     )
+    if consent_signal.mechanism_type == "cmp" and all_cmp_script_failures:
+        consent_signal.evidence = {**consent_signal.evidence, "cmp_script_failure": all_cmp_script_failures[0]}
 
     cookies = [
         c.model_copy(update={
@@ -1051,7 +1219,7 @@ async def _crawl_single_page_with_interaction(
     context: BrowserContext,
     root_url: str,
     settings: Settings,
-    disallowed_prefixes: set[str],
+    disallowed_prefixes: RobotsRules | set[str],
     consent_state: str,
     click_fn: Callable[[Page], Awaitable[str]],
 ) -> tuple[list[CookieRecord], list[TrackerRecord], str, bool, int, dict | None]:
@@ -1132,7 +1300,7 @@ async def _crawl_single_page_with_interaction(
     finally:
         await _drain_set_cookie_reads(set_cookie_reads)
         if not browser_page.is_closed():
-            await browser_page.close()
+            await _close_quietly(browser_page, "a crawled page")
 
     raw_cookies = await context.cookies()
     cookies = detect_cookies(raw_cookies, site_domain)
@@ -1257,7 +1425,7 @@ _BANNER_RETRY_WAIT_MS = 2_500
 
 
 async def _run_interaction_pass(
-    browser, root_url: str, settings: Settings, disallowed_prefixes: set[str],
+    browser, root_url: str, settings: Settings, disallowed_prefixes: RobotsRules | set[str],
     consent_state: str, click_fn: Callable[[Page], Awaitable[str]],
 ) -> tuple[list[CookieRecord], list[TrackerRecord], str, bool, int, dict | None]:
     """Owns one interaction pass's whole context lifecycle (create, route-guard,
@@ -1273,7 +1441,19 @@ async def _run_interaction_pass(
             context, root_url, settings, disallowed_prefixes, consent_state, click_fn
         )
     finally:
-        await context.close()
+        await _close_quietly(context, f"the {consent_state} context")
+
+
+def _reconcile_banner_presence(signal: ConsentSignalRecord, accept_status: str, reject_status: str) -> None:
+    """A consent tool's page text only counts as a fact about its banner when banner wording was seen (consent_signal_detector). If an Accept or Reject control was then
+    CLICKED, the banner was demonstrably on screen, so what its text said (no reject-all, per-purpose choices) is restored. Without a click it stays unknown."""
+    if signal.mechanism_type != "cmp" or "clicked" not in (accept_status, reject_status):
+        return
+    ev = signal.evidence or {}
+    if signal.has_reject_all is None and ev.get("text_has_reject_all") is not None:
+        signal.has_reject_all = ev["text_has_reject_all"]
+    if signal.has_granular_choices is None and ev.get("text_has_granular_choices") is not None:
+        signal.has_granular_choices = ev["text_has_granular_choices"]
 
 
 def _reconcile_reject_presence(signal: ConsentSignalRecord, reject_status: str, reject_confirmed: bool) -> None:
@@ -1339,7 +1519,7 @@ async def run_scan(
                     await asyncio.gather(passes_task, return_exceptions=True)
                 raise
             finally:
-                await context.close()
+                await _close_quietly(context, "the crawl context")
             homepage_screenshot = pre_consent_diagnostics.pop("homepage_screenshot", None)
 
             (
@@ -1347,7 +1527,7 @@ async def run_scan(
                 (reject_cookies, reject_trackers, reject_status, reject_confirmed, reject_scroll_steps, reject_gate),
             ) = await (passes_task if passes_task is not None else consent_passes())
         finally:
-            await browser.close()
+            await _close_quietly(browser, "the browser")
 
     cookies = _merge_cookie_pass(cookies, accept_cookies)
     cookies = _merge_cookie_pass(cookies, reject_cookies)
@@ -1372,6 +1552,7 @@ async def run_scan(
         **({"consent_gate": {"post_accept": accept_gate, "post_reject": reject_gate}} if (accept_gate or reject_gate) else {}),
     }
 
+    _reconcile_banner_presence(consent_signal, accept_status, reject_status)
     _reconcile_reject_presence(consent_signal, reject_status, reject_confirmed)
 
     scan_diagnostics = {
@@ -1529,6 +1710,11 @@ async def run_scan_isolated(
             pass
 
     if completed.returncode != 0:
-        raise RuntimeError(f"Isolated scan process failed for {root_url}: {completed.stderr.strip()}")
+        # A failure that repeating the scan cannot cure keeps its class across the process boundary, so the job queue does not retry it either.
+        marker = "ScanNotPossible: "
+        stderr = completed.stderr.strip()
+        if marker in stderr:
+            raise ScanNotPossible(stderr.rsplit(marker, 1)[1].splitlines()[0].strip(), "isolated")
+        raise RuntimeError(f"Isolated scan process failed for {root_url}: {stderr}")
 
     return ScanResult.model_validate_json(completed.stdout)

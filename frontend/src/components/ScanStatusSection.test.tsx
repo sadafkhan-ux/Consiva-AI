@@ -347,3 +347,30 @@ describe("duration comes from the server's clock", () => {
     expect(stuckStages(REAL_STAGES.slice(0, 3) as never, now)).toEqual([]);                           // nothing running
   });
 });
+
+describe("what the status tiles claim", () => {
+  const scan = { evidence_counts: { pages: 5 } } as unknown as ConsentScanState["scan"];
+
+  it("Pages Scanned is the crawler's scanned figure, not the count of page records that includes failed ones", () => {
+    render(<ScanStatusSection state={makeState({ phase: "completed", scan, websiteScanMeta: { pages_scanned: 3, pages_failed: 2 } })} />);
+    expect(screen.getByText("Pages Scanned").previousElementSibling).toHaveTextContent("3");
+  });
+
+  it("falls back to the evidence count for a scan stored before the crawler's figure existed", () => {
+    render(<ScanStatusSection state={makeState({ phase: "completed", scan, websiteScanMeta: {} })} />);
+    expect(screen.getByText("Pages Scanned").previousElementSibling).toHaveTextContent("5");
+  });
+
+  it.each([
+    ["failed pages", { pages_failed: 1 }],
+    ["timed-out pages", { pages_timeout: 2 }],
+  ])("Errors / Warnings is Yes when there were %s, even with no scan-level error", (_n, meta) => {
+    render(<ScanStatusSection state={makeState({ phase: "completed", scan, websiteScanMeta: meta })} />);
+    expect(screen.getByText("Errors / Warnings").previousElementSibling).toHaveTextContent("Yes");
+  });
+
+  it("Errors / Warnings is No when nothing went wrong", () => {
+    render(<ScanStatusSection state={makeState({ phase: "completed", scan, websiteScanMeta: { pages_scanned: 5, pages_failed: 0 } })} />);
+    expect(screen.getByText("Errors / Warnings").previousElementSibling).toHaveTextContent("No");
+  });
+});

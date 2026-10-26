@@ -73,7 +73,7 @@ gitignored; `.env.example` is the template and must stay free of real secrets.
 | `SCANNER_MAX_PAGES` | no (default `25`) | Cap on pages crawled per scan (pre_consent pass only). |
 | `SCANNER_TIMEOUT_SECONDS` | no (default `30`) | Per-page navigation timeout. |
 | `SCANNER_USER_AGENT` | no | Identify the crawler to site owners. |
-| `SCANNER_MAX_SCANS_PER_ORG_PER_DAY` | no (default `50`) | Basic rate limit. |
+| `SCANNER_MAX_SCANS_PER_ORG_PER_DAY` | no (default `0` = unlimited) | Optional cost ceiling; scans otherwise queue. |
 | `APP_ENV` / `LOG_LEVEL` | no | |
 
 ## Database setup

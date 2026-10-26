@@ -214,7 +214,7 @@ describe("the PDF page", () => {
 
   it("shows how many pages were scanned out of how many were found", async () => {
     const t = (await pdf(FIVE, META({ pages_discovered: 12 }))).join("");
-    expect(t).toContain("5 of 12 pages scanned");
+    expect(t).toContain("5 pages scanned of 12 found");
     expect(t).toMatch(/Pages found:\s*12: every distinct page/);
   });
 

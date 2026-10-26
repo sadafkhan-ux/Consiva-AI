@@ -5,14 +5,16 @@ silently" (master reference §3/§11)."""
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.core.exceptions import NotFoundError
 from app.db.repositories import monitoring_repository, scan_repository
 from app.db.session import async_session_factory
 from app.jobs import queue
+from app.scanner.failure_catalog import classify_message
 from app.services import analysis_service, audit_service
 from app.services.diff_engine import diff_evidence
 
@@ -67,16 +69,39 @@ async def promote_baseline(db: AsyncSession, *, schedule_id: uuid.UUID, org_id: 
     return schedule
 
 
+async def _paused_by_a_permanent_failure(db: AsyncSession, schedule) -> bool:
+    """True while the website's last scan failed for a reason repeating it cannot change, and that was less than the configured pause ago."""
+    hours = get_settings().scheduled_scan_permanent_failure_pause_hours
+    if not hours:
+        return False
+    last = await scan_repository.latest_scan_for_website(db, org_id=schedule.org_id, website_id=schedule.website_id)
+    if last is None or last.status != "failed":
+        return False
+    info = classify_message(last.error, url=last.url)
+    if info is None or info.retryable:
+        return False
+    when = last.completed_at or last.created_at
+    if when is None or datetime.now(UTC) - when >= timedelta(hours=hours):
+        return False
+    logger.info("Monitoring: schedule %s not run: the last scan failed permanently (%s) %s ago; pausing %dh", schedule.id, info.category.value, datetime.now(UTC) - when, hours)
+    return True
+
+
 async def dispatch_due_schedules(db: AsyncSession) -> int:
     """Called once per worker loop iteration (alongside reap_stale_jobs) — enqueues a
     real "scan" job (the SAME job type/path a manually-requested scan uses) for every
     website whose schedule is due, and bumps next_run_at so it isn't re-fired next
     iteration. Returns the number dispatched, for logging."""
     due = await monitoring_repository.due_schedules(db)
+    dispatched = 0
     for schedule in due:
         website = await scan_repository.get_website_by_id(db, schedule.website_id)
         if website is None:
             continue
+        if await _paused_by_a_permanent_failure(db, schedule):
+            await monitoring_repository.postpone(db, schedule)
+            continue
+        dispatched += 1
         scan = await scan_repository.create_scan(
             db, org_id=schedule.org_id, website_id=website.id, url=f"https://{website.domain}",
             authorized_by_user_id=SYSTEM_ACTOR_ID,
@@ -90,7 +115,7 @@ async def dispatch_due_schedules(db: AsyncSession) -> int:
         await monitoring_repository.mark_dispatched(db, schedule, triggered_scan_id=scan.id)
     if due:
         await db.commit()
-    return len(due)
+    return dispatched
 
 
 async def maybe_run_diff_after_scan(scan_id: uuid.UUID) -> None:

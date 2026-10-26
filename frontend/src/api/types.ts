@@ -196,8 +196,25 @@ export interface ScoreComparison {
   methodology_note: string;
 }
 
+/** Why a scan could not be completed, in one vocabulary for every site (backend scanner/failure_catalog.py). Derived by the server, so older scans carry it too. */
+export interface ScanFailure {
+  category: string;
+  code: string;
+  title: string;
+  explanation: string;
+  retryable: boolean;
+  transient: boolean;
+  owner: "website_owner" | "scanner_operator" | "none" | string;
+  next_action: string;
+  detail: string;
+  url: string | null;
+}
+
 export interface ScanStatusResponse extends ScanResponse {
   error: string | null;
+  /** QUEUED, RUNNING, COMPLETED, COMPLETED_WITH_WARNINGS, PARTIALLY_COMPLETED, BLOCKED, FAILED or CANCELLED. Absent on an older API. */
+  outcome?: string | null;
+  failure?: ScanFailure | null;
   evidence_counts: {
     pages: number;
     forms: number;
@@ -415,6 +432,8 @@ export interface EvidenceConsentSignalItem {
   has_reject_all: boolean | null;
   has_granular_choices: boolean | null;
   evidence: Record<string, unknown>;
+  /** The backend's own reading (rules/consent_observation.py): false when the consent tool's banner was never displayed to the scanner (what it offers is then null), true when it was, null when unknown or no tool. Absent on an older API. */
+  banner_displayed?: boolean | null;
 }
 
 export interface ScanEvidenceResponse {
@@ -504,7 +523,7 @@ export interface DpdpRequirementResult {
   why_it_matters: string;
   remediation: string;
   verification: string;
-  check_type: "website" | "business";
+  check_type: "website" | "business" | "policy";
   applicability: string;
   confidence: "high" | "medium" | "none";
   scoring_rationale: string;
@@ -512,6 +531,10 @@ export interface DpdpRequirementResult {
   penalty_points: number | null;
   score_contribution_percent: number | null;
   coverage_share_percent: number | null;
+  /** How the check was (or could be) answered; absent on a score from an older server. */
+  method?: "website_scan" | "policy_text" | "organisation_records" | string;
+  /** The records that would settle a check left unverified; absent on a score from an older server. */
+  needed_evidence?: string[];
 }
 
 export interface DpdpLedgerMetric {
@@ -706,7 +729,7 @@ export interface DpdpMethodWeight {
   id: string;
   title: string;
   category: string;
-  check_type: "website" | "business";
+  check_type: "website" | "business" | "policy";
   weight: number;
   default_weight: number;
   rationale: string;

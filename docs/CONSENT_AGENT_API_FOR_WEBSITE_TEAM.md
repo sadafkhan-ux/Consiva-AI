@@ -278,8 +278,8 @@ this is deliberate SSRF protection, not a bug.
 
 | | Default | Server setting (ask us to change) |
 |---|---|---|
-| Scans per organisation, per hour | 20 | `CONSENT_API_SCANS_PER_HOUR` |
-| Scans per organisation, per day | configured | `SCANNER_MAX_SCANS_PER_ORG_PER_DAY` |
+| Scans per organisation, per hour | 0 (no limit; scans queue) | `CONSENT_API_SCANS_PER_HOUR` |
+| Scans per organisation, per day | 0 (no limit; scans queue) | `SCANNER_MAX_SCANS_PER_ORG_PER_DAY` |
 | Pages per scan | 5 (hard ceiling) | `CONSENT_WEB_MAX_PAGES` / `SCANNER_MAX_PAGES` |
 | Per-page timeout | 30s | `SCANNER_TIMEOUT_SECONDS` |
 
@@ -362,6 +362,8 @@ GET /api/v1/consent-agent/scans/{scan_id}/summary
 ```
 
 `compliance_status` → `compliant` · `review_required` · `issues_found` · `unknown`
+
+`compliant` means only that the scan completed, scanned at least one page, exercised both the Accept and Reject paths, and found nothing wrong in what it could test. It is not a statement of legal compliance. A completed scan that found nothing but could not test (no page scanned, or the banner could not be operated) is `review_required`. `pages_discovered` is the number of pages found on the site and `pages_scanned` the number actually assessed (for example 562 and 5); scans stored before these figures existed report the number of page records instead.
 
 `consent_states_tested.accept` / `.reject` are `true` **only when the control was
 actually operated.** An attempted click that failed reads `false` — its observations

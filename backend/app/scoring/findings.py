@@ -25,6 +25,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 
+from app.rules.consent_observation import cmp_script_failure
 from app.rules.consent_rules import ConsentContext
 from app.scanner.scan_profiles import MAX_WEB_PAGES
 from app.scoring.review import ReviewItem
@@ -181,6 +182,8 @@ def _how_to_verify_missing(res, ctx: ConsentContext) -> str:
     if ctx.framed_sites:
         return "Enter the address of the site that is shown inside the frame and scan that directly."
     if ctx.banner_not_displayed and res.id in ("DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-C5"):
+        if cmp_script_failure(ctx.interaction_evidence):
+            return "Fix the consent tool's script (it failed to load: see the evidence), confirm the banner now appears in a browser, then re-scan."
         return "Re-scan from the audience's region or on a page where the banner appears, or check the banner by hand."
     if res.id == "DPDP-C3":
         return "Test Reject by hand, or scan a page where the banner can be operated automatically, then re-scan."
@@ -249,7 +252,7 @@ def build_finding_groups(results: list, review_items: list[ReviewItem], ctx: Con
                 effective_date=res.effective.isoformat(),
                 timing_note=("In force." if res.in_force else f"Applies from {res.effective.isoformat()}."),
                 business_impact=BUSINESS_IMPACT.get(res.id) or _BUSINESS_UNVERIFIED,
-                explanation=res.sufficiency_reason, missing=[res.sufficiency_reason, f"Evidence expected: {res.expected_evidence}"],
+                explanation=res.sufficiency_reason, missing=[res.sufficiency_reason, f"Evidence expected: {res.expected_evidence}", *(f"Needed: {n}" for n in res.needed_evidence)],
                 how_to_verify=_how_to_verify_missing(res, ctx), confidence="none",
             ))
 

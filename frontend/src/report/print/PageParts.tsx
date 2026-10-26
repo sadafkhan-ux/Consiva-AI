@@ -123,7 +123,7 @@ export function PageFrame({ variant, n, of, domain, scannedAt, headerPages = "",
             <>
               <b>{domain}</b>
               <div>Scanned {scannedAt}{headerPages ? ` · ${headerPages}` : ""}</div>
-              <div className="pg-id">{free ? tag : "Privacy Compliance Report (Full Scan)"} · Report ID: {reportId}</div>
+              <div className="pg-id">{free ? tag : "Privacy Readiness Report (Full Scan)"} · Report ID: {reportId}</div>
             </>
           ) : free ? (
             <>
@@ -133,7 +133,7 @@ export function PageFrame({ variant, n, of, domain, scannedAt, headerPages = "",
             </>
           ) : (
             <>
-              <b>Privacy Compliance Report (Full Scan)</b>
+              <b>Privacy Readiness Report (Full Scan)</b>
               <div>{domain}</div>
               <div>Scanned {scannedAt}</div>
               <div className="pg-id">Report ID: {reportId}</div>

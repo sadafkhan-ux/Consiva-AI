@@ -242,7 +242,8 @@ async def test_request_scan_raises_rate_limit_error_at_threshold(monkeypatch):
     -- exercised here with recent_count exactly AT the configured limit. Confirms the
     limit is enforced *before* any website/scan row is created (get_or_create_website
     is never reached)."""
-    settings = get_settings()
+    settings = get_settings().model_copy(update={"scanner_max_scans_per_org_per_day": 50})
+    monkeypatch.setattr(scan_service, "get_settings", lambda: settings)
     monkeypatch.setattr(
         scan_service.scan_repository, "count_scans_since",
         AsyncMock(return_value=settings.scanner_max_scans_per_org_per_day),
@@ -268,7 +269,8 @@ async def test_request_scan_allows_scan_just_under_the_limit(monkeypatch):
     class _PassedRateLimitGate(Exception):
         pass
 
-    settings = get_settings()
+    settings = get_settings().model_copy(update={"scanner_max_scans_per_org_per_day": 50})
+    monkeypatch.setattr(scan_service, "get_settings", lambda: settings)
     monkeypatch.setattr(
         scan_service.scan_repository, "count_scans_since",
         AsyncMock(return_value=settings.scanner_max_scans_per_org_per_day - 1),

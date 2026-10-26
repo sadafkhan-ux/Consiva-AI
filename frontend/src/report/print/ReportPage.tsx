@@ -94,7 +94,7 @@ export function ReportPage({ scanId, print, variant, part }: { scanId: string; p
   useEffect(() => {
     if (!model) return;
     window.__REPORT_META__ = reportHeaderMeta(model);
-    document.title = `Privacy Compliance Report - ${window.__REPORT_META__.domain}`;
+    document.title = `Privacy Readiness Report - ${window.__REPORT_META__.domain}`;
     window.__REPORT_READY__ = true;
   }, [model]);
 

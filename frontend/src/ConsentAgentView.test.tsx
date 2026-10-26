@@ -58,7 +58,7 @@ async function scanAndWaitForFailure(fetchMock: ReturnType<typeof vi.fn>) {
   await userEvent.clear(screen.getByPlaceholderText("https://example.com"));
   await userEvent.type(screen.getByPlaceholderText("https://example.com"), "https://smartians.ai/");
   await userEvent.click(screen.getByRole("button", { name: "Scan Website" }));
-  await waitFor(() => expect(screen.getByText("Failed")).toBeInTheDocument());
+  await waitFor(() => expect(screen.getAllByText(/^Failed/).length).toBeGreaterThan(0));
 }
 
 describe("a failed scan that collected nothing is not shown as a clean result", () => {
@@ -98,6 +98,23 @@ describe("a failed scan that collected nothing is not shown as a clean result", 
 
     expect(screen.queryByTestId("not-scanned")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /4\. Trackers/ })).toBeInTheDocument();
+  });
+
+  it("says it failed and that the results are partial, not the outcome of a completed scan", async () => {
+    await scanAndWaitForFailure(failingBackend(3));
+
+    expect(screen.getAllByText("Failed — Partial Results Available").length).toBeGreaterThan(0);
+    const banner = screen.getByTestId("partial-results");
+    expect(banner).toHaveTextContent("assessment is incomplete");
+    expect(banner).toHaveTextContent("not a clean result");
+  });
+
+  it("a scan that collected nothing has no partial-results label, only the not-scanned notice", async () => {
+    await scanAndWaitForFailure(failingBackend(0));
+
+    expect(screen.queryByTestId("partial-results")).not.toBeInTheDocument();
+    expect(screen.queryByText("Failed — Partial Results Available")).not.toBeInTheDocument();
+    expect(screen.getByTestId("not-scanned")).toBeInTheDocument();
   });
 });
 

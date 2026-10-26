@@ -39,9 +39,12 @@ def scan_inputs(evidence: dict) -> dict[str, Any]:
     def fired(state: str) -> int:
         return sum(1 for e in ctx.non_essential if state in e.get("consent_states", []))
 
+    policy = ctx.policy_analysis or {}
     return {
         "completeness": {
             "pages_scanned": len(ctx.pages),
+            # Whether the privacy policy text was read for this scan (the checks answered from it can only be tested when it was).
+            "privacy_policy_text_read": policy.get("status") == "analysed",
             "three_state_scan": ctx.three_pass,
             "consent_mechanism": ctx.mechanism_type,
             "banner_displayed_to_scanner": not ctx.banner_not_displayed,
@@ -56,6 +59,8 @@ def scan_inputs(evidence: dict) -> dict[str, Any]:
             "analytics_or_marketing_total": len(ctx.non_essential),
             "unclassified_items": sum(1 for e in (*ctx.trackers, *ctx.cookies) if e.get("category") is None),
             "policies_found": sorted(ctx.policy_types),
+            # What the policy text says (statements found, by id): when it was read in both scans, a change here is the site changing its policy.
+            "policy_statements_verified": sorted(r["id"] for r in policy.get("requirements", []) if r.get("status") == "verified"),
         },
     }
 

@@ -220,7 +220,7 @@ export function buildReportModel(
     evidence,
     policyAnalysis: policyAnalysis && policyAnalysis.status !== "not_run" ? policyAnalysis : null,
     screenshot,
-    insights: buildInsightSections({ policy: policyAnalysis, meta, evidence, sector: dpdpScore?.sector ?? null }),
+    insights: buildInsightSections({ policy: policyAnalysis, meta, evidence, sector: dpdpScore?.sector ?? null, siteUrl: scan?.url ?? null }),
     readiness: buildReadinessReview({ siteUrl: scan?.url ?? "", evidence, meta, policy: policyAnalysis, sector: dpdpScore?.sector ?? null }),
   };
 }

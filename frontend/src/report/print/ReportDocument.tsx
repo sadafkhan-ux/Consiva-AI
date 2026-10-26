@@ -8,14 +8,17 @@ import { READINESS_STATUS_TONE } from "../readiness";
 import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER } from "../reportScope";
 import { checkContribution, CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type RowTone } from "../reportText";
 import type { ElementStatus } from "../reportVisual";
+import { bannerFactText } from "../consentObservation";
 import { REQUEST_UNIT_NOTE } from "../stateCounts";
+import { pagesTileValue } from "../scanPages";
+import { CheckCoverage } from "./CheckCoverage";
 import { ScanTransparency } from "./Transparency";
 import "./report.css";
 
 // The printable report: the same sections, in the same order, as the PDF the browser draws (report/downloadReport.ts), built from the same
 // ReportModel the dashboard and that PDF read. The server prints this page to PDF (api: GET /api/v1/consent/scans/{id}/report.pdf), and the web
 // report page shows it on screen, so the two cannot disagree: there is one set of values and one design (report.css). Every figure comes from the
-// scan; a value the scan does not have is shown as "Not assessed", "Not tested" or "Could not verify", never filled in. Nothing is cut: a block
+// scan; a value the scan does not have is shown as "Not assessed", "Not tested" or "Unable to Verify", never filled in. Nothing is cut: a block
 // grows to fit its text and the print engine carries it onto the next page, repeating a table's header.
 
 type Tone = RowTone;
@@ -36,7 +39,6 @@ function Sec({ n, title, count, id, appendix, children }: { n: number; title: st
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const label = (k: string) => k.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 const bare = (u: string | null | undefined) => (u ? u.replace(/^https?:\/\//, "") : "Not recorded");
-const yesNo = (b: boolean | null | undefined) => (b === null || b === undefined ? "Not recorded" : b ? "Yes" : "No");
 const STATE_NAME: Record<string, string> = { pre_consent: "Before consent", post_accept: "After Accept", post_reject: "After Reject" };
 const states = (s: string[]) => (s.length ? s.map((x) => STATE_NAME[x] ?? x).join(", ") : "Not recorded");
 const show = (val: unknown): string => {
@@ -49,7 +51,7 @@ const show = (val: unknown): string => {
 const ELEMENT_PILL: Record<ElementStatus, { label: string; tone: Tone }> = {
   found: { label: "Found", tone: "good" },
   not_found: { label: "Not found in scanned scope", tone: "warn" },
-  unverified: { label: "Could not verify", tone: "mute" },
+  unverified: { label: "Unable to Verify", tone: "mute" },
   not_assessed: { label: "Not assessed", tone: "mute" },
 };
 const verdictTone = (t: string): Tone => (t === "pass" ? "good" : t === "fail" ? "bad" : t === "na" ? "mute" : "warn");
@@ -121,7 +123,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
   // 1. Scan summary
   const tiles: { value: string; label: string }[] = vis
     ? [
-        { value: vis.pagesFound !== null && vis.pagesFound >= vis.pagesScanned ? `${vis.pagesScanned} of ${vis.pagesFound}` : String(vis.pagesScanned), label: vis.pageLimit ? `Pages scanned (limit ${vis.pageLimit})` : "Pages scanned" },
+        { value: pagesTileValue(vis.pagesScanned, vis.pagesFound), label: vis.pageLimit ? `Pages scanned (limit ${vis.pageLimit})` : "Pages scanned" },
         { value: String(vis.statesTested), label: "Consent states tested" },
         { value: String(vis.requests), label: "Third-party requests" },
         { value: String(vis.knownRequests), label: "Analytics and marketing requests" },
@@ -136,6 +138,9 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
   // Scan transparency: what the scan found, tried, finished and could not verify, the three coverages, the consent states exercised, and why the score is what it is.
   add("transparency", "Scan transparency", <ScanTransparency view={model.transparency} />);
 
+  // What was tested and what was not: every applicable check, how it was tested, and for those not verified why and what would settle them.
+  if (v) add("tested", "What was tested and what was not", <CheckCoverage checks={v.allChecks} />);
+
   // 2. Framework readiness
   add("readiness", "Framework readiness", (
     <div className={`r-box r-framework${v && v.scoreValue !== null ? "" : " r-soft"}`}>
@@ -148,7 +153,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
 
   // 3. Privacy areas
   if (v) {
-    const cats = v.categories.filter((c) => isReportCategory(c.name)).slice(0, 4);
+    const cats = v.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).slice(0, 4);
     add("areas", "Privacy areas", (
       <>
         <Para muted small>Each bar is the share of the weighted points earned in that area. Coverage is the share of the area's checks that a scan could test.</Para>
@@ -230,7 +235,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
 
   // 8. Every check behind the score
   if (v) {
-    const checks = v.allChecks.filter((c) => isReportCategory(c.category));
+    const checks = v.allChecks.filter((c) => isReportCategory(c.category, v.assessedCategories));
     const listed = checks.filter((c) => c.statusKey !== "not_applicable");
     const notApplicable = checks.filter((c) => c.statusKey === "not_applicable");
     add("checks", "Every check behind the score", (
@@ -330,7 +335,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
             />
             <h3 className="r-h3">B. Findings, one row per check</h3>
             <div className="r-pills">
-              {(["Compliant", "Gap", "Not Found", "Cannot Verify", "Requires document review"] as const).map((k) => <Pill key={k} tone={READINESS_STATUS_TONE[k]}>{rv.counts[k]} {k}</Pill>)}
+              {(["Passes this technical check", "Gap", "Not Found", "Unable to Verify", "Requires document review"] as const).map((k) => <Pill key={k} tone={READINESS_STATUS_TONE[k]}>{rv.counts[k]} {k}</Pill>)}
             </div>
             <Table
               className="r-dense"
@@ -467,7 +472,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
               head={[{ h: "Detail", w: "190px" }, { h: "Recorded" }]}
               rows={[
                 ["Mechanism", s.mechanism_type], ["Consent tool (vendor)", s.cmp_vendor ?? "Not identified"],
-                ["Reject-all option", yesNo(s.has_reject_all)], ["Granular choices", yesNo(s.has_granular_choices)],
+                ["Reject-all option", bannerFactText(s, s.has_reject_all)], ["Granular choices", bannerFactText(s, s.has_granular_choices)],
                 ...Object.entries(s.evidence ?? {}).map(([k, val]) => [label(k), show(val)]),
               ].map(([a, b]) => [<b key="a">{a}</b>, <span key="b" className="r-break">{b}</span>])}
             />
@@ -481,7 +486,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
         {ev.forms.length === 0 && <Para>No forms were found on the pages scanned.</Para>}
         {ev.forms.map((f, i) => (
           <div className="r-item" key={f.id}>
-            <div className="r-item-head"><b>Form {i + 1}{f.purpose_guess ? `: ${label(f.purpose_guess)}` : ""} — {plural(f.fields.length, "field")}{f.selector ? ` (${f.selector})` : ""}</b></div>
+            <div className="r-item-head"><b>Form {i + 1}{f.purpose_guess ? `: ${label(f.purpose_guess)}` : ""} — {plural(f.fields.length, "field")}{f.selector ? ` (${f.selector})` : ""}{f.page_url ? ` — on ${f.page_url.replace(/^https?:\/\//, "")}` : ""}</b></div>
             <Table
               head={[{ h: "Field name" }, { h: "Type", w: "130px" }, { h: "Required", w: "90px" }]}
               rows={f.fields.length ? f.fields.map((fl) => [<b key="n">{fl.name || "(unnamed)"}</b>, fl.field_type || "Not recorded", fl.required ? "Yes" : "No"]) : [["No fields were recorded", "", ""]]}
@@ -559,7 +564,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
     ), { count: plural(ev.third_party_services.length, "service"), appendix: true });
 
     if (v) {
-      const hidden = new Set(v.allChecks.filter((c) => !isReportCategory(c.category)).map((c) => c.id));
+      const hidden = new Set(v.allChecks.filter((c) => !isReportCategory(c.category, v.assessedCategories)).map((c) => c.id));
       const groups = v.groups.map((g) => ({ ...g, entries: g.entries.filter((e) => !hidden.has(e.id)) })).filter((g) => g.entries.length);
       const outcomeTone = (key: string): Tone => (key === "confirmed" ? "bad" : key === "unable_to_verify" ? "mute" : "warn");
       add("findings", "Compliance findings in full", (
@@ -595,7 +600,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
     <article className={`rpt${appendixOnly ? " rpt-appendix" : ""}`} data-testid={appendixOnly ? "rpt-appendix" : "rpt"} lang="en">
       {!appendixOnly && !noFront && <div className="r-screen-brand" aria-hidden="true">Consiva.ai · Privacy | Compliance | Trust</div>}
       {!noFront && <div className="r-title">
-        <h1>{appendixOnly ? "Appendix: the evidence in full" : "Privacy Compliance Report"}</h1>
+        <h1>{appendixOnly ? "Appendix: the evidence in full" : "Privacy Readiness Report"}</h1>
         <p className="r-muted">{appendixOnly ? "Everything the scan recorded for this site, and the detail behind the pages before it. The figures are the same ones." : "Evidence from a live scan of the main domain: before consent, after Accept and after Reject."}</p>
         {model.provisional && <p className="r-small r-warn-text">Provisional: some findings have not yet been reviewed by a person.</p>}
       </div>}

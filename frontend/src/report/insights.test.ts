@@ -248,3 +248,26 @@ describe("all five together", () => {
     expect(sections.every((s) => s.title && s.status && s.legal && ["Confirmed", "Observed", "Not verified"].includes(s.knowledge))).toBe(true);
   });
 });
+
+describe("the security signals name the page they were observed on", () => {
+  const headers = { hsts: "max-age=1", csp: null, x_frame_options: null, x_content_type_options: null, referrer_policy: null, permissions_policy: null };
+  const m = { security_signals: { pages_total: 1, pages_https: 1, homepage_https: true, homepage_headers: headers } } as never;
+  const facts = (url?: string | null) => buildSecuritySection(m, null, url).facts;
+
+  it("calls the entered address the homepage only when it is the front door", () => {
+    const f = facts("https://shop.example/");
+    expect(f.find((x) => x.label.includes("HTTPS") && x.label.includes("Homepage"))?.label).toBe("Homepage served over HTTPS");
+    expect(f.find((x) => x.label.startsWith("Strict-Transport"))?.value).toBe("Observed on the homepage (shop.example)");
+  });
+
+  it("names the page when the scan started from a deeper address, and never calls it the homepage", () => {
+    const f = facts("https://shop.example/men/shirts?sort=new");
+    expect(f.some((x) => /homepage/i.test(x.label) || /homepage/i.test(String(x.value)))).toBe(false);
+    expect(f.find((x) => x.label.startsWith("Strict-Transport"))?.value).toBe("Observed on the entered page (shop.example/men/shirts?sort=new)");
+    expect(f.find((x) => x.label.includes("served over HTTPS") && x.label.startsWith("Entered page"))?.label).toBe("Entered page (shop.example/men/shirts?sort=new) served over HTTPS");
+  });
+
+  it("keeps the older wording when no address is known", () => {
+    expect(facts(undefined).find((x) => x.label.startsWith("Strict-Transport"))?.value).toBe("Observed on the homepage");
+  });
+});

@@ -133,7 +133,7 @@ const ELEMENT_ICON: Record<string, IconName> = {
   "Privacy policy": "doc", "Terms of use": "doc", "Cookie policy": "cookie", "Consent banner": "shield", "Accept option": "check", "Reject option": "cross", Forms: "form", "Per-purpose choices": "sliders",
 };
 const ELEMENT_PILL: Record<ElementStatus, { label: string; tone: "good" | "warn" | "mute" | "bad" }> = {
-  found: { label: "Found", tone: "good" }, not_found: { label: "Not found", tone: "bad" }, unverified: { label: "Could not verify", tone: "mute" }, not_assessed: { label: "Not assessed", tone: "mute" },
+  found: { label: "Found", tone: "good" }, not_found: { label: "Not found", tone: "bad" }, unverified: { label: "Unable to Verify", tone: "mute" }, not_assessed: { label: "Not assessed", tone: "mute" },
 };
 
 export function ElementsGrid({ view }: { view: PageReportView }) {

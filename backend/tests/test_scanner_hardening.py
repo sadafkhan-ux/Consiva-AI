@@ -53,7 +53,7 @@ async def test_navigate_with_retry_is_bounded_and_preserves_original_error(monke
     _NAV_MAX_ATTEMPTS attempts, then give up -- and the real underlying error must
     still be available to the caller, not replaced with a generic message."""
     monkeypatch.setattr(crawler.asyncio, "sleep", AsyncMock())
-    real_error = PlaywrightError("net::ERR_NAME_NOT_RESOLVED at https://example.com/")
+    real_error = PlaywrightError("net::ERR_NETWORK_CHANGED at https://example.com/")
     page = _FakeNavPage([real_error] * crawler._NAV_MAX_ATTEMPTS)
 
     response, status, exc, attempts = await crawler._navigate_with_retry(page, "https://example.com/", 5000)

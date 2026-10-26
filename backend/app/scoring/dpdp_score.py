@@ -17,6 +17,8 @@ Version history: see METHODOLOGY_VERSION and docs/DPDP_COMPLIANCE_SCORE.md.
 
 from __future__ import annotations
 
+import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -24,13 +26,14 @@ from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 from typing import Literal
 
+from app.rules.consent_observation import script_failure_note
 from app.rules.consent_rules import ConsentContext, build_consent_context
 from app.scanner.scan_profiles import MAX_WEB_PAGES
 from app.scoring import deductions as deductions_module
 from app.scoring import findings, review
 from app.scoring import sector as sector_analysis
 
-METHODOLOGY_VERSION = "1.5.0"
+METHODOLOGY_VERSION = "1.6.0"
 
 # The version of the legal mapping: which provisions each check cites, their effective dates and their applicability. Changes
 # whenever a citation, an effective date or an applicability condition changes, independently of the scoring methodology.
@@ -109,6 +112,9 @@ class Requirement:
     applies_if: DeclaredFlag | None = None
     # Whether a public website scan can observe it at all.
     scan_assessable: bool = True
+    # How the check is answered: "website_scan" (what the scan observes), "policy_text" (what the privacy policy says, read by the policy analysis, no extra
+    # model call) or "organisation_records" (only the organisation's own records can settle it).
+    method: str = "website_scan"
     # Requirements in one group describe the same underlying gap; see _suppress_duplicates.
     dedup_group: str | None = None
     rule_ids: tuple[str, ...] = ()
@@ -120,6 +126,8 @@ class Outcome:
     status: Status
     observations: list[str] = field(default_factory=list)
     evidence_ids: list[str] = field(default_factory=list)
+    # The pages the evidence was read from, when it is not an observed request or cookie (the policy page a quotation comes from).
+    pages: list[str] = field(default_factory=list)
 
 
 # =======================================================================================================================
@@ -188,7 +196,7 @@ def _consent_mechanism_present(ctx: ConsentContext) -> Outcome:
             note = (
                 "A consent tool is loaded but its banner was not displayed to the scanner (often region-specific), so it is not known "
                 "that visitors are asked."
-            )
+            ) + script_failure_note(ctx.interaction_evidence)
             return Outcome("unable_to_verify", [note])
         return Outcome("met", [f"A consent mechanism ({ctx.mechanism_type}) was detected on the scanned pages." + _seen(ctx)])
     return Outcome("unable_to_verify", ["The consent mechanism type was not determined."])
@@ -204,7 +212,7 @@ def _reject_honoured(ctx: ConsentContext) -> Outcome:
     if not ctx.three_pass:
         return Outcome("unable_to_verify", ["This scan predates three-state consent testing."])
     if ctx.banner_not_displayed:
-        return Outcome("unable_to_verify", ["The consent banner was not displayed to the scanner, so Reject could not be tested (rule R-009)."])
+        return Outcome("unable_to_verify", ["The consent banner was not displayed to the scanner, so Reject could not be tested (rule R-009)." + script_failure_note(ctx.interaction_evidence)])
     if ctx.reject_outcome != "clicked":
         return Outcome("unable_to_verify", [f"Reject could not be exercised (outcome: {ctx.reject_outcome or 'not recorded'})."])
     if not ctx.reject_confirmed:
@@ -226,7 +234,7 @@ def _reject_as_easy_as_accept(ctx: ConsentContext) -> Outcome:
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
     if ctx.banner_not_displayed:
-        return Outcome("unable_to_verify", ["The consent banner was not displayed to the scanner, so its options were not seen."])
+        return Outcome("unable_to_verify", ["The consent banner was not displayed to the scanner, so its options were not seen." + script_failure_note(ctx.interaction_evidence)])
     has_reject = (ctx.signals or {}).get("has_reject_all")
     if has_reject is True:
         return Outcome("met", ["A reject-all option was found alongside accept." + _seen(ctx)])
@@ -243,7 +251,7 @@ def _granular_choices(ctx: ConsentContext) -> Outcome:
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
     if ctx.banner_not_displayed:
-        return Outcome("unable_to_verify", ["The consent banner was not displayed to the scanner, so its options were not seen."])
+        return Outcome("unable_to_verify", ["The consent banner was not displayed to the scanner, so its options were not seen." + script_failure_note(ctx.interaction_evidence)])
     sig = ctx.signals or {}
     granular, reject = sig.get("has_granular_choices"), sig.get("has_reject_all")
     if granular is True:
@@ -283,6 +291,102 @@ def _tracking_disclosure(ctx: ConsentContext) -> Outcome:
 def _not_observable(what: str) -> Callable[[ConsentContext], Outcome]:
     def check(_ctx: ConsentContext) -> Outcome:
         return Outcome("unable_to_verify", [f"{what} cannot be observed through a public website scan; it needs organisational evidence."])
+    return check
+
+
+# ---- checks answered by what the privacy policy says --------------------------------------------------------------------------------------------------
+#
+# The policy analysis (app/policy/analysis.py) already reads the policy and cookie pages once per analysis. It returns, for each thing a policy should say, a
+# QUOTATION that was checked to appear word for word in the page, and a status decided by fixed rules (a contact detail found beside the passage, a response
+# period parsed as a number). These checks read that result: no further model call is made and no token is spent.
+#
+# What counts, and what never does:
+#   * A verified quotation with the needed detail is evidence the thing is published: Met.
+#   * A quotation that names the thing but lacks the concrete detail the Rules ask for (a role with no way to reach it) is Partially Met.
+#   * A stated period above the 90 days the Rules allow is Partially Met: the policy itself says so.
+#   * Anything NOT found in the policy text stays Unable to Verify. The site may publish it elsewhere, so absence from one document is never a failure.
+#   * A policy's description of its security or breach practice is never treated as proof that the practice exists.
+
+
+def _policy_rows(ctx: ConsentContext) -> tuple[dict[str, dict], str | None]:
+    """The policy analysis rows by id, or (empty, why there are none)."""
+    analysis = ctx.policy_analysis
+    if not analysis:
+        return {}, None
+    if analysis.get("status") != "analysed":
+        return {}, analysis.get("reason") or "The privacy policy text could not be read."
+    return {r["id"]: r for r in analysis.get("requirements", [])}, None
+
+
+def _quoted(row: dict) -> str:
+    quote = (row.get("quote") or "").strip()
+    contacts = row.get("contacts") or {}
+    detail = "; ".join(f"{label} {', '.join(values)}" for label, values in (("email", contacts.get("emails") or []), ("phone", contacts.get("phones") or []),
+                                                                            ("link", contacts.get("links") or [])) if values)
+    return f'The privacy policy says: "{quote}"' + (f" ({detail})" if detail else "") + (f" [{row['source_url']}]" if row.get("source_url") else "")
+
+
+def _unsettled(what: str, ctx: ConsentContext, why_not_read: str | None, absent: str) -> Outcome:
+    """Unable to Verify, with the honest reason: no analysis, one that could not read the policy, or one that read it and did not find the statement."""
+    if not ctx.policy_analysis:
+        return Outcome("unable_to_verify", [f"{what} cannot be observed through a public website scan; it needs organisational evidence."])
+    if why_not_read:
+        return Outcome("unable_to_verify", [f"{what}: the privacy policy could not be read ({why_not_read.rstrip('.')}), so this is not established."])
+    return Outcome("unable_to_verify", [absent])
+
+
+def _policy_single(row_id: str, what: str, absent: str) -> Callable[[ConsentContext], Outcome]:
+    """One statement the policy should make: verified -> Met, named without the concrete detail -> Partially Met, not found -> Unable to Verify."""
+    def check(ctx: ConsentContext) -> Outcome:
+        rows, why = _policy_rows(ctx)
+        row = rows.get(row_id)
+        if row is None or row.get("status") in (None, "not_found", "not_applicable"):
+            return _unsettled(what, ctx, why, absent)
+        pages = [row["source_url"]] if row.get("source_url") else []
+        if row["status"] == "verified":
+            return Outcome("met", [_quoted(row)], pages=pages)
+        return Outcome("partially_met", [_quoted(row), f"{row.get('detail', '')} The Rules ask for a concrete way to reach it.".strip()], pages=pages)
+    return check
+
+
+# A response period only counts as the grievance period when the quoted sentence is about grievances, complaints, requests or concerns. The policy analysis
+# parses any "within N days" in the passage it was given; without this a sentence about something else (deleting data within 30 days) could earn a Met.
+_GRIEVANCE_TOPIC = re.compile(r"grievanc|complain|redress|appeal|concern|quer(?:y|ies)|request", re.IGNORECASE)
+
+
+def _policy_grievance(ctx: ConsentContext) -> Outcome:
+    """A grievance system published with a response period of at most 90 days. Met needs both a reachable contact and a period within the limit. A period the
+    policy states above 90 days is Partially Met; a period that is simply not stated cannot be checked and stays Unable to Verify."""
+    what = "Whether a grievance redressal system with a response period is published"
+    rows, why = _policy_rows(ctx)
+    contact, period = rows.get("grievance_contact"), rows.get("grievance_timeline")
+    if contact is None or contact.get("status") in (None, "not_found", "not_applicable"):
+        return _unsettled(what, ctx, why, "No grievance contact was found in the privacy policy text that was read. It may be published elsewhere on the site.")
+    pages = list(dict.fromkeys(r["source_url"] for r in (contact, period) if r and r.get("source_url")))
+    notes = [_quoted(contact)]
+    if contact["status"] != "verified":
+        return Outcome("partially_met", [*notes, f"{contact.get('detail', '')} The Rules ask for a concrete way to reach the grievance system.".strip()], pages=pages)
+    if period is None or period.get("status") in (None, "not_found", "not_applicable"):
+        return Outcome("unable_to_verify", [*notes, "No response period was found in the privacy policy text that was read, so the 90-day limit cannot be checked."], pages=pages)
+    notes.append(_quoted(period))
+    if not _GRIEVANCE_TOPIC.search(period.get("quote") or ""):
+        return Outcome("unable_to_verify", [*notes, "The response period found is not about grievances, complaints or requests, so it is not taken as the grievance response period."], pages=pages)
+    days = period.get("response_days")
+    if period["status"] == "verified":
+        return Outcome("met", notes, pages=pages)
+    if days is not None and days > 90:
+        return Outcome("partially_met", [*notes, f"The policy states a response period of about {days:g} days; the Rules allow at most 90."], pages=pages)
+    return Outcome("unable_to_verify", [*notes, "The passage mentions grievances but states no response period, so the 90-day limit cannot be checked."], pages=pages)
+
+
+def _policy_practice(row_id: str, what: str, absent: str, caveat: str) -> Callable[[ConsentContext], Outcome]:
+    """A duty about what the organisation DOES. The policy can only describe it; a description is shown beside the result but never settles it."""
+    def check(ctx: ConsentContext) -> Outcome:
+        rows, why = _policy_rows(ctx)
+        row = rows.get(row_id)
+        if row is None or row.get("status") in (None, "not_found", "not_applicable"):
+            return _unsettled(what, ctx, why, absent)
+        return Outcome("unable_to_verify", [_quoted(row), caveat], pages=[row["source_url"]] if row.get("source_url") else [])
     return check
 
 
@@ -340,55 +444,59 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement(
         "DPDP-R9", "Data principal rights", "Contact of the Data Protection Officer or a responsible person is published",
         (f"{ACT} s.8(9)", f"{RULES} r.9"), 2, EFFECTIVE_18_MONTHS,
-        "Statutory duty; the scan does not read policy text.", scan_assessable=False,
-        check=_not_observable("Whether a DPO or contact person is published"),
+        "Statutory duty; answered by what the privacy policy publishes.", scan_assessable=False, method="policy_text",
+        check=_policy_single("dpo_contact", "Whether a DPO or contact person is published",
+                             "No contact of a Data Protection Officer or answering person was found in the privacy policy text that was read. It may be published elsewhere on the site."),
     ),
     Requirement(
         "DPDP-R14A", "Data principal rights", "The means to exercise data principal rights are published",
         (f"{ACT} s.11", f"{ACT} s.12", f"{ACT} s.13", f"{RULES} r.14(1)"), 3, EFFECTIVE_18_MONTHS,
-        "Statutory duty; the scan does not read policy text.", scan_assessable=False,
-        check=_not_observable("Whether the means to exercise rights are published"),
+        "Statutory duty; answered by what the privacy policy publishes.", scan_assessable=False, method="policy_text",
+        check=_policy_single("rights_means", "Whether the means to exercise rights are published",
+                             "No means of making a rights request was found in the privacy policy text that was read. It may be published elsewhere on the site."),
     ),
     Requirement(
         "DPDP-R14B", "Data principal rights", "A grievance redressal system with a response period of at most 90 days is published",
         (f"{ACT} s.8(10)", f"{ACT} s.13", f"{RULES} r.14(3)"), 3, EFFECTIVE_18_MONTHS,
-        "Statutory duty; the scan does not read policy text.", scan_assessable=False,
-        check=_not_observable("Whether a grievance redressal system is published"),
+        "Statutory duty; answered by what the privacy policy publishes.", scan_assessable=False, method="policy_text",
+        check=_policy_grievance,
     ),
     Requirement(
         "DPDP-S6", "Security and breach", "Reasonable security safeguards are in place",
         (f"{ACT} s.8(5)", f"{RULES} r.6"), 3, EFFECTIVE_18_MONTHS,
-        "Statutory duty; the scan cannot see an organisation's internal controls.", scan_assessable=False,
-        check=_not_observable("Security safeguards"),
+        "Statutory duty; the scan cannot see an organisation's internal controls.", scan_assessable=False, method="organisation_records",
+        check=_policy_practice("security", "Security safeguards", "The privacy policy text that was read does not describe security safeguards.",
+                               "A policy's description of its safeguards is not evidence that they are in place; that needs the organisation's own records."),
     ),
     Requirement(
         "DPDP-S7", "Security and breach", "Personal data breaches are intimated to the Board and affected individuals",
         (f"{ACT} s.8(6)", f"{RULES} r.7"), 3, EFFECTIVE_18_MONTHS,
-        "Statutory duty; the scan cannot see an organisation's incident process.", scan_assessable=False,
-        check=_not_observable("Breach intimation processes"),
+        "Statutory duty; the scan cannot see an organisation's incident process.", scan_assessable=False, method="organisation_records",
+        check=_policy_practice("breach_response", "Breach intimation processes", "The privacy policy text that was read does not describe a breach response.",
+                               "A policy's description of its breach response is not evidence that it works or that breaches have been reported; that needs the organisation's own records."),
     ),
     Requirement(
         "DPDP-X4", "Entity-specific", "Consent Manager registration and obligations",
         (f"{ACT} s.6(9)", f"{RULES} r.4"), 2, EFFECTIVE_12_MONTHS,
-        "Applies only to a registered Consent Manager.", applies_if="consent_manager", scan_assessable=False,
+        "Applies only to a registered Consent Manager.", applies_if="consent_manager", scan_assessable=False, method="organisation_records",
         check=_not_observable("Consent Manager obligations"),
     ),
     Requirement(
         "DPDP-X8", "Entity-specific", "Erasure after the Third Schedule period, with 48 hours' notice",
         (f"{ACT} s.8(7)", f"{RULES} r.8"), 2, EFFECTIVE_18_MONTHS,
         "Applies only to the classes in the Third Schedule (large e-commerce, online gaming, social media).",
-        applies_if="erasure_class", scan_assessable=False, check=_not_observable("Erasure processes"),
+        applies_if="erasure_class", scan_assessable=False, method="organisation_records", check=_not_observable("Erasure processes"),
     ),
     Requirement(
         "DPDP-X10", "Entity-specific", "Verifiable parental or guardian consent for children's data",
         (f"{ACT} s.9", f"{RULES} r.10", f"{RULES} r.11"), 3, EFFECTIVE_18_MONTHS,
         "Applies only where the organisation processes children's personal data.",
-        applies_if="children", scan_assessable=False, check=_not_observable("Verifiable parental consent"),
+        applies_if="children", scan_assessable=False, method="organisation_records", check=_not_observable("Verifiable parental consent"),
     ),
     Requirement(
         "DPDP-X13", "Entity-specific", "Significant Data Fiduciary duties (annual DPIA and audit)",
         (f"{ACT} s.10", f"{RULES} r.13"), 3, EFFECTIVE_18_MONTHS,
-        "Applies only to a notified Significant Data Fiduciary.", applies_if="significant", scan_assessable=False,
+        "Applies only to a notified Significant Data Fiduciary.", applies_if="significant", scan_assessable=False, method="organisation_records",
         check=_not_observable("DPIA and audit"),
     ),
 )
@@ -402,6 +510,8 @@ class CheckDetail:
     why_it_matters: str = ""
     remediation: str = ""
     verification: str = ""
+    # What an organisation would need to supply to settle the check when a scan cannot (shown only while the check is unverified).
+    needed: tuple[str, ...] = ()
 
 
 DETAILS: dict[str, CheckDetail] = {
@@ -441,6 +551,7 @@ DETAILS: dict[str, CheckDetail] = {
         "Consent can be withdrawn, and processing must stop when it is (Act s.6(4), s.6(6)).",
         "Make the consent tool stop or never start analytics and marketing tags once Reject is chosen, and clear their cookies.",
         "Re-scan: after a confirmed Reject click the After Reject state shows no analytics or marketing requests or cookies.",
+        needed=("A re-scan from a region or page where the consent banner is shown, or a test of the Reject control by hand, followed by a look at the requests and cookies that appear after refusing.",),
     ),
     "DPDP-C4": CheckDetail(
         "Refusing consent is as easy as giving it.",
@@ -482,49 +593,58 @@ DETAILS: dict[str, CheckDetail] = {
         "Re-scan: a cookie policy page is found and lists the cookies observed.",
     ),
     "DPDP-R9": CheckDetail(
-        "The contact of the Data Protection Officer, or of a person who can answer questions, is published.",
-        "Cannot be assessed from a website scan; it needs the organisation's own evidence.",
-        "The published contact details, from the organisation.",
+        'The contact of the Data Protection Officer, or of a person who can answer questions, is published.',
+        'Met: the privacy policy gives the contact, with an email address, phone number or form beside it. Partially Met: a role is named but no way to reach it is given. Unable to Verify: the policy text read does not state it (it may be published elsewhere), or the policy could not be read.',
+        'A quotation from the privacy policy naming the officer or answering person with a way to reach them.',
+        needed=('The name or title of the Data Protection Officer or of the person who answers for data processing.', 'An email address, phone number or contact form where they can be reached (Act s.8(9), Rules r.9).', 'The page where it is published, if it is not in the privacy policy.'),
     ),
     "DPDP-R14A": CheckDetail(
-        "The means to exercise data principal rights are published.",
-        "Cannot be assessed from a website scan; it needs the organisation's own evidence.",
-        "The published request channels, from the organisation.",
+        'The means to exercise data principal rights are published.',
+        'Met: the privacy policy gives a concrete means of making a request (an email address, form or portal) beside its statement of rights. Partially Met: rights are mentioned without any means. Unable to Verify: the policy text read does not state it, or the policy could not be read.',
+        'A quotation from the privacy policy giving the means of making a rights request.',
+        needed=('The form, portal or email address through which a person can ask to access, correct, complete, update or erase their data, or nominate someone (Rules r.14(1)).', 'The page where it is published, if it is not in the privacy policy.'),
     ),
     "DPDP-R14B": CheckDetail(
-        "A grievance redressal system with a response period of at most 90 days is published.",
-        "Cannot be assessed from a website scan; it needs the organisation's own evidence.",
-        "The grievance policy and its response period, from the organisation.",
+        'A grievance redressal system with a response period of at most 90 days is published.',
+        'Met: the privacy policy gives a grievance contact and a response period within 90 days. Partially Met: the contact has no way to reach it, or the policy states a period above 90 days. Unable to Verify: no grievance contact or no response period was found in the text read, or the policy could not be read.',
+        'A quotation from the privacy policy giving the grievance contact and the response period.',
+        needed=('The grievance redressal policy, and the page where it is published.', 'The response period it commits to; the Rules allow at most 90 days (Rules r.14(3)).'),
     ),
     "DPDP-S6": CheckDetail(
-        "Reasonable security safeguards are in place.",
-        "Cannot be assessed from a website scan; it needs the organisation's own evidence.",
-        "Security controls, logs and contracts, from the organisation.",
+        'Reasonable security safeguards are in place.',
+        'Cannot be settled from a website scan or from what a policy says. The description of its safeguards in a policy is shown beside the result but never counts as evidence that they exist. Unable to Verify until the records of the organisation are supplied.',
+        'The security records of the organisation.',
+        needed=('Encryption, obfuscation, masking or tokenisation of personal data (Rules r.6(1)(a)).', 'Access control for the systems that hold personal data (r.6(1)(b)).', 'Logs, monitoring and review that detect unauthorised access, kept for one year (r.6(1)(c), (e)).', 'Data backups and a way to keep processing if data is lost or compromised (r.6(1)(d)).', 'Contracts with processors that require reasonable security safeguards (r.6(1)(f)).', 'Technical and organisational measures that make sure the safeguards are followed (r.6(1)(g)).'),
     ),
     "DPDP-S7": CheckDetail(
-        "Personal data breaches are intimated to the Board and to affected individuals.",
-        "Cannot be assessed from a website scan; it needs the organisation's own evidence.",
-        "The incident process and its records, from the organisation.",
+        'Personal data breaches are intimated to the Board and to affected individuals.',
+        'Cannot be settled from a website scan or from what a policy says. The description of its breach response in a policy is shown beside the result but never counts as evidence that it works. Unable to Verify until the records of the organisation are supplied.',
+        'The incident records of the organisation.',
+        needed=('A written breach response plan naming who decides and who notifies.', 'The template and the route for telling each affected person: what happened, likely consequences, measures taken, safety steps, a contact (Rules r.7(1)).', 'The process for telling the Board without delay and with the detailed report within seventy-two hours (Rules r.7(2)).', 'The record of any breaches and the notices given.'),
     ),
     "DPDP-X4": CheckDetail(
         "Consent Manager registration and obligations.",
         "Applies only to a registered Consent Manager; cannot be assessed from a website scan.",
         "Registration and platform evidence, from the organisation.",
+        needed=('Proof of registration as a Consent Manager and the policies that govern the consent records it keeps.',),
     ),
     "DPDP-X8": CheckDetail(
         "Erasure after the Third Schedule period, with 48 hours' notice.",
         "Applies only to the Third Schedule classes; cannot be assessed from a website scan.",
         "Retention and erasure records, from the organisation.",
+        needed=('The erasure schedule and the notice given to people 48 hours before erasure.',),
     ),
     "DPDP-X10": CheckDetail(
         "Verifiable parental or guardian consent for children's data.",
         "Applies only where children's data is processed; cannot be assessed from a website scan.",
         "The age and parental-consent flow, from the organisation.",
+        needed=('How parental or guardian consent is verified and the records of it.',),
     ),
     "DPDP-X13": CheckDetail(
         "Significant Data Fiduciary duties (annual DPIA and audit).",
         "Applies only to a notified Significant Data Fiduciary; cannot be assessed from a website scan.",
         "DPIA and audit reports, from the organisation.",
+        needed=('The notification as a Significant Data Fiduciary, the annual impact assessment and the audit report.',),
     ),
 }
 
@@ -537,9 +657,9 @@ APPLICABILITY_TEXT: dict[str, str] = {
     'DPDP-C5': 'Applies when a consent banner is shown; otherwise Not Applicable.',
     'DPDP-N1': 'Every website.',
     'DPDP-N2': 'Applies when analytics or marketing tracking is observed; otherwise Not Applicable.',
-    'DPDP-R9': 'Every data fiduciary. A business check: the organisation must supply the evidence.',
-    'DPDP-R14A': 'Every data fiduciary. A business check: the organisation must supply the evidence.',
-    'DPDP-R14B': 'Every data fiduciary. A business check: the organisation must supply the evidence.',
+    'DPDP-R9': 'Every data fiduciary. Tested from what the privacy policy publishes; where the policy does not settle it, the organisation must supply the evidence.',
+    'DPDP-R14A': 'Every data fiduciary. Tested from what the privacy policy publishes; where the policy does not settle it, the organisation must supply the evidence.',
+    'DPDP-R14B': 'Every data fiduciary. Tested from what the privacy policy publishes; where the policy does not settle it, the organisation must supply the evidence.',
     'DPDP-S6': 'Every data fiduciary. A business check: the organisation must supply the evidence.',
     'DPDP-S7': 'Every data fiduciary. A business check: the organisation must supply the evidence, including its breach response times.',
     'DPDP-X4': 'Only a registered Consent Manager. Included only when declared applicable.',
@@ -567,12 +687,12 @@ LEGAL_BASIS_NOTES: dict[str, str] = {
     "DPDP-N2": "Consiva's reading of a statutory duty: the notice must itemise the personal data collected. The Act and Rules do not name "
                "a cookie policy. A dedicated cookie-policy page is the clearest evidence this scan looks for; a general privacy policy "
                "counts as partial evidence.",
-    "DPDP-R9": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Not "
-               "observed by a scan; assessed only from organisational evidence.",
-    "DPDP-R14A": "Statutory duty: the means for people to exercise their rights must be published. Not observed by a scan; assessed "
-                 "only from organisational evidence.",
-    "DPDP-R14B": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Not observed by a "
-                 "scan; assessed only from organisational evidence.",
+    "DPDP-R9": "Statutory duty: contact details of the officer or person who answers for data processing must be published. Read from "
+               "the privacy policy text (a quotation, no further model call); where the policy does not state it, only organisational evidence settles it.",
+    "DPDP-R14A": "Statutory duty: the means for people to exercise their rights must be published. Read from the privacy policy text "
+                 "(a quotation, no further model call); where the policy does not state it, only organisational evidence settles it.",
+    "DPDP-R14B": "Statutory duty: a grievance process with a response period of at most 90 days must be published. Read from the privacy "
+                 "policy text (a quotation, no further model call); where the policy does not state it, only organisational evidence settles it.",
     "DPDP-S6": "Statutory duty: reasonable security safeguards. Internal controls are not visible from a public website, so this is "
                "assessed only from organisational evidence.",
     "DPDP-S7": "Statutory duty: breaches must be reported to the Board and to affected people. An incident process is not visible from "
@@ -685,6 +805,11 @@ class RequirementResult:
     penalty_points: float | None = None
     score_contribution_percent: float | None = None
     coverage_share_percent: float | None = None
+    # How this check was (or could be) answered, and for a check left unverified, the records that would settle it.
+    method: str = "website_scan"
+    needed_evidence: list[str] = field(default_factory=list)
+    # Where a quotation came from (policy pages); merged into `pages` with the pages of observed items.
+    source_pages: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1006,7 +1131,7 @@ def evaluate_requirements(
         earned = float(SCORED_FACTOR[out.status] * weights[req.id]) if counts else 0.0
         results.append(RequirementResult(
             **base, status=out.status, points_earned=earned, counts_in_score=counts, observations=list(out.observations),
-            evidence_ids=list(dict.fromkeys(out.evidence_ids)),
+            evidence_ids=list(dict.fromkeys(out.evidence_ids)), method=req.method, source_pages=list(dict.fromkeys(out.pages)),
             exclusion_reason=out.observations[0] if out.status == "not_applicable" and out.observations else None,
         ))
     _suppress_duplicates(results)
@@ -1023,7 +1148,7 @@ def _confidence(res: RequirementResult, ctx: ConsentContext) -> str:
     or on a single page, or that is only partly met, is medium; a direct observation across several pages is high."""
     if res.status not in ASSESSED_STATUSES:
         return "none"
-    if res.status == "partially_met" or res.id in ABSENCE_BASED or len(ctx.pages) < 2:
+    if res.status == "partially_met" or res.id in ABSENCE_BASED or res.method == "policy_text" or len(ctx.pages) < 2:
         return "medium"
     return "high"
 
@@ -1062,20 +1187,26 @@ def _attach_evidence_records(results: list[RequirementResult], ctx: ConsentConte
         detail = DETAILS[res.id]
         res.description, res.criteria, res.expected_evidence = detail.description, detail.criteria, detail.expected_evidence
         res.timing = "in_force" if res.in_force else "future"
-        res.check_type = "website" if req.scan_assessable else "business"
+        res.check_type = ("policy" if req.method == "policy_text" and res.status in ASSESSED_STATUSES else "website" if req.scan_assessable else "business")
+        res.needed_evidence = list(detail.needed) if res.status == "unable_to_verify" else []
         res.applicability = APPLICABILITY_TEXT[res.id]
         res.legal_note = LEGAL_BASIS_NOTES[res.id]
         res.confidence = _confidence(res, ctx)
         res.scoring_rationale = _rationale(res, req)
         if res.status in ("not_met", "partially_met"):
             res.why_it_matters, res.remediation, res.verification = detail.why_it_matters, detail.remediation, detail.verification
-        pages = list(dict.fromkeys(u for i in res.evidence_ids for u in lookup.get(i, [])))
+        pages = list(dict.fromkeys([*res.source_pages, *(u for i in res.evidence_ids for u in lookup.get(i, []))]))
         if not pages and req.scan_assessable and res.status != "not_applicable":
             banner = res.id in ("DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-C5") and ctx.interaction_page
             pages = [ctx.interaction_page] if banner else scanned
         res.pages = pages
         n = len(scanned)
-        if res.status in ASSESSED_STATUSES:
+        if res.status in ASSESSED_STATUSES and req.method == "policy_text":
+            res.sufficient = True
+            res.sufficiency_reason = ("The privacy policy names it without the concrete detail the Rules ask for." if res.status == "partially_met"
+                                      else "Quoted from the privacy policy, word for word.")
+            res.limitation = "Covers only the privacy and cookie policy pages that were read; it shows what is published, not how it is carried out."
+        elif res.status in ASSESSED_STATUSES:
             res.sufficient = True
             res.sufficiency_reason = ("The evidence supports only part of the requirement." if res.status == "partially_met"
                                       else "Direct observation on the scanned pages.")
@@ -1083,7 +1214,8 @@ def _attach_evidence_records(results: list[RequirementResult], ctx: ConsentConte
         elif res.status == "unable_to_verify":
             res.sufficient = False
             res.sufficiency_reason = res.observations[0] if res.observations else "The scan evidence is insufficient."
-            res.limitation = ("A website scan cannot observe this." if not req.scan_assessable
+            res.limitation = (("The privacy policy text that was read does not settle this." if res.source_pages or (ctx.policy_analysis or {}).get("status") == "analysed"
+                               else "A website scan cannot observe this.") if not req.scan_assessable
                               else f"Covers only the {n} main-domain page(s) scanned.")
         else:
             res.sufficient = None
@@ -1209,6 +1341,16 @@ def build_assessment(ctx: ConsentContext, as_of: date, scan_url: str | None, sca
     )
 
 
+def canonical_evidence(evidence: dict) -> dict:
+    """The same evidence in one fixed order. The evidence queries do not order their rows, so the same stored scan can come back in a different row order on
+    each read; the score must never depend on that. Every list is sorted by its own content (not by an id or a position), so two copies of the same evidence
+    always reach the rules as identical input. The input is not changed."""
+    return {
+        key: sorted(value, key=lambda item: json.dumps(item, sort_keys=True, default=str)) if isinstance(value, list) else value
+        for key, value in evidence.items()
+    }
+
+
 def assess(
     evidence: dict, as_of: date | None = None, applicability: Applicability | None = None,
     weights: dict[str, int] | None = None, scan_url: str | None = None, scanned_at: str | None = None,
@@ -1218,6 +1360,7 @@ def assess(
     `scan_url` and `scanned_at` only describe the scan in the result; they never change a score."""
     as_of = as_of or today_in_india()
     resolved = resolve_weights(weights)
+    evidence = canonical_evidence(evidence)
     ctx = build_consent_context(evidence)
     results = evaluate_requirements(evidence, as_of, applicability, ctx, resolved)
     human_review = review.build_human_review(ctx, results, as_of, MAX_WEB_PAGES)

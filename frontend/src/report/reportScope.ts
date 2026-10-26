@@ -11,10 +11,21 @@ export const REPORT_DISCLAIMER =
  */
 export const HIDDEN_REPORT_CATEGORIES: ReadonlySet<string> = new Set(["Data principal rights", "Security and breach"]);
 
-export const isReportCategory = (category: string): boolean => !HIDDEN_REPORT_CATEGORIES.has(category);
+const NONE_ASSESSED: ReadonlySet<string> = new Set();
 
-/** True for a ledger metric name such as "Data principal rights: score". */
-export const isReportMetric = (name: string): boolean => ![...HIDDEN_REPORT_CATEGORIES].some((c) => name.startsWith(`${c}:`));
+/**
+ * A hidden category is shown as soon as one of its checks was actually assessed (a verdict of Met, Partially Met or Not Met, for example from what the privacy
+ * policy says): its points are in the score, so the tables must show them. `assessed` is the set from `assessedCategories`. Left out, the category stays hidden.
+ */
+export const isReportCategory = (category: string, assessed: ReadonlySet<string> = NONE_ASSESSED): boolean => !HIDDEN_REPORT_CATEGORIES.has(category) || assessed.has(category);
+
+/** True for a ledger metric name such as "Data principal rights: score" that the report shows. */
+export const isReportMetric = (name: string, assessed: ReadonlySet<string> = NONE_ASSESSED): boolean =>
+  ![...HIDDEN_REPORT_CATEGORIES].some((c) => name.startsWith(`${c}:`) && !assessed.has(c));
+
+/** The categories with at least one assessed check (one that counts in the score). */
+export const assessedCategories = (checks: readonly { category: string; statusKey: string }[]): ReadonlySet<string> =>
+  new Set(checks.filter((c) => c.statusKey === "met" || c.statusKey === "partially_met" || c.statusKey === "not_met").map((c) => c.category));
 
 /** Said once in the appendix, so the omitted duties do not make the counts look wrong. */
 export const OMITTED_DUTIES_NOTE =

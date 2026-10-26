@@ -1,6 +1,7 @@
 import type { ReportModel } from "./buildReport";
 import type { ElementStatus } from "./reportVisual";
-import { pagesCoverageLine } from "./scanPages";
+import { pagesCoverageLine, pagesTileValue } from "./scanPages";
+import { bannerFactText } from "./consentObservation";
 import { CONSIVA_LOGO_HEIGHT, CONSIVA_LOGO_PNG, CONSIVA_LOGO_WIDTH } from "./consivaLogo";
 import { buildHeroView, buildPreviewView } from "./hero";
 import { formatRef, formatRefShort, formatRefs } from "./legalRefs";
@@ -16,7 +17,7 @@ import { REQUEST_UNIT_NOTE } from "./stateCounts";
 // every form with every field, every cookie, every third-party request, the policies and services, and every compliance finding. Nothing is
 // cut: a block grows to fit its text and flows onto the next page. A contents on page 1 and an index at the start of the appendix give the
 // page of each section. Text and shapes are drawn with jsPDF's own API (crisp and selectable). Every figure is read from the scan; a value the
-// scan does not have is shown as "Not assessed", "Not tested" or "Could not verify", never filled in. Legal references are spelt one way
+// scan does not have is shown as "Not assessed", "Not tested" or "Unable to Verify", never filled in. Legal references are spelt one way
 // (report/legalRefs.ts).
 const PAGE_W = 595.28;
 const PAGE_H = 841.89;
@@ -57,7 +58,7 @@ const TONES: Record<Tone, { bg: Rgb; fg: Rgb }> = {
 const ELEMENT_PILL: Record<ElementStatus, { label: string; tone: Tone }> = {
   found: { label: "Found", tone: "good" },
   not_found: { label: "Not found in scanned scope", tone: "warn" },
-  unverified: { label: "Could not verify", tone: "mute" },
+  unverified: { label: "Unable to Verify", tone: "mute" },
   not_assessed: { label: "Not assessed", tone: "mute" },
 };
 
@@ -272,7 +273,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
    * new page (header and footer included) when the next block will not fit, and cuts nothing: a block grows to fit its text. The numbered sections
    * after the table of checks and the appendix both write with it.
    */
-  const ORDER_COUNTS = ["Compliant", "Gap", "Not Found", "Cannot Verify", "Requires document review"] as const;
+  const ORDER_COUNTS = ["Passes this technical check", "Gap", "Not Found", "Unable to Verify", "Requires document review"] as const;
   const makeWriter = (startY: number) => {
     const w = { y: startY };
       const room = (h: number, redraw?: () => void) => {
@@ -372,7 +373,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
 
   // ============================== page 1 ==============================
   pageTop(1);
-  text("Privacy Compliance Report", M, 74, { size: 20, bold: true });
+  text("Privacy Readiness Report", M, 74, { size: 20, bold: true });
   text("Evidence from a live scan of the main domain: before consent, after Accept and after Reject.", M, 88, { size: 8.5, color: MUTED });
 
   // --- hero: the score at the top left, what it means beside it, and at the top right the scanned site's domain above its homepage as the scanner saw it ---
@@ -468,7 +469,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   let y = section("Scan summary", afterHero);
   const tiles: { value: string; label: string }[] = vis
     ? [
-        { value: vis.pagesFound !== null && vis.pagesFound >= vis.pagesScanned ? `${vis.pagesScanned} of ${vis.pagesFound}` : String(vis.pagesScanned),
+        { value: pagesTileValue(vis.pagesScanned, vis.pagesFound),
           label: vis.pageLimit ? `Pages scanned (limit ${vis.pageLimit})` : "Pages scanned" },
         { value: String(vis.statesTested), label: "Consent states tested" },
         { value: String(vis.requests), label: "Third-party requests" },
@@ -513,7 +514,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   if (v) {
     y = section("Privacy areas", y);
     y = text("Each bar is the share of the weighted points earned in that area. Coverage is the share of the area's checks that a scan could test.", M, y + 1, { size: 6.8, color: MUTED, width: CW, lead: 8.2 }) + 3;
-    const cats = v.categories.filter((c) => isReportCategory(c.name)).slice(0, 4);
+    const cats = v.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).slice(0, 4);
     const aw = (CW - gap * (cats.length - 1)) / Math.max(1, cats.length);
     const ah = 66;
     cats.forEach((c, i) => {
@@ -674,7 +675,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
 
   // --- every check behind the score, compactly. The full record of each check (legal basis, limits, evidence expected) is on the dashboard. ---
   if (v) {
-    const checks = v.allChecks.filter((c) => isReportCategory(c.category));
+    const checks = v.allChecks.filter((c) => isReportCategory(c.category, v.assessedCategories));
     const listed = checks.filter((c) => c.statusKey !== "not_applicable");
     const notApplicable = checks.filter((c) => c.statusKey === "not_applicable");
     const contributionOf = checkContribution;
@@ -770,6 +771,23 @@ export async function downloadReport(model: ReportModel): Promise<void> {
       MW.room(84);
       cur2.y = section(title, cur2.y + 18) + 2;
     };
+
+    // --- what was tested and what was not ---
+    if (v) {
+      const applicable = v.allChecks.filter((c) => c.statusKey !== "not_applicable");
+      const tested = applicable.filter((c) => c.statusKey === "met" || c.statusKey === "partially_met" || c.statusKey === "not_met");
+      const unverified = applicable.filter((c) => c.statusKey === "unable_to_verify");
+      heading("What was tested and what was not");
+      MW.para(`${applicable.length} applicable checks: ${tested.length} tested, ${unverified.length} not verified.`, { size: 8.4, bold: true });
+      MW.table([{ head: "Check", w: 190, bold: true }, { head: "How it was tested", w: 90 }, { head: "Result", w: 60 }, { head: "Evidence", w: CW - 340 }],
+        tested.map((c) => [`${c.id.replace("DPDP-", "")} ${c.title}`, c.methodLabel, c.verdict, c.evidenceLine]), 7);
+      if (unverified.length) {
+        MW.para("Not verified", { size: 8.4, bold: true, color: DEEP });
+        MW.table([{ head: "Check", w: 150, bold: true }, { head: "Why it could not be tested", w: 150 }, { head: "What would settle it", w: CW - 300 }],
+          unverified.map((c) => [`${c.id.replace("DPDP-", "")} ${c.title}`, c.reason || c.evidenceLine, c.neededEvidence.join(" ") || "Not recorded."]), 7);
+      }
+      MW.para("A check that could not be tested is never counted as met or as failed. A statement not found in the privacy policy text is not treated as a failure: the site may publish it elsewhere.", { size: 7, color: MUTED });
+    }
 
     // --- prioritised fixes ---
     heading("Prioritised fixes");
@@ -1011,7 +1029,6 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     const { room: aroom, para, entry, quoteBlock, table } = W;
     const STATE_NAME: Record<string, string> = { pre_consent: "Before consent", post_accept: "After Accept", post_reject: "After Reject" };
     const states = (s: string[]) => (s.length ? s.map((x) => STATE_NAME[x] ?? x).join(", ") : "Not recorded");
-    const yesNo = (b: boolean | null | undefined) => (b === null || b === undefined ? "Not recorded" : b ? "Yes" : "No");
     const bare = (u: string | null | undefined) => (u ? u.replace(/^https?:\/\//, "") : "Not recorded");
 
     /** A section header: a tinted bar with the section's letter, its title and (optionally) a count. Listed in the contents. */
@@ -1126,7 +1143,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
         [{ head: "Detail", w: 190, bold: true }, { head: "Recorded", w: CW - 190 }],
         [
           ["Mechanism", s.mechanism_type], ["Consent tool (vendor)", s.cmp_vendor ?? "Not identified"],
-          ["Reject-all option", yesNo(s.has_reject_all)], ["Granular choices", yesNo(s.has_granular_choices)],
+          ["Reject-all option", bannerFactText(s, s.has_reject_all)], ["Granular choices", bannerFactText(s, s.has_granular_choices)],
           ...Object.entries(s.evidence ?? {}).map(([k, val]) => [label(k), show(val)]),
         ],
       );
@@ -1137,7 +1154,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     if (ev.forms.length === 0) para("No forms were found on the pages scanned.", { size: 8.5 });
     ev.forms.forEach((f, i) => {
       aroom(56);
-      entry(`Form ${i + 1}${f.purpose_guess ? `: ${label(f.purpose_guess)}` : ""} — ${plural(f.fields.length, "field")}${f.selector ? ` (${f.selector})` : ""}`, []);
+      entry(`Form ${i + 1}${f.purpose_guess ? `: ${label(f.purpose_guess)}` : ""} — ${plural(f.fields.length, "field")}${f.selector ? ` (${f.selector})` : ""}${f.page_url ? ` — on ${bare(f.page_url)}` : ""}`, []);
       table(
         [{ head: "Field name", w: CW - 230, bold: true }, { head: "Type", w: 130 }, { head: "Required", w: 100 }],
         f.fields.length ? f.fields.map((fl) => [fl.name || "(unnamed)", fl.field_type || "Not recorded", fl.required ? "Yes" : "No"]) : [["No fields were recorded", "", ""]],
@@ -1215,7 +1232,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
 
     // --- compliance findings ---
     if (v) {
-      const hidden = new Set(v.allChecks.filter((c) => !isReportCategory(c.category)).map((c) => c.id));
+      const hidden = new Set(v.allChecks.filter((c) => !isReportCategory(c.category, v.assessedCategories)).map((c) => c.id));
       const groups = v.groups.map((g) => ({ ...g, entries: g.entries.filter((e) => !hidden.has(e.id)) })).filter((g) => g.entries.length);
       asection("Compliance findings in full", plural(groups.reduce((n, g) => n + g.entries.length, 0), "finding"));
       if (groups.length === 0) para("No findings were recorded for the checks that could be tested.", { size: 8.5 });

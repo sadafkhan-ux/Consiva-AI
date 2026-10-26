@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import (
     AgentRun,
+    AgentRunStage,
     ConsentForm,
     ConsentScan,
     ConsentSignal,
@@ -20,6 +21,7 @@ from app.db.models import (
     Website,
     WebsitePage,
 )
+from app.rules.consent_observation import observed_signal
 from app.rules.consent_rules import RulesClassification
 from app.rules.cookie_purposes import describe_cookie, lifetime_days
 from app.scanner.schemas import ScanResult, ScreenshotRecord
@@ -31,6 +33,12 @@ async def count_scans_since(db: AsyncSession, *, org_id: uuid.UUID, since: datet
     result = await db.execute(
         select(func.count()).select_from(ConsentScan).where(ConsentScan.org_id == org_id, ConsentScan.created_at >= since)
     )
+    return result.scalar_one()
+
+
+async def count_queued_scans(db: AsyncSession, *, org_id: uuid.UUID) -> int:
+    """Scans of one organisation still waiting for a worker."""
+    result = await db.execute(select(func.count()).select_from(ConsentScan).where(ConsentScan.org_id == org_id, ConsentScan.status == "queued"))
     return result.scalar_one()
 
 
@@ -82,6 +90,14 @@ async def list_recent_scans(db: AsyncSession, org_id: uuid.UUID, limit: int = 20
         select(ConsentScan).where(ConsentScan.org_id == org_id).order_by(ConsentScan.created_at.desc()).limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def latest_scan_for_website(db: AsyncSession, *, org_id: uuid.UUID, website_id: uuid.UUID) -> ConsentScan | None:
+    """The most recent scan of one website in one organisation, whatever its status."""
+    result = await db.execute(
+        select(ConsentScan).where(ConsentScan.org_id == org_id, ConsentScan.website_id == website_id).order_by(ConsentScan.created_at.desc()).limit(1)
+    )
+    return result.scalars().first()
 
 
 async def previous_completed_scan(db: AsyncSession, scan: ConsentScan) -> ConsentScan | None:
@@ -358,16 +374,32 @@ def _serialize_evidence(
         ],
         "policies": [{"id": str(p.id), "url": p.url, "policy_type": p.policy_type} for p in policies],
         "consent_signals": [
-            {"mechanism_type": s.mechanism_type, "cmp_vendor": s.cmp_vendor,
+            observed_signal({"mechanism_type": s.mechanism_type, "cmp_vendor": s.cmp_vendor,
              "has_reject_all": s.has_reject_all, "has_granular_choices": s.has_granular_choices,
              # accept_interaction/reject_interaction/confidence/detection_source live
              # here -- previously persisted but never read back out, so
              # evaluate_consent_rules() (and therefore the LLM) had no way to know
              # whether Accept/Reject were ever actually automatable on this scan.
-             "evidence": s.evidence}
+             "evidence": s.evidence})
             for s in signals
         ],
     }
+
+
+_evidence_slots: dict[int, asyncio.Semaphore] = {}
+
+
+def _evidence_slot() -> asyncio.Semaphore:
+    """At most this many evidence queries run at once in this process, whoever asked: two connections fewer than the pool can hold, so loading evidence can never
+    take the connection that a request, a job or the maintenance loop needs next. (An unbounded fan-out of seven queries per caller, together with each request
+    already holding a connection of its own, exhausted a pool of five with five simultaneous callers and failed every one of them after 30 seconds.)"""
+    from app.config import get_settings
+
+    loop_id = id(asyncio.get_running_loop())
+    if loop_id not in _evidence_slots:
+        s = get_settings()
+        _evidence_slots[loop_id] = asyncio.Semaphore(max(1, s.db_pool_size + s.db_max_overflow - 2))
+    return _evidence_slots[loop_id]
 
 
 async def get_scan_evidence_summary_concurrent(scan_id: uuid.UUID, *, include_cookie_detail: bool = False) -> dict:
@@ -383,9 +415,12 @@ async def get_scan_evidence_summary_concurrent(scan_id: uuid.UUID, *, include_co
     models = [WebsitePage, ConsentForm, Cookie, Tracker, ThirdPartyService, Policy, ConsentSignal]
 
     async def _rows(model):
-        async with async_session_factory() as db:
-            result = await db.execute(select(model).where(model.scan_id == scan_id))
-            return result.scalars().all()
+        # Bounded: seven of these run at once for every caller, and under many users the pool is the scarce thing. Without the bound, a few simultaneous callers took
+        # every connection between them and the rest waited out the pool timeout (see _evidence_slot).
+        async with _evidence_slot():
+            async with async_session_factory() as db:
+                result = await db.execute(select(model).where(model.scan_id == scan_id))
+                return result.scalars().all()
 
     pages, forms, cookies, trackers, services, policies, signals = await asyncio.gather(
         *(_rows(model) for model in models)
@@ -394,6 +429,30 @@ async def get_scan_evidence_summary_concurrent(scan_id: uuid.UUID, *, include_co
         pages, forms, cookies, trackers, services, policies, signals,
         include_cookie_detail=include_cookie_detail,
     )
+
+
+async def get_policy_analysis_result(scan_id: uuid.UUID) -> dict | None:
+    """The result of reading this scan's privacy and cookie policy text (stage `policy_analysis`), exactly as stored, or None when there is none yet. It was
+    produced once, by the analysis; reading it costs no model call."""
+    from app.db.session import async_session_factory
+
+    async with async_session_factory() as db:
+        row = (await db.execute(
+            select(AgentRunStage.stage_metadata).where(AgentRunStage.scan_id == scan_id, AgentRunStage.stage == "policy_analysis", AgentRunStage.status == "completed")
+            .order_by(AgentRunStage.completed_at.desc()).limit(1)
+        )).first()
+    result = (row[0] or {}).get("result") if row else None
+    return result if isinstance(result, dict) else None
+
+
+async def get_scan_evidence_for_score(scan_id: uuid.UUID) -> dict:
+    """The evidence the DPDP score is computed from: the scan's persisted evidence, plus the policy analysis result when the analysis has run. Every place that
+    scores a scan uses this one function, so the dashboard, the report and the backend record can never score different inputs."""
+    import asyncio
+
+    evidence, policy = await asyncio.gather(
+        get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True), get_policy_analysis_result(scan_id))
+    return {**evidence, "policy_analysis": policy} if policy else evidence
 
 
 async def get_scan_evidence_summary(db: AsyncSession, scan_id: uuid.UUID) -> dict:

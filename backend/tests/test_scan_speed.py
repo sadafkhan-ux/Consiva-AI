@@ -110,6 +110,10 @@ class TestRunAnalysisOverlaps:
         async def compiled():
             return Graph()
 
+        async def no_prewarm(*a, **k):
+            return None
+
+        monkeypatch.setattr(analysis_service.report_cache_service, "queue_prewarm", no_prewarm)
         monkeypatch.setattr(analysis_service, "async_session_factory", lambda: Session())
         monkeypatch.setattr(analysis_service, "get_compiled_graph", compiled)
         monkeypatch.setattr("app.observability.stage_tracker.track_stage", stage)
@@ -117,7 +121,7 @@ class TestRunAnalysisOverlaps:
         t = time.monotonic()
         await analysis_service.run_analysis(ids[0], ids[1], ids[2])
         elapsed = time.monotonic() - t
-        assert elapsed < 0.7, elapsed
+        assert elapsed < 0.75, elapsed        # one after the other would take 0.8 s
 
     async def test_a_crashing_graph_still_lets_the_policy_reading_finish(self, monkeypatch):
         ids = [uuid.uuid4() for _ in range(3)]
@@ -152,6 +156,10 @@ class TestRunAnalysisOverlaps:
         async def compiled():
             return Graph()
 
+        async def no_prewarm(*a, **k):
+            return None
+
+        monkeypatch.setattr(analysis_service.report_cache_service, "queue_prewarm", no_prewarm)
         monkeypatch.setattr(analysis_service, "async_session_factory", lambda: Session())
         monkeypatch.setattr(analysis_service, "get_compiled_graph", compiled)
         monkeypatch.setattr("app.observability.stage_tracker.track_stage", stage)

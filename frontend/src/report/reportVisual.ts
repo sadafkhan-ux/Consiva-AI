@@ -3,6 +3,7 @@ import type { ScoreView } from "./dpdpScore";
 import { framedSiteOf } from "./scanTransparency";
 import { countByState, isKnownTracker } from "./stateCounts";
 import { registrableDomain, summariseTrackers } from "./trackerSummary";
+import { bannerNotDisplayed, observedBannerFact, scriptFailure } from "./consentObservation";
 
 /**
  * Everything the visual two-page report draws from the scan itself: counts per consent state, the technologies seen, and which
@@ -131,7 +132,9 @@ export function buildReportVisual(
   const known = STATES.map((k) => counted.knownRequests[k]) as [number, number, number];
   const all = STATES.map((k) => counted.requests[k]) as [number, number, number];
   const mechanism = meta?.consent_mechanism;
-  const bannerBefore = mechanism === "none" ? "No banner found" : mechanism === "banner" || mechanism === "cmp" ? "Banner found" : "Not known";
+  // A consent tool whose script loaded but whose banner was never shown to the scanner is "tool loaded", not "banner found".
+  const toolOnly = bannerNotDisplayed(signals.find((s) => s.mechanism_type !== "none"));
+  const bannerBefore = mechanism === "none" ? "No banner found" : toolOnly ? "Tool loaded, no banner shown" : mechanism === "banner" || mechanism === "cmp" ? "Banner found" : "Not known";
   const base = {
     acceptTested, rejectTested, cookies: cookieCounts, known, all,
     banner: [bannerBefore, interaction(meta?.accept_interaction), interaction(meta?.reject_interaction)] as [string, string, string],
@@ -165,7 +168,7 @@ export function buildReportVisual(
     outcome === "clicked" ? { title, status: "found", note: "Clicked in the scan" }
       : outcome === "click_failed" ? { title, status: "found", note: "Found, could not be clicked" }
         : { title, status: "unverified", note: "Not reachable by the scan" };
-  const granular = signal?.has_granular_choices;
+  const granular = observedBannerFact(signal, signal?.has_granular_choices);
 
   const elements: ElementView[] = [
     privacy ? { title: "Privacy policy", status: "found", note: pathOf(privacy.url) }
@@ -175,6 +178,8 @@ export function buildReportVisual(
     cookiePolicy ? { title: "Cookie policy", status: "found", note: pathOf(cookiePolicy.url) }
       : { title: "Cookie policy", status: "not_found", note: "Not found in scanned scope" },
     mechanism === "none" ? { title: "Consent banner", status: "not_found", note: "Not found in scanned scope" }
+      : toolOnly
+        ? { title: "Consent banner", status: "unverified", note: `${vendor ?? "A consent tool"} is loaded; no banner was shown to the scanner${scriptFailure(signals.find((s) => s.mechanism_type !== "none")) ? ` (its script failed to load: ${scriptFailure(signals.find((s) => s.mechanism_type !== "none"))?.error})` : ""}` }
       : mechanism === "banner" || mechanism === "cmp"
         ? { title: "Consent banner", status: "found", note: vendor ?? "Vendor not identified" }
         : { title: "Consent banner", status: "unverified", note: "Not known" },

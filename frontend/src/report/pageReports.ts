@@ -3,7 +3,7 @@ import type { ReportModel } from "./buildReport";
 import { buildHeroView, buildPreviewView, type HeroView, type PreviewView } from "./hero";
 import { resolveCta, type Cta } from "./reportCta";
 import { isReportCategory } from "./reportScope";
-import { pagesCoverageLine } from "./scanPages";
+import { pagesCoverageLine, pagesTileValue } from "./scanPages";
 import { checkContribution, stripRuleCodes, topFindingRows, type FindingRow, type RowTone } from "./reportText";
 import type { ConsentComparison, ElementView, TechnologyRow } from "./reportVisual";
 import { registrableDomain } from "./trackerSummary";
@@ -84,7 +84,7 @@ export const verdictPill = (verdict: string): StatusPillView => {
     case "Partial": return { label: "Partially met", tone: "warn" };
     case "Fail": return { label: "Not met", tone: "bad" };
     case "N/A": return { label: "Not applicable", tone: "mute" };
-    default: return { label: "Could not verify", tone: "mute" };
+    default: return { label: "Unable to Verify", tone: "mute" };
   }
 };
 
@@ -93,7 +93,7 @@ export function findingPill(f: FindingRow): StatusPillView {
   if (/partial/i.test(f.label)) return { label: "Partially met", tone: "warn" };
   if (/not met/i.test(f.label)) return { label: "Not met", tone: "bad" };
   if (/review/i.test(f.label)) return { label: "Requires review", tone: "warn" };
-  if (/verify/i.test(f.label)) return { label: "Could not verify", tone: "mute" };
+  if (/verify/i.test(f.label)) return { label: "Unable to Verify", tone: "mute" };
   return { label: f.label, tone: f.tone };
 }
 
@@ -150,7 +150,7 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
   };
 
   const areas: AreaView[] = v
-    ? v.categories.filter((c) => isReportCategory(c.name)).slice(0, 4).map((c) => {
+    ? v.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).slice(0, 4).map((c) => {
         const pct = c.score === "Not assessed" ? null : parseFloat(c.score);
         return { name: c.name, scoreLabel: pct === null ? "Not assessed" : c.score, pct, coverageLabel: pct === null ? "Cannot be tested from outside" : c.coverage.replace("coverage", "Coverage") };
       })
@@ -172,7 +172,7 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
   const rows = topFindingRows(model);
   const findings = rows.slice(0, 3);
 
-  const listedChecks = v ? v.allChecks.filter((c) => isReportCategory(c.category) && c.statusKey !== "not_applicable") : [];
+  const listedChecks = v ? v.allChecks.filter((c) => isReportCategory(c.category, v.assessedCategories) && c.statusKey !== "not_applicable") : [];
   const CHECK_ROWS = 9;
   const checks: CheckRow[] = listedChecks.slice(0, CHECK_ROWS).map((r) => ({
     id: r.id.replace("DPDP-", ""), title: r.title, evidence: stripRuleCodes(r.evidenceLine), weight: r.weight, status: verdictPill(r.verdict), contribution: checkContribution(r),
@@ -189,7 +189,7 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
   const critical = !!v?.groups.find((g) => g.key === "confirmed")?.entries.some((e) => /critical|high/i.test(e.severity));
   const cta = resolveCta({ score: v ? v.scoreValue : null, coverage: v ? v.coverageValue : null, unassessed: unable.length, critical, subscriber: variant === "full" });
 
-  const pagesLine = vis ? (vis.pagesFound !== null && vis.pagesFound >= vis.pagesScanned ? `${vis.pagesScanned} of ${vis.pagesFound}` : String(vis.pagesScanned)) : "Not recorded";
+  const pagesLine = vis ? pagesTileValue(vis.pagesScanned, vis.pagesFound) : "Not recorded";
   const tiles: { value: string; label: string }[] = vis
     ? [
         { value: pagesLine, label: vis.pageLimit ? `Pages scanned (${variant === "free" ? "Free scan limit" : "limit"} ${vis.pageLimit})` : "Pages scanned" },

@@ -71,7 +71,7 @@ class TestConfigurableWeights:
 class TestMethodologyPayload:
     def test_it_states_the_version_the_formulas_and_the_rules(self):
         m = assess(evidence(**MIXED), TODAY).methodology
-        assert m.version == ds.METHODOLOGY_VERSION == "1.5.0"
+        assert m.version == ds.METHODOLOGY_VERSION == "1.6.0"
         assert "weighted points earned ÷ weighted points assessed" in m.score_formula
         assert "weight of assessed requirements ÷ weight of applicable requirements" in m.coverage_formula
         assert "shown separately from the score" in m.coverage_formula
@@ -108,7 +108,7 @@ class TestMethodologyPayload:
 
     def test_it_serialises_through_the_api_model(self):
         m = DpdpScoreResponse(**asdict(assess(evidence(**MIXED), TODAY))).methodology
-        assert m.version == "1.5.0" and len(m.weights) == len(ds.REQUIREMENTS) and m.categories
+        assert m.version == "1.6.0" and len(m.weights) == len(ds.REQUIREMENTS) and m.categories
 
 
 class TestCategoryWeights:
