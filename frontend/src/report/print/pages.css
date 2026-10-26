@@ -24,6 +24,13 @@
 .pg-head-right { text-align: right; font-size: 9.5px; color: var(--ink); line-height: 1.5; }
 .pg-head-right b { font-size: 10.5px; display: block; }
 .pg-head-right .pg-id { color: var(--mut); }
+/* Every page after the cover carries the same dark band with white text as the flowing pages of the long report (its print header, report_pdf_service.py),
+   so one PDF never mixes a white header with a dark one. The cover keeps its own light header. */
+.pg-head-dark { margin: -26px -34px 14px; padding: 4px 34px 0; height: 66px; align-items: center; background: #03070f; }
+.pg-head-dark .pg-logo { background: transparent; padding: 0; }
+.pg-head-dark .pg-head-right, .pg-head-dark .pg-head-right b, .pg-head-dark .pg-head-right .pg-id { color: #fff; }
+.pg-head-dark .pg-head-right { font-size: 9px; line-height: 1.35; }
+.pg-head-dark .pg-tag { margin-bottom: 2px; }
 .pg-tag { display: inline-block; background: #e3ebff; color: var(--blue); font-weight: 700; font-size: 8.5px; letter-spacing: .06em; padding: 3px 9px; border-radius: 4px; margin-bottom: 5px; }
 .pg-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding-bottom: 8px; }
 .pg-foot { flex: 0 0 auto; height: 40px; margin: 0 -34px; padding: 0 34px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; border-top: 1px solid var(--rule); font-size: 8.5px; color: var(--mut); }

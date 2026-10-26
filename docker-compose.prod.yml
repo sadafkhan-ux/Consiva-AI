@@ -230,6 +230,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 25s
+    # The PDF report endpoint runs Chromium in this container; Docker's default 64 MB /dev/shm crashes it on a large report (the worker has the same).
+    shm_size: "1gb"
 
   worker:
     # Same image as the backend — same application, different entrypoint. `build` is

@@ -19,13 +19,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 from typing import Literal
 
 from app.rules.consent_rules import ConsentContext, build_consent_context
 from app.scanner.scan_profiles import MAX_WEB_PAGES
+from app.scoring import deductions as deductions_module
 from app.scoring import findings, review
 from app.scoring import sector as sector_analysis
 
@@ -130,10 +131,25 @@ def _unverifiable(ctx: ConsentContext) -> str | None:
     """Reasons that make ANY observation about the scanned site unreliable."""
     if not ctx.pages:
         return "No pages were scanned, so nothing was observed."
-    if ctx.framed_sites:
-        return (f"The scanned address only displays another site ({ctx.framed_sites[0]}) in a frame, so the evidence describes "
-                "the wrapper page, not the site visitors see (rule R-012).")
     return None
+
+
+def _framed_limit(ctx: ConsentContext) -> str | None:
+    """The limit a framed wrapper puts on what a CLEAN or ABSENT result may claim.
+
+    The scanned address only displays another site in a frame (rule R-012). What the scan OBSERVED is still observed: a tracker that fired while the
+    address loaded fired, and a consent banner or policy link found on the pages scanned is there. What a wrapper cannot support is a conclusion
+    from NOTHING being seen (no banner, no policy, no tracker, a clean Reject): the framed site may have its own, and the scan did not read it. So a
+    requirement is limited only where its answer rests on something not being seen; one that rests on something seen keeps its answer."""
+    if not ctx.framed_sites:
+        return None
+    return (f"The scanned address only displays another site ({ctx.framed_sites[0]}) in a frame, so the evidence describes "
+            "the wrapper page, not the site visitors see (rule R-012).")
+
+
+def _seen(ctx: ConsentContext) -> str:
+    """What to add to a positive observation made on a wrapper."""
+    return " This was seen on the scanned wrapper page; the framed site's own pages were not scanned." if ctx.framed_sites else ""
 
 
 def _pre_consent_processing(ctx: ConsentContext) -> Outcome:
@@ -143,8 +159,10 @@ def _pre_consent_processing(ctx: ConsentContext) -> Outcome:
         return Outcome("unable_to_verify", ["This scan predates three-state consent testing, so what fired before consent is unknown."])
     classified = [e for e in ctx.non_essential if "pre_consent" in e.get("consent_states", [])]
     if classified:
-        return Outcome("not_met", [f"{len(classified)} analytics/marketing cookie(s)/script(s) fired before any consent interaction."],
-                       [e["id"] for e in classified])
+        note = f"{len(classified)} analytics/marketing cookie(s)/script(s) fired before any consent interaction."
+        return Outcome("not_met", [note + _seen(ctx)], [e["id"] for e in classified])
+    if (limit := _framed_limit(ctx)):
+        return Outcome("unable_to_verify", [limit])
     unknown = [e for e in (*ctx.trackers, *ctx.cookies) if e.get("category") is None and "pre_consent" in e.get("consent_states", [])]
     if unknown:
         note = (
@@ -161,6 +179,8 @@ def _consent_mechanism_present(ctx: ConsentContext) -> Outcome:
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
     ids = [e["id"] for e in ctx.non_essential]
+    if ctx.mechanism_type == "none" and (limit := _framed_limit(ctx)):
+        return Outcome("unable_to_verify", [limit])        # no banner seen on a wrapper is not proof the framed site has none
     if ctx.mechanism_type == "none":
         return Outcome("not_met", [f"{len(ids)} analytics/marketing item(s) were observed but no consent banner or CMP was found."], ids)
     if ctx.mechanism_type in ("banner", "cmp"):
@@ -170,7 +190,7 @@ def _consent_mechanism_present(ctx: ConsentContext) -> Outcome:
                 "that visitors are asked."
             )
             return Outcome("unable_to_verify", [note])
-        return Outcome("met", [f"A consent mechanism ({ctx.mechanism_type}) was detected on the scanned pages."])
+        return Outcome("met", [f"A consent mechanism ({ctx.mechanism_type}) was detected on the scanned pages." + _seen(ctx)])
     return Outcome("unable_to_verify", ["The consent mechanism type was not determined."])
 
 
@@ -178,6 +198,8 @@ def _reject_honoured(ctx: ConsentContext) -> Outcome:
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
     if ctx.mechanism_type == "none":
+        if (limit := _framed_limit(ctx)):
+            return Outcome("unable_to_verify", [limit])
         return Outcome("not_applicable", ["No consent mechanism exists to reject through; see DPDP-C2."])
     if not ctx.three_pass:
         return Outcome("unable_to_verify", ["This scan predates three-state consent testing."])
@@ -191,11 +213,15 @@ def _reject_honoured(ctx: ConsentContext) -> Outcome:
     if after:
         return Outcome("not_met", [f"{len(after)} analytics/marketing item(s) kept firing after Reject was clicked and confirmed."],
                        [e["id"] for e in after])
+    if (limit := _framed_limit(ctx)):
+        return Outcome("unable_to_verify", [limit])
     return Outcome("met", ["Reject was clicked and confirmed, and no analytics or marketing was observed afterwards."])
 
 
 def _reject_as_easy_as_accept(ctx: ConsentContext) -> Outcome:
     if ctx.mechanism_type not in ("banner", "cmp"):
+        if (limit := _framed_limit(ctx)):
+            return Outcome("unable_to_verify", [limit])
         return Outcome("not_applicable", ["No consent banner was found, so there is no choice to compare; see DPDP-C2."])
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
@@ -203,7 +229,7 @@ def _reject_as_easy_as_accept(ctx: ConsentContext) -> Outcome:
         return Outcome("unable_to_verify", ["The consent banner was not displayed to the scanner, so its options were not seen."])
     has_reject = (ctx.signals or {}).get("has_reject_all")
     if has_reject is True:
-        return Outcome("met", ["A reject-all option was found alongside accept."])
+        return Outcome("met", ["A reject-all option was found alongside accept." + _seen(ctx)])
     if has_reject is False:
         return Outcome("not_met", ["A consent banner was shown but no equally prominent reject-all option was found."])
     return Outcome("unable_to_verify", ["Whether a reject-all option exists was not recorded."])
@@ -211,6 +237,8 @@ def _reject_as_easy_as_accept(ctx: ConsentContext) -> Outcome:
 
 def _granular_choices(ctx: ConsentContext) -> Outcome:
     if ctx.mechanism_type not in ("banner", "cmp"):
+        if (limit := _framed_limit(ctx)):
+            return Outcome("unable_to_verify", [limit])
         return Outcome("not_applicable", ["No consent banner was found, so there are no choices to assess; see DPDP-C2."])
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
@@ -219,7 +247,7 @@ def _granular_choices(ctx: ConsentContext) -> Outcome:
     sig = ctx.signals or {}
     granular, reject = sig.get("has_granular_choices"), sig.get("has_reject_all")
     if granular is True:
-        return Outcome("met", ["The banner offers choices per purpose or category."])
+        return Outcome("met", ["The banner offers choices per purpose or category." + _seen(ctx)])
     if granular is False:
         if reject is True:
             return Outcome("partially_met", ["The banner offers a single accept/reject choice but no choice per purpose."])
@@ -231,7 +259,9 @@ def _privacy_notice(ctx: ConsentContext) -> Outcome:
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
     if "privacy_policy" in ctx.policy_types:
-        return Outcome("met", ["A privacy policy page was found on the scanned pages."])
+        return Outcome("met", ["A privacy policy page was found on the scanned pages." + _seen(ctx)])
+    if (limit := _framed_limit(ctx)):
+        return Outcome("unable_to_verify", [limit])      # a wrapper without a policy link says nothing about the framed site's notice
     return Outcome("not_met", ["No privacy policy page was found within the pages scanned."])
 
 
@@ -242,9 +272,11 @@ def _tracking_disclosure(ctx: ConsentContext) -> Outcome:
         return Outcome("unable_to_verify", [why])
     ids = [e["id"] for e in ctx.non_essential]
     if "cookie_policy" in ctx.policy_types:
-        return Outcome("met", ["A dedicated cookie policy page was found."], ids)
+        return Outcome("met", ["A dedicated cookie policy page was found." + _seen(ctx)], ids)
     if "privacy_policy" in ctx.policy_types:
         return Outcome("partially_met", ["Tracking was observed and a general privacy policy exists, but no dedicated cookie policy was found."], ids)
+    if (limit := _framed_limit(ctx)):
+        return Outcome("unable_to_verify", [limit])
     return Outcome("not_met", ["Tracking was observed and neither a cookie policy nor a privacy policy was found."], ids)
 
 
@@ -902,12 +934,20 @@ class DpdpScore:
     assessment: Assessment | None = None
     remediation_plan: list[findings.RemediationStep] = field(default_factory=list)
     ledger: Ledger | None = None
+    # The readiness score taken apart: every check that lost points, how many, why, on what evidence (scoring/deductions.py).
+    deductions: deductions_module.Deductions | None = None
     # Which kind of website this looks like and which provisions depend on it. Informational: it never changes a score.
     sector: sector_analysis.SectorAssessment | None = None
     thresholds: dict = field(default_factory=lambda: {
         "min_coverage_percent": MIN_COVERAGE_PERCENT, "min_assessed_requirements": MIN_ASSESSED_REQUIREMENTS,
     })
     out_of_scope: list[dict] = field(default_factory=lambda: [{"provision": p, "reason": r} for p, r in OUT_OF_SCOPE])
+
+
+def today_in_india() -> date:
+    """Today's date in India (UTC+5:30, no daylight saving). The Act and Rules start on India dates, so an obligation that starts on 13 May 2027 is in force from
+    the start of that day in India, not from 05:30 India time (the start of that day in UTC)."""
+    return (datetime.now(UTC) + timedelta(hours=5, minutes=30)).date()
 
 
 def _pct(numerator: Fraction | int, denominator: Fraction | int) -> float:
@@ -1176,7 +1216,7 @@ def assess(
 ) -> DpdpScore:
     """`weights` replaces the documented default weight of the requirements it names (validated; see resolve_weights).
     `scan_url` and `scanned_at` only describe the scan in the result; they never change a score."""
-    as_of = as_of or datetime.now(UTC).date()
+    as_of = as_of or today_in_india()
     resolved = resolve_weights(weights)
     ctx = build_consent_context(evidence)
     results = evaluate_requirements(evidence, as_of, applicability, ctx, resolved)
@@ -1195,5 +1235,6 @@ def assess(
         assessment=build_assessment(ctx, as_of, scan_url, scanned_at),
         remediation_plan=findings.build_remediation_plan(results, readiness),
         ledger=build_ledger(results, readiness, in_force),
+        deductions=deductions_module.build_deductions(results, readiness, [*ctx.trackers, *ctx.cookies]),
         sector=sector_analysis.assess_sector(evidence, scan_url, applicability, business_sector),
     )

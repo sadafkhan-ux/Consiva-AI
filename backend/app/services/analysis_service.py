@@ -14,7 +14,7 @@ from app.db.repositories import scan_repository
 from app.db.session import async_session_factory
 from app.jobs import queue
 from app.llm.client import resolve_reasoning_provider_and_model
-from app.services import audit_service
+from app.services import audit_service, policy_background, report_cache_service
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +95,10 @@ async def run_analysis(agent_run_id: uuid.UUID, scan_id: uuid.UUID, org_id: uuid
 
     # Reads what the site's privacy and cookie policies SAY, beside the graph's reading of what the site DOES. Fail-soft by design: it
     # never raises, and its stage always completes (an unavailable result is recorded in the stage metadata, not as a failed stage:
-    # a failed stage outside the analysis stages is read by the console as the whole run failing). Run before the graph so the result
-    # exists whenever the findings do.
-    try:
+    # a failed stage outside the analysis stages is read by the console as the whole run failing). It runs TOGETHER with the graph (nothing in
+    # the graph reads its result), and the audit node waits for it before it marks the run completed, so the result still exists whenever the
+    # findings do (services/policy_background.py).
+    async def read_policy() -> None:
         from app.observability.stage_tracker import track_stage
         from app.policy import analysis as policy_analysis
 
@@ -105,8 +106,9 @@ async def run_analysis(agent_run_id: uuid.UUID, scan_id: uuid.UUID, org_id: uuid
             result = await policy_analysis.run(scan_id)
             meta["status"] = result["status"]
             meta["result"] = result
-    except Exception:
-        logger.warning("Policy analysis step could not run for scan %s", scan_id, exc_info=True)
+            meta["input_hash"] = result.get("input_hash")
+
+    policy_task = policy_background.start(agent_run_id, read_policy)
 
     graph = await get_compiled_graph()
     initial_state = AgentState(scan_id=str(scan_id), org_id=str(org_id), agent_run_id=str(agent_run_id))
@@ -114,6 +116,8 @@ async def run_analysis(agent_run_id: uuid.UUID, scan_id: uuid.UUID, org_id: uuid
     try:
         result = await graph.ainvoke(initial_state.model_dump(), config={"configurable": {"thread_id": thread_id}})
     except Exception as exc:
+        await policy_background.wait(agent_run_id)
+        policy_background.forget(agent_run_id)
         logger.exception("Agent run %s crashed", agent_run_id)
         async with async_session_factory() as db:
             agent_run = await db.get(AgentRun, agent_run_id)
@@ -123,6 +127,12 @@ async def run_analysis(agent_run_id: uuid.UUID, scan_id: uuid.UUID, org_id: uuid
                 agent_run.completed_at = datetime.now(UTC)
                 await db.commit()
         raise
+
+    # The policy reading ends before this job does, whichever way the graph ended (a paused run included).
+    await policy_task
+    policy_background.forget(agent_run_id)
+    # The report is complete now (or waiting only on a person's review): print it ahead of the first download.
+    await report_cache_service.queue_prewarm(scan_id, org_id)
 
     if "__interrupt__" in result:
         async with async_session_factory() as db:

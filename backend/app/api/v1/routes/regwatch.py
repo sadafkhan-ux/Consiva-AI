@@ -24,6 +24,7 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.credential_refs import CredentialRefNotAllowedError, assert_credential_ref_allowed
 from app.agents.regwatch.errors import (
     FindingNotFoundError,
     InvalidSourceError,
@@ -84,6 +85,10 @@ class SourceCreate(BaseModel):
                 "credential_ref is the NAME of an environment variable (e.g. "
                 "REGWATCH_MEITY_TOKEN), not the secret itself"
             )
+        try:
+            assert_credential_ref_allowed(cleaned)
+        except CredentialRefNotAllowedError as exc:
+            raise ValueError(str(exc)) from exc
         return cleaned
 
 
@@ -519,7 +524,7 @@ async def list_findings(
     if finding_status and finding_status not in watch.ALL_STATUSES:
         raise WatchNotReadyError(f"{finding_status!r} is not a finding status")
     org_id = uuid.UUID(user.org_id)
-    rows = await repo.list_findings(db, org_id, status=finding_status, limit=min(limit, 200))
+    rows = await repo.list_findings(db, org_id, status=finding_status, limit=max(1, min(limit, 200)))
     sources = await repo.source_identity_map(db, org_id)
     return {
         "findings": [

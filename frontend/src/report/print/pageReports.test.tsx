@@ -238,3 +238,30 @@ describe("the long report's front page", () => {
     expect(screen.getByTestId("rpt-about")).toBeInTheDocument();
   });
 });
+
+describe("report figures fixed by the 2026-10-26 audit", () => {
+  const manyTrackers = Array.from({ length: 12 }, (_, i) => tracker(String(100 + i), `Vendor ${i}`, i % 2 ? "analytics" : "marketing", ["post_accept"], `https://v${i}.example.net/t.js`));
+  const bigEvidence = { ...EVIDENCE, trackers: manyTrackers } as ScanEvidenceResponse;
+
+  it("counts the technologies still unlisted against what each report actually shows", () => {
+    const free = buildPageReport(model({ evidence: bigEvidence }), "free");
+    const full = buildPageReport(model({ evidence: bigEvidence }), "full");
+    expect(free.techCards.length).toBe(5);
+    expect(free.techMore).toBe(12 - 5);                    // the Free cards show 5
+    expect(full.techRows.length).toBe(8);
+    expect(full.techRowsMore).toBe(12 - 8);                // the Full table shows 8, so 4 remain, not 7
+  });
+
+  it("does not call the page limit the Free limit on the Full report", () => {
+    expect(buildPageReport(model(), "free").tiles[0].label).toContain("Free scan limit");
+    expect(buildPageReport(model(), "full").tiles[0].label).not.toContain("Free");
+  });
+
+  it("puts a confirmed finding rated High ahead of a high score, since the score never rates a finding Critical", () => {
+    for (const key of Object.keys(F) as (keyof typeof F)[]) {
+      const m = model({ score: key });
+      const hasHigh = !!m.dpdpScore?.groups.find((g) => g.key === "confirmed")?.entries.some((e) => /high/i.test(e.severity));
+      expect(buildPageReport(m, "free").cta.key === "fix_priority", String(key)).toBe(hasHigh);
+    }
+  });
+});

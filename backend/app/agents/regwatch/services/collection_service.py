@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.credential_refs import CredentialRefNotAllowedError, assert_credential_ref_allowed
 from app.agents.regwatch.connectors import feed_source, http_source
 from app.agents.regwatch.errors import (
     ContentUnusableError,
@@ -71,6 +72,10 @@ def _resolve_credential(source: RegWatchSource) -> str | None:
     """
     if not source.credential_ref:
         return None
+    try:
+        assert_credential_ref_allowed(source.credential_ref)
+    except CredentialRefNotAllowedError as exc:
+        raise SourceNotAuthorizedError(str(exc)) from exc
     secret = os.getenv(source.credential_ref)
     if secret is None:
         raise SourceNotAuthorizedError(

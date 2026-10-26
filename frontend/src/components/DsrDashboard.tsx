@@ -131,6 +131,8 @@ export function DsrDashboard({ initialCaseId = null, onCaseChange, onOpenConfig 
   const [showManual, setShowManual] = useState(false);
   const sources = useSourceStatus();
 
+  const loadCaseRef = useRef<((id: string) => Promise<void>) | null>(null);
+
   const loadCases = useCallback(async () => {
     try {
       const rows = await dsrApi.listCases();
@@ -140,7 +142,10 @@ export function DsrDashboard({ initialCaseId = null, onCaseChange, onOpenConfig 
       const current = selectedRef.current;
       if (current) {
         const updated = rows.find((c) => c.id === current.id);
-        if (updated && updated.status !== current.status) setSelected(updated);
+        if (updated && updated.status !== current.status) {
+          setSelected(updated);
+          void loadCaseRef.current?.(updated.id);   // the evidence, plan and executions changed with the status: reload the tabs, not only the header
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load cases.");
@@ -230,6 +235,7 @@ export function DsrDashboard({ initialCaseId = null, onCaseChange, onOpenConfig 
       setBusy(false);
     }
   }, []);
+  loadCaseRef.current = loadCase;
 
   /** Every mutating action funnels through here so a failure always surfaces as a
    *  message and the case is always re-read from the backend afterwards. */

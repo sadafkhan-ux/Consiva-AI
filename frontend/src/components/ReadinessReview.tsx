@@ -65,7 +65,7 @@ export function ReadinessReview({ review }: { review: Review }) {
       </div>
 
       <h3>C. Summary</h3>
-      <p data-testid="readiness-score"><strong>Readiness score:</strong> {review.scoreLine}</p>
+      <p data-testid="readiness-score"><strong>Five-page review score:</strong> {review.scoreLine}</p>
       <h4>Top gaps, ranked by risk</h4>
       {review.topGaps.length === 0 ? (
         <p className="small" data-testid="readiness-no-gaps">No gap or missing item was found in the checks the scan could assess.</p>

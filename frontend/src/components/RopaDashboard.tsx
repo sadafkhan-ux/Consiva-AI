@@ -118,8 +118,9 @@ export function RopaDashboard() {
 
   useEffect(() => {
     if (selected) void loadRun(selected);
+    // The status is a dependency too: a run that moves from discovering to completed has just written its records and findings, and the tabs must show them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
+  }, [selected?.id, selected?.status]);
 
   async function decideRecord(id: string, decision: "approved" | "rejected") {
     try {

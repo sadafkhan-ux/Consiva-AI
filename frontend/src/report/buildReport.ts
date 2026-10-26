@@ -8,6 +8,7 @@ import { summariseTrackers } from "./trackerSummary";
 import { buildCookieInventory, type CookieInventory } from "./cookieInventory";
 import { buildScanPages, type ScanPagesView } from "./scanPages";
 import { buildReportVisual, type ReportVisual } from "./reportVisual";
+import { buildTransparency, type ScanTiming, type TransparencyView } from "./scanTransparency";
 
 /** Risk ordering, worst first -- used both to pick the overall band and to decide which
  *  findings earn a place on a deliberately one-page summary. */
@@ -48,6 +49,8 @@ export interface ReportModel {
   scanPages: ScanPagesView | null;
   /** Set when the analysis step did not complete, so the report says so beside the score. */
   analysisNote: string | null;
+  /** What the scan found, tried, finished and could not verify: pages, timing, the three coverages, the consent states, and why the score is what it is. */
+  transparency: TransparencyView;
   /** The scan run this report describes: the same one the score card and the page list come from. */
   scanId: string | null;
   /** The scan's complete evidence (forms with every field, banner details, cookies, requests, policies, services), for the appendix. Null when it was not loaded. */
@@ -82,6 +85,7 @@ export function buildReportModel(
   analysisNote: string | null = null,
   policyAnalysis: PolicyAnalysis | null = null,
   screenshot: ScanScreenshot | null = null,
+  timing: ScanTiming | null = null,
 ): ReportModel {
   const sorted = [...findings].sort((a, b) => riskRank(a.risk_level) - riskRank(b.risk_level));
   const provisional = findings.some((f) => f.status === "pending");
@@ -209,6 +213,10 @@ export function buildReportModel(
     scanPages: buildScanPages(evidence?.pages, meta, scan?.url ?? "", dpdpScore?.pageLimit ?? null),
     scanId: scan?.id ?? null,
     analysisNote,
+    transparency: buildTransparency({
+      scanPages: buildScanPages(evidence?.pages, meta, scan?.url ?? "", dpdpScore?.pageLimit ?? null),
+      visual: buildReportVisual(evidence, meta, dpdpScore, untestedStates), score: dpdpScore, evidence, timing,
+    }),
     evidence,
     policyAnalysis: policyAnalysis && policyAnalysis.status !== "not_run" ? policyAnalysis : null,
     screenshot,

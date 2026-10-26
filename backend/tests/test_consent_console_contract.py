@@ -66,7 +66,7 @@ def _normalise(path: str) -> str:
 
 
 def test_the_console_calls_the_sixteen_documented_endpoints():
-    assert len(_console_calls()) == 16, _console_calls()
+    assert len(_console_calls()) == 17, _console_calls()
 
 
 @pytest.mark.parametrize("method,path", _console_calls())
@@ -133,6 +133,7 @@ PAIRS = [
     ("UsagePages", "UsagePages"),
     ("ScanUsage", "UsageResponse"),
     ("UsageHistoryItem", "UsageHistoryItem"),
+    ("ScoreComparison", "ScoreComparisonResponse"),
 ]
 
 
@@ -158,6 +159,7 @@ ENDPOINTS = [
     ("GET", f"/api/v1/consent/scans/{SCAN}/stages", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/evidence", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/dpdp-score", None),
+    ("GET", f"/api/v1/consent/scans/{SCAN}/dpdp-score/compare", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/usage", None),
     ("GET", "/api/v1/consent/scans/usage/history", None),
     ("POST", f"/api/v1/consent/scans/{SCAN}/analyze", None),
@@ -188,6 +190,7 @@ def test_every_console_endpoint_refuses_a_forged_token(method, path, body):
     "/api/v1/consent/scans/not-a-uuid/stages",
     "/api/v1/consent/scans/not-a-uuid/evidence",
     "/api/v1/consent/scans/not-a-uuid/dpdp-score",
+    "/api/v1/consent/scans/not-a-uuid/dpdp-score/compare",
     "/api/v1/consent/scans/not-a-uuid/findings",
     "/api/v1/consent/scans/not-a-uuid/audit",
     "/api/v1/consent/scans/not-a-uuid/usage",

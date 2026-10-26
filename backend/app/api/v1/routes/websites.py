@@ -80,7 +80,7 @@ async def verify_domain(
 
 
 class SetScheduleRequest(BaseModel):
-    interval_hours: int = Field(gt=0)
+    interval_hours: int = Field(gt=0, le=24 * 366)   # a year at most: a larger value overflows the next-run date
     enabled: bool = True
 
 
@@ -154,6 +154,8 @@ async def promote_baseline(
     updated = await monitoring_service.promote_baseline(
         db, schedule_id=schedule.id, org_id=org_id, scan_id=body.scan_id
     )
+    if updated is None:
+        raise NotFoundError(f"No completed scan {body.scan_id} of this website to use as the baseline")
     await db.commit()
     return ScheduleResponse.model_validate(updated)
 

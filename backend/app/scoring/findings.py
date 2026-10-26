@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import ROUND_HALF_UP, Decimal
+from fractions import Fraction
 
 from app.rules.consent_rules import ConsentContext
 from app.scanner.scan_profiles import MAX_WEB_PAGES
@@ -116,6 +118,13 @@ class RemediationStep:
     impact: str = ""
 
 
+def _pct(numerator: float, denominator: float) -> float:
+    """numerator / denominator x 100 rounded half-up to one decimal, exactly as the score does (scoring/dpdp_score.py `_pct`). Python's round() rounds half
+    to even and works on a binary float, so 5 / 16 came out 31.2 here while the score showed 31.3 for the same fraction."""
+    q = Fraction(numerator).limit_denominator(2) / Fraction(denominator) * 100
+    return float((Decimal(q.numerator) / Decimal(q.denominator)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+
 def build_remediation_plan(results: list, readiness=None) -> list[RemediationStep]:
     """The remediation actions of every failed check, in the order to do them, by a fixed rule that can be read off the result:
     duties already in force first; within that, Not Met before Partially Met; then the heavier documented weight; then by id.
@@ -127,9 +136,9 @@ def build_remediation_plan(results: list, readiness=None) -> list[RemediationSte
     # one the half it had not earned. No estimate and no invented metric: the same arithmetic as the score, run once more with one check fixed.
     scored = readiness is not None and getattr(readiness, "status", None) == "scored" and getattr(readiness, "assessed_weight", 0)
     for rank, r in enumerate(gaps, start=1):
-        current = round(readiness.points_earned / readiness.assessed_weight * 100, 1) if scored else None
+        current = _pct(readiness.points_earned, readiness.assessed_weight) if scored else None
         regained = r.weight * (1.0 if r.status == "not_met" else 0.5)
-        after = round(min(100.0, (readiness.points_earned + regained) / readiness.assessed_weight * 100), 1) if scored else None
+        after = min(100.0, _pct(readiness.points_earned + regained, readiness.assessed_weight)) if scored else None
         if r.in_force:
             priority = "Fix now" if r.status == "not_met" else "Improve"
             timing = "Current"

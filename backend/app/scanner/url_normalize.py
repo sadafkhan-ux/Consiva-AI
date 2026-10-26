@@ -89,8 +89,14 @@ def normalize_url(url: str) -> str:
     if hostname.startswith("www.") and hostname.count(".") >= 2:
         hostname = hostname[4:]
     netloc = hostname
-    if parts.port and str(parts.port) != _DEFAULT_PORTS.get(scheme):
-        netloc = f"{hostname}:{parts.port}"
+    try:
+        port = parts.port
+    except ValueError:
+        # `https://example.com:99999/` or `:abc`: a link on a page can carry anything. One bad link must not fail a finished crawl, so the address is
+        # returned as it came (the crawler then fails to load it, which is recorded against that one page).
+        return url
+    if port and str(port) != _DEFAULT_PORTS.get(scheme):
+        netloc = f"{hostname}:{port}"
 
     # keep_blank_values: `?q=` is a real, different request from `?` absent.
     kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)

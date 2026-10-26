@@ -107,6 +107,21 @@ class ScanScreenshot(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
+class ReportPdf(Base):
+    """A pre-generated PDF report (migration 0043). One row per scan and report type; valid only while its fingerprint matches the scan's current one."""
+
+    __tablename__ = "report_pdfs"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("consent_scans.id", ondelete="CASCADE"), nullable=False)
+    variant: Mapped[str] = mapped_column(String, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    filename: Mapped[str] = mapped_column(String, nullable=False)
+    pdf: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
 class ConsentForm(Base):
     __tablename__ = "consent_forms"
 

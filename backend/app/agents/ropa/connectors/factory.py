@@ -35,6 +35,7 @@ from app.agents.ropa.connectors.api import ApiConnectionConfig, ApiConnector, Ap
 from app.agents.ropa.connectors.base import ConnectorError
 from app.agents.ropa.connectors.postgres import PostgresConnectionConfig, PostgresConnector
 from app.config import get_settings
+from app.core.credential_refs import CredentialRefNotAllowedError, assert_credential_ref_allowed
 
 # Environment names a source may point at must look like an env var, so a
 # malicious/typo'd config can't be used to probe arbitrary process state.
@@ -114,7 +115,11 @@ def _resolve_secret(
     if not credential_ref:
         return None
     if len(credential_ref) > _MAX_CREDENTIAL_REF_LEN or not credential_ref.replace("_", "").isalnum():
-        raise ConnectorError(f"invalid credential_ref format: {credential_ref!r}")
+        raise ConnectorError("invalid credential_ref format")
+    try:
+        assert_credential_ref_allowed(credential_ref)
+    except CredentialRefNotAllowedError as exc:
+        raise ConnectorError(str(exc)) from exc
     secret = os.getenv(credential_ref)
     if secret is None:
         # Names the REF, never a value -- this message reaches logs and API errors.

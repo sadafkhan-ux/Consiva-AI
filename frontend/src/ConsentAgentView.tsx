@@ -7,6 +7,7 @@ import { ScanStatusSection } from "./components/ScanStatusSection";
 import { ConsentSummarySection } from "./components/ConsentSummarySection";
 import { buildScoreView, isDpdpScore } from "./report/dpdpScore";
 import { DpdpScoreSection } from "./components/DpdpScoreSection";
+import { ScoreComparisonPanel } from "./components/ScoreComparisonPanel";
 import { ThreeStateSection } from "./components/ThreeStateSection";
 import { TrackersTable } from "./components/TrackersTable";
 import { CookiesTable } from "./components/CookiesTable";
@@ -207,6 +208,7 @@ export function ConsentAgentView() {
           <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} />
           <ConsentSummarySection meta={state.websiteScanMeta} />
           <DpdpScoreSection score={state.dpdpScore} analysisNote={analysisNote} />
+          {isDpdpScore(state.dpdpScore) && <ScoreComparisonPanel scanId={state.scanId} />}
           <PolicyAnalysisSection analysis={state.policyAnalysis} />
           <InsightSections sections={buildInsightSections({ policy: state.policyAnalysis, meta: state.websiteScanMeta, evidence: state.evidence, sector: isDpdpScore(state.dpdpScore) ? state.dpdpScore.sector : null })} />
           <ReadinessReview review={buildReadinessReview({ siteUrl: state.scan?.url ?? "", evidence: state.evidence, meta: state.websiteScanMeta, policy: state.policyAnalysis, sector: isDpdpScore(state.dpdpScore) ? state.dpdpScore.sector : null })} />

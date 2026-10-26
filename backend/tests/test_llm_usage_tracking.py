@@ -48,7 +48,8 @@ def test_several_attempts_add_up_and_each_request_keeps_its_id():
 def test_the_openai_compatible_shape_is_understood():
     s = ut.summarise_usage([{"prompt_tokens": 900, "completion_tokens": 120, "prompt_tokens_details": {"cached_tokens": 64},
                              "completion_tokens_details": {"reasoning_tokens": 30}, "request_id": "chatcmpl-1"}])
-    assert (s["input_tokens"], s["output_tokens"], s["cache_read_tokens"], s["reasoning_tokens"], s["request_ids"]) == (900, 120, 64, 30, ["chatcmpl-1"])
+    # OpenAI-compatible prompt_tokens INCLUDES the cached tokens, so input is the uncached 836 and the 64 are counted once, as cache reads (audit 2026-10-26).
+    assert (s["input_tokens"], s["output_tokens"], s["cache_read_tokens"], s["reasoning_tokens"], s["request_ids"]) == (836, 120, 64, 30, ["chatcmpl-1"])
 
 
 @pytest.mark.parametrize("blank", [[], [None], [{}], [{"input_tokens": None, "output_tokens": None}]])

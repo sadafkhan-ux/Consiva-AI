@@ -3,6 +3,7 @@ import type { ReportModel } from "./buildReport";
 import { buildHeroView, buildPreviewView, type HeroView, type PreviewView } from "./hero";
 import { resolveCta, type Cta } from "./reportCta";
 import { isReportCategory } from "./reportScope";
+import { pagesCoverageLine } from "./scanPages";
 import { checkContribution, stripRuleCodes, topFindingRows, type FindingRow, type RowTone } from "./reportText";
 import type { ConsentComparison, ElementView, TechnologyRow } from "./reportVisual";
 import { registrableDomain } from "./trackerSummary";
@@ -38,6 +39,8 @@ export interface PageReportView {
   /** FR-20261022-7843 (Free) or FS-20261022-7843 (Full): the date of the scan and the first four characters of its id, so it is the scan's own and repeats. */
   reportId: string;
   scannedAt: string;
+  /** "5 of 112 pages scanned": the page header's pages-scanned words, the same as the flowing pages' print header. */
+  headerPages: string;
   hero: HeroView;
   preview: PreviewView;
   coverageLabel: string;
@@ -49,6 +52,8 @@ export interface PageReportView {
   consent: ConsentComparison | null;
   techCards: TechCard[];
   techMore: number;
+  /** Technologies beyond the ones the Full report's table lists (it lists up to 8; the Free cards list 5). */
+  techRowsMore: number;
   techRows: TechCard[];
   domains: { shown: string[]; others: number };
   series: SeriesPoint[];
@@ -180,13 +185,14 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
       }))
     : [];
 
-  const critical = !!v?.groups.find((g) => g.key === "confirmed")?.entries.some((e) => /critical/i.test(e.severity));
+  // The score rates a finding High, Medium or Low (scoring/findings.py); it has no "Critical". A confirmed finding rated High is the one that outranks a high score.
+  const critical = !!v?.groups.find((g) => g.key === "confirmed")?.entries.some((e) => /critical|high/i.test(e.severity));
   const cta = resolveCta({ score: v ? v.scoreValue : null, coverage: v ? v.coverageValue : null, unassessed: unable.length, critical, subscriber: variant === "full" });
 
   const pagesLine = vis ? (vis.pagesFound !== null && vis.pagesFound >= vis.pagesScanned ? `${vis.pagesScanned} of ${vis.pagesFound}` : String(vis.pagesScanned)) : "Not recorded";
   const tiles: { value: string; label: string }[] = vis
     ? [
-        { value: pagesLine, label: vis.pageLimit ? `Pages scanned (Free scan limit ${vis.pageLimit})` : "Pages scanned" },
+        { value: pagesLine, label: vis.pageLimit ? `Pages scanned (${variant === "free" ? "Free scan limit" : "limit"} ${vis.pageLimit})` : "Pages scanned" },
         { value: String(vis.statesTested), label: "Consent states tested" },
         { value: String(vis.requests), label: "Third-party requests" },
         { value: String(vis.knownRequests), label: "Analytics and marketing requests" },
@@ -204,16 +210,17 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
   if (v && unable.length) limits.push(`${unable.length} applicable ${unable.length === 1 ? "check" : "checks"} could not be tested from outside and ${unable.length === 1 ? "is" : "are"} not counted as passed.`);
 
   return {
-    variant, domain: preview.domain, scanId: model.scanId, reportId: reportIdFor(variant, model.scanId, scannedAt), scannedAt, hero, preview,
+    variant, domain: preview.domain, scanId: model.scanId, reportId: reportIdFor(variant, model.scanId, scannedAt), scannedAt,
+    headerPages: model.scanPages ? model.scanPages.coverageLine : vis ? pagesCoverageLine(vis.pagesScanned, vis.pagesFound) : "", hero, preview,
     coverageLabel: v ? v.coverageHeadline : "n/a", coveragePct: v ? v.coverageValue : null,
     testedLine: v ? `${assessed.length} of ${assessed.length + unable.length} applicable checks tested from outside.` : "",
-    tiles, framework, areas, consent, techCards: allTech.slice(0, 5), techMore: techMore + Math.max(0, allTech.length - 5), techRows: allTech,
+    tiles, framework, areas, consent, techCards: allTech.slice(0, 5), techMore: techMore + Math.max(0, allTech.length - 5), techRowsMore: techMore, techRows: allTech,
     domains: { shown: hosts.slice(0, SHOWN_DOMAINS), others: Math.max(0, hosts.length - SHOWN_DOMAINS) },
     series: seriesFrom(ev, consent), elements: vis ? vis.elements : [],
     findings, findingsMore: Math.max(0, rows.length - findings.length),
     checks, checksMore: Math.max(0, listedChecks.length - checks.length), fixes, cta, limits, pagesLine,
     upcoming: v ? v.upcomingLines : [], groupCounts: v ? v.groupCountsLine : null,
     policies: (ev?.policies ?? []).map((p) => ({ type: p.policy_type.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase()), url: p.url })),
-    forms: (ev?.forms ?? []).map((f, i) => ({ title: `Form ${i + 1}${f.purpose_guess ? `: ${f.purpose_guess.replace(/_/g, " ")}` : ""}`, fields: f.fields.length ? f.fields.map((x) => x.name || "(unnamed)").join(", ") : "No fields recorded" })),
+    forms: (ev?.forms ?? []).map((f, i) => ({ title: `Form ${i + 1}${f.purpose_guess ? `: ${f.purpose_guess.replace(/_/g, " ")}` : ""}`, fields: f.fields.length ? `${f.fields.slice(0, 6).map((x) => x.name || "(unnamed)").join(", ")}${f.fields.length > 6 ? ` and ${f.fields.length - 6} more` : ""}` : "No fields recorded" })),
   };
 }

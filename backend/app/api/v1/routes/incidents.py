@@ -291,7 +291,7 @@ async def list_incidents(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     rows = await incident_repository.list_incidents(
-        db, uuid.UUID(user.org_id), status=status_filter, limit=min(limit, 200)
+        db, uuid.UUID(user.org_id), status=status_filter, limit=max(1, min(limit, 200))
     )
     return [_incident_response(r) for r in rows]
 

@@ -30,6 +30,13 @@ export interface ScanPagesView {
   scannedCount: number;
   /** "5 of 12 pages scanned": the pages scanned out of every page of the domain the scan found. */
   coverageLine: string;
+  /** Every distinct page of the entered domain the scan saw a link or sitemap entry for, or null when the scan did not record it. */
+  discovered: number | null;
+  /** Pages that were tried and did not load, with the reason; and the pages found but not tried, by reason, in plain words. */
+  failed: { url: string; reason: string }[];
+  skipped: { reason: string; count: number }[];
+  /** The crawl's own account of why it stopped, in plain words, or null. */
+  stopReason: string | null;
   /** "Label: sentence" lines for the Scan Review box, in order. */
   review: { label: string; text: string }[];
 }
@@ -197,5 +204,11 @@ export function buildScanPages(
   if (host && off.length) limitations.push(`${plural(off.length, "recorded page is", "recorded pages are")} not on ${host}.`);
   review.push({ label: "Limitations", text: limitations.join(" ") });
 
-  return { rows, pageLimit: limit, host, attempted, scannedCount, coverageLine: pagesCoverageLine(scannedCount, found), review };
+  const skippedList = Object.entries(skipped).filter(([reason, n]) => n > 0 && reason !== "duplicate_url").map(([reason, n]) => ({ reason: SKIP_REASON[reason] ?? `skipped (${reason.replace(/_/g, " ")})`, count: n }));
+  if (unattempted > 0 && !(skipped.page_limit > 0)) skippedList.push({ reason: "found after the limit was reached", count: unattempted });
+  return {
+    rows, pageLimit: limit, host, attempted, scannedCount, coverageLine: pagesCoverageLine(scannedCount, found), discovered: found === null ? null : Math.max(found, scannedCount),
+    failed: failedRows.map((r) => ({ url: r.url, reason: r.status.replace("Not scanned: ", "") })), skipped: skippedList,
+    stopReason: meta?.stop_reason ? STOP_REASON[meta.stop_reason] ?? null : null, review,
+  };
 }

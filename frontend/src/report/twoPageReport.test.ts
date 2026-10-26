@@ -1375,7 +1375,7 @@ describe("the five-page readiness review in the PDF", () => {
     const t = flat(summary);
     const rv = model.readiness;
     for (const k of ["Compliant", "Gap", "Not Found", "Cannot Verify", "Requires document review"] as const) expect(t).toContain(flat(`${rv.counts[k]} ${k}`));
-    expect(t).toContain(flat(`Readiness score: ${rv.scoreLine}`));
+    expect(t).toContain(flat(`Five-page review score: ${rv.scoreLine}`));
     expect(rv.topGaps.length).toBeGreaterThan(0);
     for (const g of rv.topGaps) { expect(t).toContain(flat(`${g.rank}. ${g.row.check}`)); expect(t).toContain(flat(`${g.row.page}: ${g.row.status}. Fix: ${g.row.fix}`)); }
     expect(t).toContain(flat(`Highest-risk page: ${rv.riskiest!.n}. ${rv.riskiest!.page}. ${rv.riskiest!.why}`));

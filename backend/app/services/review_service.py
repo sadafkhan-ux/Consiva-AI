@@ -31,6 +31,9 @@ _EDIT_FIELD_VALIDATORS: dict[str, tuple] = {
 }
 
 
+_COOKIE_CATEGORIES = frozenset({"analytics", "marketing", "functional", "other"})
+
+
 def _validate_edited_payload(edited_payload: dict) -> None:
     """A reviewer edit must satisfy the same constraints as the LLM output it
     overrides -- previously an out-of-enum string (e.g. risk_level='banana') would be
@@ -41,6 +44,14 @@ def _validate_edited_payload(edited_payload: dict) -> None:
             raise InvalidEditError(
                 f"edited_payload.{field} must be one of {sorted(allowed)}, got {edited_payload[field]!r}"
             )
+    if "reclassify_cookie" in edited_payload:
+        reclassify = edited_payload["reclassify_cookie"]
+        if not isinstance(reclassify, dict) or not isinstance(reclassify.get("name_pattern"), str) or not reclassify["name_pattern"].strip():
+            raise InvalidEditError("edited_payload.reclassify_cookie must be an object with a non-empty name_pattern")
+        if reclassify.get("category") not in _COOKIE_CATEGORIES:
+            raise InvalidEditError(f"edited_payload.reclassify_cookie.category must be one of {sorted(_COOKIE_CATEGORIES)}")
+        if len(reclassify["name_pattern"]) > 200 or not (reclassify.get("vendor") is None or isinstance(reclassify.get("vendor"), str)):
+            raise InvalidEditError("edited_payload.reclassify_cookie has a name_pattern over 200 characters or a vendor that is not text")
     if "finding_text" in edited_payload:
         text = edited_payload["finding_text"]
         if not isinstance(text, str) or not text.strip():

@@ -79,6 +79,7 @@ from app.services import (
     purpose_run_service,
     monitoring_service,
     regwatch_run_service,
+    report_cache_service,
     ropa_run_service,
     scan_service,
 )
@@ -128,6 +129,9 @@ async def _process_one(job: AgentJob) -> None:
             uuid.UUID(job.payload["scan_id"]),
             uuid.UUID(job.payload["org_id"]),
         )
+    elif job.job_type == "render_reports":
+        # Pre-generation: print and keep a finished scan's reports so the first download is already waiting (services/report_cache_service.py).
+        await report_cache_service.prewarm(uuid.UUID(job.payload["scan_id"]))
     elif job.job_type == "ropa_discovery":
         # Agent 2 (Data Discovery / ROPA) connector run: connects to the
         # customer's database and reads its schema, which can take as long as

@@ -1303,6 +1303,18 @@ async def run_scan(
             await context.route("**/*", _guard_navigation)
             disallowed_prefixes, robots_sitemaps = await _fetch_robots(context, root_url)
             site_registered = _registered_domain(urlparse(root_url).netloc)
+
+            async def consent_passes():
+                """post_accept and post_reject are fully independent -- separate contexts (deliberately fresh, so neither pass's consent state leaks into the
+                other), no shared mutable state between them or with the crawl, which uses `context`. Running them concurrently is a pure wall-clock win with no
+                correctness change: same navigations, same click attempts, same detection logic."""
+                return await asyncio.gather(
+                    _run_interaction_pass(browser, root_url, settings, disallowed_prefixes, "post_accept", click_accept),
+                    _run_interaction_pass(browser, root_url, settings, disallowed_prefixes, "post_reject", click_reject),
+                )
+
+            # They also do not depend on the crawl's result (only on the address and robots.txt), so they can start now and run beside it.
+            passes_task = asyncio.ensure_future(consent_passes()) if settings.scanner_overlap_consent_passes else None
             try:
                 sitemap_urls = await discover_sitemap_urls(
                     context, root_url, robots_sitemaps,
@@ -1320,22 +1332,20 @@ async def run_scan(
                     context, root_url, settings, disallowed_prefixes, sitemap_urls=sitemap_urls,
                     profile=profile, deadline_monotonic=crawl_deadline, should_stop=should_stop,
                 )
+            except BaseException:
+                # The crawl failed or the scan was cancelled: the passes beside it are no longer wanted.
+                if passes_task is not None:
+                    passes_task.cancel()
+                    await asyncio.gather(passes_task, return_exceptions=True)
+                raise
             finally:
                 await context.close()
             homepage_screenshot = pre_consent_diagnostics.pop("homepage_screenshot", None)
 
-            # post_accept and post_reject are fully independent -- separate contexts
-            # (deliberately fresh, so neither pass's consent state leaks into the
-            # other), no shared mutable state between them. Running them concurrently
-            # instead of sequentially is a pure wall-clock win with no correctness
-            # change: same navigations, same click attempts, same detection logic.
             (
                 (accept_cookies, accept_trackers, accept_status, accept_confirmed, accept_scroll_steps, accept_gate),
                 (reject_cookies, reject_trackers, reject_status, reject_confirmed, reject_scroll_steps, reject_gate),
-            ) = await asyncio.gather(
-                _run_interaction_pass(browser, root_url, settings, disallowed_prefixes, "post_accept", click_accept),
-                _run_interaction_pass(browser, root_url, settings, disallowed_prefixes, "post_reject", click_reject),
-            )
+            ) = await (passes_task if passes_task is not None else consent_passes())
         finally:
             await browser.close()
 

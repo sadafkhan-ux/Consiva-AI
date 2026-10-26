@@ -118,11 +118,31 @@ class TestUnableToVerify:
         s = assess(evidence(three_pass=False), TODAY)
         assert by_id(s, "DPDP-C1").status == "unable_to_verify"
 
-    def test_framed_wrapper_is_never_assessed(self):
-        s = assess(evidence(framed=["https://real.test"], trackers=[tr(1)], policies=()), TODAY)
-        for rid in ("DPDP-C1", "DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-N1", "DPDP-N2"):
+    def test_a_framed_wrapper_is_limited_only_where_the_answer_rests_on_nothing_being_seen(self):
+        """Requirement by requirement (audit 2026-10-26): what the scan SAW stands, what it did not see proves nothing about the framed site."""
+        s = assess(evidence(framed=["https://real.test"], trackers=[tr(1)], policies=(), mechanism="none"), TODAY)
+        # A tracker that fired while the address loaded fired: that observation is kept, and says where it was seen.
+        assert by_id(s, "DPDP-C1").status == "not_met" and "wrapper" in by_id(s, "DPDP-C1").observations[0]
+        # No banner / no policy / no clean Reject seen on a wrapper is not a finding about the framed site.
+        for rid in ("DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-N1", "DPDP-N2"):
             assert by_id(s, rid).status in ("unable_to_verify", "not_applicable"), rid
-        assert s.readiness.status == "insufficient_evidence"
+        assert by_id(s, "DPDP-N1").status == "unable_to_verify" and "frame" in by_id(s, "DPDP-N1").observations[0]
+        assert s.readiness.status == "insufficient_evidence"          # one assessed requirement is not enough for a number
+
+    def test_a_clean_framed_wrapper_is_never_a_pass(self):
+        s = assess(evidence(framed=["https://real.test"], trackers=[], policies=(), mechanism="none"), TODAY)
+        assert not any(r.status == "met" for r in s.requirements)
+        assert by_id(s, "DPDP-C1").status == "unable_to_verify" and by_id(s, "DPDP-N1").status == "unable_to_verify"
+
+    def test_a_policy_link_found_on_a_wrapper_is_kept_with_where_it_was_seen(self):
+        s = assess(evidence(framed=["https://real.test"], trackers=[], policies=("privacy_policy",), mechanism="none"), TODAY)
+        n1 = by_id(s, "DPDP-N1")
+        assert n1.status == "met" and "wrapper" in n1.observations[0]
+
+    def test_the_same_checks_without_a_frame_are_unchanged(self):
+        s = assess(evidence(trackers=[tr(1)], policies=(), mechanism="none"), TODAY)
+        assert by_id(s, "DPDP-C1").status == "not_met" and by_id(s, "DPDP-N1").status == "not_met"
+        assert by_id(s, "DPDP-C2").status == "not_applicable"      # its gap is carried by DPDP-C1 (duplicate suppression), never silently passed
 
     def test_missing_evidence_is_never_compliance(self):
         """With no pages scanned nothing is Met, nothing is scored."""

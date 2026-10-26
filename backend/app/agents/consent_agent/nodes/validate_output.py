@@ -14,6 +14,15 @@ MAX_VALIDATION_ATTEMPTS = 2
 # text verbatim -- see _unsupported_vendor_claims below.
 _KNOWN_VENDOR_NAMES = sorted({sig.vendor for sig in TRACKER_CATALOG} | {sig.cmp_vendor for sig in CMP_CATALOG})
 
+# Vendor names that are also ordinary words. "analytics fired for every visitor segment" does not name Segment, so these count only when written with the
+# vendor's own capital letter. Every other name is matched whole-word, case-insensitively: "cookiebot-free" or "segments" is not a mention of a vendor.
+_ORDINARY_WORD_VENDORS = frozenset({"Segment"})
+
+
+def _names_vendor(text: str, vendor: str) -> bool:
+    flags = 0 if vendor in _ORDINARY_WORD_VENDORS else re.IGNORECASE
+    return re.search(rf"(?<![\w-]){re.escape(vendor)}(?![\w-])", text, flags) is not None
+
 # Catches the LLM writing a specific-sounding legal citation number directly into its
 # free-text finding/recommendation prose (e.g. "DPDP Rule 17(1)(b)") -- a real, observed
 # failure mode distinct from an ungrounded dpdp_reference chunk_id: the structured
@@ -139,8 +148,7 @@ def _unsupported_vendor_claims(
     claims_post_reject = _asserts(text, _POST_REJECT_CLAIM_RE)
     if not (claims_pre or claims_post_reject):
         return []
-    lowered = text.lower()
-    mentioned = [v for v in _KNOWN_VENDOR_NAMES if v.lower() in lowered]
+    mentioned = [v for v in _KNOWN_VENDOR_NAMES if _names_vendor(text, v)]
     unsupported = []
     for vendor in mentioned:
         if claims_pre and vendor not in pre_consent_vendors:

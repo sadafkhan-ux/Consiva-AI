@@ -26,7 +26,8 @@ async def load_all(db: AsyncSession) -> list[LookupEntry]:
     if _cache is not None and (now - _cache_loaded_at) < _CACHE_TTL_SECONDS:
         return _cache
 
-    result = await db.execute(select(CookieLookup))
+    # Ordered, so the first exact row the matcher meets for a name is always the same one: a person's correction first, then the oldest row.
+    result = await db.execute(select(CookieLookup).order_by(CookieLookup.source != "human_confirmed", CookieLookup.created_at, CookieLookup.id))
     entries = [
         LookupEntry(
             name_pattern=row.name_pattern,

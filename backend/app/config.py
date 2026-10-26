@@ -194,7 +194,12 @@ class Settings(BaseSettings):
     report_frontend_url: str = "http://frontend:8080"
     report_pdf_timeout_seconds: int = Field(default=90, ge=10, le=600)
     report_pdf_max_concurrent: int = Field(default=2, ge=1, le=8)
+    # When set, a source's `credential_ref` (the name of the environment variable holding its secret) must start with this. Empty = only the platform's own
+    # variables are refused (app/core/credential_refs.py). Set it, and name each source's variable to match, to allow only variables made for sources.
+    credential_ref_required_prefix: str = ""
     report_pdf_cache_seconds: int = Field(default=120, ge=0, le=3600)
+    # Pre-generated PDFs (services/report_cache_service.py) are kept this many days, then dropped the next time one is stored.
+    report_pdf_retention_days: int = Field(default=30, ge=1, le=365)
     # Purpose Classifier (Agent 6): an assessment request can carry a caller-supplied
     # DSN/spec URL/CSV body that the worker will act on -- unbounded submissions let
     # one org occupy every slot in the single shared worker pool (jobs/worker.py's
@@ -206,6 +211,9 @@ class Settings(BaseSettings):
     # change). Default of 4 is the value already measured live against a real 25-page
     # site (see crawler.py's own docstring) -- not changed, just made configurable.
     scanner_max_concurrent_pages: int = 4
+    # Start the Accept and Reject passes (each in its own fresh browser context) while the page crawl is still running, instead of after it. They need only the
+    # entered address and robots.txt, both known before the crawl, so the scan takes as long as the longer of the two. Off = the previous order.
+    scanner_overlap_consent_passes: bool = True
     # India (DPDP) is this product's target compliance audience, so the scanner
     # presents as an Indian-locale browser by default -- this is a request-header/
     # navigator hint only. It does NOT affect network egress IP, and it does NOT make

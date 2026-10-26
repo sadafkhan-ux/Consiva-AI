@@ -11,6 +11,7 @@ it is descriptive pattern-matching (which vendor is this?), not the legal judgme
 
 from dataclasses import dataclass
 from typing import Literal
+from urllib.parse import urlsplit
 
 Category = Literal["analytics", "marketing", "functional", "other"]
 
@@ -21,6 +22,9 @@ class VendorSignature:
     default_category: Category
     domain_substrings: tuple[str, ...] = ()
     cookie_name_prefixes: tuple[str, ...] = ()
+    # Whole cookie names (matched exactly, ignoring case). Used where the real cookie is a fixed name: as a prefix a short name such as `IDE` also
+    # captured `IDENTITY` and `IDEA`.
+    cookie_names: tuple[str, ...] = ()
 
 
 TRACKER_CATALOG: tuple[VendorSignature, ...] = (
@@ -45,7 +49,8 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         domain_substrings=(
             "googleadservices.com", "googlesyndication.com", "doubleclick.net", "/ads/ga-audiences",
         ),
-        cookie_name_prefixes=("_gcl", "IDE", "test_cookie"),
+        cookie_name_prefixes=("_gcl",),
+        cookie_names=("IDE", "test_cookie"),
     ),
     # ── Product analytics the Google-family entries above do not cover ──────────
     #
@@ -67,7 +72,7 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         default_category="analytics",
         domain_substrings=("posthog.com",),
         # `ph_phc_<project key>` -- observed directly on a live scan.
-        cookie_name_prefixes=("ph_phc_", "ph_"),
+        cookie_name_prefixes=("ph_phc_",),
     ),
     VendorSignature(
         vendor="Razorpay",
@@ -117,7 +122,7 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         vendor="FullStory",
         default_category="analytics",
         domain_substrings=("fullstory.com",),
-        cookie_name_prefixes=("fs_uid",),
+        cookie_names=("fs_uid",),
     ),
     VendorSignature(
         vendor="TikTok Pixel",
@@ -154,7 +159,7 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         vendor="LinkedIn Insight Tag",
         default_category="marketing",
         domain_substrings=("snap.licdn.com", "px.ads.linkedin.com"),
-        cookie_name_prefixes=("li_",),
+        cookie_names=("li_sugr", "li_fat_id", "li_gc", "li_mc", "li_oatml", "lidc", "bcookie", "bscookie"),
     ),
     VendorSignature(
         vendor="Hotjar",
@@ -172,7 +177,8 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         vendor="HubSpot",
         default_category="marketing",
         domain_substrings=("js.hs-scripts.com", "js.hsforms.net", "hubspot.com"),
-        cookie_name_prefixes=("hubspotutk", "__hstc", "__hssc"),
+        cookie_name_prefixes=("__hstc", "__hssc"),
+        cookie_names=("hubspotutk",),
     ),
     VendorSignature(
         vendor="Intercom",
@@ -190,13 +196,15 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         vendor="YouTube Embed",
         default_category="functional",
         domain_substrings=("youtube.com/embed", "ytimg.com"),
-        cookie_name_prefixes=("YSC", "VISITOR_INFO1_LIVE"),
+        cookie_names=("YSC", "VISITOR_INFO1_LIVE"),
     ),
     VendorSignature(
         vendor="Cloudflare",
         default_category="functional",
         domain_substrings=("cloudflareinsights.com", "cloudflare.com"),
         cookie_name_prefixes=("__cf",),
+        # Cloudflare's rate-limiting cookie has a single underscore, so the `__cf` prefix never reached it.
+        cookie_names=("_cfuvid",),
     ),
     # The four below were all caught UNCLASSIFIED on one live scan of a real site, and
     # are added on that direct evidence rather than guessed.
@@ -244,7 +252,7 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         vendor="Vimeo Embed",
         default_category="functional",
         domain_substrings=("player.vimeo.com", "vimeo.com"),
-        cookie_name_prefixes=("vuid",),
+        cookie_names=("vuid",),
     ),
     # Asset CDNs. These matter for STABILITY, not just coverage: without a vendor match
     # they fall through to _is_likely_static_asset(), which requires the URL to carry no
@@ -404,13 +412,45 @@ CMP_CATALOG: tuple[CmpSignature, ...] = (
 )
 
 
+def _host_is(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def _locations(domain: str | None, script_src: str | None) -> list[tuple[str, str]]:
+    """(host, path) of everything the match may look at: the cookie's domain and the request address, lower-cased. The query string and fragment are
+    never part of a match: `?ref=vimeo.com` is not a request to Vimeo."""
+    found: list[tuple[str, str]] = []
+    if domain:
+        found.append((domain.strip().lstrip(".").lower(), ""))
+    if script_src:
+        parts = urlsplit(script_src.strip())
+        if parts.hostname:
+            found.append((parts.hostname.lower(), parts.path.lower()))
+    return found
+
+
+def _location_matches(signature: str, host: str, path: str) -> bool:
+    """`signature` is a host ("hotjar.com": that host or any subdomain), a host and a path ("facebook.com/tr"), or a bare path ("/ads/ga-audiences"). A host is
+    matched on its whole labels, so "heap.io" does not match "cheap.io" and "clarity.ms" does not match "clarity.msu.edu"."""
+    if signature.startswith("/"):
+        return signature in path
+    if "/" in signature:
+        sig_host, _, rest = signature.partition("/")
+        wanted = "/" + rest
+        return _host_is(host, sig_host) and (path == wanted or path.startswith(wanted + "/"))
+    return _host_is(host, signature)
+
+
 def match_vendor(*, domain: str | None = None, script_src: str | None = None,
                   cookie_name: str | None = None) -> VendorSignature | None:
-    haystack = " ".join(filter(None, [domain, script_src])).lower()
+    """The first signature, in catalogue order, whose host or path matches the cookie's domain or the request address, or whose cookie name or prefix matches
+    the cookie's name (ignoring case)."""
+    places = _locations(domain, script_src)
+    name = (cookie_name or "").lower()
     for sig in TRACKER_CATALOG:
-        if haystack and any(sub in haystack for sub in sig.domain_substrings):
+        if any(_location_matches(sub, host, path) for sub in sig.domain_substrings for host, path in places):
             return sig
-        if cookie_name and any(cookie_name.startswith(p) for p in sig.cookie_name_prefixes):
+        if name and (name in {n.lower() for n in sig.cookie_names} or any(name.startswith(p.lower()) for p in sig.cookie_name_prefixes)):
             return sig
     return None
 

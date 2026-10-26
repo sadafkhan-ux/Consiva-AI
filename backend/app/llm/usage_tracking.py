@@ -107,9 +107,13 @@ def summarise_usage(usage_by_attempt: list[dict | None]) -> dict:
     request_ids: list[str] = []
     for u in usage_by_attempt:
         u = u or {}
-        inp += int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
+        cached = int(u.get("cache_read_input_tokens") or (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        if "input_tokens" in u:
+            inp += int(u.get("input_tokens") or 0)      # Anthropic: input_tokens already EXCLUDES cache reads and writes
+        else:
+            inp += max(0, int(u.get("prompt_tokens") or 0) - cached)   # OpenAI-compatible: prompt_tokens INCLUDES the cached tokens
         out += int(u.get("output_tokens") or u.get("completion_tokens") or 0)
-        read += int(u.get("cache_read_input_tokens") or (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        read += cached
         write += int(u.get("cache_creation_input_tokens") or 0)
         write_1h += int((u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0)
         thinking = (u.get("output_tokens_details") or {}).get("thinking_tokens")

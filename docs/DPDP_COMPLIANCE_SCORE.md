@@ -359,3 +359,29 @@ by `/evidence` with `http_status` and `discovered_via`), with a Scan Review buil
 * **Order**: the homepage, then the pages that loaded in the order the scan recorded them (pages load concurrently, so this is not
   the order they were tried), then attempts that did not load.
 * The section changes no score, weight, coverage or finding.
+
+## Standardisation update (2026-10-26)
+
+- **Framed wrapper (R-012).** When the scanned address only displays another site in a frame, the rule applies per requirement. What the scan did observe stands (violations and positive finds, with a "seen on the wrapper" note). A clean or absent result, which rests on something not being seen, becomes Unable to Verify. Only a scan with no pages at all is wholly unverifiable. The dashboard readiness review and the visual follow the same rule.
+- **One-check scores are withheld.** The five-page review score (formerly "Readiness score") needs at least 2 assessed checks and 30% coverage, as the backend does, so it never shows 100 out of 100 from a single check.
+- **Rounding and dates.** Percentages round half-up everywhere (the remediation plan used Python `round`, which rounds half to even). The default `as_of` date is today in India (UTC+5:30).
+- **Score comparison.** `GET /api/v1/consent/scans/{id}/dpdp-score/compare?against=<scan_id>&as_of=<date>` re-assesses this scan and the previous completed scan of the same website with the same methodology and returns both scores, coverage, weights, every changed requirement (before/after status and evidence), a cause for each (scan coverage, website behaviour, scoring configuration, unexplained) and a sequential score attribution. It returns 409 when there is no earlier completed scan. A score produced by older scoring logic cannot be re-derived; the response says so.
+- **Scan transparency section.** Every report carries pages (discovered, selected, scanned, failed, skipped with reasons), duration and stage timings, the three separate coverages (page, requirement, consent state), the consent states actually tested, and the reason a score is zero, unavailable or partial.
+- **Classification.** Vendor and cookie matching is host- and path-aware, cookie names match exactly, wildcard prefixes need at least 4 characters, and generic names (`uid`, `token`, `_session_id`) need a matching domain.
+
+## Why were points deducted: backend only (2026-10-26)
+
+The scoring formula and the deduction explanation are **not** in the client-facing report, the dashboard, the score API or the in-browser PDF. They are kept where the Consent Agent runs.
+
+`app/scoring/deductions.py` takes the readiness score apart (the score is `points earned ÷ points assessed × 100`, so it is exactly 100 minus what each check failed to earn): for every Not Met or Partially Met check, its weight, the points earned and lost, the percentage points it takes off, the running score before and after, the rule that gave the outcome and the evidence it cites (requests and cookies with vendor, category, consent state and page). Checks that cost nothing (Unable to Verify, Not Applicable, a duplicate gap counted once) are listed with the reason. The arithmetic is exact and read from the same results as the score; the scoring logic is unchanged.
+
+`app/services/score_deduction_log_service.py` writes it at the end of each analysis run (the `audit_saved` node), best effort, so a failure never costs the run its audit trail:
+
+- **Server log:** one readable block on logger `consiva.score_deductions`, e.g. `docker compose logs backend worker | grep -A40 "Score deductions for scan"`.
+- **Database:** one `audit_logs` row, `action = 'scan.score_deductions'`, `entity_id` = the scan, the whole breakdown in `after.deductions`. The audit API (`GET /scans/{id}/audit`) returns an entry's action and ids only, never `after`, so the payload is read from the database: `SELECT after FROM audit_logs WHERE action = 'scan.score_deductions' AND entity_id = '<scan id>' ORDER BY created_at DESC LIMIT 1;`
+
+`GET /scans/{id}/dpdp-score` does not return a `deductions` field.
+
+## Report headers
+
+Every page after the cover now uses the same dark header with white text, in the long report (print header), the Full and Free fixed sheets (`.pg-head-dark`), on the web and in the PDF. Covers keep their own light header.

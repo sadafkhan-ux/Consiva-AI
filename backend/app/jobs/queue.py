@@ -71,13 +71,18 @@ def stale_threshold_for(job: AgentJob) -> timedelta:
     scan, 24 hours + 15 for an application scan. The profile is read the same way scan_service
     reads it: the `scan_profile` the API put in the job payload, else web.
     """
-    if getattr(job, "job_type", None) != "scan":
+    job_type = getattr(job, "job_type", None)
+    if job_type not in ("scan", "consent_api_chain"):
         return _stale_threshold()
     payload = getattr(job, "payload", None)
     payload = payload if isinstance(payload, dict) else {}
     name = scan_profiles.APPLICATION if payload.get("scan_profile") == scan_profiles.APPLICATION else scan_profiles.WEB
     profile = scan_profiles.resolve_profile(name)
-    return max(_stale_threshold(), timedelta(seconds=profile.hard_timeout_seconds) + _APPLICATION_LEASE_MARGIN)
+    lease = timedelta(seconds=profile.hard_timeout_seconds) + _APPLICATION_LEASE_MARGIN
+    if job_type == "consent_api_chain":
+        # The API's chain job runs the crawl AND then the analysis in one job, so both budgets count: the analysis starts only after the crawl ends.
+        lease += timedelta(seconds=get_settings().llm_deadline_seconds)
+    return max(_stale_threshold(), lease)
 
 
 async def enqueue(db: AsyncSession, *, org_id: uuid.UUID, job_type: str, payload: dict) -> AgentJob:

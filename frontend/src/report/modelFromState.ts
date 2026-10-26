@@ -1,6 +1,7 @@
 import type { ConsentScanState } from "../hooks/useConsentScan";
 import { ANALYSIS_INCOMPLETE_NOTE, buildReportModel, type ReportModel } from "./buildReport";
 import { buildScoreView, isDpdpScore } from "./dpdpScore";
+import { buildTiming } from "./scanTransparency";
 
 /** The report's data model from what the dashboard (or the report page) holds for one scan. One function, so the PDF button, the
  *  PDF the server prints and the web report all start from the very same values. */
@@ -13,5 +14,6 @@ export function reportModelFromState(state: ConsentScanState): ReportModel {
     analysisNote,
     state.policyAnalysis ?? null,
     state.screenshot ?? null,
+    buildTiming(state.stages),
   );
 }

@@ -3,6 +3,7 @@ import { buildPageReport, FULL_PAGES, type SeriesPoint } from "../pageReports";
 import { CONSIVA_UPDATES, OMITTED_DUTIES_NOTE } from "../reportScope";
 import { AreasBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, UpgradeBand } from "./Blocks";
 import { Icon, PageFrame, Pill, SecHead, SheetPageStyle, type IconName } from "./PageParts";
+import { ScanTransparency } from "./Transparency";
 import "./pages.css";
 
 // The Full Scan report: eight fixed A4 pages, laid out as the scope document's Full Scan benchmark (section 2.2), as a readable report rather than a
@@ -47,11 +48,10 @@ const CARD_ICONS: IconName[] = ["scale", "key", "board", "doc", "gavel"];
 
 export function FullReport({ model }: { model: ReportModel }) {
   const view = buildPageReport(model, "full");
-  const frame = { variant: "full" as const, of: FULL_PAGES, domain: view.domain, scannedAt: view.scannedAt, reportId: view.reportId };
+  const frame = { variant: "full" as const, of: FULL_PAGES, domain: view.domain, scannedAt: view.scannedAt, headerPages: view.headerPages, reportId: view.reportId };
   const { preview } = view;
   const vis = model.visual;
   const [scanDate, scanTime] = view.scannedAt.split(", ");
-  const states = view.consent ? [view.consent.acceptTested, view.consent.rejectTested] : [false, false];
   return (
     <div className="pg-doc" data-testid="full-report">
       <SheetPageStyle />
@@ -106,16 +106,8 @@ export function FullReport({ model }: { model: ReportModel }) {
         <SecHead n={5} title="Consent Behaviour" note="What was observed on the scanned pages before consent, after Accept and after Reject." />
         <ConsentTable view={view} />
         {vis && <p className="pg-callout" data-testid="pg-takeaway"><b>Key takeaway.</b> {vis.consent.takeaway}</p>}
-        <SecHead n="5a" title="How each consent state was tested" />
-        <table className="pg-table">
-          <thead><tr><th>State</th><th>Pages</th><th>Action attempted</th><th>Result</th></tr></thead>
-          <tbody>
-            <tr><td>Before Consent</td><td>All {vis ? vis.pagesScanned : "scanned"} pages</td><td>None</td><td>Observed</td></tr>
-            <tr><td>After Accept</td><td>Homepage only</td><td>{states[0] ? "Accept clicked" : "Not clicked"}</td><td>{states[0] ? "Observed after the click" : "Could not be tested"}</td></tr>
-            <tr><td>After Reject</td><td>Homepage only</td><td>{states[1] ? "Reject clicked" : "Not clicked"}</td><td>{states[1] ? "Observed after the click" : "Could not be tested"}</td></tr>
-          </tbody>
-        </table>
-        <p className="pg-muted">A click is recorded as an action, and what the browser then did is recorded as its own observation. The scan does not claim that a choice was honoured beyond what it saw.</p>
+        <SecHead n="5a" title="Scan transparency" note="What was scanned, what was tested, and what could not be verified." />
+        <ScanTransparency view={model.transparency} compact />
       </PageFrame>
 
       <PageFrame {...frame} n={4}>
@@ -133,7 +125,7 @@ export function FullReport({ model }: { model: ReportModel }) {
             {view.techRows.map((t) => <tr key={t.name}><td><b>{t.name}</b></td><td style={{ color: TYPE_TONE[t.type] ?? "#555a85" }}>{t.type}</td><td>{t.requests}</td><td>{t.seen}</td><td>{t.category}</td></tr>)}
           </tbody>
         </table>
-        {view.techMore > 0 && <p className="pg-muted pg-more">+ {view.techMore} more: every request is listed in the Appendix (Third-party requests and scripts).</p>}
+        {view.techRowsMore > 0 && <p className="pg-muted pg-more">+ {view.techRowsMore} more: every request is listed in the Appendix (Third-party requests and scripts).</p>}
         <SecHead n={7} title="Third-party Domains" note={`(${view.domains.shown.length + view.domains.others} found)`} />
         <div className="pg-chips" data-testid="pg-domains">
           {view.domains.shown.length === 0 && <span className="pg-muted">No third-party domain was recorded.</span>}
@@ -151,13 +143,14 @@ export function FullReport({ model }: { model: ReportModel }) {
         <h3 className="pg-h3">Policies found <span>({view.policies.length})</span></h3>
         <table className="pg-table" data-testid="pg-policies">
           <thead><tr><th>Type</th><th>URL</th></tr></thead>
-          <tbody>{view.policies.length === 0 ? <tr><td colSpan={2}>No privacy, cookie or terms page was found in the scanned scope.</td></tr> : view.policies.map((p) => <tr key={p.url}><td><b>{p.type}</b></td><td>{p.url}</td></tr>)}</tbody>
+          <tbody>{view.policies.length === 0 ? <tr><td colSpan={2}>No privacy, cookie or terms page was found in the scanned scope.</td></tr> : view.policies.slice(0, 6).map((p) => <tr key={p.url}><td><b>{p.type}</b></td><td>{p.url}</td></tr>)}</tbody>
         </table>
         <h3 className="pg-h3">Forms found <span>({view.forms.length})</span></h3>
         <table className="pg-table" data-testid="pg-forms">
           <thead><tr><th>Form</th><th>Fields</th></tr></thead>
           <tbody>{view.forms.length === 0 ? <tr><td colSpan={2}>No forms were found in the scanned scope.</td></tr> : view.forms.slice(0, 4).map((f) => <tr key={f.title}><td><b>{f.title}</b></td><td>{f.fields}</td></tr>)}</tbody>
         </table>
+        {view.policies.length > 6 && <p className="pg-muted pg-more">+ {view.policies.length - 6} more policy pages in the Appendix (Policies found).</p>}
         {view.forms.length > 4 && <p className="pg-muted pg-more">+ {view.forms.length - 4} more forms, every field listed, in the Appendix (Forms found).</p>}
         <div className="pg-limits" data-testid="pg-limits"><b>Scope and limits</b><ul>{view.limits.map((l) => <li key={l}>{l}</li>)}</ul></div>
         <div className="pg-info"><Icon name="info" size={18} /><p>A report is based on {vis ? vis.pagesScanned : "the"} scanned {vis && vis.pagesScanned === 1 ? "page" : "pages"}. Behaviour on additional pages, subdomains or login-gated areas may differ. "Not found" means not found in the scanned scope; it does not mean the item does not exist.</p></div>

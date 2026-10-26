@@ -851,7 +851,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
           rv.rows.map((r) => [r.page, r.sections, r.check, [r.status, `(${r.evidenceKind})`], r.evidence, r.fix]), 6.4,
         );
         MW.para("C. Summary", { size: 9.2, bold: true, color: DEEP });
-        MW.para(`Readiness score: ${rv.scoreLine}`, { size: 8, bold: true });
+        MW.para(`Five-page review score: ${rv.scoreLine}`, { size: 8, bold: true });
         MW.para("Top gaps, ranked by risk", { size: 8.2, bold: true });
         if (rv.topGaps.length === 0) MW.para("No gap or missing item was found in the checks the scan could assess.", { size: 7.8, indent: 6 });
         for (const g of rv.topGaps) {

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fetchReportPdf, saveBlob } from "../../api/client";
-import { getToken } from "../../api/auth";
+import { AUTH_BYPASSED, autoLogin, getToken } from "../../api/auth";
+import { LoginScreen } from "../../components/LoginScreen";
 import { useConsentScan } from "../../hooks/useConsentScan";
 import { pagesCoverageLine } from "../scanPages";
 import { reportModelFromState } from "../modelFromState";
@@ -49,11 +50,18 @@ export function ReportPage({ scanId, print, variant, part }: { scanId: string; p
   const [settled, setSettled] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const signedIn = !!getToken();
+  const [signedIn, setSignedIn] = useState(!!getToken());
   const opened = useRef(false);
 
   // The console around this app is dark (its colour scheme, page background and heading font are set for the whole document). The report is a light
   // document, on screen and on paper, so while it is shown the document is put in report mode (see report.css) and put back after.
+  // "Open web report" opens a new tab, and a new tab starts with no session (the token lives in the tab's own storage). Under the development / open-access
+  // bypass the tab signs itself in; otherwise it shows the sign-in form. The printing server always arrives with a session.
+  useEffect(() => {
+    if (signedIn || print || !AUTH_BYPASSED) return;
+    autoLogin().then(() => setSignedIn(true)).catch(() => undefined);
+  }, [signedIn, print]);
+
   useLayoutEffect(() => {
     document.documentElement.classList.add("report-mode");
     return () => document.documentElement.classList.remove("report-mode");
@@ -113,6 +121,8 @@ export function ReportPage({ scanId, print, variant, part }: { scanId: string; p
       setDownloading(false);
     }
   }
+
+  if (!signedIn && !print && !AUTH_BYPASSED) return <LoginScreen onSignedIn={() => setSignedIn(true)} signInHint={null} />;
 
   return (
     <div className="r-page" data-testid="report-page">

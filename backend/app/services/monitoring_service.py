@@ -56,6 +56,11 @@ async def promote_baseline(db: AsyncSession, *, schedule_id: uuid.UUID, org_id: 
     schedule = await monitoring_repository.get_schedule_by_id(db, schedule_id, org_id)
     if schedule is None:
         return None
+    # The new baseline must be a completed scan of THIS website in THIS organisation. Anything else (another tenant's scan id, another site's scan, an
+    # unfinished scan) would be diffed against and its evidence stored in this organisation's diffs.
+    scan = await scan_repository.get_scan(db, scan_id, org_id)
+    if scan is None or scan.website_id != schedule.website_id or scan.status != "completed":
+        return None
     schedule.baseline_scan_id = scan_id
     schedule.updated_at = datetime.now(UTC)
     await db.flush()
@@ -99,6 +104,13 @@ async def maybe_run_diff_after_scan(scan_id: uuid.UUID) -> None:
         schedule = await monitoring_repository.schedule_by_triggered_scan(db, scan_id)
         if schedule is None:
             return  # not a schedule-triggered scan; nothing to do
+
+        # A scan that was cancelled (or never finished) holds no, or partial, evidence. Taken as the baseline it would make every later scan look like
+        # "everything was added"; diffed, it would store a diff of nothing.
+        scan = await scan_repository.get_scan(db, scan_id, schedule.org_id)
+        if scan is None or scan.status != "completed":
+            logger.info("Monitoring: scan %s is not completed (%s); not used as a baseline or diffed", scan_id, getattr(scan, "status", None))
+            return
 
         if schedule.baseline_scan_id is None:
             schedule.baseline_scan_id = scan_id

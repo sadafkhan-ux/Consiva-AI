@@ -141,6 +141,61 @@ export interface UsageHistoryItem {
   analysis_run: boolean;
 }
 
+// ── Why two scans of one website scored differently (GET /api/v1/consent/scans/{id}/dpdp-score/compare; backend app/scoring/comparison.py).
+export interface ScoreComparisonSide {
+  scan_id: string;
+  url?: string;
+  scanned_at: string | null;
+  score_percent: number | null;
+  status: "scored" | "insufficient_evidence" | string;
+  coverage_percent: number | null;
+  applicable_weight: number;
+  assessed_weight: number;
+  insufficient_reason: string | null;
+}
+
+export interface ScoreComparisonRequirement {
+  status: string;
+  status_label: string;
+  points_earned: number;
+  weight: number;
+  counts_in_score: boolean;
+  evidence: string[];
+  evidence_ids: string[];
+}
+
+export interface ScoreComparisonChange {
+  id: string;
+  title: string;
+  category: string;
+  previous: ScoreComparisonRequirement | null;
+  latest: ScoreComparisonRequirement | null;
+  /** "scan_coverage", "website_behaviour", "scoring_configuration" or "unexplained". */
+  cause: string;
+  explanation: string;
+  score_before: number | null;
+  score_after: number | null;
+  score_change: number | null;
+  score_becomes_available: boolean;
+  score_becomes_withheld: boolean;
+}
+
+export interface ScoreComparison {
+  previous: ScoreComparisonSide;
+  latest: ScoreComparisonSide;
+  score_change: number | null;
+  summary: string;
+  causes: string[];
+  changes: ScoreComparisonChange[];
+  changed_inputs: { group: string; name: string; previous: unknown; latest: unknown }[];
+  denominators: { previous: { applicable_weight: number; assessed_weight: number }; latest: { applicable_weight: number; assessed_weight: number }; changed: boolean };
+  requirements_missing_from_one_scan: string[];
+  attribution: { method: string; sums_to_total: boolean };
+  methodology_version: string;
+  assessed_on: string;
+  methodology_note: string;
+}
+
 export interface ScanStatusResponse extends ScanResponse {
   error: string | null;
   evidence_counts: {

@@ -685,7 +685,7 @@ async def list_runs(
     user: CurrentUser = Depends(integration_auth.get_ropa_reader),
 ) -> list[RunResponse]:
     """Recent discovery runs for the caller's org, newest first."""
-    rows = await ropa_repository.list_runs(db, uuid.UUID(user.org_id), limit=min(limit, 200))
+    rows = await ropa_repository.list_runs(db, uuid.UUID(user.org_id), limit=max(1, min(limit, 200)))
     jobs = await ropa_repository.queue_state_for_runs(db, [r.id for r in rows if r.status in _IN_FLIGHT])
     key_names = await ropa_repository.integration_key_names_for_runs(
         db, uuid.UUID(user.org_id), [r.integration_key_id for r in rows if r.integration_key_id is not None]
@@ -748,7 +748,7 @@ async def list_findings(
         {
             "id": str(f.id), "run_id": str(f.discovery_run_id), "finding": f.finding,
             "category": f.category, "gap_status": f.gap_status, "severity": f.severity,
-            "severity_factors": f.severity_factors, "confidence": float(f.confidence) if f.confidence else None,
+            "severity_factors": f.severity_factors, "confidence": float(f.confidence) if f.confidence is not None else None,
             "recommendation": f.recommendation, "review_status": f.review_status,
             "created_at": f.created_at.isoformat(),
         }

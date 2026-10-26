@@ -46,7 +46,7 @@ def classify_cookie(cookie: CookieRecord, lookup_entries: list[LookupEntry] = ()
     falling back to the hardcoded vendor-signature catalog for anything the cookie
     dataset doesn't cover. `lookup_entries` defaults to empty so this stays callable
     (and unit-testable) without a DB session."""
-    match = match_cookie_lookup(cookie.name, list(lookup_entries))
+    match = match_cookie_lookup(cookie.name, list(lookup_entries), cookie.domain)
     if match is not None:
         return cookie.model_copy(update={"vendor": match.vendor, "category": match.category, "source": "lookup"})
 

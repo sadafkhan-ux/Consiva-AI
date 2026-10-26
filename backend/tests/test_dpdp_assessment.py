@@ -198,7 +198,7 @@ class TestIncompleteScans:
         assert s.assessment.states_tested == [] and s.assessment.pages_scanned == []
 
     def test_a_framed_wrapper_is_not_scored_and_says_why(self):
-        s = assess(evidence(framed=["https://real.test"], trackers=[t(1)], policies=(), pages=1), AFTER)
+        s = assess(evidence(framed=["https://real.test"], trackers=[], policies=(), pages=1, mechanism="none"), AFTER)
         assert s.readiness.status == "insufficient_evidence" and s.remediation_plan == []
 
     def test_a_banner_not_shown_to_the_scanner_leaves_the_banner_checks_unverified(self):
@@ -252,9 +252,15 @@ class TestHandReviewedGoldenExamples:
         assert by_id(s, "DPDP-C3").status == "unable_to_verify"
 
     def test_a_framed_wrapper_is_not_scored_whatever_it_shows(self):
-        # smartians.ai (a frameset): every observable check is Unable to Verify. Nothing assessed: Insufficient Evidence, coverage 0%.
-        s = assess(evidence(framed=["https://corp.gignaati.com"], trackers=[t(i) for i in range(1, 5)], policies=(), pages=1), TODAY)
+        # A frameset wrapper whose own requests were not classified as analytics or marketing: every observable check is Unable to Verify.
+        # Nothing assessed: Insufficient Evidence, coverage 0%.
+        s = assess(evidence(framed=["https://corp.gignaati.com"], trackers=[t(i, category=None) for i in range(1, 5)], policies=(), pages=1, mechanism="none"), TODAY)
         assert s.readiness.score_percent is None and s.readiness.coverage_percent == 0.0
+
+    def test_a_lone_observed_failure_on_a_wrapper_never_becomes_a_number(self):
+        s = assess(evidence(framed=["https://corp.gignaati.com"], trackers=[t(i) for i in range(1, 5)], policies=(), pages=1, mechanism="none"), TODAY)
+        assert by_id(s, "DPDP-C1").status == "not_met"
+        assert s.readiness.score_percent is None and s.readiness.status == "insufficient_evidence"   # one assessed requirement: no score, not 0%
 
     @pytest.mark.parametrize("kw,expected", [
         ({"pages": 3, "mechanism": "none", "policies": ("privacy_policy",)}, 100.0),

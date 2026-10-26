@@ -9,6 +9,7 @@ import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER } from "../rep
 import { checkContribution, CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type RowTone } from "../reportText";
 import type { ElementStatus } from "../reportVisual";
 import { REQUEST_UNIT_NOTE } from "../stateCounts";
+import { ScanTransparency } from "./Transparency";
 import "./report.css";
 
 // The printable report: the same sections, in the same order, as the PDF the browser draws (report/downloadReport.ts), built from the same
@@ -105,7 +106,7 @@ function Hero({ model }: { model: ReportModel }) {
 }
 
 /** Sections the fixed-page reports (Free and Full) already carry in full. In the appendix they are left out; every other section follows the pages. */
-const ON_FIXED_PAGES: ReadonlySet<string> = new Set(["summary", "readiness", "areas", "top-findings", "consent", "technologies", "elements"]);
+const ON_FIXED_PAGES: ReadonlySet<string> = new Set(["summary", "transparency", "readiness", "areas", "top-findings", "consent", "technologies", "elements"]);
 
 export function ReportDocument({ model, appendixOnly = false, noFront = false }: { model: ReportModel; appendixOnly?: boolean; noFront?: boolean }) {
   const v = model.dpdpScore;
@@ -131,6 +132,9 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
   add("summary", "Scan summary", (
     <div className="r-tiles">{tiles.map((t) => <div className="r-tile" key={t.label}><b>{t.value}</b><span>{t.label}</span></div>)}</div>
   ));
+
+  // Scan transparency: what the scan found, tried, finished and could not verify, the three coverages, the consent states exercised, and why the score is what it is.
+  add("transparency", "Scan transparency", <ScanTransparency view={model.transparency} />);
 
   // 2. Framework readiness
   add("readiness", "Framework readiness", (
@@ -334,7 +338,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
               rows={rv.rows.map((r) => [<b key="p">{r.page}</b>, r.sections, r.check, <span key="s"><b>{r.status}</b><br />({r.evidenceKind})</span>, r.evidence, r.fix])}
             />
             <h3 className="r-h3">C. Summary</h3>
-            <Para bold>Readiness score: {rv.scoreLine}</Para>
+            <Para bold>Five-page review score: {rv.scoreLine}</Para>
             <Para bold small>Top gaps, ranked by risk</Para>
             {rv.topGaps.length === 0 && <Para small indent>No gap or missing item was found in the checks the scan could assess.</Para>}
             {rv.topGaps.map((g) => (

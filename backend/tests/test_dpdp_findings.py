@@ -174,8 +174,12 @@ class TestPartialAndEmptyScans:
         assert g.confirmed == [] and g.future_readiness == []
         assert len(g.unable_to_verify) >= 5
 
-    def test_a_framed_wrapper_confirms_nothing(self):
-        g = assess(evidence(framed=["https://real.test"], trackers=[t(1)], policies=(), pages=3), AFTER).finding_groups
+    def test_a_framed_wrapper_confirms_only_what_it_observed(self):
+        g = assess(evidence(framed=["https://real.test"], trackers=[t(1)], policies=(), pages=3, mechanism="none"), AFTER).finding_groups
+        assert [e.id for e in g.confirmed] == ["DPDP-C1"] and g.future_readiness == []     # the tracker seen; nothing from an absence
+
+    def test_a_clean_framed_wrapper_confirms_nothing(self):
+        g = assess(evidence(framed=["https://real.test"], trackers=[], policies=(), pages=3, mechanism="none"), AFTER).finding_groups
         assert g.confirmed == [] and g.future_readiness == []
 
 

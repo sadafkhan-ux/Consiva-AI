@@ -21,9 +21,10 @@ from app.db.repositories import (
 )
 from app.db.session import get_db
 from app.llm.schemas import DpdpReference
+from app.scoring import comparison as score_comparison
 from app.scoring import dpdp_score
 from app.scoring.sector import SECTORS
-from app.services import analysis_service, report_pdf_service, scan_service, usage_service
+from app.services import analysis_service, report_cache_service, report_pdf_service, scan_service, usage_service
 
 router = APIRouter(prefix="/api/v1/consent/scans", tags=["consent-scans"])
 
@@ -906,7 +907,64 @@ async def get_scan_dpdp_score(
         if (scan.completed_at or scan.started_at or scan.created_at) else None,
         business_sector=business_sector,
     )
-    return DpdpScoreResponse(**asdict(result))
+    # The deductions (scoring/deductions.py) are for the operators of the agent: they go to the server log and the audit table
+    # (services/score_deduction_log_service.py), not to a client.
+    return DpdpScoreResponse(**{k: v for k, v in asdict(result).items() if k != "deductions"})
+
+
+class ScoreComparisonResponse(BaseModel):
+    """Why two scans of one website scored differently, requirement by requirement (scoring/comparison.py). Both are re-assessed now from their own stored
+    evidence with the same methodology; see `methodology_note` for what that does and does not explain."""
+    previous: dict
+    latest: dict
+    score_change: float | None = None
+    summary: str
+    causes: list[str]
+    changes: list[dict]
+    changed_inputs: list[dict]
+    denominators: dict
+    requirements_missing_from_one_scan: list[str]
+    attribution: dict
+    methodology_version: str
+    assessed_on: str
+    methodology_note: str
+
+
+@router.get("/{scan_id}/dpdp-score/compare", response_model=ScoreComparisonResponse)
+async def compare_scan_dpdp_score(
+    scan_id: uuid.UUID,
+    against: uuid.UUID | None = Query(None, description="The earlier scan to compare with. Default: the completed scan of the same website just before this one."),
+    as_of: date | None = None,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Why this scan's score differs from an earlier scan's: which requirements changed status and on what evidence, whether the weights or denominators moved,
+    what the scans recorded differently (pages, consent states exercised, the banner, a framed wrapper, what fired), and how much each change moved the score.
+    Both scans must belong to the caller's organisation and to the same website. 404 when the earlier scan is absent; 409 when there is none to compare with."""
+    org_id = uuid.UUID(user.org_id)
+    latest = await scan_repository.get_scan(db, scan_id, org_id)
+    if latest is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    if against is not None:
+        previous = await scan_repository.get_scan(db, against, org_id)
+        if previous is None or previous.website_id != latest.website_id:
+            raise NotFoundError(f"Scan {against} not found for this website")
+    else:
+        previous = await scan_repository.previous_completed_scan(db, latest)
+        if previous is None:
+            raise ScanNotReadyError(f"There is no earlier completed scan of this website to compare scan {scan_id} with")
+
+    def info(scan) -> dict:
+        when = scan.completed_at or scan.started_at or scan.created_at
+        return {"scan_id": str(scan.id), "url": scan.url, "scanned_at": when.isoformat() if when else None, "status": scan.status}
+
+    evidence_prev = await scan_repository.get_scan_evidence_summary_concurrent(previous.id, include_cookie_detail=True)
+    evidence_latest = await scan_repository.get_scan_evidence_summary_concurrent(latest.id, include_cookie_detail=True)
+    result = score_comparison.compare_scans(
+        evidence_prev, evidence_latest, as_of=as_of or dpdp_score.today_in_india(), previous_info=info(previous), latest_info=info(latest),
+        weights=get_settings().dpdp_score_weights or None,
+    )
+    return ScoreComparisonResponse(**result)
 
 
 class ScreenshotResponse(BaseModel):
@@ -1038,9 +1096,9 @@ async def get_scan_report_pdf(
         raise ScanNotReadyError(f"Scan {scan_id} is not completed yet (status={scan.status}), so it has no report")
     auth = request.headers.get("authorization", "")
     token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
-    rendered = await report_pdf_service.render_report_pdf(
-        scan_id, version=scan.completed_at.isoformat() if scan.completed_at else "", token=token,
-        user_id=user.user_id, org_id=user.org_id, role=user.role, settings=get_settings(), variant=variant,
+    # The stored copy when it is still exactly what would be printed now; otherwise printed once (however many ask together) and stored.
+    rendered, source = await report_cache_service.get_or_render(
+        db, scan, variant, token=token, user_id=user.user_id, org_id=user.org_id, role=user.role, settings=get_settings(),
     )
     return Response(
         content=rendered.pdf,
@@ -1049,6 +1107,7 @@ async def get_scan_report_pdf(
             "Content-Disposition": f'attachment; filename="{rendered.filename}"',
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
+            "X-Report-Source": source,
         },
     )
 

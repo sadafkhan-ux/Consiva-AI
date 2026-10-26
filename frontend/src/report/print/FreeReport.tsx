@@ -63,7 +63,7 @@ function FirstPage({ model, view, frame, tag, numbered = true }: { model: Report
 /** The cover of the long report: the Free report's first sheet, with no page number. */
 export function ReportCover({ model }: { model: ReportModel }) {
   const view = buildPageReport(model, "free");
-  const frame = { variant: "free" as const, of: 1, domain: view.domain, scannedAt: view.scannedAt, reportId: view.reportId };
+  const frame = { variant: "free" as const, of: 1, domain: view.domain, scannedAt: view.scannedAt, headerPages: view.headerPages, reportId: view.reportId };
   return <div className="pg-doc" data-testid="report-cover"><SheetPageStyle /><FirstPage model={model} view={view} frame={frame} tag="PRIVACY COMPLIANCE REPORT" numbered={false} /></div>;
 }
 
@@ -74,7 +74,7 @@ export function ReportCover({ model }: { model: ReportModel }) {
  */
 export function FreeReport({ model }: { model: ReportModel }) {
   const view = buildPageReport(model, "free");
-  const frame = { variant: "free" as const, of: FREE_PAGES, domain: view.domain, scannedAt: view.scannedAt, reportId: view.reportId };
+  const frame = { variant: "free" as const, of: FREE_PAGES, domain: view.domain, scannedAt: view.scannedAt, headerPages: view.headerPages, reportId: view.reportId };
   return (
     <div className="pg-doc" data-testid="free-report">
       <SheetPageStyle />

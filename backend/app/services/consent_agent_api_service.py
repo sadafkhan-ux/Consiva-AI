@@ -139,21 +139,25 @@ def _token_metrics(stages: list[AgentRunStage]) -> dict[str, Any] | None:
     total_tokens=0 would reasonably conclude the scan was free, when the truth is that
     it has not been billed yet.
     """
-    stage = next((s for s in stages if s.stage == "llm_analysis"), None)
-    if stage is None:
+    llm_stages = [s for s in stages if s.stage == "llm_analysis"]
+    if not llm_stages:
         return None
-    meta = stage.stage_metadata or {}
-    usage = meta.get("llm_usage") or {}
-    attempts = usage.get("usage_by_attempt") or []
+    meta = llm_stages[0].stage_metadata or {}
+    # Every analysis attempt counts (a validation retry writes its own stage row), and both providers' usage shapes are read: Claude reports
+    # input_tokens/output_tokens, the OpenAI-compatible providers prompt_tokens/completion_tokens.
+    attempts = [a for s in llm_stages for a in (((s.stage_metadata or {}).get("llm_usage") or {}).get("usage_by_attempt") or [])]
     if not attempts:
         return None
+    from app.llm import usage_tracking
+
+    summary = usage_tracking.summarise_usage(attempts)
     rag = next((s for s in stages if s.stage == "rag_retrieval"), None)
     return {
         "llm_calls": len(attempts),
         "rag_calls": 1 if rag is not None else 0,
-        "input_tokens": sum(a.get("prompt_tokens") or 0 for a in attempts),
-        "output_tokens": sum(a.get("completion_tokens") or 0 for a in attempts),
-        "total_tokens": sum(a.get("total_tokens") or 0 for a in attempts),
+        "input_tokens": summary["input_tokens"] + summary["cache_read_tokens"] + summary["cache_write_tokens"],
+        "output_tokens": summary["output_tokens"],
+        "total_tokens": summary["input_tokens"] + summary["output_tokens"] + summary["cache_read_tokens"] + summary["cache_write_tokens"],
         "provider": meta.get("provider"),
         "model": _public_model_name(meta.get("model")),
     }

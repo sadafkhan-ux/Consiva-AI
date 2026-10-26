@@ -1,6 +1,7 @@
 import type { EvidenceFormItem, EvidencePageItem, PolicyAnalysis, PolicyRequirementResult, ScanEvidenceResponse, SectorAssessment, WebsiteScanMetadata } from "../api/types";
 import { ageGateSeen, childFieldNames } from "./insights";
 import { formatRefs } from "./legalRefs";
+import { framedSiteOf } from "./scanTransparency";
 
 // The five-page DPDP readiness review: the five pages that matter most for the website-visible duties, each checked against the provisions the
 // website can show. It is built from what the scan recorded (pages, forms, trackers, cookies, the consent banner, the policy analysis) and is the
@@ -16,6 +17,9 @@ import { formatRefs } from "./legalRefs";
 
 export type ReadinessStatus = "Compliant" | "Gap" | "Not Found" | "Cannot Verify" | "Requires document review";
 export type EvidenceKind = "Quoted" | "Observed" | "Not seen" | "Not captured";
+
+/** The fewest assessed checks that make a score: the same floor the compliance score uses (backend scoring/dpdp_score.py MIN_ASSESSED_REQUIREMENTS). */
+export const MIN_ASSESSED_CHECKS = 2;
 
 export const READINESS_CLOSING = "This is a compliance readiness review, not legal advice.";
 export const READINESS_TIMING = "Most of Sections 3 to 17 of the Act and Rules 3 and 5 to 16 apply from 13 May 2027 (Section 6(9) and Rule 4, on Consent Managers, from 13 November 2026), so these are readiness findings, not violations.";
@@ -431,13 +435,31 @@ export function buildReadinessReview(args: {
   add({ pageN: 0, sections: ref("DPDP Act s.10"), check: "Data protection impact assessment and audit for a Significant Data Fiduciary", status: "Requires document review", evidence: "These are internal records and apply only to a notified Significant Data Fiduciary.", evidenceKind: "Not captured", fix: "If notified, review the impact assessments and audits on file.", risk: 2, scored: false });
   add({ pageN: 0, sections: ref("DPDP Act s.8(7)", "DPDP Rules r.8"), check: "Internal retention schedules and erasure practice", status: "Requires document review", evidence: "What the notice says can be read; whether data is actually erased on schedule is shown by internal records only.", evidenceKind: "Not captured", fix: "Review retention schedules and erasure logs against what the notice states.", risk: 3, scored: false });
 
+  // ── a framed wrapper (rule R-012) ──────────────────────────────────────────────────────────────────────────────────────────
+  // The scanned address only displays another site, so what the scan saw is the wrapper page. What it SAW stands (a tracker that fired, a form, a quoted
+  // policy sentence). A row that rests on NOTHING being seen (no banner, no page, no policy link, a clean "nothing fired") says nothing about the framed site, so
+  // it becomes Cannot Verify, is not scored, and says why. This is the same rule the compliance score applies, requirement by requirement
+  // (backend scoring/dpdp_score.py `_framed_limit`).
+  const framed = framedSiteOf(evidence);
+  if (framed) {
+    const note = `The scanned address only displays another site (${framed}) in a frame, so this describes the wrapper page, not the site visitors see (rule R-012).`;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if ((r.status === "Compliant" || r.status === "Not Found") && r.evidenceKind === "Not seen") {
+        rows[i] = { ...r, status: "Cannot Verify", evidenceKind: "Not captured", scored: false, evidence: `${note} ${r.evidence}`, fix: `To verify: scan ${framed} directly.` };
+      }
+    }
+    for (const page of pages) if (!page.found) page.why = `${page.why} The scanned address is a wrapper, so the framed site (${framed}) may have this page; it was not scanned.`;
+  }
+
   // ── the summary ────────────────────────────────────────────────────────────────────────────────────────────────────────────
   const counts: Record<ReadinessStatus, number> = { Compliant: 0, Gap: 0, "Not Found": 0, "Cannot Verify": 0, "Requires document review": 0 };
   for (const r of rows) counts[r.status] += 1;
   const scored = rows.filter((r) => r.scored && (r.status === "Compliant" || r.status === "Gap" || r.status === "Not Found"));
   const assessed = scored.length;
   const ok = scored.filter((r) => r.status === "Compliant").length;
-  const scorePercent = assessed ? Math.round((ok / assessed) * 100) : null;
+  // The compliance score is withheld below two assessed requirements (backend MIN_ASSESSED_REQUIREMENTS); a one-check "100 out of 100" would be the same misleading number.
+  const scorePercent = assessed >= MIN_ASSESSED_CHECKS ? Math.round((ok / assessed) * 100) : null;
   const gapsOf = rows.filter((r) => r.scored && (r.status === "Gap" || r.status === "Not Found")).map((r, i) => ({ r, i }))
     .sort((a, b) => b.r.risk - a.r.risk || a.r.pageN - b.r.pageN || a.i - b.i);
   const topGaps: GapSummary[] = gapsOf.slice(0, 5).map(({ r }, i) => ({ rank: i + 1, row: r, riskLabel: r.risk >= 4 ? "High" : r.risk === 3 ? "Medium" : "Low" }));
@@ -455,11 +477,12 @@ export function buildReadinessReview(args: {
   return {
     ...empty, available: true, pages, rows, counts, assessed, scorePercent,
     scoreLine: scorePercent === null
-      ? "Not enough could be verified from the website to give a readiness score."
+      ? "Not enough could be verified from the website to give a five-page review score."
       : `${scorePercent} out of 100: ${ok} of the ${assessed} checks the scan could assess are met (${counts.Gap} gap${counts.Gap === 1 ? "" : "s"}, ${counts["Not Found"]} not found). The ${counts["Cannot Verify"]} it could not verify and the ${counts["Requires document review"]} that need document review are not counted.`,
     topGaps, riskiest,
     notes: [
-      "This is a separate five-page reading. It does not change the DPDP Compliance Score, which weighs every check by its own weight.",
+      ...(framed ? [`The scanned address is a wrapper that displays ${framed}. Checks that rest on something not being seen are Cannot Verify and are not scored, as in the compliance score; scan ${framed} directly to assess that site.`] : []),
+      "This is a separate five-page reading, not the DPDP Compliance Score. It does not change that score, which weighs every check by its own weight and is the report's headline.",
       "Each check counts equally. A page that does not exist is a finding, not a failed check, except the privacy notice. Only what the scan saw or the policy's own words say is marked Compliant; what could not be seen is marked Cannot Verify, never Compliant.",
       "Plain language, the wording beside a form, and a footer's text are not kept by the scan, so they are marked Cannot Verify rather than judged.",
     ],

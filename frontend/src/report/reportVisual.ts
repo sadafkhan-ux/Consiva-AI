@@ -1,5 +1,6 @@
 import type { EvidenceCookieItem, ScanEvidenceResponse, WebsiteScanMetadata } from "../api/types";
 import type { ScoreView } from "./dpdpScore";
+import { framedSiteOf } from "./scanTransparency";
 import { countByState, isKnownTracker } from "./stateCounts";
 import { registrableDomain, summariseTrackers } from "./trackerSummary";
 
@@ -186,6 +187,13 @@ export function buildReportVisual(
         : { title: "Per-purpose choices", status: "unverified", note: "Not readable by the scan" },
   ];
 
+  // A framed wrapper (rule R-012): "not found" on the wrapper is not "not found" on the site visitors see.
+  const framed = framedSiteOf(evidence);
+  const framedElements: ElementView[] = framed
+    ? elements.map((e) => (e.status === "not_found"
+      ? { title: e.title, status: "unverified" as const, note: `Not seen on the wrapper; ${framed} was not scanned` } : e))
+    : elements;
+  if (framed) comparison.banner[0] = comparison.banner[0] === "No banner found" ? "No banner seen on the wrapper" : comparison.banner[0];
   const pages = meta?.pages_scanned ?? evidence.pages.length;
   return {
     pagesScanned: pages,
@@ -200,6 +208,6 @@ export function buildReportVisual(
     domains: new Set(trackers.map((t) => registrableDomain(t.script_src))).size,
     consent: comparison,
     technologies: { rows: techRows.slice(0, MAX_TECH_ROWS), more: Math.max(0, techRows.length - MAX_TECH_ROWS) },
-    elements,
+    elements: framedElements,
   };
 }

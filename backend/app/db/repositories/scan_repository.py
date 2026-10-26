@@ -84,6 +84,17 @@ async def list_recent_scans(db: AsyncSession, org_id: uuid.UUID, limit: int = 20
     return list(result.scalars().all())
 
 
+async def previous_completed_scan(db: AsyncSession, scan: ConsentScan) -> ConsentScan | None:
+    """The completed scan of the same website, in the same organisation, that came just before `scan`. None when there is none."""
+    result = await db.execute(
+        select(ConsentScan)
+        .where(ConsentScan.org_id == scan.org_id, ConsentScan.website_id == scan.website_id, ConsentScan.status == "completed",
+               ConsentScan.created_at < scan.created_at, ConsentScan.id != scan.id)
+        .order_by(ConsentScan.created_at.desc()).limit(1)
+    )
+    return result.scalars().first()
+
+
 async def mark_scan_running(db: AsyncSession, scan_id: uuid.UUID) -> None:
     scan = await db.get(ConsentScan, scan_id)
     if scan:

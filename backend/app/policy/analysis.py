@@ -16,6 +16,8 @@ scan, the score and the findings are untouched.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import unicodedata
@@ -28,7 +30,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.db.models import ConsentScan, Policy
+from app.db.models import AgentRunStage, ConsentScan, Policy
 from app.db.repositories import scan_repository
 from app.db.session import async_session_factory
 from app.policy.requirements import BY_ID, CHILD_SECTORS, REQUIREMENTS, PolicyRequirement
@@ -334,6 +336,38 @@ def _child_signal(evidence: dict) -> bool:
     return bool(_matching_fields(evidence, _CHILD_FIELD))
 
 
+def input_hash(system: str, user: str, sector: str | None, child: bool, model_id: str) -> str:
+    """Identifies everything the model's answer depends on: the instructions, the policy text and requirement list it is asked about, the sector and child
+    reading that shape the answer, and which model answers. The same hash means the same question put to the same model."""
+    payload = json.dumps([system, user, sector, bool(child), model_id], ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def find_reusable(scan_id: uuid.UUID, website_id: uuid.UUID | None, org_id: uuid.UUID | None, digest: str) -> dict | None:
+    """The finished result of an earlier scan of the SAME website, in the same organisation, whose model was asked exactly this question (same hash). Reusing it
+    spends no tokens and gives the answer the model already gave; any change in the policy text, the requirements or the model changes the hash and the model
+    is asked again. Returns None when there is no such result."""
+    if website_id is None or org_id is None:
+        return None
+    async with async_session_factory() as db:
+        row = (await db.execute(
+            select(AgentRunStage.stage_metadata, AgentRunStage.scan_id)
+            .join(ConsentScan, ConsentScan.id == AgentRunStage.scan_id)
+            .where(
+                ConsentScan.website_id == website_id, ConsentScan.org_id == org_id, AgentRunStage.scan_id != scan_id,
+                AgentRunStage.stage == "policy_analysis", AgentRunStage.status == "completed",
+                AgentRunStage.stage_metadata["input_hash"].astext == digest,
+            )
+            .order_by(AgentRunStage.completed_at.desc()).limit(1)
+        )).first()
+    if row is None:
+        return None
+    previous = (row[0] or {}).get("result")
+    if not isinstance(previous, dict) or previous.get("status") != ANALYSED:
+        return None
+    return {**previous, "reused_from_scan": str(row[1])}
+
+
 async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) -> dict:
     """Reads the scan's policies and returns the result (never raises). `extractor(system, user) -> (PolicyExtraction, meta)` can be
     injected for tests; by default the existing Claude-first client with NVIDIA/Groq fallback is used."""
@@ -342,6 +376,8 @@ async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) 
             policies = list((await db.execute(select(Policy).where(Policy.scan_id == scan_id))).scalars().all())
             scan = await db.get(ConsentScan, scan_id)
             scan_url = scan.url if scan is not None else None
+            website_id = getattr(scan, "website_id", None)
+            org_id = getattr(scan, "org_id", None)
         if not any(p.policy_type in ("privacy_policy", "cookie_policy") for p in policies):
             return unavailable("No privacy or cookie policy page was found on the scanned pages, so there was nothing to read.")
         docs, notes = await collect_documents(policies, fetcher)
@@ -355,17 +391,34 @@ async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) 
         child = _child_signal(evidence)
         reqs = [r for r in REQUIREMENTS if applicable(r, sector, child)[0]]
 
+        prompt = build_prompt(docs, reqs)
+        digest = None
         if extractor is None:
+            # Production path only: a test that injects its own extractor always exercises it.
+            from app.llm.client import resolve_reasoning_provider_and_model
+
+            provider, model = resolve_reasoning_provider_and_model(get_settings())
+            digest = input_hash(SYSTEM_PROMPT, prompt, sector, child, f"{provider}/{model}")
+            try:
+                reused = await find_reusable(scan_id, website_id, org_id, digest)
+            except Exception:
+                logger.warning("Looking for a reusable policy analysis failed for %s", scan_id, exc_info=True)
+                reused = None
+            if reused is not None:
+                logger.info("Policy analysis for %s reused from scan %s: no model call", scan_id, reused["reused_from_scan"])
+                # What this scan fetched now is current; the model's reading is the earlier one, for the identical text and question.
+                return {**reused, "notes": notes, "input_hash": digest,
+                        "model": {**(reused.get("model") or {}), "reused": True, "tokens_in": 0, "tokens_out": 0}}
             extractor = _default_extractor(str(scan_id), [d.url for d in docs])
         try:
-            extraction, meta = await extractor(SYSTEM_PROMPT, build_prompt(docs, reqs))
+            extraction, meta = await extractor(SYSTEM_PROMPT, prompt)
         except Exception as exc:
             logger.warning("Policy analysis model call failed for %s: %s", scan_id, exc)
             return unavailable(f"The policy was read but the analysis model could not be reached ({type(exc).__name__}).", docs, notes)
 
         out = analyse(extraction, docs, sector, child)
         return {"status": ANALYSED, "reason": None, "sector": sector, "documents": _doc_rows(docs), "notes": notes,
-                **out, "limitations": list(LIMITATIONS), "model": meta}
+                **out, "limitations": list(LIMITATIONS), "model": meta, "input_hash": digest}
     except Exception as exc:
         logger.exception("Policy analysis failed for %s", scan_id)
         return unavailable(f"The policy analysis could not run ({type(exc).__name__}).")

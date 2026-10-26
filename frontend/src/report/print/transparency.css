@@ -1,0 +1,32 @@
+/* The scan transparency section: one design for the long report and the Full report's fixed page. Its own colours, so it needs neither stylesheet's variables. */
+.tp { font-size: 1em; color: #111b4d; }
+.tp h4 { margin: 10px 0 4px; font-size: 1em; color: #2b2f7a; }
+.tp p { margin: 3px 0; }
+.tp p.tp-reason { padding: 8px 11px; border-radius: 8px; border-left: 4px solid #8a8eb5; background: #eef1fb; font-weight: 600; }
+.tp p.tp-reason.tp-good { border-left-color: #21a974; background: #e3f6ee; }
+.tp p.tp-reason.tp-warn { border-left-color: #ee9b2e; background: #fff1d6; }
+.tp p.tp-reason.tp-bad { border-left-color: #e5484d; background: #fde4e7; }
+.tp p.tp-frame { padding: 7px 11px; border-radius: 8px; background: #eaf0ff; border: 1px solid #d6e0ff; color: #1a2a73; }
+.tp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+.tp-grid section { border: 1px solid #e3e6f4; border-radius: 9px; padding: 9px 11px; min-width: 0; }
+.tp dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 0; }
+.tp dt { color: #5d6086; }
+.tp dd { margin: 0; text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+/* The coverage card holds sentences, not short figures: value under the label, left aligned, instead of a cramped right-hand column. */
+.tp [data-testid="tp-coverage"] dl { grid-template-columns: 1fr; gap: 0; }
+.tp [data-testid="tp-coverage"] dt { margin-top: 5px; }
+.tp [data-testid="tp-coverage"] dd { text-align: left; }
+.tp-note { color: #5d6086; font-size: 0.92em; }
+.tp-list { margin: 5px 0 0; padding-left: 15px; color: #5d6086; font-size: 0.92em; }
+.tp-stages { list-style: none; padding-left: 0; }
+.tp-stages li { display: flex; justify-content: space-between; gap: 8px; }
+.tp-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+.tp-table th { background: #eef1fb; text-align: left; padding: 5px 8px; font-size: 0.9em; }
+.tp-table td { padding: 5px 8px; border-bottom: 1px solid #e3e6f4; vertical-align: top; }
+.tp-pill { display: inline-block; padding: 2px 8px; border-radius: 6px; font-weight: 700; font-size: 0.9em; white-space: nowrap; }
+.tp-pill.tp-good { background: #e0f6ec; color: #0d7a55; }
+.tp-pill.tp-warn { background: #fff0d0; color: #8f5600; }
+.tp-pill.tp-bad { background: #fde4e7; color: #a8283a; }
+.tp-pill.tp-mute { background: #eaeefa; color: #555a85; }
+@media screen and (max-width: 760px) { .tp-grid { grid-template-columns: 1fr; } }
+@media print { .tp-grid section, .tp-table tr { break-inside: avoid; page-break-inside: avoid; } }

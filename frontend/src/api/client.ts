@@ -6,6 +6,7 @@ import type {
   ScanEvidenceResponse,
   PolicyAnalysis,
   ScanListItem,
+  ScoreComparison,
   ScanUsage,
   UsageHistoryItem,
   ScanScreenshot,
@@ -200,6 +201,10 @@ export const api = {
   },
   getEvidence(scanId: string): Promise<ScanEvidenceResponse> {
     return request(`/api/v1/consent/scans/${scanId}/evidence`);
+  },
+  compareDpdpScore(scanId: string, against?: string): Promise<ScoreComparison> {
+    const query = against ? `?against=${encodeURIComponent(against)}` : "";
+    return request(`/api/v1/consent/scans/${scanId}/dpdp-score/compare` + query);
   },
   getDpdpScore(scanId: string): Promise<DpdpScoreResponse> {
     return request(`/api/v1/consent/scans/${scanId}/dpdp-score`);

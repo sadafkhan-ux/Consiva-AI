@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from app.core.credential_refs import CredentialRefNotAllowedError, assert_credential_ref_allowed
 from app.agents.dsr.connectors.authorization import SourceGrant, resolve
 from app.agents.dsr.connectors.postgres import PostgresDsrConfig, PostgresDsrConnector
 from app.agents.dsr.errors import EncryptionNotConfiguredError, SourceNotAuthorizedError
@@ -86,7 +87,11 @@ def _resolve_secret(
     if not credential_ref:
         return None
     if len(credential_ref) > _MAX_CREDENTIAL_REF_LEN or not credential_ref.replace("_", "").isalnum():
-        raise SourceNotAuthorizedError(f"invalid {purpose} credential_ref format: {credential_ref!r}")
+        raise SourceNotAuthorizedError(f"invalid {purpose} credential_ref format")
+    try:
+        assert_credential_ref_allowed(credential_ref)
+    except CredentialRefNotAllowedError as exc:
+        raise SourceNotAuthorizedError(f"{purpose} {exc}") from exc
     secret = os.getenv(credential_ref)
     if secret is None:
         raise SourceNotAuthorizedError(

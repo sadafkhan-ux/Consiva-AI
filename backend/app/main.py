@@ -17,7 +17,7 @@ from app.db.privilege_check import assert_rls_is_enforceable
 from app.lookup.health import warn_if_cookie_lookup_empty
 from app.rag.health import warn_if_knowledge_base_empty
 
-logging.basicConfig(level=get_settings().log_level)
+logging.basicConfig(level=str(get_settings().log_level).upper())
 
 
 @asynccontextmanager
@@ -67,7 +67,7 @@ elif _settings.cors_origin_list:
         CORSMiddleware,
         allow_origins=_settings.cors_origin_list,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
         max_age=600,
     )

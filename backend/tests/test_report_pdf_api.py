@@ -27,6 +27,7 @@ from app.core.exceptions import ReportGenerationError
 from app.db.repositories import scan_repository
 from app.main import app
 from app.scoring.dpdp_score import DISCLAIMER
+from app.services import report_cache_service
 from app.services import report_pdf_service as svc
 
 client = TestClient(app)
@@ -159,8 +160,28 @@ def test_a_web_app_address_that_is_not_http_is_refused_before_a_browser_starts()
 def _wire(monkeypatch, *, found=True, status="completed", website_org=ORG_ID, render=None):
     from app.db.session import get_db
 
+    class FakeDb:
+        async def rollback(self):
+            return None
+
     async def fake_db():
-        yield None
+        yield FakeDb()
+
+    # The route answers from the stored report when it is current (services/report_cache_service.py). These tests are about the route's own rules and
+    # the printing hand-off, so nothing is ever stored and every request is printed; the cache has its own tests (test_report_cache.py).
+    async def no_fingerprint(db, scan, settings=None):
+        return "test"
+
+    async def nothing_stored(db, scan_id, variant, current):
+        return None
+
+    async def store_nothing(*a, **k):
+        return None
+
+    monkeypatch.setattr(report_cache_service, "fingerprint", no_fingerprint)
+    monkeypatch.setattr(report_cache_service, "get_stored", nothing_stored)
+    monkeypatch.setattr(report_cache_service, "_store", store_nothing)
+    report_cache_service._inflight.clear()
 
     async def get_scan(db, scan_id, org_id):
         return SimpleNamespace(id=scan_id, org_id=org_id, website_id=uuid.uuid4(), status=status, completed_at=datetime(2026, 10, 22, 12, 0, tzinfo=UTC)) if found else None
@@ -198,7 +219,7 @@ def test_a_completed_scan_downloads_as_a_pdf_with_the_right_headers(monkeypatch)
         assert r.headers["cache-control"] == "private, no-store" and r.headers["x-content-type-options"] == "nosniff"
         # The caller's own token and identity go to the printer, and nothing else is handed over.
         assert seen["scan_id"] == SCAN_ID and seen["kw"]["token"] == tok
-        assert seen["kw"]["org_id"] == str(ORG_ID) and seen["kw"]["user_id"] == str(USER_ID) and seen["kw"]["version"].startswith("2026-10-22")
+        assert seen["kw"]["org_id"] == str(ORG_ID) and seen["kw"]["user_id"] == str(USER_ID) and seen["kw"]["version"] == "test"   # the printer is told the state of the report: the cache's fingerprint, not just the completion date
         assert tok not in r.text and tok not in str(r.headers)
     finally:
         app.dependency_overrides.pop(key, None)
