@@ -142,11 +142,14 @@ export function PageFrame({ variant, n, of, domain, scannedAt, headerPages = "",
         </div>
       </header>
       <div className="pg-body">{children}</div>
-      <footer className="pg-foot">
-        <span className="pg-foot-brand"><i /> Consiva.ai</span>
-        <span className="pg-foot-mid">{free ? `Website Privacy Readiness Report | ${domain}` : SHORT_DISCLAIMER}</span>
-        <span className="pg-foot-page">{numbered ? `Page ${n} of ${of}` : ""}</span>
-      </footer>
+      {/* The cover (numbered={false}) carries no footer strip: the long report's own page footer starts on the next page. */}
+      {numbered && (
+        <footer className="pg-foot">
+          <span className="pg-foot-brand"><i /> Consiva.ai</span>
+          <span className="pg-foot-mid">{free ? `Website Privacy Readiness Report | ${domain}` : SHORT_DISCLAIMER}</span>
+          <span className="pg-foot-page">{`Page ${n} of ${of}`}</span>
+        </footer>
+      )}
     </section>
   );
 }
