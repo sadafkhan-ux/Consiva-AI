@@ -1102,7 +1102,7 @@ async def get_scan_report_pdf(
     scan_id: uuid.UUID,
     request: Request,
     variant: Literal["free", "full", "long", "summary"] = Query(
-        "long", description="long (default): the full report, opening with the Free report's front page; free: the two-page Free Scan report; full: the eight-page Full Scan report with its evidence appendix; summary: the three-page summary report.",
+        "summary", description="summary (default): the two-page report; long: the full evidence report, opening with the Free report's front page; free: the two-page Free Scan report; full: the eight-page Full Scan report with its evidence appendix.",
     ),
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

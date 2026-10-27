@@ -70,10 +70,11 @@ has no appendix and no gap in the numbers.
 
 ## Free Scan and Full Scan reports (scope document, 23 Oct 2026)
 
-`GET /api/v1/consent/scans/{id}/report.pdf?variant=free|full|long` (default `free`).
+`GET /api/v1/consent/scans/{id}/report.pdf?variant=summary|free|full|long` (default `summary`, the two-page report; ask for `?variant=long` to get the full evidence report).
 
 | variant | What it is | How it is printed |
 |---|---|---|
+| `summary` (default) | The two-page report: logo header, one Compliance Score, the checkpoints with their evidence, cookies and consent states, the sign-up link and the disclaimer (`SummaryReport.tsx`) | One Chromium print of `/?report=<id>&print=1&variant=summary&part=pages`, no print-engine header or footer |
 | `free` | Two fixed A4 sheets (`FreeReport.tsx`) | One Chromium print of `/?report=<id>&print=1&variant=free&part=pages`, no print-engine header or footer: each sheet carries its own |
 | `full` | Eight fixed A4 sheets (`FullReport.tsx`) followed by the evidence appendix | `part=pages` (fixed) and `part=appendix` (flowing, with the print engine's header/footer, numbered "Appendix page n of N") printed separately and joined with pypdf |
 | `long` | The earlier single-flow evidence report | As before |

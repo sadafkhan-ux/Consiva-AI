@@ -276,8 +276,8 @@ def test_the_route_needs_a_token_and_a_valid_id(monkeypatch):
         app.dependency_overrides.pop(key, None)
 
 
-@pytest.mark.parametrize("query,expected", [("", "long"), ("?variant=free", "free"), ("?variant=full", "full"), ("?variant=long", "long"), ("?variant=summary", "summary")])
-def test_the_route_prints_the_report_type_asked_for_and_the_long_one_by_default(monkeypatch, query, expected):
+@pytest.mark.parametrize("query,expected", [("", "summary"), ("?variant=free", "free"), ("?variant=full", "full"), ("?variant=long", "long"), ("?variant=summary", "summary")])
+def test_the_route_prints_the_report_type_asked_for_and_the_two_page_one_by_default(monkeypatch, query, expected):
     key, seen = _wire(monkeypatch)
     try:
         assert _get(_token(), query=query).status_code == 200
