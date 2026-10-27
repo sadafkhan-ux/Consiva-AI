@@ -88,7 +88,10 @@ describe("a failed scan that collected nothing is not shown as a clean result", 
   it("still shows the reason and the failing stage in the diagnostics", async () => {
     await scanAndWaitForFailure(failingBackend(0));
 
-    expect(screen.getAllByText(new RegExp(TIMEOUT_ERROR.slice(0, 40))).length).toBeGreaterThan(0);
+    // The person is told in plain words and what to do; the raw error text is not on the page.
+    expect(screen.getAllByText(/took longer than allowed/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/What you can do:/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(new RegExp(TIMEOUT_ERROR.slice(0, 40)))).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Errors \/ Diagnostics/ })).toBeInTheDocument();
     expect(screen.getByText("Pages Scanned").previousSibling).toHaveTextContent("0");
   });

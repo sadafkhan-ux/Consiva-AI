@@ -137,3 +137,32 @@ class TestTheLifecycleWord:
 
     def test_an_unknown_status_with_an_error_is_a_failure_not_a_success(self):
         assert scan_outcome("weird", error="boom") == FAILED
+
+
+class TestWhatAPersonIsTold:
+    """Every failure has a short, plain message and a next step, with no technical terms: the technical detail stays in the logs and in the API's `detail`."""
+
+    BANNED = ("rag", "api", "llm", "nvidia", "http", "tls", "ssl", "dns", "robots", "stack", "exception", "traceback", "playwright", "chromium", "timeout", "timed out", "retry window",
+              "cert_", "err_", "ecconn", "json", "stage", "database", "embedding", "token")
+
+    @pytest.mark.parametrize("category", list(C))
+    def test_every_category_has_a_plain_short_message_and_next_step(self, category):
+        import re
+        info = describe(category, detail="net::ERR_FAILED at https://x.test/")
+        for text in (info.user_message, info.what_you_can_do, info.short):
+            assert text and len(text) <= 140, (category, text)
+            words = re.findall(r"[a-z_]+", text.lower())
+            assert not [b for b in self.BANNED if b in words or (len(b) > 4 and b in text.lower())], (category, text)
+        assert info.user_message.endswith(".") and info.what_you_can_do.endswith(".")
+        assert info.detail and "ERR_FAILED" in info.detail, "the technical text is kept for developers"
+
+    def test_the_two_known_failures_read_plainly(self):
+        expired = classify_message("Could not read the robots.txt of uat.consiva.ai (certificate has expired)")
+        assert expired.user_message == "This website's security certificate has expired, so we couldn't open it safely."
+        assert expired.what_you_can_do == "The website's owner needs to renew it. Try again afterwards."
+        blocked = classify_message("The robots.txt of x does not allow the scanner to visit https://x/")
+        assert blocked.user_message == "This website doesn't allow automated scanning, so we didn't scan it."
+
+    def test_the_dictionary_form_carries_them_to_the_api(self):
+        d = describe(C.RATE_LIMITED).as_dict()
+        assert d["user_message"] and d["what_you_can_do"] and d["short"] and d["category"] == "RATE_LIMITED"

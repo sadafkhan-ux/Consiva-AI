@@ -264,6 +264,9 @@ class SitePage:
     def on(self, *_a):
         pass
 
+    async def route(self, *_a):
+        pass
+
     async def goto(self, url, timeout=None, wait_until=None):
         self.url = url
         self.log.append(url)

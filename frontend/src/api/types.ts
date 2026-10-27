@@ -208,6 +208,10 @@ export interface ScanFailure {
   next_action: string;
   detail: string;
   url: string | null;
+  /** In plain words, for a person: what happened, what they can do, and a few words for a label. The fields above are for developers. */
+  user_message?: string;
+  what_you_can_do?: string;
+  short?: string;
 }
 
 export interface ScanStatusResponse extends ScanResponse {

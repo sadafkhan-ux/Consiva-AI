@@ -74,3 +74,7 @@ It does not fix an external site's certificate or robots.txt, and does not make 
 ## Not deployed
 
 All of the above is in the working tree. The backend, worker and frontend images have **not** been rebuilt, so none of it runs in the services until they are (commands in `docs/SCALING.md`).
+
+## Deployment setting for an unreadable robots.txt (27 Oct 2026)
+
+`docker-compose.prod.yml` now sets `SCANNER_ROBOTS_UNREADABLE_POLICY` to `allow` for the backend and worker by default (override with the same variable in the environment). With `allow`, a robots.txt that cannot be read (timeout, 5xx, 429) logs a warning and the scan proceeds. A robots.txt that can be read and forbids the scanner is **always** obeyed, and the code default remains `disallow`.

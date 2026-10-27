@@ -206,6 +206,10 @@ class Settings(BaseSettings):
     # Most scans one organisation may have WAITING (status "queued", not yet taken by a worker) at once. 0 = no ceiling (the default, nothing changes). Above 0, a new scan is
     # refused with HTTP 429 while that many are already waiting, so a flood from one organisation cannot grow the queue without bound; scans that are running or finished do not count.
     scanner_max_queued_scans_per_org: int = Field(default=0, ge=0)
+    # How long the scanner waits for a site's robots.txt, per request. A site's bot protection often answers an automated client slowly rather than refusing it (in.louisvuitton.com served
+    # robots.txt with HTTP 200 after 8.3 s, so the former fixed 5 s failed the scan). One further try is made after a timeout. An unreadable robots.txt still stops the scan unless
+    # SCANNER_ROBOTS_UNREADABLE_POLICY=allow.
+    scanner_robots_timeout_seconds: int = Field(default=15, ge=3, le=60)
     # A scheduled (monitoring) scan is not started again for this many hours after the website's last scan failed for a reason that scanning again cannot change (robots.txt disallows the scanner,
     # an expired or invalid certificate, access denied, a login required: scanner/failure_catalog.py). Without it a schedule repeats the same refused request every interval, for as long as the
     # site's owner has not fixed it. The schedule is moved on as usual, so it tries again once the pause is over. A scan someone requests by hand is never held back. 0 = no pause.
@@ -256,6 +260,8 @@ class Settings(BaseSettings):
     # Start the Accept and Reject passes (each in its own fresh browser context) while the page crawl is still running, instead of after it. They need only the
     # entered address and robots.txt, both known before the crawl, so the scan takes as long as the longer of the two. Off = the previous order.
     scanner_overlap_consent_passes: bool = True
+    # Pages after the first do not download large photographs (scanner/image_blocking.py): trackers, beacons and the first page are never affected.
+    scanner_skip_secondary_page_images: bool = True
     # India (DPDP) is this product's target compliance audience, so the scanner
     # presents as an Indian-locale browser by default -- this is a request-header/
     # navigator hint only. It does NOT affect network egress IP, and it does NOT make

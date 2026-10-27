@@ -192,6 +192,9 @@ class _FailingPage:
     def on(self, event, handler):
         pass
 
+    async def route(self, *_a):
+        pass
+
     async def goto(self, url, timeout=None, wait_until=None):
         raise self._error
 

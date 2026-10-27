@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ConsentScanState } from "../hooks/useConsentScan";
+import { friendlyError } from "../errors/friendlyError";
 import { deriveFailureReason, hasPartialResults } from "../hooks/useConsentScan";
 import { formatMs, formatTimestamp } from "./shared";
 import { serverSpanMs, stuckStages, summariseStages, unaccountedMs } from "./stageTiming";
@@ -97,7 +98,8 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
   // crawler's figure existed. Failed or timed-out pages are warnings too, not just a scan-level error.
   const pagesScanned = state.websiteScanMeta?.pages_scanned ?? state.scan?.evidence_counts.pages;
   const hasErrorsOrWarnings = Boolean(state.error) || (state.websiteScanMeta?.pages_failed ?? 0) > 0 || (state.websiteScanMeta?.pages_timeout ?? 0) > 0;
-  const failureReason = state.phase === "failed" ? deriveFailureReason(state.error, state.websiteScanMeta) : null;
+  // The label says what went wrong in a few plain words (the server's own description when it has one, else the same wording worked out from the message).
+  const failureReason = state.phase === "failed" ? (state.scan?.failure?.short || (state.error ? friendlyError(state.error).short : deriveFailureReason(state.error, state.websiteScanMeta))) : null;
   // An analysis step that failed on a scan that completed: with findings they are ready but unexplained; with none, the scan is complete and the
   // analysis is not.
   const degradedNoFindings = state.phase === "degraded" && state.findings.length === 0;

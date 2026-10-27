@@ -2,7 +2,8 @@
 // could add authentication and a second agent around it. Nothing in this view's
 // behaviour changed -- only the function name and its new home.
 import { useState } from "react";
-import { FailureNotice } from "./components/FailureNotice";
+import { FailureNotice, SimpleErrorNotice } from "./components/FailureNotice";
+import { friendlyError } from "./errors/friendlyError";
 import { evidenceStatus, failedStageName, hasPartialResults, scanEvidenceUnavailable, useConsentScan } from "./hooks/useConsentScan";
 import { ScanStatusSection } from "./components/ScanStatusSection";
 import { ConsentSummarySection } from "./components/ConsentSummarySection";
@@ -98,7 +99,7 @@ export function ConsentAgentView() {
       <div className="usage-main">
       <div className="agent-intro">
         <h1>Consent Agent</h1>
-        <div className="tagline">Enter a public website URL to run a real scan → three-state consent test → rules → RAG → NVIDIA LLM → findings → human review.</div>
+        <div className="tagline">Enter a public website address to scan it. We check its consent banner, cookies and trackers, and show what needs a human review.</div>
       </div>
 
       <div className="scan-form">
@@ -122,21 +123,21 @@ export function ConsentAgentView() {
       {state.phase === "failed" && state.error && (
         state.scan?.failure
           ? <FailureNotice failure={state.scan.failure} outcome={state.scan.outcome} />
-          : <div className="error-box">{state.error}</div>
+          : <SimpleErrorNotice {...(({ message, next }) => ({ message, next }))(friendlyError(state.error))} />
       )}
       {state.phase !== "failed" && state.scan?.outcome === "PARTIALLY_COMPLETED" && <FailureNotice failure={state.scan.failure} outcome={state.scan.outcome} />}
       {state.phase === "degraded" && state.findings.length > 0 && (
         <div className="info-box" data-testid="degraded-notice">
           The findings below were produced by the deterministic rules from evidence the scan actually collected, so what
           they report was measured. The step that writes the plain-English explanation and attaches regulatory citations
-          did not complete ({state.error}), so each finding carries its rule's own summary, cites nothing, and requires
+          did not complete, so each finding carries its rule's own summary, cites nothing, and requires
           human review. Re-running the analysis will add the explanations; the evidence does not need re-scanning.
         </div>
       )}
       {state.phase === "degraded" && state.findings.length === 0 && RULE_STAGES.has(state.failedStage ?? "") && (
         <div className="info-box" data-testid="degraded-notice">
           <strong>The scan completed; the findings step did not.</strong> The checks and the score below are computed from
-          the scan's own evidence. The step that turns rule results into findings did not complete ({state.error}), so
+          the scan's own evidence. The step that turns rule results into findings did not complete, so
           the absence of findings here does not mean the rules found nothing. Re-running the analysis completes it.
         </div>
       )}
@@ -144,7 +145,7 @@ export function ConsentAgentView() {
         <div className="info-box" data-testid="degraded-notice">
           <strong>The scan completed; the analysis did not.</strong> The checks and the score below are computed from the
           scan's own evidence and do not depend on the analysis step. That step, which writes the explanations, attaches
-          the regulatory citations and can add model-assisted findings, did not complete ({state.error}). The rules matched
+          the regulatory citations and can add model-assisted findings, did not complete. The rules matched
           nothing on the scanned pages, so there are no findings and no recommendations. That is not a statement that the
           analysis would have found nothing. Re-running the analysis completes it; the evidence does not need re-scanning.
         </div>

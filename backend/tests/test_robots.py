@@ -260,3 +260,51 @@ class TestACertificateProblemIsPermanentNotUnreadable:
         from app.scanner.failures import RobotsUnreadable
         with pytest.raises(RobotsUnreadable):
             await _fetch_robots(_RobotsContext({"https://x.test/robots.txt": OSError("socket hang up")}), "https://x.test/")
+
+
+class TestASlowRobotsTxt:
+    """in.louisvuitton.com answered robots.txt with HTTP 200 after 8.3 s; a fixed 5 s timeout failed the scan."""
+
+    class SlowThenFine(_RobotsContext):
+        def __init__(self, table, timeouts_first):
+            super().__init__(table)
+            self.timeouts_first, self.timeouts_given, self.seen_timeouts = timeouts_first, 0, []
+
+        async def get(self, url, timeout=0, max_redirects=0):
+            self.seen_timeouts.append(timeout)
+            if self.timeouts_given < self.timeouts_first:
+                self.timeouts_given += 1
+                raise TimeoutError("APIRequestContext.get: Timeout 15000ms exceeded.")
+            return await super().get(url, timeout=timeout, max_redirects=max_redirects)
+
+    def test_the_default_wait_is_15_seconds_and_configurable(self):
+        f = type(get_settings()).model_fields["scanner_robots_timeout_seconds"]
+        assert f.default == 15
+
+    async def test_the_configured_timeout_is_used(self, safe_hosts):
+        from app.scanner.crawler import _fetch_robots
+        ctx = self.SlowThenFine({"https://x.test/robots.txt": _Resp(200, "User-agent: *\nDisallow: /mylv/\n")}, timeouts_first=0)
+        await _fetch_robots(ctx, "https://x.test/")
+        assert ctx.seen_timeouts == [get_settings().scanner_robots_timeout_seconds * 1000]
+
+    async def test_one_timeout_is_retried_and_the_file_is_then_obeyed(self, safe_hosts):
+        from app.scanner.crawler import _fetch_robots
+        ctx = self.SlowThenFine({"https://x.test/robots.txt": _Resp(200, "User-agent: *\nDisallow: /mylv/\n")}, timeouts_first=1)
+        rules, _ = await _fetch_robots(ctx, "https://x.test/")
+        assert len(ctx.seen_timeouts) == 2 and not rules.allows("/mylv/x") and rules.allows("/eng-in/")
+
+    async def test_two_timeouts_still_stop_the_scan_it_is_never_taken_as_permission(self, safe_hosts):
+        from app.scanner.crawler import _fetch_robots
+        from app.scanner.failures import RobotsUnreadable
+        ctx = self.SlowThenFine({"https://x.test/robots.txt": _Resp(200, "")}, timeouts_first=2)
+        with pytest.raises(RobotsUnreadable):
+            await _fetch_robots(ctx, "https://x.test/")
+        assert len(ctx.seen_timeouts) == 2, "one extra try, not a loop"
+
+    async def test_a_non_timeout_error_is_not_retried(self, safe_hosts):
+        from app.scanner.crawler import _fetch_robots
+        from app.scanner.failures import RobotsUnreadable
+        ctx = _RobotsContext({"https://x.test/robots.txt": OSError("socket hang up")})
+        with pytest.raises(RobotsUnreadable):
+            await _fetch_robots(ctx, "https://x.test/")
+        assert len(ctx.asked) == 1

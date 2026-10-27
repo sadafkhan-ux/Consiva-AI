@@ -208,6 +208,9 @@ services:
       # Scans per organisation per hour through the integration API, on top of the
       # existing per-day ceiling. A scan is a real browser crawl plus a model call.
       CONSENT_API_SCANS_PER_HOUR: "${CONSENT_API_SCANS_PER_HOUR:-0}"
+      # What to do when a site's robots.txt cannot be READ (timeout, HTTP 5xx or 429): "allow" scans anyway and logs a warning; "disallow" stops the scan. A robots.txt that can be read and
+      # forbids the scanner is always obeyed, whichever is set. Set to "allow" here by decision of the operator (27 Oct 2026); override with SCANNER_ROBOTS_UNREADABLE_POLICY in the environment.
+      SCANNER_ROBOTS_UNREADABLE_POLICY: "${SCANNER_ROBOTS_UNREADABLE_POLICY:-allow}"
     volumes:
       # Source PDFs for the RAG knowledge base. Read-only, and deliberately a mount
       # rather than a COPY: they live at the repo root, outside this service's
@@ -279,6 +282,9 @@ services:
       # cores). A number above 0 caps it instead; the CPU and memory limits still apply.
       # /dev/shm below still has to hold every browser: it is scaled with the slots.
       WORKER_CONCURRENCY: "${WORKER_CONCURRENCY:-0}"
+      # What to do when a site's robots.txt cannot be READ (timeout, HTTP 5xx or 429): "allow" scans anyway and logs a warning; "disallow" stops the scan. A robots.txt that can be read and
+      # forbids the scanner is always obeyed, whichever is set. Set to "allow" here by decision of the operator (27 Oct 2026); override with SCANNER_ROBOTS_UNREADABLE_POLICY in the environment.
+      SCANNER_ROBOTS_UNREADABLE_POLICY: "${SCANNER_ROBOTS_UNREADABLE_POLICY:-allow}"
       # Must be raised WITH WORKER_CONCURRENCY. The app default is 3+2=5 connections
       # per process, sized years ago for Supabase's 15-client session pooler; this
       # deployment is on the local `db` container instead, where max_connections is

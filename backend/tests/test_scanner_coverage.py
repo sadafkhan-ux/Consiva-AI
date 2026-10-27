@@ -58,6 +58,9 @@ class _FakePage:
     def on(self, event, handler):
         pass
 
+    async def route(self, *_a):
+        pass
+
     async def goto(self, url, timeout=None, wait_until=None):
         key = normalize_url(url)
         if key in self._failures:

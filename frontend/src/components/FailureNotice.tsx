@@ -1,11 +1,5 @@
 import type { ScanFailure } from "../api/types";
 
-const WHO: Record<string, string> = {
-  website_owner: "The website's owner has to act",
-  scanner_operator: "The scanner's operator has to act",
-  none: "Nobody has to change anything",
-};
-
 export const OUTCOME_LABELS: Record<string, string> = {
   QUEUED: "Queued",
   RUNNING: "Running",
@@ -17,19 +11,27 @@ export const OUTCOME_LABELS: Record<string, string> = {
   CANCELLED: "Cancelled",
 };
 
-/** Why a scan could not be completed, what that does and does not mean, and the next step. A technical failure is never shown as a compliance result. */
+/** Why a scan couldn't be completed, in one plain sentence, and what the person can do next. The technical error is not shown here: it is in the server's logs. */
 export function FailureNotice({ failure, outcome }: { failure: ScanFailure | null | undefined; outcome?: string | null }) {
   if (!failure) return null;
   const partial = outcome === "PARTIALLY_COMPLETED" || failure.category === "PARTIAL_SCAN";
+  const message = failure.user_message || "Something went wrong while scanning.";
+  const next = failure.what_you_can_do || "Please try again. If it keeps happening, contact support.";
   return (
     <div className={partial ? "status-banner warn" : "error-box"} role={partial ? "status" : "alert"} data-testid="failure-notice">
-      <strong>{outcome && OUTCOME_LABELS[outcome] ? `${OUTCOME_LABELS[outcome]}: ` : ""}{failure.title}.</strong> {failure.explanation}
-      <div style={{ marginTop: 6 }}><b>Next step:</b> {failure.next_action}</div>
-      <div className="muted small" style={{ marginTop: 6 }}>
-        {WHO[failure.owner] ?? failure.owner} · {failure.retryable ? "Scanning again can help" : "Scanning again without a change will not help"}
-        {failure.detail ? <> · Error: <code>{failure.detail}</code></> : null}
-      </div>
-      <div className="muted small" style={{ marginTop: 4 }}>This is a technical result. It says nothing about the site's consent practices, and no compliance conclusion is drawn from it.</div>
+      <strong>{message}</strong>
+      <div style={{ marginTop: 6 }}><b>What you can do:</b> {next}</div>
+      <div className="muted small" style={{ marginTop: 6 }}>This is about reaching the website, not about its privacy practices.</div>
+    </div>
+  );
+}
+
+/** The same box for an error that arrived as plain text. */
+export function SimpleErrorNotice({ message, next }: { message: string; next: string }) {
+  return (
+    <div className="error-box" role="alert" data-testid="friendly-error">
+      <strong>{message}</strong>
+      <div style={{ marginTop: 6 }}><b>What you can do:</b> {next}</div>
     </div>
   );
 }

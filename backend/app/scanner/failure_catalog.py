@@ -51,8 +51,11 @@ class FailureInfo:
     transient: bool               # whether the cause is likely temporary
     owner: str                    # who must act
     next_action: str
-    detail: str = ""              # the underlying error, as the browser or client reported it (one line, no secrets)
+    detail: str = ""              # the underlying error, as the browser or client reported it (one line, no secrets). For developers and integrators: a user interface does not show it.
     url: str | None = None        # the address concerned
+    user_message: str = ""        # what happened, in one plain sentence for a person (no technical terms)
+    what_you_can_do: str = ""     # what that person can do next, in one plain sentence
+    short: str = ""               # a few words for a status label
 
     def as_dict(self) -> dict:
         return {**asdict(self), "category": self.category.value}
@@ -133,9 +136,30 @@ _CATALOG: dict[FailureCategory, _Spec] = {
 }
 
 
+# What a person is told, for every category: short, plain, from their point of view, with no technical terms (a test enforces it). The technical explanation above and the underlying error stay for
+# developers and the logs.
+_USER: dict[FailureCategory, tuple[str, str, str]] = {
+    FailureCategory.ROBOTS_TXT_DISALLOWED: ("short=Not allowed by the website", "This website doesn't allow automated scanning, so we didn't scan it.", "Ask the website's owner to allow it, or try a page the site permits."),
+    FailureCategory.ROBOTS_TXT_UNAVAILABLE: ("short=Couldn't check the website's rules", "We couldn't check this website's scanning rules, so we didn't scan it.", "Try again in a few minutes."),
+    FailureCategory.TLS_CERTIFICATE_EXPIRED: ("short=Website security has expired", "This website's security certificate has expired, so we couldn't open it safely.", "The website's owner needs to renew it. Try again afterwards."),
+    FailureCategory.TLS_CERTIFICATE_INVALID: ("short=Website security problem", "This website's security certificate isn't valid, so we couldn't open it safely.", "The website's owner needs to fix it. Try again afterwards."),
+    FailureCategory.DNS_RESOLUTION_FAILED: ("short=Website not found", "We couldn't find this website address.", "Check the spelling of the address and try again."),
+    FailureCategory.CONNECTION_FAILED: ("short=Couldn't connect", "The website refused or dropped our connection.", "Check that the site is online. If it's yours, allow our scanner, then try again."),
+    FailureCategory.REQUEST_TIMEOUT: ("short=Website too slow", "The website took too long to respond.", "Try again in a few minutes."),
+    FailureCategory.HTTP_ACCESS_DENIED: ("short=Blocked by the website", "The website blocked our scanner.", "If it's your site, allow the scanner in its firewall. Otherwise ask the owner for permission."),
+    FailureCategory.AUTHENTICATION_REQUIRED: ("short=Needs a login", "This page needs a login, which we can't use.", "Scan a public page of the site instead."),
+    FailureCategory.RATE_LIMITED: ("short=Website is limiting us", "The website is limiting how fast we can scan it.", "Wait a few minutes and try again."),
+    FailureCategory.SERVER_ERROR: ("short=Website had a problem", "The website had a problem and couldn't load.", "Try again later."),
+    FailureCategory.BROWSER_NAVIGATION_FAILED: ("short=Couldn't open the page", "We couldn't open this page.", "Check that it opens in your browser, then try again."),
+    FailureCategory.PARTIAL_SCAN: ("short=Some pages couldn't be scanned", "Some pages couldn't be scanned, so the results cover only the pages that were.", "Scan again to retry the others."),
+    FailureCategory.UNKNOWN_SCAN_ERROR: ("short=Something went wrong", "Something went wrong while scanning.", "Please try again. If it keeps happening, contact support and quote the scan ID."),
+}
+
+
 def describe(category: FailureCategory, *, detail: str = "", url: str | None = None) -> FailureInfo:
     spec = _CATALOG[category]
-    return FailureInfo(category=category, code=category.value, detail=_one_line(detail), url=url, **asdict(spec))
+    short, message, action = _USER[category]
+    return FailureInfo(category=category, code=category.value, detail=_one_line(detail), url=url, user_message=message, what_you_can_do=action, short=short.removeprefix("short="), **asdict(spec))
 
 
 def _one_line(text: str, limit: int = 240) -> str:
@@ -148,7 +172,7 @@ _EXPIRED = re.compile(r"certificate has expired|cert_has_expired|err_cert_date_i
 _CERT = re.compile(r"certificate|err_cert_|err_ssl_|depth_zero_self_signed|altnames|self[- ]signed|unable to verify the first|local issuer", re.IGNORECASE)
 _DNS = re.compile(r"did not resolve|err_name_not_resolved|err_name_resolution_failed|enotfound|getaddrinfo|dns_failure", re.IGNORECASE)
 _REFUSED = re.compile(r"closed the connection|econnrefused|econnreset|err_connection_(refused|reset|closed)|err_empty_response|err_http2_protocol_error|socket hang up|refused the connection", re.IGNORECASE)
-_TIMEOUT = re.compile(r"timeout|timed out|too slow or unavailable|err_timed_out|err_connection_timed_out", re.IGNORECASE)
+_TIMEOUT = re.compile(r"timeout|timed out|too slow or unavailable|err_timed_out|err_connection_timed_out|exceeded its .*(budget|time)|was aborted so the worker", re.IGNORECASE)
 _STATUS = re.compile(r"\bhttp (\d{3})\b", re.IGNORECASE)
 
 

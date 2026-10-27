@@ -78,6 +78,7 @@ from app.scanner.failures import (
     parse_retry_after,
 )
 from app.scanner.form_detector import detect_forms
+from app.scanner.image_blocking import ImageSkipper
 from app.scanner.page_parser import ParsedScript, parse_page
 from app.scanner.page_signals import (
     indic_script_counts,
@@ -350,6 +351,19 @@ async def _guard_navigation(route: Route) -> None:
 _ROBOTS_MAX_REDIRECTS = 5
 
 
+async def _robots_get(context: BrowserContext, url: str):
+    """One robots.txt request, never following a redirect itself (see _fetch_robots), with the configured timeout and one more try after a timeout: a slow answer is the usual form
+    of a site's bot protection, and the file is small."""
+    timeout_ms = get_settings().scanner_robots_timeout_seconds * 1000
+    try:
+        return await context.request.get(url, timeout=timeout_ms, max_redirects=0)
+    except Exception as exc:  # noqa: BLE001
+        if "timeout" not in str(exc).lower():
+            raise
+        logger.info("robots.txt request to %s timed out after %d ms; trying once more", url, timeout_ms)
+        return await context.request.get(url, timeout=timeout_ms, max_redirects=0)
+
+
 async def _fetch_robots(context: BrowserContext, root_url: str, user_agent: str = "") -> tuple[RobotsRules, list[str]]:
     """Best-effort robots.txt fetch: (the rules that apply to the scanner, Sitemap: URLs), read as RFC 9309 says (scanner/robots.py: Allow, wildcards, the group written for this
     scanner by name, longest match wins). `Sitemap:` lines are not group-scoped, so they are collected wherever they appear; sitemap.py re-checks each one's scope.
@@ -370,7 +384,7 @@ async def _fetch_robots(context: BrowserContext, root_url: str, user_agent: str 
         # bare->www is how many sites serve robots.txt, so they are followed here one
         # at a time, each hop checked as a navigation is (assert_safe_url) and kept on
         # the scanned site. Ignoring the redirect used to read as "no robots.txt".
-        response = await context.request.get(robots_url, timeout=5000, max_redirects=0)
+        response = await _robots_get(context, robots_url)
         for _hop in range(_ROBOTS_MAX_REDIRECTS):
             location = (response.headers or {}).get("location") if 300 <= response.status < 400 else None
             if not location:
@@ -380,7 +394,7 @@ async def _fetch_robots(context: BrowserContext, root_url: str, user_agent: str 
                 unreadable = f"it redirects to another site, {urlparse(robots_url).netloc}"
                 break
             await assert_safe_url(robots_url)
-            response = await context.request.get(robots_url, timeout=5000, max_redirects=0)
+            response = await _robots_get(context, robots_url)
         if response.ok:
             rules = parse_robots(await response.text(), user_agent or get_settings().scanner_user_agent)
         elif response.status >= 500 or response.status == 429:
@@ -761,6 +775,8 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
     browser_page.on(
         "request", lambda req, _r=request_records: _r.append((req.url, req.resource_type))
     )
+    if not is_seed and settings.scanner_skip_secondary_page_images:
+        await browser_page.route("**/*", ImageSkipper(_registered_domain(urlparse(root_url).netloc)))
     set_cookie_events, set_cookie_reads = _watch_set_cookies(browser_page, url)
     cmp_script_failures: list[dict] = []
 

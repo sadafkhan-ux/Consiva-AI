@@ -115,7 +115,7 @@ describe("a long scan is not shown as a failure", () => {
         })}
       />,
     );
-    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Failed — Scan took too long")).toBeInTheDocument();
     expect(screen.getByText("Yes")).toBeInTheDocument(); // Errors / Warnings
     expect(screen.queryByText(/Still scanning/)).not.toBeInTheDocument();
   });

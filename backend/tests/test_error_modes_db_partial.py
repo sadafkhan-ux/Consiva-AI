@@ -166,6 +166,9 @@ class _FakePage:
     def on(self, _event, _handler):
         pass
 
+    async def route(self, *_a):
+        pass
+
     async def goto(self, _url, timeout=None, wait_until=None):
         if self._goto_error is not None:
             raise self._goto_error
