@@ -8,9 +8,8 @@ import type { EvidencePageItem, WebsiteScanMetadata } from "../api/types";
  *
  * How the pages are chosen (backend scanner/crawler.py, scanner/url_normalize.py): the entered address is scanned first. The other
  * pages are links found on pages already scanned, plus the sitemap when the site has one, on the entered domain only, de-duplicated,
- * and tried in this order: privacy and cookie pages, then terms and legal pages, then sign-up / login / checkout / contact pages,
- * then about / pricing / product pages, then everything else, with blog and news pages last. Within one rank the page found first
- * is tried first. No address is guessed or requested without a link or sitemap entry pointing to it.
+ * and tried in this order: privacy and cookie pages, then terms pages, then contact and legal-notice pages, then sign-up / login / checkout pages,
+ * then about / pricing / product pages, then everything else, with blog and news pages last. Within one rank the shallower address comes first, then the alphabetical order. No address is guessed or requested without a link or sitemap entry pointing to it.
  */
 
 export interface ScanPageRow {
@@ -43,9 +42,9 @@ export interface ScanPagesView {
 
 export const SELECTION_TEXT =
   "The entered address is scanned first. The other pages are links found on pages already scanned, plus the sitemap when the site has one, " +
-  "on the entered domain only, and are tried in this order: privacy and cookie pages, then terms and legal pages, then sign-up, login, " +
-  "checkout and contact pages, then about, pricing and product pages, then everything else, with blog and news pages last. Within one " +
-  "group the page found first is tried first. No address is guessed: a page is only tried when a link or the sitemap points to it.";
+  "on the entered domain only, and are tried in this order: privacy and cookie pages, then terms pages, then contact and legal-notice pages, " +
+  "then sign-up, login and checkout pages, then about, pricing and product pages, then everything else, with blog and news pages last. Within one " +
+  "group the shallower address comes first, then the alphabetical order, so the same site gives the same pages every time. No address is guessed: a page is only tried when a link or the sitemap points to it.";
 
 const LOADED_VIA = new Set(["seed", "link", "sitemap"]);
 

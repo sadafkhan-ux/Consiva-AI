@@ -58,7 +58,7 @@ _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 # Which report is printed. "free" is the two-page Free Scan report and "full" the eight-page Full Scan report followed by its evidence appendix (both are
 # fixed A4 pages the web app draws, with their own header and footer); "long" is the single-flow evidence report: the Free report's first sheet as its cover,
 # then its own pages with the print engine's header and footer.
-VARIANTS = ("free", "full", "long")
+VARIANTS = ("free", "full", "long", "summary")
 
 
 @dataclass(frozen=True)
@@ -184,8 +184,9 @@ async def _render(scan_id: str, token: str, user_id: str, org_id: str, role: str
                 )
                 return pdf_bytes, found
 
-            if variant == "free":
-                pdf, meta = await fixed_pages("&variant=free&part=pages")
+            if variant in ("free", "summary"):
+                # Both are fixed A4 sheets only (free: 2, summary: 3), so they are printed as they are, with no appendix.
+                pdf, meta = await fixed_pages(f"&variant={variant}&part=pages")
             else:
                 # The long report opens with the Free report's first sheet as its cover, and the Full report is its eight sheets followed by the appendix. The page is
                 # loaded ONCE (loading it reads the scan from the API again) and printed twice: first with only the fixed sheets showing, then with only the flowing

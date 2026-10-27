@@ -1,0 +1,113 @@
+/* The two-page report (variant "summary"): the sheets of print/SummaryReport.tsx. White pages with a solid black header band, no logo, no footer. Built on the fixed-page styles of
+   pages.css; only what differs is here. */
+
+.pg-summary { padding: 0 34px 24px; }
+.pg-summary::before { display: none; }
+.pg-summary .pg-body { padding-bottom: 0; }
+.pg-summary .pg-body > * { flex-shrink: 0; }
+
+/* the header: a black band across the whole sheet in the logo's own colour (#03070f), the logo on the left, white text on the right */
+.sm-head { margin: 0 -34px 12px; padding: 10px 34px; background: #03070f; color: #fff; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.sm-logo { display: block; height: 42px; width: auto; flex: 0 0 auto; }
+.sm-head-r { text-align: right; font-size: 10px; line-height: 1.55; color: #fff; } .sm-head-r b { display: block; font-size: 14px; font-weight: 700; letter-spacing: .01em; color: #fff; } .sm-pageno { font-weight: 700; }
+
+/* section headings */
+.sm-h { font-size: 12.5px; font-weight: 700; margin: 12px 0 5px; padding-bottom: 3px; border-bottom: 1px solid var(--rule); display: flex; align-items: baseline; gap: 8px; break-after: avoid; }
+.sm-h span { font-size: 8.8px; font-weight: 400; color: var(--mut); margin-left: auto; text-align: right; }
+
+/* page 1: the site, its first view, framework readiness */
+.sm-hero { display: grid; grid-template-columns: 1fr 292px; gap: 18px; align-items: center; }
+.sm-domain { font-size: 26px; font-weight: 800; line-height: 1.1; }
+.sm-hero h1 { font-size: 14px; font-weight: 700; margin: 3px 0 5px; color: var(--blue); }
+.sm-hero p { font-size: 10px; color: var(--mut); line-height: 1.5; max-width: 390px; }
+.sm-shot { margin: 0; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; background: #fff; }
+.sm-shot img { display: block; width: 100%; height: 128px; object-fit: cover; object-position: top; }
+.sm-shot figcaption { padding: 3px 8px; font-size: 8px; color: var(--mut); border-top: 1px solid var(--rule); }
+.sm-fw { margin-top: 10px; }
+.pg-summary .pg-framework { padding: 8px 12px; gap: 14px; grid-template-columns: 190px 1fr; } .pg-summary .pg-flag { width: 32px; height: 32px; } .pg-summary .pg-fw-left { gap: 9px; } .pg-summary .pg-fw-left b { font-size: 11px; }
+.pg-summary .pg-legend { gap: 2px 12px; font-size: 8.8px; margin-top: 5px; }
+
+/* the one score, beside the key metrics */
+.sm-top { display: grid; grid-template-columns: 236px 1fr; gap: 12px; margin-top: 10px; align-items: stretch; }
+.sm-card { border: 1px solid var(--rule); background: #fff; border-radius: 10px; padding: 9px 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; text-align: center; }
+.sm-card-title { font-size: 12px; }
+.sm-card .pg-ring { width: 92px; height: 92px; }
+.sm-score-line { font-size: 10.5px; font-weight: 700; }
+.sm-score-note { font-size: 8.8px; color: var(--mut); }
+.sm-top .pg-tiles { grid-template-columns: repeat(3, 1fr); gap: 8px; align-content: stretch; }
+.sm-top .pg-tile { padding: 6px 10px; justify-content: center; } .sm-top .pg-tile b { font-size: 17px; } .sm-top .pg-tile span { font-size: 8.8px; }
+.sm-top .pg-tile-icon { width: 17px; height: 17px; margin-bottom: 1px; }
+
+/* tables */
+.sm-table { font-size: 9.5px; }
+.sm-table th { padding: 5px 8px; font-size: 8.8px; } .sm-table td { padding: 4px 8px; vertical-align: middle; line-height: 1.35; }
+.sm-table .pg-pill { font-size: 8.4px; padding: 2px 8px; white-space: nowrap; }
+.sm-num { text-align: center; white-space: nowrap; } .sm-table th.sm-num { text-align: center; }
+.sm-table th:first-child, .sm-table td:first-child { width: 24px; white-space: nowrap; }
+.sm-total td { background: #f4f6ff; font-weight: 800; border-top: 2px solid var(--rule); }
+.sm-unscored td { color: var(--ink); }
+
+/* the checkpoints: the checkpoint, the evidence it rests on in full, and the Act and Rules */
+.sm-checks td { padding: 5px 8px; vertical-align: top; } .sm-checks td:not(.sm-cp) { vertical-align: middle; }
+.sm-cp > b { display: inline; font-size: 10.4px; }
+.sm-ev { display: block; margin-top: 2px; font-size: 9px; line-height: 1.38; color: var(--mut); }
+.sm-checks .sm-prov { display: inline; margin-left: 10px; font-size: 8.4px; font-weight: 400; color: var(--mut); white-space: nowrap; } .sm-prov span { margin-right: 8px; } .sm-prov b { display: inline; font-size: inherit; color: var(--ink); }
+.sm-checks th:nth-child(3), .sm-checks td:nth-child(3) { width: 104px; } .sm-checks th:nth-child(4), .sm-checks td:nth-child(4), .sm-checks th:nth-child(5), .sm-checks td:nth-child(5) { width: 70px; white-space: normal; }
+
+/* page 2 */
+.sm-strip { display: flex; flex-wrap: wrap; gap: 3px 6px; margin: 2px 0 5px; font-size: 9px; }
+.sm-strip > span { background: #f4f6ff; border: 1px solid var(--rule); border-radius: 999px; padding: 2px 9px; color: var(--mut); } .sm-strip b { color: var(--ink); }
+.sm-strip .sm-cat { background: #fff; }
+.sm-cookies td { font-size: 9px; padding: 2px 8px; } .sm-cookies th:first-child, .sm-cookies td:first-child { width: auto; white-space: normal; }
+.sm-break { overflow-wrap: anywhere; }
+.sm-consent td, .sm-consent th { text-align: center; } .sm-consent td:first-child, .sm-consent th:first-child { text-align: left; width: auto; white-space: normal; }
+.sm-consent td { padding: 4px 8px; }
+.sm-nt { color: var(--mut); font-style: italic; }
+.sm-fine { font-size: 8.2px; line-height: 1.4; color: var(--mut); margin-top: 3px; }
+.sm-consent + .sm-fine, .sm-consent + .sm-strip, .sm-fine + .sm-strip { margin-top: 6px; }
+.sm-findings { display: grid; gap: 0; }
+.sm-finding { display: grid; grid-template-columns: 20px 1fr auto; gap: 8px; align-items: start; padding: 5px 2px; border-bottom: 1px solid var(--rule); font-size: 9.5px; }
+.sm-finding > div b { display: block; } .sm-finding > div span { display: block; color: var(--mut); font-size: 8.8px; line-height: 1.4; }
+.sm-fn { display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border-radius: 50%; background: #6c75b8; color: #fff; font-weight: 700; font-size: 9px; }
+.sm-finding .pg-pill { font-size: 8px; padding: 2px 8px; }
+.sm-els { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.sm-el { border: 1px solid var(--rule); border-radius: 7px; padding: 4px 8px; display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 6px; font-size: 9px; } .sm-el .pg-pill { font-size: 8px; padding: 1px 7px; white-space: nowrap; } .sm-el small { display: none; }
+.sm-contacts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+.sm-contacts > div { background: #f4f6ff; border-left: 3px solid var(--purple); border-radius: 3px; padding: 5px 9px; font-size: 8.8px; line-height: 1.4; display: flex; flex-direction: column; } .sm-contacts b { font-size: 9.4px; } .sm-contacts small { color: var(--mut); font-size: 8px; overflow-wrap: anywhere; }
+.sm-pages td { font-size: 8.8px; padding: 3px 8px; } .sm-url { overflow-wrap: anywhere; font-weight: 700; color: var(--ink); } .sm-nowrap { white-space: nowrap; }
+.sm-rule { margin-top: 3px; }
+.sm-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 4px; }
+.pg-doc ul.sm-list { list-style: disc; padding-left: 14px; color: var(--mut); font-size: 8.9px; line-height: 1.5; }
+.sm-cta { margin-top: 12px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-radius: 12px; padding: 13px 20px; background: linear-gradient(115deg, #0f1745, #2a2f95 60%, #3d56d6); color: #fff; }
+.sm-cta-text b { display: block; font-size: 12.5px; font-weight: 800; line-height: 1.3; color: #fff; } .sm-cta-text span { display: block; margin-top: 3px; font-size: 9.2px; line-height: 1.4; color: #d9defc; }
+.pg-doc a.sm-cta-link { flex: 0 0 auto; background: #fff; color: #1f3fbf; font-weight: 800; padding: 8px 24px; border-radius: 999px; font-size: 11px; text-decoration: none; box-shadow: 0 1px 4px rgba(0, 0, 0, .25); }
+/* the disclaimer sits at the foot of page 2: the free space goes above it, never over it */
+.sm-disc { margin-top: auto; padding: 9px 14px 10px; background: #f4f6fb; border: 1px solid var(--rule); border-left: 4px solid #3d56d6; border-radius: 8px; }
+.sm-disc b { display: block; font-size: 8.6px; letter-spacing: .09em; text-transform: uppercase; color: #3d56d6; }
+.sm-disc p { margin: 3px 0 0; font-size: 9.2px; line-height: 1.55; color: #2f3350; }
+.sm-cta + .sm-disc { margin-top: auto; }
+.pg-summary .sm-cta + .sm-disc::before { content: none; }
+
+/* roomy: while a page has room it is set larger and more open */
+.sm-roomy .sm-hero { gap: 22px; } .sm-roomy .sm-domain { font-size: 30px; } .sm-roomy .sm-hero h1 { font-size: 15px; } .sm-roomy .sm-hero p { font-size: 10.6px; } .sm-roomy .sm-shot img { height: 148px; }
+.sm-roomy .sm-fw { margin-top: 12px; } .sm-roomy .pg-framework { padding: 10px 14px; } .sm-roomy .pg-legend { font-size: 9.2px; }
+.sm-roomy .sm-top { margin-top: 12px; gap: 14px; } .sm-roomy .sm-card { padding: 11px 14px; gap: 4px; } .sm-roomy .sm-card .pg-ring { width: 104px; height: 104px; } .sm-roomy .sm-top .pg-tile b { font-size: 19px; } .sm-roomy .sm-top .pg-tile span { font-size: 9.2px; }
+.sm-roomy .sm-h { font-size: 13.5px; margin: 13px 0 6px; }
+.sm-roomy .sm-checks td { padding: 7px 9px; } .sm-roomy .sm-cp > b { font-size: 10.8px; } .sm-roomy .sm-ev { font-size: 9.6px; margin-top: 3px; } .sm-roomy .sm-checks .sm-prov { font-size: 8.8px; }
+.sm-roomy .sm-table th { padding: 6px 9px; font-size: 9.2px; } .sm-roomy .sm-table .pg-pill { font-size: 8.8px; padding: 3px 9px; }
+.sm-roomy .sm-cookies td { padding: 3px 9px; font-size: 9.4px; } .sm-roomy .sm-consent td { padding: 5px 9px; font-size: 9.8px; } .sm-roomy .sm-pages td { padding: 4px 9px; font-size: 9.2px; }
+.sm-roomy .sm-finding { padding: 6px 2px; font-size: 10px; } .sm-roomy .sm-finding > div span { font-size: 9.2px; }
+.sm-roomy .sm-el { padding: 6px 9px; font-size: 9.6px; } .sm-roomy .sm-contacts > div { font-size: 9.2px; padding: 6px 10px; }
+.sm-roomy .pg-doc ul.sm-list, .sm-roomy ul.sm-list { font-size: 9.3px; } .sm-roomy .sm-fine { font-size: 8.6px; } .sm-roomy .sm-disc p { font-size: 9.6px; }
+
+/* Fitting a page to its room. A sheet whose content does not fit is tightened one step at a time (SummaryReport.tsx measures it after layout and adds sm-fit-1, then sm-fit-2, then
+   sm-fit-3, each on top of the one before): spacing first, then the optional explanations, then the type and the picture. The last steps also show fewer cookies. */
+.sm-fit-1 .sm-h { margin: 8px 0 4px; } .sm-fit-1 .sm-table td { padding-top: 2px; padding-bottom: 2px; } .sm-fit-1 .sm-checks td { padding-top: 4px; padding-bottom: 4px; } .sm-fit-1 .sm-shot img { height: 128px; }
+.sm-fit-1 .sm-strip { margin-bottom: 3px; } .sm-fit-1 .sm-strip > span { padding: 1px 8px; } .sm-fit-1 .sm-finding { padding: 3px 2px; } 
+.sm-fit-2 .sm-hero p { display: none; } .sm-fit-2 .pg-tile-icon { display: none; } .sm-fit-2 .sm-shot img { height: 104px; } .sm-fit-2 .sm-card .pg-ring { width: 84px; height: 84px; }
+.sm-fit-2 .sm-fine { font-size: 7.6px; line-height: 1.3; } .sm-fit-2 .sm-prov span { margin-right: 6px; } .sm-fit-2 .sm-el small { display: none; }
+.sm-fit-3 .sm-ev { font-size: 8.6px; line-height: 1.3; } .sm-fit-3 .sm-table td, .sm-fit-3 .sm-cookies td, .sm-fit-3 .sm-pages td { font-size: 8.4px; } .sm-fit-3 .sm-shot img { height: 80px; } .sm-fit-3 ul.sm-list { font-size: 8.2px; line-height: 1.35; }
+.sm-fit-3 .sm-finding > div span { font-size: 8.2px; } .sm-fit-3 .sm-disc p { font-size: 8.4px; }
+
+.sm-roomy .sm-cta { padding: 15px 22px; margin-top: 14px; } .sm-roomy .sm-cta-text b { font-size: 13px; }
+.sm-fit-2 .sm-cta { padding: 9px 16px; } .sm-fit-2 .sm-cta-text span { display: none; } .sm-fit-1 .sm-logo { height: 38px; }

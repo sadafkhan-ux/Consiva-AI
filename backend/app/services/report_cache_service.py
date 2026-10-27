@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 #: Bump when the report's content changes in a way the fingerprint cannot see (a change to the web app is seen through its bundle names).
 RENDER_VERSION = "1"
 #: The reports a scan gets pre-generated, most used first.
-PREWARM_VARIANTS = ("long", "full", "free")
+PREWARM_VARIANTS = ("summary", "long", "full", "free")
 _FRONTEND_SIGNATURE_TTL = 60.0
 _frontend_signature: tuple[float, str] | None = None
 _inflight: dict[tuple[str, str, str], asyncio.Task] = {}

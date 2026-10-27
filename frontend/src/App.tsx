@@ -31,7 +31,7 @@ export default function App() {
     return (
       <ReportPage
         scanId={reportScanId} print={reportParams.get("print") === "1"}
-        variant={variant === "free" || variant === "full" ? variant : undefined} part={part === "pages" || part === "appendix" || part === "cover" || part === "body" ? part : undefined}
+        variant={variant === "free" || variant === "full" || variant === "summary" ? variant : undefined} part={part === "pages" || part === "appendix" || part === "cover" || part === "body" ? part : undefined}
       />
     );
   }

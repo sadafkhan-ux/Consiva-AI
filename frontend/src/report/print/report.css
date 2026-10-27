@@ -160,6 +160,9 @@ html.report-mode #root { height: auto; }
   .r-table thead { display: table-header-group; }
   .r-table tr, .r-item, .r-finding, .r-tile, .r-area, .r-element, .r-callout, .r-quote, .r-shots figure, .r-hero, .r-box, .r-contents li { break-inside: avoid; page-break-inside: avoid; }
   .r-appendix-start { break-before: page; page-break-before: always; }
+  /* The short "insight" sections (grievance officer, DPO, languages, children, security) are one unit: a heading and its status left at the foot of a page with the
+     table on the next read as a section with nothing in it. Each is shorter than a page, so each is kept whole. */
+  .r-sec[id^="insight-"] { break-inside: avoid; page-break-inside: avoid; }
   .r-contents ol { columns: 2; }
   a { color: inherit; }
 }

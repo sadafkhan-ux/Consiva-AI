@@ -33,7 +33,7 @@ from app.scoring import deductions as deductions_module
 from app.scoring import findings, review
 from app.scoring import sector as sector_analysis
 
-METHODOLOGY_VERSION = "1.6.0"
+METHODOLOGY_VERSION = "1.6.1"
 
 # The version of the legal mapping: which provisions each check cites, their effective dates and their applicability. Changes
 # whenever a citation, an effective date or an applicability condition changes, independently of the scoring methodology.
@@ -181,9 +181,23 @@ def _pre_consent_processing(ctx: ConsentContext) -> Outcome:
     return Outcome("met", ["Before any consent interaction, no analytics or marketing cookie or script was observed."])
 
 
+def _no_tracking_observed(ctx: ConsentContext, not_applicable_note: str) -> Outcome:
+    """What an absence of analytics or marketing tracking means for the two checks that exist only where tracking is used.
+
+    Tracking is gated behind consent on a site that has a consent tool, so it shows up only after Accept. When the Accept choice could not be tested (the banner's control was not
+    found, or the click failed), nothing after consent was ever seen: "no tracking observed" is then an untested claim, not a finding, and the check is Unable to Verify. Treating it
+    as Not Applicable made two scans of one website differ in which checks applied, and so in coverage, only because one Accept click happened to fail (uat.consiva.ai, 27 Oct 2026).
+    Without a consent tool, or with Accept tested, an absence is an observation and the check does not apply."""
+    if ctx.three_pass and ctx.mechanism_type in ("banner", "cmp") and ctx.accept_outcome != "clicked":
+        return Outcome("unable_to_verify", [
+            "No analytics or marketing tracking was observed, but the Accept choice could not be tested, so it is not known whether tracking starts once a visitor consents."
+        ])
+    return Outcome("not_applicable", [not_applicable_note])
+
+
 def _consent_mechanism_present(ctx: ConsentContext) -> Outcome:
     if not ctx.non_essential:
-        return Outcome("not_applicable", ["No analytics or marketing tracking was observed, so no consent mechanism was needed for it."])
+        return _no_tracking_observed(ctx, "No analytics or marketing tracking was observed, so no consent mechanism was needed for it.")
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
     ids = [e["id"] for e in ctx.non_essential]
@@ -275,7 +289,7 @@ def _privacy_notice(ctx: ConsentContext) -> Outcome:
 
 def _tracking_disclosure(ctx: ConsentContext) -> Outcome:
     if not ctx.non_essential:
-        return Outcome("not_applicable", ["No analytics or marketing tracking was observed, so no tracking disclosure was needed."])
+        return _no_tracking_observed(ctx, "No analytics or marketing tracking was observed, so no tracking disclosure was needed.")
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
     ids = [e["id"] for e in ctx.non_essential]

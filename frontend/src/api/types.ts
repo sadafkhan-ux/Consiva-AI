@@ -349,6 +349,8 @@ export interface EvidencePageItem {
   http_status?: number | null;
   /** How the page was found: "seed" (the entered address), "link", "sitemap" -- or "failed" / "timeout" for an attempt that did not load. */
   discovered_via?: string | null;
+  /** Why the page was chosen: its kind and where it was found. Worked out when the evidence is read; absent for a page that did not load. */
+  selection_reason?: string | null;
 }
 
 export interface FormField {

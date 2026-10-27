@@ -54,13 +54,13 @@ export function SummaryTiles({ view }: { view: PageReportView }) {
   );
 }
 
-export function FrameworkBlock({ view, withNote }: { view: PageReportView; withNote?: ReactNode }) {
+export function FrameworkBlock({ view, withNote, hideScore }: { view: PageReportView; withNote?: ReactNode; hideScore?: boolean }) {
   const f = view.framework;
   const colour: Record<string, string> = { met: "#21c07a", partly: "#f5c431", notMet: "#e5484d", unverified: "#d6dcee", na: "#b5bbd6" };
   const legendText: Record<string, string> = { met: "met", partly: "partly met", notMet: "not met", unverified: "could not be verified", na: "not applicable" };
   return (
     <div className="pg-framework" data-testid="pg-framework">
-      <div className="pg-fw-left"><Flag /><div><b>{f.name}</b><div className="pg-fw-score" data-testid="pg-framework-score">{f.scoreLabel}</div></div></div>
+      <div className="pg-fw-left"><Flag /><div><b>{f.name}</b>{!hideScore && <div className="pg-fw-score" data-testid="pg-framework-score">{f.scoreLabel}</div>}</div></div>
       <div className="pg-fw-right">
         <div className="pg-segbar" role="img" aria-label={f.segments.map((s) => `${s.count} ${legendText[s.key]}`).join(", ")}>
           {f.segments.filter((s) => s.count > 0).map((s) => <i key={s.key} style={{ width: `${s.pct}%`, background: colour[s.key] }} />)}

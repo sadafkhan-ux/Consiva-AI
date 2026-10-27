@@ -200,6 +200,31 @@ class TestApplicabilityAndExclusions:
         s = assess(evidence(), TODAY)
         assert by_id(s, "DPDP-C2").status == "not_applicable" and by_id(s, "DPDP-N2").status == "not_applicable"
 
+    def test_no_tracking_is_not_applicable_only_when_accept_could_have_shown_it(self):
+        """A consent tool is present and Accept was clicked: nothing fired after consent either, so tracking is not used. Accept NOT clicked: nothing after consent was ever seen,
+        so the absence is untested and the two checks are Unable to Verify, not Not Applicable (uat.consiva.ai: one failed Accept click moved coverage from 76.9% to 72.7%)."""
+        tested = assess(evidence(accept_outcome="clicked"), TODAY)
+        assert by_id(tested, "DPDP-C2").status == "not_applicable" and by_id(tested, "DPDP-N2").status == "not_applicable"
+        for outcome in ("cmp_not_automatable", "click_failed"):
+            s = assess(evidence(accept_outcome=outcome), TODAY)
+            for rid in ("DPDP-C2", "DPDP-N2"):
+                r = by_id(s, rid)
+                assert r.status == "unable_to_verify" and not r.counts_in_score, (outcome, rid)
+                assert "Accept choice could not be tested" in " ".join(r.observations)
+        # the same two checks never count as passed or failed while Accept is untested, and coverage falls rather than the score moving
+        a, b = assess(evidence(accept_outcome="clicked"), TODAY).readiness, assess(evidence(accept_outcome="cmp_not_automatable"), TODAY).readiness
+        assert a.score_percent == b.score_percent == 100.0
+        assert b.applicable_weight > a.applicable_weight and b.coverage_percent < a.coverage_percent
+
+    def test_without_a_consent_tool_or_on_an_older_scan_an_absence_is_still_not_applicable(self):
+        for kw in ({"mechanism": "none", "accept_outcome": "cmp_not_found"}, {"three_pass": False}):
+            s = assess(evidence(**kw), TODAY)
+            assert by_id(s, "DPDP-C2").status == "not_applicable" and by_id(s, "DPDP-N2").status == "not_applicable", kw
+
+    def test_tracking_that_was_seen_is_scored_whatever_the_accept_outcome(self):
+        s = assess(evidence(trackers=[tr(1, states=("post_reject",))], accept_outcome="cmp_not_automatable"), TODAY)
+        assert by_id(s, "DPDP-C2").status != "not_applicable" and by_id(s, "DPDP-N2").status != "not_applicable"     # tracking was observed, so both checks apply
+
     def test_no_banner_makes_banner_choices_not_applicable_rather_than_failed(self):
         s = assess(evidence(trackers=[tr(1)], mechanism="none"), TODAY)
         for rid in ("DPDP-C3", "DPDP-C4", "DPDP-C5"):
@@ -314,7 +339,7 @@ class TestTraceability:
 
     def test_methodology_is_versioned_and_labelled_as_proposed(self):
         s = assess(evidence(), TODAY)
-        assert s.methodology_version == ds.METHODOLOGY_VERSION == "1.6.0"
+        assert s.methodology_version == ds.METHODOLOGY_VERSION == "1.6.1"
         assert "for informational purposes only" in s.disclaimer and "does not constitute legal advice" in s.disclaimer
 
 

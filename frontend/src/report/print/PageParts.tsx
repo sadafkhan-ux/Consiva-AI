@@ -110,14 +110,14 @@ export function SheetPageStyle() {
 export const SHORT_DISCLAIMER = "This report is for informational purposes only and does not constitute legal advice.";
 
 /** One fixed A4 page: header at the top, footer at the bottom, and the page's own content between. */
-export function PageFrame({ variant, n, of, domain, scannedAt, headerPages = "", reportId, tag = "FREE SCAN REPORT", numbered = true, children }: { variant: ReportVariant; n: number; of: number; domain: string; scannedAt: string; headerPages?: string; reportId: string; tag?: string; numbered?: boolean; children: ReactNode }) {
+export function PageFrame({ variant, n, of, domain, scannedAt, headerPages = "", reportId, tag = "FREE SCAN REPORT", numbered = true, uniformHeader = false, className, testId, children }: { variant: ReportVariant; n: number; of: number; domain: string; scannedAt: string; headerPages?: string; reportId: string; tag?: string; numbered?: boolean; uniformHeader?: boolean; className?: string; testId?: string; children: ReactNode }) {
   const free = variant === "free";
   return (
-    <section className={`pg pg-${variant}`} data-testid={`pg-${variant}-${n}`} data-page={n}>
+    <section className={`pg pg-${variant}${className ? ` ${className}` : ""}`} data-testid={testId ?? `pg-${variant}-${n}`} data-page={n}>
       <header className="pg-head pg-head-dark">
         <span className="pg-logo"><img src={CONSIVA_LOGO_PNG} alt="Consiva.ai" /></span>
         <div className="pg-head-right">
-          {n === 1 ? (
+          {n === 1 && !uniformHeader ? (
             // The first page carries the same header as the flowing pages of the long report (report_pdf_service.build_header_template): the domain, then the scan time
             // and the pages scanned. The report's own name and id follow on a quieter line.
             <>
@@ -127,7 +127,7 @@ export function PageFrame({ variant, n, of, domain, scannedAt, headerPages = "",
             </>
           ) : free ? (
             <>
-              <span className="pg-tag">{tag}</span>
+              {tag && <span className="pg-tag">{tag}</span>}
               <div>Scanned on {scannedAt}</div>
               <div>Report ID: {reportId}</div>
             </>

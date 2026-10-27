@@ -243,6 +243,75 @@ async def test_the_second_look_is_the_last_a_site_with_no_banner_is_not_retried_
     assert out[2] == "not_found" and calls == 2
 
 
+class _Browser:
+    """A browser that hands out one throwaway context per attempt and counts them."""
+    def __init__(self):
+        self.contexts = 0
+
+    async def new_context(self, **_kw):
+        self.contexts += 1
+        outer = self
+
+        class Ctx:
+            async def route(self, *_a):
+                return None
+
+            async def close(self):
+                return None
+        return Ctx()
+
+
+def _tracker(src):
+    from app.scanner.schemas import TrackerRecord
+    return TrackerRecord(local_id="t", page_local_id="p", script_src=src, resource_type="script")
+
+
+async def _run_wrapper(monkeypatch, attempts):
+    """attempts: the outcome (status, trackers) of each pass attempt, in order."""
+    from app.config import get_settings
+    browser, seen = _Browser(), []
+
+    async def fake(_ctx, _root, _settings, _dis, state, _click, **_kw):
+        status, trackers = attempts[min(len(seen), len(attempts) - 1)]
+        seen.append(status)
+        return [], trackers, status, status == "clicked", 0, None
+
+    monkeypatch.setattr(crawler, "_crawl_single_page_with_interaction", fake)
+    out = await crawler._run_interaction_pass(browser, "https://x.test/", get_settings(), set(), "post_accept", None)
+    return out, browser.contexts
+
+
+CMP = [_tracker("https://api.consiva.ai/sdk.js")]
+OTHER = [_tracker("https://www.google-analytics.com/analytics.js")]
+
+
+async def test_a_page_with_a_consent_tool_but_no_banner_is_looked_at_again_in_a_fresh_context(monkeypatch):
+    """swaransoft.com under load: the SDK's 800 ms configuration timeout drew no banner on that page view; a second page view drew it."""
+    out, contexts = await _run_wrapper(monkeypatch, [("not_found", CMP), ("clicked", CMP)])
+    assert out[2] == "clicked" and out[3] is True and contexts == 2
+
+
+async def test_the_retry_is_one_only_and_its_evidence_replaces_the_first_attempts(monkeypatch):
+    out, contexts = await _run_wrapper(monkeypatch, [("not_found", CMP)])
+    assert out[2] == "not_found" and contexts == 1 + crawler._BANNER_PASS_RETRIES
+
+
+async def test_a_page_with_no_consent_tool_is_not_retried_and_a_banner_found_first_time_is_not_either(monkeypatch):
+    out, contexts = await _run_wrapper(monkeypatch, [("not_found", OTHER)])
+    assert out[2] == "not_found" and contexts == 1
+    out, contexts = await _run_wrapper(monkeypatch, [("clicked", CMP)])
+    assert out[2] == "clicked" and contexts == 1
+    out, contexts = await _run_wrapper(monkeypatch, [("click_failed", CMP)])
+    assert out[2] == "click_failed" and contexts == 1
+
+
+def test_a_consent_tool_among_the_third_party_requests_is_recognised_and_other_requests_are_not():
+    assert crawler._a_consent_tool_was_loaded([_tracker("https://cdn.cookielaw.org/scripttemplates/otSDKStub.js")]) is True
+    assert crawler._a_consent_tool_was_loaded(CMP) is True
+    assert crawler._a_consent_tool_was_loaded(OTHER) is False
+    assert crawler._a_consent_tool_was_loaded([]) is False
+
+
 async def test_a_banner_found_first_time_is_not_looked_for_again(monkeypatch):
     out, calls = await _run_pass_with_clicks(monkeypatch, ["clicked"])
 

@@ -19,15 +19,16 @@ BASE = "https://shop.example"
     "/category/privacy/page-2",
 ])
 def test_an_article_about_a_topic_is_not_the_page_for_that_topic(path):
-    assert priority(BASE + path) == 5, path
+    assert priority(BASE + path) == 6, path
 
 
 @pytest.mark.parametrize("path,rank", [
     ("/privacy", 0), ("/privacy-policy", 0), ("/legal/privacy", 0), ("/cookie-policy", 0), ("/cookies", 0), ("/dpdp", 0),
-    ("/terms", 1), ("/terms-of-use", 1), ("/legal", 1),
-    ("/contact", 2), ("/contact-us", 2), ("/login", 2), ("/checkout", 2), ("/subscribe", 2),
-    ("/about", 3), ("/pricing", 3), ("/services", 3),
-    ("/random-page", 4),
+    ("/terms", 1), ("/terms-of-use", 1),
+    ("/contact", 2), ("/contact-us", 2), ("/legal", 2), ("/disclaimer", 2), ("/imprint", 2),
+    ("/login", 3), ("/checkout", 3), ("/subscribe", 3),
+    ("/about", 4), ("/pricing", 4), ("/services", 4),
+    ("/random-page", 5),
 ])
 def test_the_pages_the_audit_needs_keep_their_rank(path, rank):
     assert priority(BASE + path) == rank, path

@@ -28,7 +28,6 @@ per step found no site gaining a new third-party host after step 3 while a fixed
 import asyncio
 import base64
 import heapq
-import itertools
 import logging
 import os
 import random
@@ -103,7 +102,7 @@ from app.scanner.schemas import (
 )
 from app.scanner.sitemap import discover_sitemap_urls
 from app.scanner.tracker_detector import detect_trackers
-from app.scanner.url_normalize import normalize_url, priority, section_of
+from app.scanner.url_normalize import effective_rank, normalize_url, path_without_query, query_variant_of, section_of, tie_break_key
 from app.scanner.url_safety import assert_safe_url
 
 logger = logging.getLogger(__name__)
@@ -949,8 +948,7 @@ async def _crawl_full_site(
 
     # (priority, insertion order, url as first spelled, discovered_via). The insertion
     # counter keeps it FIFO within a priority and keeps the heap from comparing urls.
-    queue: list[tuple[float, int, str, str]] = []
-    order = itertools.count()
+    queue: list[tuple[float, tuple[int, int, str], str, str]] = []
     seen_keys: set[str] = set()
     seen_spellings: set[str] = set()
 
@@ -988,8 +986,8 @@ async def _crawl_full_site(
         # Within one priority class, pages of the entered address's own section (/in-en/) come before the same kind of page in another section (/ae-en/, /ar-es/). Only a tie-break: a
         # higher-priority page (a privacy page) anywhere still comes first. Seen live: a scan of konicaminolta.com/in-en/ spent four of its five pages on /contact of other countries.
         out_of_section = 0.5 if seed_section and section_of(url) != seed_section else 0.0
-        rank: float = -1 if via == "seed" else priority(url) + out_of_section
-        heapq.heappush(queue, (rank, next(order), url, via))
+        rank: float = -1 if via == "seed" else effective_rank(url) + out_of_section
+        heapq.heappush(queue, (rank, tie_break_key(url), url, via))
         if via == "sitemap":
             diagnostics["pages_from_sitemap"] += 1
 
@@ -1112,6 +1110,8 @@ async def _crawl_full_site(
         return (diagnostics["pages_scanned"] + len(in_flight) < budget
                 and diagnostics["pages_attempted"] - dead_not_counted + len(in_flight) < attempt_ceiling)
 
+    launched_paths: set[str] = set()
+
     def _fill_pool() -> None:
         # The entered address is loaded ALONE first. The pages are chosen by priority (privacy and cookie pages first), but the links that rank highest are only
         # found when the seed has loaded; with the pool already full of the sitemap's addresses, a slow seed let the fastest pages (often dead sitemap entries) use the
@@ -1119,6 +1119,12 @@ async def _crawl_full_site(
         # skipped the privacy page). Waiting for the seed costs one page load and makes the choice the same every time.
         while queue and len(in_flight) < max_concurrent and _budget_left() and (seed_processed or not in_flight):
             _rank, _n, url, via = heapq.heappop(queue)
+            variant_of = query_variant_of(url) if via != "seed" else None
+            if variant_of is not None and variant_of in launched_paths:
+                # /blog?page=2 after /blog: the same page with another query string. It would spend one of the pages on content already seen.
+                _skip(url, "query_variant_of_known_page")
+                continue
+            launched_paths.add(path_without_query(url))
             in_flight[asyncio.create_task(_fetch_one_page(context, url, root_url, settings))] = (url, via)
 
     async def _check_stop() -> str | None:
@@ -1439,6 +1445,18 @@ _INTERACTION_LOAD_WAIT_MS = 15_000
 #: never a loop -- a site with no banner pays this wait once.
 _BANNER_RETRY_WAIT_MS = 2_500
 
+#: A page that loaded a known consent tool but showed no banner is looked at once more, in a fresh browser context, as a fresh page view. Consent tools decide per page view
+#: whether to draw the banner, and some decide "no" when their configuration request is slow: the Consiva SDK gives a first-time visitor 800 ms and then shows nothing for that
+#: page view (swaransoft.com, 27 Oct 2026: its console says "Banner config request timed out after 800ms. No banner will be shown for this pageview." in every load that
+#: drew no banner; 0 of 36 loads run one at a time, 4 of 126 six at a time and 11 of 48 twelve at a time). Waiting longer cannot help: the decision is already made. A second page
+#: view usually is not slowed the same way. One retry only, so a site whose tool draws no banner for a visitor (a region rule) pays one more pass, not a loop.
+_BANNER_PASS_RETRIES = 1
+
+
+def _a_consent_tool_was_loaded(trackers: list[TrackerRecord]) -> bool:
+    """True when one of the page's third-party requests is a consent tool in the catalogue: its banner was expected."""
+    return any(match_cmp(script_src=t.script_src) is not None for t in trackers)
+
 
 async def _run_interaction_pass(
     browser, root_url: str, settings: Settings, disallowed_prefixes: RobotsRules | set[str],
@@ -1450,14 +1468,22 @@ async def _run_interaction_pass(
     the previous sequential version did. This isolation is deliberately preserved,
     not optimized away: the three consent states must never leak cookies/storage/
     consent choices into each other."""
-    context = await browser.new_context(**_new_context_kwargs(settings))
-    await context.route("**/*", _guard_navigation)
-    try:
-        return await _crawl_single_page_with_interaction(
-            context, root_url, settings, disallowed_prefixes, consent_state, click_fn
-        )
-    finally:
-        await _close_quietly(context, f"the {consent_state} context")
+    result = None
+    for attempt in range(1 + _BANNER_PASS_RETRIES):
+        context = await browser.new_context(**_new_context_kwargs(settings))
+        await context.route("**/*", _guard_navigation)
+        try:
+            result = await _crawl_single_page_with_interaction(
+                context, root_url, settings, disallowed_prefixes, consent_state, click_fn
+            )
+        finally:
+            await _close_quietly(context, f"the {consent_state} context")
+        # Only the last attempt's evidence is kept: a page view that drew no banner may have let tags through that the banner would have held back, and those must not be
+        # read as what the site does after Accept or Reject.
+        if result[2] != "not_found" or not _a_consent_tool_was_loaded(result[1]) or attempt == _BANNER_PASS_RETRIES:
+            break
+        logger.info("The %s pass of %s loaded a consent tool but drew no banner; looking again in a fresh browser context", consent_state, root_url)
+    return result
 
 
 def _reconcile_banner_presence(signal: ConsentSignalRecord, accept_status: str, reject_status: str) -> None:

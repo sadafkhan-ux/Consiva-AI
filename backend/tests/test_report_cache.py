@@ -232,7 +232,7 @@ class TestFingerprintInputs:
         base = ["1", "s", "completed", None, [("r", "completed", None)], [("f", "pending")], [], None, "2026-10-26", "1.5.0", {}, "sig"]
         h = rc._digest(base)
         assert h == rc._digest(list(base))
-        for i, change in [(9, "1.6.0"), (8, "2026-10-27"), (11, "sig2"), (5, [("f", "approved")]), (4, [("r", "failed", None)])]:
+        for i, change in [(9, "1.6.1"), (8, "2026-10-27"), (11, "sig2"), (5, [("f", "approved")]), (4, [("r", "failed", None)])]:
             other = list(base)
             other[i] = change
             assert rc._digest(other) != h
@@ -345,4 +345,4 @@ class TestPrewarmPrintsEveryVariantAfterTheConnectionIsReleased:
         monkeypatch.setattr(rc, "_store", store)
         monkeypatch.setattr(rc.report_pdf_service, "render_report_pdf", render)
         out = await rc.prewarm(sid)
-        assert printed == ["long", "full", "free"] and set(out.values()) == {"printed"}
+        assert printed == ["summary", "long", "full", "free"] and set(out.values()) == {"printed"}

@@ -163,6 +163,8 @@ class EvidencePageItem(BaseModel):
     title: str | None
     http_status: int | None = None
     discovered_via: str | None = None
+    # Why the page was chosen (its kind and where it was found), worked out when the evidence is read; null for a page that did not load.
+    selection_reason: str | None = None
 
 
 class EvidenceFormItem(BaseModel):
@@ -1099,8 +1101,8 @@ class PolicyAnalysisResponse(BaseModel):
 async def get_scan_report_pdf(
     scan_id: uuid.UUID,
     request: Request,
-    variant: Literal["free", "full", "long"] = Query(
-        "long", description="long (default): the full report, opening with the Free report's front page; free: the two-page Free Scan report; full: the eight-page Full Scan report with its evidence appendix.",
+    variant: Literal["free", "full", "long", "summary"] = Query(
+        "long", description="long (default): the full report, opening with the Free report's front page; free: the two-page Free Scan report; full: the eight-page Full Scan report with its evidence appendix; summary: the three-page summary report.",
     ),
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

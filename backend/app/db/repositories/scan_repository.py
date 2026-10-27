@@ -25,6 +25,7 @@ from app.rules.consent_observation import observed_signal
 from app.rules.consent_rules import RulesClassification
 from app.rules.cookie_purposes import describe_cookie, lifetime_days
 from app.scanner.schemas import ScanResult, ScreenshotRecord
+from app.scanner.url_normalize import selection_reason
 
 logger = logging.getLogger(__name__)
 
@@ -345,7 +346,10 @@ def _serialize_evidence(
         # http_status and discovered_via say whether a page loaded and how it was found ("seed", "link", "sitemap"), or that the
         # attempt did not succeed ("failed", "timeout"): the scan report lists the pages from these.
         "pages": [
-            {"id": str(p.id), "url": p.url, "title": p.title, "http_status": p.http_status, "discovered_via": p.discovered_via}
+            {"id": str(p.id), "url": p.url, "title": p.title, "http_status": p.http_status, "discovered_via": p.discovered_via,
+             # Why the page was chosen, worked out from its address and how it was found (url_normalize.selection_reason): a read of what is stored, never a stored claim.
+             # Only in the API's detailed view, so the agent's own evidence is unchanged.
+             **({"selection_reason": selection_reason(p.url, p.discovered_via)} if include_cookie_detail else {})}
             for p in pages
         ],
         "forms": [

@@ -8,6 +8,7 @@ import { reportModelFromState } from "../modelFromState";
 import type { ReportModel } from "../buildReport";
 import { FreeReport, ReportCover } from "./FreeReport";
 import { FullReport } from "./FullReport";
+import { SummaryReport } from "./SummaryReport";
 import { ReportDocument } from "./ReportDocument";
 
 declare global {
@@ -38,7 +39,7 @@ export function reportHeaderMeta(model: ReportModel): { domain: string; scanned:
  * The web report for one scan (/?report=<scanId>), and the page the server prints to make the PDF (/?report=<scanId>&print=1). It loads the scan
  * exactly as the console does when a scan is opened, builds the report model with the same function, and draws the one report document.
  */
-export type ReportVariantParam = "free" | "full";
+export type ReportVariantParam = "free" | "full" | "summary";
 
 /**
  * `variant` picks the report: "free" is the two-page Free Scan report, "full" the eight-page Full Scan report followed by its evidence appendix, and none the
@@ -130,6 +131,7 @@ export function ReportPage({ scanId, print, variant, part }: { scanId: string; p
         <div className="r-toolbar">
           <a className="r-btn" href="/" style={{ background: "#16163a" }}>← Back to the console</a>
           <nav className="r-variants" aria-label="Report">
+            <a href={`/?report=${scanId}&variant=summary`} className={variant === "summary" ? "on" : undefined} data-testid="variant-summary">Summary (3 pages)</a>
             <a href={`/?report=${scanId}&variant=free`} className={variant === "free" ? "on" : undefined} data-testid="variant-free">Free Scan (2 pages)</a>
             <a href={`/?report=${scanId}&variant=full`} className={variant === "full" ? "on" : undefined} data-testid="variant-full">Full Scan (8 pages + appendix)</a>
             <a href={`/?report=${scanId}`} className={variant === undefined ? "on" : undefined} data-testid="variant-long">Evidence report</a>
@@ -141,7 +143,7 @@ export function ReportPage({ scanId, print, variant, part }: { scanId: string; p
           <button onClick={download} disabled={!model || downloading} data-testid="report-download">{downloading ? "Preparing the PDF…" : "Download PDF"}</button>
         </div>
       )}
-      {model ? (variant === "free" ? <FreeReport model={model} /> : variant === "full" ? <>{part !== "appendix" && <FullReport model={model} />}{part !== "pages" && <ReportDocument model={model} appendixOnly />}</> : part === "cover" ? <ReportCover model={model} /> : part === "body" ? <ReportDocument model={model} noFront /> : <><ReportCover model={model} /><ReportDocument model={model} noFront /></>) : <div className="r-loading" data-testid="report-loading">{failure ?? "Loading the report…"}</div>}
+      {model ? (variant === "summary" ? <SummaryReport model={model} /> : variant === "free" ? <FreeReport model={model} /> : variant === "full" ? <>{part !== "appendix" && <FullReport model={model} />}{part !== "pages" && <ReportDocument model={model} appendixOnly />}</> : part === "cover" ? <ReportCover model={model} /> : part === "body" ? <ReportDocument model={model} noFront /> : <><ReportCover model={model} /><ReportDocument model={model} noFront /></>) : <div className="r-loading" data-testid="report-loading">{failure ?? "Loading the report…"}</div>}
     </div>
   );
 }

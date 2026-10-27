@@ -11,7 +11,7 @@ vi.mock("../hooks/useConsentScan", async (orig) => {
 });
 const fetchReportPdf = vi.fn();
 const saveBlob = vi.fn();
-vi.mock("../api/client", async (orig) => ({ ...(await orig<typeof import("../api/client")>()), fetchReportPdf: (id: string) => fetchReportPdf(id), saveBlob: (b: Blob, n: string) => saveBlob(b, n) }));
+vi.mock("../api/client", async (orig) => ({ ...(await orig<typeof import("../api/client")>()), fetchReportPdf: (id: string, variant?: string) => (variant === undefined ? fetchReportPdf(id) : fetchReportPdf(id, variant)), saveBlob: (b: Blob, n: string) => saveBlob(b, n) }));
 const downloadReport = vi.fn();
 vi.mock("../report/downloadReport", async (orig) => ({ ...(await orig<typeof import("../report/downloadReport")>()), downloadReport: (m: unknown) => downloadReport(m) }));
 
@@ -31,7 +31,7 @@ describe("the Download Report button uses the server's PDF API", () => {
     render(<ConsentAgentView />);
     fireEvent.click(screen.getByRole("button", { name: BUTTON }));
     await waitFor(() => expect(saveBlob).toHaveBeenCalledWith(blob, "consiva-privacy-report-x.test-2026-10-23.pdf"));
-    expect(fetchReportPdf).toHaveBeenCalledWith(SCAN_ID);
+    expect(fetchReportPdf).toHaveBeenCalledWith(SCAN_ID, "summary");
     expect(downloadReport).not.toHaveBeenCalled();
   });
 

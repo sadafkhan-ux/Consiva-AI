@@ -48,7 +48,7 @@ class TestAssessmentRecord:
 
     def test_the_methodology_and_legal_mapping_versions_are_separate(self):
         s = assess(evidence(), TODAY)
-        assert s.methodology.version == ds.METHODOLOGY_VERSION == "1.6.0"
+        assert s.methodology.version == ds.METHODOLOGY_VERSION == "1.6.1"
         assert s.methodology.legal_mapping_version == ds.LEGAL_MAPPING_VERSION == "2026.10.1"
         assert s.methodology.version != s.methodology.legal_mapping_version
 

@@ -124,7 +124,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  * The PDF report the server prints for one completed scan (GET /api/v1/consent/scans/{id}/report.pdf), as the file's bytes and the name the
  * server gave it. The server renders the same report page the web shows, so the file and the page carry the same values.
  */
-export async function fetchReportPdf(scanId: string, variant: "free" | "full" | "long" = "long"): Promise<{ blob: Blob; filename: string }> {
+export async function fetchReportPdf(scanId: string, variant: "free" | "full" | "long" | "summary" = "long"): Promise<{ blob: Blob; filename: string }> {
   const token = getToken();
   if (!token) {
     handleUnauthorized();

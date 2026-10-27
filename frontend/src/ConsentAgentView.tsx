@@ -78,7 +78,7 @@ export function ConsentAgentView() {
       // network or server error, not "not found" or "not allowed") is the PDF drawn here in the browser instead, from the same report model.
       try {
         if (!state.scanId) throw new ApiError(0, "No scan is open.");
-        const { blob, filename } = await fetchReportPdf(state.scanId);
+        const { blob, filename } = await fetchReportPdf(state.scanId, "summary");
         saveBlob(blob, filename);
       } catch (serverErr) {
         const status = serverErr instanceof ApiError ? serverErr.status : 0;
