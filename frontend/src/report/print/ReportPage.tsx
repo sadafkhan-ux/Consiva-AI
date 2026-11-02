@@ -8,7 +8,7 @@ import { reportModelFromState } from "../modelFromState";
 import type { ReportModel } from "../buildReport";
 import { FreeReport, ReportCover } from "./FreeReport";
 import { FullReport } from "./FullReport";
-import { SummaryReport } from "./SummaryReport";
+import { SnapshotReport } from "./SnapshotReport";
 import { ReportDocument } from "./ReportDocument";
 
 declare global {
@@ -143,7 +143,7 @@ export function ReportPage({ scanId, print, variant, part }: { scanId: string; p
           <button onClick={download} disabled={!model || downloading} data-testid="report-download">{downloading ? "Preparing the PDF…" : "Download PDF"}</button>
         </div>
       )}
-      {model ? (variant === "summary" ? <SummaryReport model={model} /> : variant === "free" ? <FreeReport model={model} /> : variant === "full" ? <>{part !== "appendix" && <FullReport model={model} />}{part !== "pages" && <ReportDocument model={model} appendixOnly />}</> : part === "cover" ? <ReportCover model={model} /> : part === "body" ? <ReportDocument model={model} noFront /> : <><ReportCover model={model} /><ReportDocument model={model} noFront /></>) : <div className="r-loading" data-testid="report-loading">{failure ?? "Loading the report…"}</div>}
+      {model ? (variant === "summary" ? <SnapshotReport model={model} /> : variant === "free" ? <FreeReport model={model} /> : variant === "full" ? <>{part !== "appendix" && <FullReport model={model} />}{part !== "pages" && <ReportDocument model={model} appendixOnly />}</> : part === "cover" ? <ReportCover model={model} /> : part === "body" ? <ReportDocument model={model} noFront /> : <><ReportCover model={model} /><ReportDocument model={model} noFront /></>) : <div className="r-loading" data-testid="report-loading">{failure ?? "Loading the report…"}</div>}
     </div>
   );
 }

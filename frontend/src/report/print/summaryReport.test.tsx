@@ -1,4 +1,3 @@
-import { SNAPSHOT_DISCLAIMER } from "../reportScope";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DpdpScoreResponse, EvidenceCookieItem, ScanEvidenceResponse, ScanScreenshot, WebsiteScanMetadata } from "../../api/types";
@@ -263,7 +262,7 @@ describe("the disclaimer", () => {
     render(<SummaryReport model={model()} />);
     const p2 = screen.getByTestId("sm-page-2");
     const d = within(p2).getByTestId("sm-disclaimer");
-    expect(d.textContent).toBe(SNAPSHOT_DISCLAIMER);
+    expect(d.textContent).toBe("This report reflects publicly accessible website content and technical behaviour observed during the scan. Results are limited to the pages and consent states tested and do not constitute a legal opinion, certification, or guarantee of regulatory compliance.");
     const card = d.closest(".sm-disc")!;
     expect(card).toHaveTextContent(/^Disclaimer/);
     expect(p2.querySelector(".pg-body")!.lastElementChild).toBe(card);
@@ -443,7 +442,7 @@ describe("what the report will not claim", () => {
   it("does not call a website compliant, certified or guaranteed, and the disclaimer says the results are not a legal opinion", () => {
     const { container } = render(<SummaryReport model={model()} />);
     expect(container.textContent).not.toMatch(/fully compliant|is compliant|certified compliant|guarantees? compliance/i);
-    expect(screen.getByTestId("sm-disclaimer")).toHaveTextContent(/Website Privacy Snapshot is a limited, browser-based review of up to five/);
+    expect(screen.getByTestId("sm-disclaimer")).toHaveTextContent(/do not constitute a legal opinion, certification, or guarantee/);
     expect(screen.getByTestId("pg-limits")).toHaveTextContent(/not an assessment of the whole site/);
   });
 });

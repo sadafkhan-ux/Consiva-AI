@@ -5,10 +5,6 @@
 export const REPORT_DISCLAIMER =
   "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a qualified legal professional before relying on it.";
 
-/** The Website Privacy Snapshot disclaimer, printed on every report variant exactly as worded. */
-export const SNAPSHOT_DISCLAIMER =
-  "Consiva AI's Website Privacy Snapshot is a limited, browser-based review of up to five publicly accessible website pages, intended solely for awareness, education and preliminary privacy benchmarking. The requester represents that they own the submitted domain or have obtained the necessary authorisation. Findings and proprietary scores are indicative, time-specific and subject to technical limitations. They do not constitute legal advice, a legal or regulatory determination, compliance certification, comprehensive privacy audit or security assessment. The requester is responsible for ensuring appropriate authorisation. Consiva AI remains responsible for its own service operations and obligations under applicable law.";
-
 /**
  * Compliance areas the report does not show: people's data-rights handling and security / breach practice. A website scan cannot observe
  * either, so they are never assessed. The score, its coverage and its checks are untouched: these duties stay in the counts as not tested.
