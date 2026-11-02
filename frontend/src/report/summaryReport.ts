@@ -175,10 +175,6 @@ function toRow(r: ScoreRequirementView, n: number): CheckRow {
   };
 }
 
-/** The disclaimer printed at the foot of page 2. */
-export const DISCLAIMER =
-  "This report reflects publicly accessible website content and technical behaviour observed during the scan. Results are limited to the pages and consent states tested and do not constitute a legal opinion, certification, or guarantee of regulatory compliance.";
-
 // ─── cookies ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const CATEGORY_WORD: Record<string, string> = { analytics: "Analytics", marketing: "Marketing", functional: "Functional", necessary: "Necessary" };

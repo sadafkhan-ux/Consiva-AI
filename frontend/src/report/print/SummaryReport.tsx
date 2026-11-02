@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ReportModel } from "../buildReport";
 import { SNAPSHOT_DISCLAIMER } from "../reportScope";
-import { buildSummaryReport, COOKIE_ROWS, DISCLAIMER, provisionLines, SELECTION_RULE, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, SUMMARY_PAGES, weightage, type CheckRow, type SummaryView } from "../summaryReport";
+import { buildSummaryReport, COOKIE_ROWS, provisionLines, SELECTION_RULE, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, SUMMARY_PAGES, weightage, type CheckRow, type SummaryView } from "../summaryReport";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
 import { ELEMENT_ICON, FrameworkBlock, SummaryTiles } from "./Blocks";
 import { BigRing, Icon, Pill, SheetPageStyle, type IconName } from "./PageParts";
@@ -240,7 +240,7 @@ function Page2({ s, frame, fit, rows, seen }: { s: SummaryView; frame: Frame; fi
 
       <div className="sm-disc">
         <Icon name="doc" size={22} className="sm-disc-icon" />
-        <div><b>Disclaimer</b><p data-testid="sm-disclaimer">{DISCLAIMER}</p><p data-testid="sm-snapshot-disclaimer">{SNAPSHOT_DISCLAIMER}</p></div>
+        <div><b>Disclaimer</b><p data-testid="sm-disclaimer">{SNAPSHOT_DISCLAIMER}</p></div>
       </div>
     </Sheet>
   );
