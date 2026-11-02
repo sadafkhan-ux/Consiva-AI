@@ -34,7 +34,7 @@ import { ApiError } from "./api/types";
 const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
 
 export function ConsentAgentView() {
-  const { state, run, afterReviewDecision } = useConsentScan();
+  const { state, run, open, afterReviewDecision } = useConsentScan();
   const [url, setUrl] = useState("https://example.com");
   const [authorized, setAuthorized] = useState(true);
   const [buildingReport, setBuildingReport] = useState(false);
@@ -98,7 +98,7 @@ export function ConsentAgentView() {
     <div className="usage-layout">
       <div className="usage-main">
       <div className="agent-intro">
-        <h1>Consent Agent</h1>
+        <h1>Privacy Policy Agent</h1>
         <div className="tagline">Enter a public website address to scan it. We check its consent banner, cookies and trackers, and show what needs a human review.</div>
       </div>
 
@@ -288,7 +288,7 @@ export function ConsentAgentView() {
         </>
       )}
       </div>
-      <TokenUsagePanel scanId={state.scanId} live={busy} status={busy ? "running" : state.phase === "failed" ? "failed" : state.phase === "idle" ? "idle" : "completed"} />
+      <TokenUsagePanel scanId={state.scanId} live={busy} status={busy ? "running" : state.phase === "failed" ? "failed" : state.phase === "idle" ? "idle" : "completed"} onOpenScan={(id) => { void open(id); }} />
     </div>
   );
 }

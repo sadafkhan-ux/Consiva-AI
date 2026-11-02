@@ -679,6 +679,45 @@ class UsageStage(BaseModel):
     cost: float | None = None
     embedding_requests: int | None = None
     embedding_tokens: int | None = None
+    reused: bool = False
+    reused_from_scan: str | None = None
+    error: str | None = None
+
+
+class UsageCall(BaseModel):
+    """One recorded model call: the breakdown behind the panel's numbers. Counts and identifiers only, never a prompt or a response."""
+    stage: str
+    label: str
+    agent: str | None = None
+    provider: str
+    model: str
+    status: str
+    attempts: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    reasoning_tokens: int | None = None
+    total_tokens: int
+    duration_ms: int | None = None
+    cost: float | None = None
+    page_urls: list[str] = []
+    error_type: str | None = None
+    at: datetime | None = None
+
+
+class UsageError(BaseModel):
+    where: str
+    stage: str | None = None
+    message: str
+
+
+class UsageResults(BaseModel):
+    """What was saved for the scan, read from its stage records: whether its evidence, analysis, findings and audit can be opened."""
+    evidence: bool = False
+    analysis: bool = False
+    findings: bool = False
+    audit: bool = False
 
 
 class UsagePageRow(BaseModel):
@@ -727,6 +766,9 @@ class UsageResponse(BaseModel):
     stages: list[UsageStage]
     pages: UsagePages
     notes: list[str]
+    calls: list[UsageCall] = []
+    errors: list[UsageError] = []
+    results: UsageResults = UsageResults()
 
 
 class UsageHistoryItem(BaseModel):
@@ -747,6 +789,9 @@ class UsageHistoryItem(BaseModel):
     currency: str
     source: str
     analysis_run: bool = True
+    errors: list[UsageError] = []
+    results: UsageResults = UsageResults()
+    reused_analysis: bool = False
 
 
 class ScanListItem(BaseModel):
@@ -771,12 +816,14 @@ async def list_scans(
 @router.get("/usage/history", response_model=list[UsageHistoryItem])
 async def get_usage_history(
     limit: int = 30,
+    offset: int = 0,
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """The model usage of the organisation's recent scans, newest first, for the usage panel's history. A scan made before usage was recorded per call shows
-    what its stage records kept, marked `stage_records`; a scan with neither shows source `none`. Read-only: it never regenerates anything."""
-    scans = await scan_repository.list_recent_scans(db, uuid.UUID(user.org_id), max(1, min(limit, 100)))
+    """The model usage of the organisation's scans, newest first, for the usage panel's history; `offset` pages back through all of them. A scan made before
+    usage was recorded per call shows what its stage records kept, marked `stage_records`; a scan with neither shows source `none`. Read-only: it never
+    regenerates anything."""
+    scans = await scan_repository.list_recent_scans(db, uuid.UUID(user.org_id), max(1, min(limit, 100)), max(0, offset))
     return await usage_service.load_history(db, scans)
 
 

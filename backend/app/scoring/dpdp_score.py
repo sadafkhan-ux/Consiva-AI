@@ -27,7 +27,7 @@ from fractions import Fraction
 from typing import Literal
 
 from app.rules.consent_observation import script_failure_note
-from app.rules.consent_rules import ConsentContext, build_consent_context
+from app.rules.consent_rules import ConsentContext, build_consent_context, count_phrase
 from app.scanner.scan_profiles import MAX_WEB_PAGES
 from app.scoring import deductions as deductions_module
 from app.scoring import findings, review
@@ -160,6 +160,13 @@ def _seen(ctx: ConsentContext) -> str:
     return " This was seen on the scanned wrapper page; the framed site's own pages were not scanned." if ctx.framed_sites else ""
 
 
+def _loads_phrase(pages: list[dict]) -> str:
+    """"clean loads that fired: 1 of 3" -- the evidence behind a re-check's answer, stated the same way everywhere."""
+    loads = sum(int(p.get("loads") or 0) for p in pages)
+    fired = sum(int(p.get("fired_loads") or 0) for p in pages)
+    return f"{fired} of {loads} clean load(s) fired"
+
+
 def _pre_consent_processing(ctx: ConsentContext) -> Outcome:
     if (why := _unverifiable(ctx)):
         return Outcome("unable_to_verify", [why])
@@ -167,8 +174,20 @@ def _pre_consent_processing(ctx: ConsentContext) -> Outcome:
         return Outcome("unable_to_verify", ["This scan predates three-state consent testing, so what fired before consent is unknown."])
     classified = [e for e in ctx.non_essential if "pre_consent" in e.get("consent_states", [])]
     if classified:
-        note = f"{len(classified)} analytics/marketing cookie(s)/script(s) fired before any consent interaction."
-        return Outcome("not_met", [note + _seen(ctx)], [e["id"] for e in classified])
+        note = f"{count_phrase(ctx, classified)} fired before any consent interaction."
+        ids = [e["id"] for e in classified]
+        recheck = ctx.interaction_evidence.get("pre_consent_recheck") or {}
+        pages = recheck.get("pages") or []
+        if pages and recheck.get("reproduced"):
+            return Outcome("not_met", [note + f" It fired again when {sum(1 for p in pages if p.get('fired'))} of {len(pages)} page(s) were loaded alone in a clean browser ({_loads_phrase(pages)}), so it is reproducible." + _seen(ctx)], ids)
+        # Not reproduced counts only when the answer is complete and the scanner saw every item it is clearing: a page that did not load is "unknown", and an item the
+        # scanner's own classification did not recognise (the report's did, through the cookie database) was never put to the re-check.
+        if pages and recheck.get("complete") and len(classified) <= int(recheck.get("crawl_hits") or 0):
+            return Outcome("partially_met", [
+                note + f" It fired on a page view during the crawl, which read several pages at once, and did not fire in most clean loads of any of the {len(pages)} page(s) loaded alone ({_loads_phrase(pages)}). "
+                "The first observation is kept as evidence; it may be a page view where the consent banner was not drawn in time. A reviewer should confirm."
+            ], ids)
+        return Outcome("not_met", [note + _seen(ctx)], ids)
     if (limit := _framed_limit(ctx)):
         return Outcome("unable_to_verify", [limit])
     unknown = [e for e in (*ctx.trackers, *ctx.cookies) if e.get("category") is None and "pre_consent" in e.get("consent_states", [])]
@@ -233,7 +252,7 @@ def _reject_honoured(ctx: ConsentContext) -> Outcome:
         return Outcome("unable_to_verify", ["Reject was clicked but the banner did not observably record the choice (rule R-011)."])
     after = [e for e in ctx.non_essential if "post_reject" in e.get("consent_states", [])]
     if after:
-        return Outcome("not_met", [f"{len(after)} analytics/marketing item(s) kept firing after Reject was clicked and confirmed."],
+        return Outcome("not_met", [f"{count_phrase(ctx, after)} kept firing after Reject was clicked and confirmed."],
                        [e["id"] for e in after])
     if (limit := _framed_limit(ctx)):
         return Outcome("unable_to_verify", [limit])

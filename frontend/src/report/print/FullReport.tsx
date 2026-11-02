@@ -1,6 +1,6 @@
 import type { ReportModel } from "../buildReport";
 import { buildPageReport, FULL_PAGES, type SeriesPoint } from "../pageReports";
-import { CONSIVA_UPDATES, OMITTED_DUTIES_NOTE } from "../reportScope";
+import { CONSIVA_UPDATES, OMITTED_DUTIES_NOTE, SNAPSHOT_DISCLAIMER } from "../reportScope";
 import { AreasBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, UpgradeBand } from "./Blocks";
 import { Icon, PageFrame, Pill, SecHead, SheetPageStyle, type IconName } from "./PageParts";
 import { ScanTransparency } from "./Transparency";
@@ -215,6 +215,7 @@ export function FullReport({ model }: { model: ReportModel }) {
           </dl>
         </div>
         <p className="pg-disclaimer" data-testid="pg-disclaimer"><b>Important:</b> This report is an automated, point-in-time assessment of publicly accessible website signals within the stated scan scope. It is provided for informational and preliminary readiness purposes only; it is not legal advice, a legal opinion, an audit, a certification, or a guarantee of compliance with the Digital Personal Data Protection Act, 2023, the DPDP Rules, 2025, GDPR/ePrivacy, CCPA/CPRA or any other law. A passing score applies only to checks tested within the stated scope and does not establish full organisational compliance.</p>
+        <p className="pg-disclaimer" data-testid="pg-snapshot-disclaimer">{SNAPSHOT_DISCLAIMER}</p>
       </PageFrame>
     </div>
   );

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Consiva Consent Agent — Demo</title>
+<title>Consiva Privacy Policy Agent — Demo</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   :root {
@@ -112,14 +112,14 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Consiva — Consent Agent Demo</h1>
+  <h1>Consiva — Privacy Policy Agent Demo</h1>
   <div class="sub">Enter a website URL to run the full scan → classify → RAG → NVIDIA LLM → findings → review pipeline, live.</div>
 
   <div class="panel">
     <div class="run-row">
       <input id="url" type="text" placeholder="https://example.com" value="https://example.com">
       <label class="chk"><input id="authorized" type="checkbox" checked> I own / am authorized to scan this domain</label>
-      <button id="runBtn" onclick="runAgent()">RUN CONSENT AGENT</button>
+      <button id="runBtn" onclick="runAgent()">RUN PRIVACY POLICY AGENT</button>
     </div>
     <div class="hint">SSRF-protected — private/internal/loopback addresses are always rejected regardless of this checkbox.</div>
     <div id="scanIdRow" class="scan-id" style="display:none"></div>

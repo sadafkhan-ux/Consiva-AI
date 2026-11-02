@@ -54,16 +54,24 @@ export function useScanUsage(scanId: string | null, live: boolean, intervalMs = 
   return { usage: usage && usage.scan_id === scanId ? usage : null, error };
 }
 
-/** The usage of the organisation's recent scans. Read again whenever `refreshKey` changes (a scan has finished). */
-export function useUsageHistory(refreshKey: string): { items: UsageHistoryItem[] | null; error: string | null } {
+const HISTORY_PAGE = 20;
+
+/** The usage of the organisation's scans, newest first, a page at a time. Read again from the newest page whenever `refreshKey` changes (a scan has finished);
+ *  `loadMore` appends the next older page, so every scan ever saved can be reached. */
+export function useUsageHistory(refreshKey: string): { items: UsageHistoryItem[] | null; error: string | null; hasMore: boolean; loadingMore: boolean; loadMore: () => void } {
   const [items, setItems] = useState<UsageHistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const count = useRef(0);
   useEffect(() => {
     let cancelled = false;
-    Promise.resolve().then(() => api.getUsageHistory(20)).then(   // a read that fails to even start is an error on screen, never a crash
+    Promise.resolve().then(() => api.getUsageHistory(HISTORY_PAGE)).then(   // a read that fails to even start is an error on screen, never a crash
       (rows) => {
         if (!cancelled) {
+          count.current = rows.length;
           setItems(rows);
+          setHasMore(rows.length === HISTORY_PAGE);
           setError(null);
         }
       },
@@ -75,5 +83,20 @@ export function useUsageHistory(refreshKey: string): { items: UsageHistoryItem[]
       cancelled = true;
     };
   }, [refreshKey]);
-  return { items, error };
+
+  function loadMore() {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    Promise.resolve().then(() => api.getUsageHistory(HISTORY_PAGE, count.current)).then(
+      (rows) => {
+        const seen = new Set<string>();
+        setItems((prev) => [...(prev ?? []), ...rows].filter((r) => (seen.has(r.scan_id) ? false : (seen.add(r.scan_id), true))));
+        count.current += rows.length;
+        setHasMore(rows.length === HISTORY_PAGE);
+        setError(null);
+      },
+      (e) => setError(e instanceof Error ? e.message : "Could not read the usage history."),
+    ).finally(() => setLoadingMore(false));
+  }
+  return { items, error, hasMore, loadingMore, loadMore };
 }

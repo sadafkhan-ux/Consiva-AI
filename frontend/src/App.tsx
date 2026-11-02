@@ -93,7 +93,7 @@ function Console() {
   }
 
   const AGENTS: { id: Agent; label: string }[] = [
-    { id: "consent", label: "Consent" },
+    { id: "consent", label: "Privacy Policy" },
     { id: "ropa", label: "ROPA" },
     { id: "dsr", label: "DSR" },
     { id: "breach", label: "Breach" },

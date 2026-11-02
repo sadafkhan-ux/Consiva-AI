@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ReportModel } from "../buildReport";
+import { SNAPSHOT_DISCLAIMER } from "../reportScope";
 import { buildSummaryReport, COOKIE_ROWS, DISCLAIMER, provisionLines, SELECTION_RULE, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, SUMMARY_PAGES, weightage, type CheckRow, type SummaryView } from "../summaryReport";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
-import { FrameworkBlock, SummaryTiles } from "./Blocks";
-import { BigRing, Pill, SheetPageStyle } from "./PageParts";
+import { ELEMENT_ICON, FrameworkBlock, SummaryTiles } from "./Blocks";
+import { BigRing, Icon, Pill, SheetPageStyle, type IconName } from "./PageParts";
 import "./pages.css";
 import "./summary.css";
 
@@ -43,20 +44,23 @@ function Sheet({ n, frame, fit, testId, children }: { n: number; frame: Frame; f
   const steps = (fit === ROOMY ? " sm-roomy" : "") + Array.from({ length: Math.max(0, Math.min(fit, MAX_LAYOUT_FIT)) }, (_, i) => ` sm-fit-${i + 1}`).join("");
   return (
     <section className={`pg pg-free pg-summary${steps}`} data-testid={testId} data-page={n} data-fit={fit}>
-      <header className="sm-head" data-testid={`sm-head-${n}`}>
-        <img className="sm-logo" src={CONSIVA_LOGO_PNG} alt="Consiva.ai" data-testid="sm-logo" />
-        <div className="sm-head-r">
-          <b>{frame.domain}</b>
-          <div>Scanned {frame.scannedAt}{frame.headerPages ? ` · ${frame.headerPages}` : ""}</div>
-          <div>Report ID: {frame.reportId} · <span className="sm-pageno">{`Page ${n} of ${SUMMARY_PAGES}`}</span></div>
-        </div>
-      </header>
+      {/* Only page 1 has a header band; page 2 starts straight with its content. */}
+      {n === 1 && (
+        <header className="sm-head" data-testid={`sm-head-${n}`}>
+          <img className="sm-logo" src={CONSIVA_LOGO_PNG} alt="Consiva.ai" data-testid="sm-logo" />
+          <div className="sm-head-r">
+            <b>{frame.domain}</b>
+            <div>Scanned {frame.scannedAt}{frame.headerPages ? ` · ${frame.headerPages}` : ""}</div>
+            <div>Report ID: {frame.reportId} · <span className="sm-pageno">{`Page ${n} of ${SUMMARY_PAGES}`}</span></div>
+          </div>
+        </header>
+      )}
       <div className="pg-body">{children}</div>
     </section>
   );
 }
 
-const H = ({ title, note }: { title: string; note?: string }) => <h2 className="sm-h">{title}{note && <span>{note}</span>}</h2>;
+const H = ({ title, note, icon }: { title: string; note?: string; icon?: IconName }) => <h2 className="sm-h">{icon && <i className="sm-h-icon"><Icon name={icon} size={15} /></i>}{title}{note && <span>{note}</span>}</h2>;
 
 function CheckpointRow({ r, sameAs }: { r: CheckRow; sameAs: number | null }) {
   const prov = provisionLines(r.provisions);
@@ -71,8 +75,8 @@ function CheckpointRow({ r, sameAs }: { r: CheckRow; sameAs: number | null }) {
         {r.note && <span className="sm-ev" data-testid="sm-evidence">{sameAs !== null ? `Same evidence as checkpoint ${sameAs}: see the passage quoted there.` : r.note}</span>}
       </td>
       <td><Pill s={r.status} /></td>
-      <td className="sm-num">{r.scored ? weightage(r.awarded ?? 0) : "–"}</td>
       <td className="sm-num">{r.scored ? weightage(r.max ?? 0) : "–"}</td>
+      <td className="sm-num">{r.scored ? weightage(r.awarded ?? 0) : "–"}</td>
     </tr>
   );
 }
@@ -81,7 +85,7 @@ function CheckpointRow({ r, sameAs }: { r: CheckRow; sameAs: number | null }) {
 function CheckpointTable({ rows, seen, total, testId }: { rows: CheckRow[]; seen: Map<string, number>; total?: { awarded: number; max: number }; testId: string }) {
   return (
     <table className="pg-table sm-table sm-checks" data-testid={testId}>
-      <thead><tr><th>#</th><th>Checkpoint and supporting evidence</th><th>Status</th><th className="sm-num">Weightage Awarded</th><th className="sm-num">Maximum Weightage</th></tr></thead>
+      <thead><tr><th>#</th><th>Checkpoint and supporting evidence</th><th>Status</th><th className="sm-num">Maximum Weightage</th><th className="sm-num">Weightage Awarded</th></tr></thead>
       <tbody>
         {rows.map((r) => {
           const first = r.note.length > 80 ? seen.get(r.note) : undefined;
@@ -89,7 +93,7 @@ function CheckpointTable({ rows, seen, total, testId }: { rows: CheckRow[]; seen
           return <CheckpointRow key={r.id} r={r} sameAs={first ?? null} />;
         })}
         {rows.length === 0 && <tr><td colSpan={5} className="pg-muted-cell">No applicable checkpoint could be identified for this scan.</td></tr>}
-        {total && <tr className="sm-total"><td colSpan={3}>Total Weightage (assessed checkpoints)</td><td className="sm-num">{weightage(total.awarded)}</td><td className="sm-num">{weightage(total.max)}</td></tr>}
+        {total && <tr className="sm-total"><td colSpan={3}>Total Weightage (assessed checkpoints)</td><td className="sm-num">{weightage(total.max)}</td><td className="sm-num">{weightage(total.awarded)}</td></tr>}
       </tbody>
     </table>
   );
@@ -106,6 +110,12 @@ function Page1({ s, frame, fit, rows, seen }: { s: SummaryView; frame: Frame; fi
         <div className="sm-hero-text">
           <div className="sm-domain">{preview.domain}</div>
           <h1>Website Privacy Readiness Report</h1>
+          <p>Assessment based on {s.framework.name}.</p>
+          <div className="sm-meta" data-testid="sm-meta">
+            <span><Icon name="calendar" size={20} /><small>Scan Date</small><b>{page.scannedAt}</b></span>
+            {page.headerPages && <span><Icon name="doc" size={20} /><small>Pages Scanned</small><b>{page.headerPages.replace(/ pages? scanned/i, "")}</b></span>}
+            <span><Icon name="globe" size={20} /><small>Website URL</small><b>{preview.address ?? `https://${preview.domain}`}</b></span>
+          </div>
         </div>
         <figure className="sm-shot" data-testid="pg-hero-preview">
           {preview.src ? (
@@ -132,7 +142,7 @@ function Page1({ s, frame, fit, rows, seen }: { s: SummaryView; frame: Frame; fi
         <SummaryTiles view={{ ...page, tiles: s.tiles }} />
       </div>
 
-      <H title="Applicable checkpoints" note="Weightage is given only for a checkpoint that was assessed" />
+      <H title="Applicable checkpoints" note="Weightage is given only for a checkpoint that was assessed" icon="shield" />
       <CheckpointTable rows={rows} seen={seen} total={{ awarded: s.totalAwarded, max: s.totalMax }} testId="sm-checkpoints" />
     </Sheet>
   );
@@ -155,7 +165,7 @@ function Page2({ s, frame, fit, rows, seen }: { s: SummaryView; frame: Frame; fi
       )}
 
       <H title="Cookies observed" />
-      <div className="sm-strip" data-testid="sm-cookie-counts">
+      <div className="sm-strip sm-cookie-chips" data-testid="sm-cookie-counts">
         <span><b>{cc.found}</b> found</span><span><b>{cc.thirdParty}</b> third-party</span><span><b>{cc.beforeConsent}</b> before consent</span>
         <span><b>{cc.afterAccept === null ? "Not Tested" : cc.afterAccept}</b> after Accept</span><span><b>{cc.afterReject === null ? "Not Tested" : cc.afterReject}</b> after Reject</span>
         {cc.byCategory.map((g) => <span key={g.label} className="sm-cat">{g.label}: <b>{g.count}</b></span>)}
@@ -180,6 +190,7 @@ function Page2({ s, frame, fit, rows, seen }: { s: SummaryView; frame: Frame; fi
         </table>
       )}
       {untestedChoices.length > 0 && <p className="sm-fine" data-testid="sm-untested">{untestedChoices.join(" and ")} {untestedChoices.length === 1 ? "was" : "were"} not tested (no click was confirmed), so nothing is reported for what the site does after {untestedChoices.length === 1 ? "that choice" : "either choice"}. A cookie held in such a pass is marked “Seen, no choice made”.</p>}
+      <H title="Third-party requests" note={s.requests !== null ? `${s.requests} found` : undefined} />
       <div className="sm-strip" data-testid="sm-tech">
         {s.requests !== null && <span><b>{s.requests}</b> third-party requests</span>}
         {s.domains !== null && <span><b>{s.domains}</b> third-party domains</span>}
@@ -191,14 +202,14 @@ function Page2({ s, frame, fit, rows, seen }: { s: SummaryView; frame: Frame; fi
       <H title="Website privacy elements" note="publicly detected" />
       {s.elements.length === 0 ? <p className="pg-muted">The scan evidence was not loaded, so the privacy elements are not shown.</p> : (
         <div className="sm-els" data-testid="sm-elements">
-          {s.elements.map((e) => <div key={e.title} className="sm-el"><b>{e.title}</b><Pill s={{ label: e.label, tone: e.tone }} />{e.note && <small>{e.note}</small>}</div>)}
+          {s.elements.map((e) => <div key={e.title} className="sm-el"><Icon name={ELEMENT_ICON[e.title] ?? "doc"} size={16} className="sm-el-icon" /><b>{e.title}</b><Pill s={{ label: e.label, tone: e.tone }} />{e.note && <small>{e.note}</small>}</div>)}
         </div>
       )}
 
       {s.contacts.length > 0 && (
         <div className="sm-contacts" data-testid="sm-contacts">
           {s.contacts.map((c) => (
-            <div key={c.title} data-testid="sm-contact"><b>{c.title}</b>{c.lines.map((l) => <span key={l}>{l}</span>)}{c.source && <small>{c.source}</small>}</div>
+            <div key={c.title} data-testid="sm-contact"><Icon name={/grievance/i.test(c.title) ? "scale" : "home"} size={22} className="sm-contact-icon" /><div className="sm-contact-body"><b>{c.title}</b>{c.lines.map((l) => <span key={l}>{l}</span>)}{c.source && <small>{c.source}</small>}</div></div>
           ))}
         </div>
       )}
@@ -222,13 +233,14 @@ function Page2({ s, frame, fit, rows, seen }: { s: SummaryView; frame: Frame; fi
       </div>
 
       <div className="sm-cta" data-testid="sm-cta">
+        <i className="sm-cta-icon"><Icon name="bolt" size={26} /></i>
         <div className="sm-cta-text"><b>{SIGNUP_TEXT}</b><span>{SIGNUP_SUB}</span></div>
-        <a className="sm-cta-link" href={SIGNUP_URL} data-testid="sm-signup">Sign Up</a>
+        <a className="sm-cta-link" href={SIGNUP_URL} data-testid="sm-signup">Sign Up <Icon name="arrow" size={13} /></a>
       </div>
 
       <div className="sm-disc">
-        <b>Disclaimer</b>
-        <p data-testid="sm-disclaimer">{DISCLAIMER}</p>
+        <Icon name="doc" size={22} className="sm-disc-icon" />
+        <div><b>Disclaimer</b><p data-testid="sm-disclaimer">{DISCLAIMER}</p><p data-testid="sm-snapshot-disclaimer">{SNAPSHOT_DISCLAIMER}</p></div>
       </div>
     </Sheet>
   );

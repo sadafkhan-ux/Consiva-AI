@@ -104,30 +104,27 @@ describe("the two printed pages", () => {
     const { container } = render(<SummaryReport model={model()} />);
     expect(SUMMARY_PAGES).toBe(2);
     expect(container.querySelectorAll("section.pg")).toHaveLength(2);
-    for (const n of [1, 2]) expect(within(screen.getByTestId(`sm-page-${n}`)).getByText(`Page ${n} of 2`)).toBeTruthy();
+    expect(within(screen.getByTestId("sm-page-1")).getByText("Page 1 of 2")).toBeTruthy();    // page 2 has no header, so no page number
   });
 
-  it("carries the logo in the header of both pages and nowhere else, and the only other picture is the homepage preview", () => {
+  it("carries the logo in the header of page 1 only (page 2 has no header), and the only other picture is the homepage preview", () => {
     const { container } = render(<SummaryReport model={model()} />);
-    for (const n of [1, 2]) {
-      const head = within(screen.getByTestId(`sm-page-${n}`)).getByTestId(`sm-head-${n}`);
-      const logo = head.querySelector("img")!;
-      expect(logo).toHaveAttribute("alt", "Consiva.ai");
-      expect(logo.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
-      expect(head.querySelectorAll("img")).toHaveLength(1);
-    }
-    expect([...container.querySelectorAll("img")].map((i) => i.getAttribute("data-testid"))).toEqual(["sm-logo", "pg-hero-screenshot", "sm-logo"]);
+    const head = within(screen.getByTestId("sm-page-1")).getByTestId("sm-head-1");
+    const logo = head.querySelector("img")!;
+    expect(logo).toHaveAttribute("alt", "Consiva.ai");
+    expect(logo.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    expect(head.querySelectorAll("img")).toHaveLength(1);
+    expect(screen.getByTestId("sm-page-2").querySelector("header")).toBeNull();
+    expect([...container.querySelectorAll("img")].map((i) => i.getAttribute("data-testid"))).toEqual(["sm-logo", "pg-hero-screenshot"]);
     expect(container.querySelectorAll("footer")).toHaveLength(0);
   });
 
-  it("keeps the domain, the scan time and the report id on both pages", () => {
+  it("keeps the domain, the scan time and the report id on page 1", () => {
     render(<SummaryReport model={model()} />);
-    for (const n of [1, 2]) {
-      const p = screen.getByTestId(`sm-page-${n}`);
-      expect(p).toHaveTextContent("x.test");
-      expect(p).toHaveTextContent(/Scanned .* UTC/);
-      expect(p).toHaveTextContent(/Report ID: FR-\d{8}-9BD5/);
-    }
+    const p = screen.getByTestId("sm-page-1");
+    expect(p).toHaveTextContent("x.test");
+    expect(p).toHaveTextContent(/Scanned .* UTC/);
+    expect(p).toHaveTextContent(/Report ID: FR-\d{8}-9BD5/);
   });
 
   it("uses Weightage Awarded, Maximum Weightage and Total Weightage, and none of the old words", () => {
@@ -146,7 +143,7 @@ describe("the two printed pages", () => {
     expect(within(p1).getByTestId("sm-total-line")).toHaveTextContent(`Total Weightage: ${weightage(s.totalAwarded)} / ${weightage(s.totalMax)}`);
     const counts = within(p1).getByTestId("sm-counts");
     expect(counts).toHaveTextContent(`${s.assessedRows.length} of ${s.assessedRows.length + s.unassessedRows.length} applicable checkpoints assessed`);
-    expect(within(p1).getByTestId("sm-checkpoints")).toHaveTextContent(`Total Weightage (assessed checkpoints)${weightage(s.totalAwarded)}${weightage(s.totalMax)}`);
+    expect(within(p1).getByTestId("sm-checkpoints")).toHaveTextContent(`Total Weightage (assessed checkpoints)${weightage(s.totalMax)}${weightage(s.totalAwarded)}`);   // Maximum Weightage first, then Weightage Awarded, as in the approved design
     expect(within(p1).getByTestId("pg-hero-screenshot")).toHaveAttribute("src", expect.stringContaining("data:image/jpeg"));
   });
 
@@ -155,10 +152,10 @@ describe("the two printed pages", () => {
     expect(screen.getByTestId("pg-hero-missing")).toHaveTextContent("Homepage preview not available");
   });
 
-  it("has no footer: nothing repeats at the foot of a page, and the page number is in the top line", () => {
+  it("has no footer: nothing repeats at the foot of a page, and the page number is in page 1's top line", () => {
     const { container } = render(<SummaryReport model={model()} />);
     expect(container.querySelectorAll("footer")).toHaveLength(0);
-    for (const n of [1, 2]) expect(within(screen.getByTestId(`sm-page-${n}`)).getByText(`Page ${n} of 2`).closest("header")).not.toBeNull();
+    expect(within(screen.getByTestId("sm-page-1")).getByText("Page 1 of 2").closest("header")).not.toBeNull();
   });
 });
 
@@ -183,20 +180,16 @@ describe("page 1 follows the agreed order", () => {
 });
 
 describe("the header and the one score", () => {
-  it("has a solid black header (the logo's own near-black) with white text on both pages, from the stylesheet that prints them", () => {
+  it("has a dark header with white text on page 1 only, from the stylesheet that prints it", () => {
     const { container } = render(<SummaryReport model={model()} />);
-    for (const n of [1, 2]) {
-      const head = within(screen.getByTestId(`sm-page-${n}`)).getByTestId(`sm-head-${n}`);
-      expect(head.tagName).toBe("HEADER");
-      const css = getComputedStyle(head);
-      expect(css.backgroundColor).toBe("rgb(3, 7, 15)");       // the logo's own near-black, so the logo sits in the band without an edge
-      expect(css.color).toBe("rgb(255, 255, 255)");
-      expect(getComputedStyle(head.querySelector(".sm-head-r")!).color).toBe("rgb(255, 255, 255)");
-      expect(head).toHaveTextContent("x.test");
-      expect(head).toHaveTextContent(/Scanned .* UTC/);
-      expect(head).toHaveTextContent(/Report ID: FR-\d{8}-9BD5/);
-    }
-    expect(container.querySelectorAll("header")).toHaveLength(2);
+    const head = within(screen.getByTestId("sm-page-1")).getByTestId("sm-head-1");
+    expect(head.tagName).toBe("HEADER");
+    expect(getComputedStyle(head).color).toBe("rgb(255, 255, 255)");
+    expect(getComputedStyle(head.querySelector(".sm-head-r")!).color).toBe("rgb(255, 255, 255)");
+    expect(head).toHaveTextContent("x.test");
+    expect(head).toHaveTextContent(/Scanned .* UTC/);
+    expect(head).toHaveTextContent(/Report ID: FR-\d{8}-9BD5/);
+    expect(container.querySelectorAll("header")).toHaveLength(1);
   });
 
   it("shows the Compliance Score once, as the score the assessment returned, and no coverage score, area scores or framework percentage", () => {

@@ -314,6 +314,35 @@ def build_consent_context(evidence: dict) -> ConsentContext:
     )
 
 
+def count_phrase(ctx: ConsentContext, items: list[dict]) -> str:
+    """"6 analytics/marketing request(s) and 3 cookie(s)": requests and cookies are different things and are counted apart.
+
+    One number for both ("9 cookie(s)/script(s)") disagreed with the report's own tables, which count requests and cookies separately (27 Oct 2026, FR-20261027-D200: 9 in
+    the finding, 6 requests and 3 cookies in the consent table). Every finding that counts evidence uses this, so the figures are the same wherever they appear."""
+    cookie_ids = {c["id"] for c in ctx.cookies}
+    cookies = sum(1 for e in items if e["id"] in cookie_ids)
+    requests = len(items) - cookies
+    parts = []
+    if requests:
+        parts.append(f"{requests} analytics/marketing request(s)")
+    if cookies:
+        parts.append(f"{cookies} analytics/marketing cookie(s)")
+    return " and ".join(parts) or "0 analytics/marketing items"
+
+
+def _recheck_note(ctx: ConsentContext) -> str:
+    """What the clean re-check of the pages found (scanner/crawler.py `_recheck_pre_consent`), so the finding says the same as the score's check."""
+    recheck = ctx.interaction_evidence.get("pre_consent_recheck") or {}
+    pages = recheck.get("pages") or []
+    if not pages:
+        return ""
+    if recheck.get("reproduced"):
+        return f" It fired again when {sum(1 for p in pages if p.get('fired'))} of {len(pages)} page(s) were loaded alone in a clean browser."
+    if recheck.get("complete"):
+        return f" It did not fire again when each of the {len(pages)} page(s) was loaded alone in a clean browser."
+    return " A clean re-check could not load every page, so it is not known whether this repeats."
+
+
 def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
     """`evidence` is the dict shape produced by
     scan_repository.get_scan_evidence_summary() — real DB ids, already vendor/category
@@ -345,8 +374,8 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             category="other",
             risk_level="high",
             summary=(
-                f"{len(pre_consent_hits)} analytics/marketing cookie(s)/script(s) fired BEFORE any "
-                "consent interaction." + _observed_on(pre_consent_hits)
+                f"{count_phrase(ctx, pre_consent_hits)} fired BEFORE any "
+                "consent interaction." + _observed_on(pre_consent_hits) + _recheck_note(ctx)
             ),
             evidence_ids=[e["id"] for e in pre_consent_hits],
             confidence="high",
@@ -358,7 +387,7 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             category="other",
             risk_level="high",
             summary=(
-                f"{len(non_essential)} analytics/marketing cookie(s)/script(s) detected but no "
+                f"{count_phrase(ctx, non_essential)} detected but no "
                 "consent banner or CMP was found on the scanned pages." + framed_note
             ),
             evidence_ids=[e["id"] for e in non_essential],
@@ -394,7 +423,7 @@ def evaluate_consent_rules(evidence: dict) -> list[RuleFinding]:
             category="other",
             risk_level="high",
             summary=(
-                f"{len(post_reject_hits)} analytics/marketing cookie(s)/script(s) continued firing "
+                f"{count_phrase(ctx, post_reject_hits)} continued firing "
                 "AFTER the visitor clicked Reject."
             ),
             evidence_ids=[e["id"] for e in post_reject_hits],

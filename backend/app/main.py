@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     await close_graph_resources()
 
 
-app = FastAPI(title="Consiva — Consent Agent", lifespan=lifespan)
+app = FastAPI(title="Consiva — Privacy Policy Agent", lifespan=lifespan)
 app.include_router(api_router)
 
 # Local dev only: the separate Vite frontend (frontend/) runs on its own origin

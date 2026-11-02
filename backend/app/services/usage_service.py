@@ -170,6 +170,16 @@ def build_usage(scan: dict, stages: list[dict], event_rows: list) -> dict:
                                  else "No usage was recorded for this stage." if status == "completed" else "Failed before any usage was recorded.")
             elif source == "stage_records":
                 entry["note"] = "From the stage record (made before per-call tracking): no request ids or page list."
+        reused = _reused_from(rows) if kind == "llm" else None
+        if reused is not None:
+            # The identical policy text and question were already answered for this site, so the model was not called: zero tokens is a fact, not a gap.
+            for k in ("input_tokens", "output_tokens", "total_tokens", "cache_read_tokens", "cache_write_tokens"):
+                entry[k] = entry[k] or 0
+            entry["cost"] = entry["cost"] if entry["cost"] is not None else 0.0
+            entry["note"] = "Reused the saved analysis of an identical policy text" + (f" from scan {reused[:8]}" if reused != "earlier" else "") + ": no model call, zero tokens."
+        entry["reused_from_scan"] = None if reused in (None, "earlier") else reused
+        entry["reused"] = reused is not None
+        entry["error"] = next((r["error"] for r in reversed(rows) if r.get("error")), None)
         stage_out.append(entry)
 
     # pages: a call is attributed to a page only when it read exactly that one page
@@ -219,8 +229,54 @@ def build_usage(scan: dict, stages: list[dict], event_rows: list) -> dict:
         "cost": {"currency": usage_tracking.CURRENCY, "total": totals["cost"], "input": totals["cost_input"], "cache_read": totals["cost_cache_read"], "cache_write": totals["cost_cache_write"],
                  "output": totals["cost_output"], "priced_calls": totals["priced_calls"], "unpriced_calls": totals["unpriced_calls"], "complete": totals["unpriced_calls"] == 0 and totals["calls"] > 0,
                  "price_source": usage_tracking.PRICE_SOURCE if totals["priced_calls"] else None},
-        "stages": stage_out, "pages": pages, "notes": notes,
+        "stages": stage_out, "pages": pages, "notes": notes, "calls": _call_rows(events), "errors": _errors(scan, stages, events),
+        # What was saved for this scan, so the panel can say whether its results can be opened. Read from the stage records, never assumed.
+        "results": {
+            "evidence": any(s["stage"] == "website_scan" and s["status"] == "completed" for s in stages),
+            "analysis": any(s["stage"] == "llm_analysis" and s["status"] == "completed" for s in stages),
+            "findings": any(s["stage"] in ("findings_generated", "rule_findings_generated") and s["status"] == "completed" for s in stages),
+            "audit": any(s["stage"] == "audit_saved" and s["status"] == "completed" for s in stages),
+        },
     }
+
+
+def _reused_from(rows: list[dict]) -> str | None:
+    """The scan whose saved policy analysis this stage reused ('earlier' when the record does not say which), or None when the model was really called."""
+    for r in rows:
+        meta = r.get("meta") or {}
+        if (meta.get("policy_model") or {}).get("reused"):
+            return meta.get("reused_from") or "earlier"
+    return None
+
+
+def _call_rows(events: list[dict]) -> list[dict]:
+    """One row per recorded model call, in the order they were made: the breakdown behind every number in the panel. Only what was recorded."""
+    out = []
+    for e in sorted(events, key=lambda x: (x["at"] is None, x["at"])):
+        comps = _cost_of(e)
+        label = STAGES.get(e["stage"] or "", (e["stage"] or "Unknown stage", ""))[0]
+        out.append({
+            "stage": e["stage"] or "unknown", "label": label, "agent": e["agent"], "provider": e["provider"], "model": e["model"], "status": e["status"], "attempts": e["attempts"],
+            "input_tokens": e["input_tokens"], "output_tokens": e["output_tokens"], "cache_read_tokens": e["cache_read_tokens"], "cache_write_tokens": e["cache_write_tokens"],
+            "reasoning_tokens": e["reasoning_tokens"], "total_tokens": e["input_tokens"] + e["output_tokens"] + e["cache_read_tokens"] + e["cache_write_tokens"],
+            "duration_ms": e["duration_ms"], "cost": None if comps is None else comps["total"], "page_urls": e["page_urls"],
+            "error_type": e["error_type"], "at": e["at"],
+        })
+    return out
+
+
+def _errors(scan: dict, stages: list[dict], events: list[dict]) -> list[dict]:
+    """Everything that went wrong and was recorded: the scan's own error, each failed stage, each failed model call."""
+    out = []
+    if scan.get("error"):
+        out.append({"where": "Scan", "stage": None, "message": str(scan["error"])[:1000]})
+    for s in stages:
+        if s["status"] == "failed" or (s.get("error") and s["status"] != "completed"):
+            out.append({"where": STAGES.get(s["stage"], (s["stage"], ""))[0], "stage": s["stage"], "message": str(s.get("error") or "The stage failed; no message was recorded.")[:1000]})
+    for e in events:
+        if e["status"] != "success":
+            out.append({"where": STAGES.get(e["stage"] or "", (e["stage"] or "Model call", ""))[0], "stage": e["stage"], "message": f"Model call failed: {e['error_type'] or 'no error type recorded'}."})
+    return out
 
 
 def _domain(url: str) -> str:
@@ -232,7 +288,8 @@ def summary_of(u: dict) -> dict:
     t = u["totals"]
     return {"scan_id": u["scan_id"], "url": u["url"], "domain": u["domain"], "status": u["state"], "created_at": u["created_at"], "completed_at": u["completed_at"],
             "pages_scanned": u["pages_scanned"], "calls": t["calls"], "failed_calls": t["failed_calls"], "input_tokens": t["input_tokens"], "output_tokens": t["output_tokens"],
-            "total_tokens": t["total_tokens"], "cost": u["cost"]["total"], "cost_complete": u["cost"]["complete"], "currency": u["cost"]["currency"], "source": u["source"], "analysis_run": u["analysis_run"]}
+            "total_tokens": t["total_tokens"], "cost": u["cost"]["total"], "cost_complete": u["cost"]["complete"], "currency": u["cost"]["currency"], "source": u["source"], "analysis_run": u["analysis_run"],
+            "errors": u["errors"], "results": u["results"], "reused_analysis": any(s.get("reused") for s in u["stages"])}
 
 
 # ── loading ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -242,7 +299,7 @@ def _stage_dict(r) -> dict:
     return {
         "scan_id": r.scan_id, "stage": r.stage, "status": r.status, "started_at": r.started_at, "completed_at": getattr(r, "completed_at", None), "duration_ms": r.duration_ms, "error": r.error,
         "meta": {"llm_usage": r.llm_usage, "provider": r.provider, "model": r.model, "embed_tokens": r.embed_tokens, "embed_requests": r.embed_requests,
-                 "pages_scanned": r.pages_scanned, "policy_model": r.policy_model},
+                 "pages_scanned": r.pages_scanned, "policy_model": r.policy_model, "reused_from": r.reused_from},
     }
 
 
@@ -251,13 +308,14 @@ def _stage_query(scan_ids: list[uuid.UUID]):
     return (
         select(AgentRunStage.scan_id, AgentRunStage.stage, AgentRunStage.status, AgentRunStage.started_at, AgentRunStage.completed_at, AgentRunStage.duration_ms, AgentRunStage.error,
                m["llm_usage"].label("llm_usage"), m["provider"].label("provider"), m["model"].label("model"), m["embed_tokens"].label("embed_tokens"),
-               m["embed_requests"].label("embed_requests"), m["pages_scanned"].label("pages_scanned"), m["result"]["model"].label("policy_model"))
+               m["embed_requests"].label("embed_requests"), m["pages_scanned"].label("pages_scanned"), m["result"]["model"].label("policy_model"),
+               m["result"]["reused_from_scan"].as_string().label("reused_from"))
         .where(AgentRunStage.scan_id.in_(scan_ids)).order_by(AgentRunStage.created_at)
     )
 
 
 def _scan_dict(s: ConsentScan) -> dict:
-    return {"id": s.id, "url": s.url, "status": s.status, "created_at": s.created_at, "completed_at": s.completed_at}
+    return {"id": s.id, "url": s.url, "status": s.status, "created_at": s.created_at, "completed_at": s.completed_at, "error": s.error}
 
 
 async def load_scan_usage(db, scan: ConsentScan) -> dict:

@@ -111,3 +111,94 @@
 
 .sm-roomy .sm-cta { padding: 15px 22px; margin-top: 14px; } .sm-roomy .sm-cta-text b { font-size: 13px; }
 .sm-fit-2 .sm-cta { padding: 9px 16px; } .sm-fit-2 .sm-cta-text span { display: none; } .sm-fit-1 .sm-logo { height: 38px; }
+
+/* ── Reference match: the look of the approved two-page design (layout, colours, cards, icons). Later rules override the ones above; the fit steps still tighten them. ── */
+.pg-summary { --sm-line: #dfe4f3; --sm-navy: #0b1030; }
+
+/* header: a deep navy band with a larger logo, the report's identity at the right */
+.sm-head { background: linear-gradient(100deg, #03070f 0%, #060b1f 55%, #0a1440 100%); padding: 12px 34px; margin-bottom: 14px; }
+.sm-logo { height: 50px; }
+.sm-head-r { font-size: 10.4px; line-height: 1.6; } .sm-head-r b { font-size: 15px; }
+
+/* title block: the site, the report's name in blue, the basis, then Scan Date / Pages Scanned / Website URL with their icons */
+.sm-hero { grid-template-columns: minmax(0, 1fr) 250px; gap: 22px; align-items: start; }
+.sm-domain { font-size: 34px; letter-spacing: -.01em; color: var(--sm-navy); }
+.sm-hero h1 { font-size: 17px; margin: 4px 0 4px; color: #2457d6; }
+.sm-hero p { font-size: 10.6px; color: #2c3358; max-width: none; margin-bottom: 8px; }
+.sm-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.sm-meta > span { display: grid; grid-template-columns: 22px auto; grid-template-rows: auto auto; column-gap: 6px; align-items: center; min-width: 0; }
+.sm-meta svg { grid-row: 1 / 3; color: #3d6bff; }
+.sm-meta small { font-size: 8px; color: var(--mut); line-height: 1.2; }
+.sm-meta b { font-size: 9.4px; font-weight: 700; color: #2457d6; line-height: 1.25; overflow-wrap: anywhere; }
+.sm-shot { border-radius: 12px; border-color: var(--sm-line); box-shadow: 0 2px 10px rgba(17, 27, 77, .10); }
+.sm-shot img { height: 140px; }
+.sm-shot figcaption { font-size: 7.6px; background: #fff; }
+.pg-summary .pg-browser { background: #f1f3fa; }
+
+/* framework readiness: a soft card, flag, a thicker segmented bar, legend dots */
+.pg-summary .pg-framework { background: var(--soft); border: 1px solid var(--sm-line); border-radius: 14px; padding: 10px 16px; grid-template-columns: 190px 1fr; }
+.pg-summary .pg-fw-left b { font-size: 12px; line-height: 1.3; }
+.pg-summary .pg-segbar { height: 12px; border-radius: 6px; overflow: hidden; }
+.pg-summary .pg-legend { font-size: 9px; color: #2c3358; margin-top: 6px; }
+
+/* score card and the six metrics, each tile tinted as in the reference */
+.sm-top { grid-template-columns: 232px 1fr; gap: 12px; }
+.sm-card { border-radius: 14px; border-color: var(--sm-line); background: #fff; gap: 4px; }
+.sm-card-title { font-size: 13.5px; font-weight: 800; }
+.sm-card .pg-ring { width: 110px; height: 110px; }
+.sm-score-line { font-size: 10.8px; font-weight: 800; }
+.sm-top .pg-tiles { gap: 8px; }
+.sm-top .pg-tile { border: 1px solid transparent; border-radius: 12px; padding: 8px 12px; align-items: flex-start; }
+.sm-top .pg-tile b { font-size: 21px; font-weight: 800; color: var(--sm-navy); } .sm-top .pg-tile span { font-size: 9px; color: #3a4068; }
+.sm-top .pg-tile-icon { width: 22px; height: 22px; }
+.sm-top .pg-tile:nth-child(1) { background: #eef3ff; border-color: #dbe5ff; } .sm-top .pg-tile:nth-child(1) .pg-tile-icon { color: #2f6bff; }
+.sm-top .pg-tile:nth-child(2) { background: #e9f8f1; border-color: #cdeedd; } .sm-top .pg-tile:nth-child(2) .pg-tile-icon { color: #12a672; }
+.sm-top .pg-tile:nth-child(3) { background: #f3eefe; border-color: #e3d8fc; } .sm-top .pg-tile:nth-child(3) .pg-tile-icon { color: #7a4dff; }
+.sm-top .pg-tile:nth-child(4) { background: #fff3e6; border-color: #fde0bf; } .sm-top .pg-tile:nth-child(4) .pg-tile-icon { color: #f08a12; }
+.sm-top .pg-tile:nth-child(5) { background: #fdeef0; border-color: #f9d3d8; } .sm-top .pg-tile:nth-child(5) .pg-tile-icon { color: #e0474f; }
+.sm-top .pg-tile:nth-child(6) { background: #eaf6fd; border-color: #cfe8f8; } .sm-top .pg-tile:nth-child(6) .pg-tile-icon { color: #1c8fd8; }
+
+/* section headings: an icon tile, the title, the note as a soft pill at the right */
+.sm-h { font-size: 14px; font-weight: 800; color: var(--sm-navy); border-bottom: 0; padding-bottom: 0; margin: 14px 0 7px; align-items: center; }
+.sm-h-icon { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 7px; background: #eaf0ff; color: #2f6bff; }
+.sm-h span { font-size: 8.4px; font-weight: 400; color: #2f4fbf; background: #eef3ff; border: 1px solid #d4defc; border-radius: 999px; padding: 2px 10px; }
+
+/* tables: a tinted header row, hairlines, rounded pills, weightage centred */
+.sm-table { border: 1px solid var(--sm-line); border-radius: 10px; border-collapse: separate; border-spacing: 0; overflow: hidden; }
+.sm-table th { background: #f1f4fc; color: #2c3358; font-size: 8.8px; border-bottom: 1px solid var(--sm-line); }
+.sm-table td { border-bottom: 1px solid #eceff8; }
+.sm-table tbody tr:last-child td { border-bottom: 0; }
+.sm-table .pg-pill { border-radius: 6px; font-weight: 800; }
+.sm-total td { background: #eef2ff; border-top: 1px solid var(--sm-line); }
+.sm-cp > b { color: var(--sm-navy); font-size: 10.6px; font-weight: 800; }
+.sm-checks th:nth-child(4), .sm-checks td:nth-child(4), .sm-checks th:nth-child(5), .sm-checks td:nth-child(5) { width: 78px; }
+
+/* page 2: chips, each in its own colour; element cards with icons; contact cards; links; the sign-up band; the disclaimer */
+.sm-strip > span { background: #fff; border-color: var(--sm-line); color: #2c3358; padding: 3px 10px; }
+.sm-cookie-chips > span:first-child { background: #2f6bff; border-color: #2f6bff; color: #fff; } .sm-cookie-chips > span:first-child b { color: #fff; }
+.sm-cookie-chips > span:nth-child(2) { background: #eef3ff; border-color: #d4defc; }
+.sm-cookie-chips > span:nth-child(3) { background: #e9f8f1; border-color: #cdeedd; }
+.sm-cookie-chips > span:nth-child(4) { background: #fff3e6; border-color: #fde0bf; }
+.sm-cookie-chips > span:nth-child(5) { background: #eaf6fd; border-color: #cfe8f8; }
+.sm-cookie-chips > .sm-cat, .sm-strip > .sm-cat { background: #fff; border-color: var(--sm-line); }
+.sm-els { gap: 6px; }
+.sm-el { border-radius: 10px; border-color: var(--sm-line); padding: 6px 9px; gap: 6px; justify-content: flex-start; }
+.sm-el b { flex: 1 1 auto; min-width: 0; } .sm-el-icon { color: #2f6bff; flex: 0 0 auto; } .sm-el .pg-pill { flex: 0 0 auto; margin-left: auto; }
+.sm-contacts { gap: 10px; margin-top: 8px; }
+.sm-contacts > div { flex-direction: row; gap: 10px; align-items: flex-start; border-radius: 10px; border-left-width: 3px; padding: 8px 12px; background: #f6f3ff; border-left-color: #7a4dff; }
+.sm-contacts > div:nth-child(2) { background: #eef3ff; border-left-color: #2f6bff; } .sm-contacts > div:nth-child(2) .sm-contact-icon { color: #2f6bff; }
+.sm-contact-icon { flex: 0 0 auto; color: #7a4dff; margin-top: 1px; }
+.sm-contact-body { display: flex; flex-direction: column; min-width: 0; }
+.sm-contacts b { font-size: 10px; color: var(--sm-navy); }
+.sm-url { color: #2457d6; font-weight: 600; }
+.sm-cta { background: linear-gradient(105deg, #4a2fd1, #2f54e0 55%, #3d7bff); border-radius: 14px; justify-content: flex-start; gap: 14px; }
+.sm-cta-icon { display: inline-flex; align-items: center; justify-content: center; width: 46px; height: 46px; flex: 0 0 auto; border-radius: 12px; background: rgba(255, 255, 255, .18); color: #fff; }
+.sm-cta-text { flex: 1 1 auto; min-width: 0; }
+.pg-doc a.sm-cta-link { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.sm-disc { display: flex; gap: 10px; align-items: flex-start; background: #f6f7fc; border: 1px solid var(--sm-line); border-left: 4px solid #7a4dff; border-radius: 10px; }
+.sm-disc-icon { flex: 0 0 auto; color: #7a4dff; margin-top: 1px; }
+.sm-disc b { color: #2f4fbf; font-size: 9.6px; letter-spacing: .02em; text-transform: none; font-weight: 800; }
+
+/* page 2 has no header: its content starts at the top of the sheet */
+.pg-summary[data-page="2"] { padding-top: 26px; }
+.sm-fit-2 .sm-meta { display: none; } .sm-fit-3 .sm-cta-icon { display: none; } .sm-fit-1 .sm-logo { height: 44px; }

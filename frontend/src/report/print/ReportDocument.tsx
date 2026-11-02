@@ -5,7 +5,7 @@ import { buildHeroView, buildPreviewView } from "../hero";
 import { formatRef, formatRefShort, formatRefs } from "../legalRefs";
 import { buildPolicyView, POLICY_BASIS_LABEL, POLICY_STATUS_LABEL } from "../policyAnalysis";
 import { READINESS_STATUS_TONE } from "../readiness";
-import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER } from "../reportScope";
+import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER, SNAPSHOT_DISCLAIMER } from "../reportScope";
 import { checkContribution, CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type RowTone } from "../reportText";
 import type { ElementStatus } from "../reportVisual";
 import { bannerFactText } from "../consentObservation";
@@ -618,6 +618,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
       <section className="r-about" data-testid="rpt-about">
         <b>About this report</b>
         <p>{REPORT_DISCLAIMER}</p>
+        <p data-testid="rpt-snapshot-disclaimer">{SNAPSHOT_DISCLAIMER}</p>
       </section>
     </article>
   );

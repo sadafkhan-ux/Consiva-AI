@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import date
 
 from app.rules.consent_observation import script_failure_note
-from app.rules.consent_rules import ConsentContext
+from app.rules.consent_rules import ConsentContext, count_phrase
 
 STATEMENT = (
     "A website scan cannot establish complete DPDP compliance. It shows what the scanned pages did in this scan. A network "
@@ -183,7 +183,7 @@ def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_page
             topic="Requests to known analytics or advertising services before consent",
             needs=["business_context", "legal_interpretation"],
             known=[
-                (f"{len(c1.evidence_ids)} request(s) or cookie(s) matching known analytics/marketing services were observed on "
+                (f"{count_phrase(ctx, [{'id': i} for i in c1.evidence_ids])} matching known analytics/marketing services were observed on "
                  "the scanned pages before any consent interaction."),
                 "The browser contacted those services. This is evidence of a request, not proof that a tracker ran or of what it sent.",
             ],
@@ -194,6 +194,21 @@ def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_page
             ],
             decision="Decide, with legal advice, whether this processing needed consent and whether it was lawful without it. "
                      "If it did, move the services behind consent and re-scan.",
+            provisions=list(c1.provisions), evidence_ids=list(c1.evidence_ids), requirement_ids=["DPDP-C1"],
+        ))
+    elif c1 is not None and c1.status == "partially_met" and (ctx.interaction_evidence.get("pre_consent_recheck") or {}).get("pages") and any(
+        "analytics/marketing" in o for o in c1.observations
+    ):
+        items.append(ReviewItem(
+            id="pre-consent-not-reproduced", category="uncertain",
+            topic="Analytics or marketing fired before consent once, and did not repeat",
+            needs=["more_evidence", "business_context"],
+            known=[
+                f"{count_phrase(ctx, [{'id': i} for i in c1.evidence_ids])} fired before any consent interaction during the crawl.",
+                "Loaded again alone in a clean browser, no page fired analytics or marketing before consent.",
+            ],
+            missing=["Whether the consent banner was displayed to real visitors on that page view, and how often it is not (a slow banner configuration request can leave a page view without one)."],
+            decision="Re-scan, and check the consent tool's loading behaviour. If the tags can run when the banner does not load, hold them back until it has.",
             provisions=list(c1.provisions), evidence_ids=list(c1.evidence_ids), requirement_ids=["DPDP-C1"],
         ))
     elif c1 is not None and c1.status == "partially_met":
@@ -226,7 +241,7 @@ def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_page
             id="activity-after-reject", category="uncertain",
             topic="Activity observed after Reject was clicked",
             needs=["business_context", "legal_interpretation"],
-            known=[f"Reject was clicked and the banner recorded it; {len(c3.evidence_ids)} request(s) or cookie(s) matching known analytics/marketing services were still observed afterwards."],
+            known=[f"Reject was clicked and the banner recorded it; {count_phrase(ctx, [{'id': i} for i in c3.evidence_ids])} matching known analytics/marketing services were still observed afterwards."],
             missing=["Whether these are leftovers from before the choice or new activity, and whether data was sent."],
             decision="Confirm on a clean browser profile; if it repeats, the consent tool is not honouring refusal.",
             provisions=list(c3.provisions), evidence_ids=list(c3.evidence_ids), requirement_ids=["DPDP-C3"],

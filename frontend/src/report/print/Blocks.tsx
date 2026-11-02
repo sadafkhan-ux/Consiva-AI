@@ -129,7 +129,7 @@ export function TechCards({ view }: { view: PageReportView }) {
   );
 }
 
-const ELEMENT_ICON: Record<string, IconName> = {
+export const ELEMENT_ICON: Record<string, IconName> = {
   "Privacy policy": "doc", "Terms of use": "doc", "Cookie policy": "cookie", "Consent banner": "shield", "Accept option": "check", "Reject option": "cross", Forms: "form", "Per-purpose choices": "sliders",
 };
 const ELEMENT_PILL: Record<ElementStatus, { label: string; tone: "good" | "warn" | "mute" | "bad" }> = {

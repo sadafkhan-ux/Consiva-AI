@@ -194,3 +194,42 @@ class TestEachPageCarriesItsReason:
         detailed = _serialize_evidence(pages, [], [], [], [], [], [], include_cookie_detail=True)["pages"]
         assert "Privacy or cookie page" in detailed[0]["selection_reason"] and detailed[1]["selection_reason"] is None
         assert all("selection_reason" not in p for p in _serialize_evidence(pages, [], [], [], [], [], [])["pages"])
+
+
+class TestTheListOrderDoesNotDependOnWhichPageFinishedFirst:
+    """FR-20261027-D200 and -1DB8 chose the same five pages and listed them in different orders: pages are stored as they finish."""
+
+    SEED = ("https://swaransoft.com/", "seed")
+    OTHERS = [("https://www.swaransoft.com/terms", "sitemap"), ("https://www.swaransoft.com/privacy", "sitemap"),
+              ("https://www.swaransoft.com/contact", "sitemap"), ("https://www.swaransoft.com/cookie-policy", "sitemap")]
+
+    def _listed(self, stored):
+        from types import SimpleNamespace
+
+        from app.db.repositories.scan_repository import _serialize_evidence
+
+        pages = [SimpleNamespace(id=i, url=u, title=None, http_status=200, discovered_via=v) for i, (u, v) in enumerate(stored)]
+        return [p["url"] for p in _serialize_evidence(pages, [], [], [], [], [], [], include_cookie_detail=True)["pages"]]
+
+    def test_every_completion_order_lists_the_same_way(self):
+        import itertools
+
+        results = {tuple(self._listed([self.SEED, *order])) for order in itertools.permutations(self.OTHERS)}
+        assert len(results) == 1
+        listed = next(iter(results))
+        assert listed[0] == "https://swaransoft.com/"
+        # privacy and cookie pages (rank 0) come before terms (1) and contact (2).
+        assert [u.rsplit("/", 1)[1] for u in listed[1:]] == ["cookie-policy", "privacy", "terms", "contact"]
+
+    def test_the_seed_is_first_and_failed_attempts_are_last(self):
+        out = self._listed([("https://x.test/privacy", "sitemap"), ("https://x.test/dead", "failed"), ("https://x.test/", "seed")])
+        assert out == ["https://x.test/", "https://x.test/privacy", "https://x.test/dead"]
+
+    def test_the_agents_own_evidence_keeps_the_stored_order(self):
+        from types import SimpleNamespace
+
+        from app.db.repositories.scan_repository import _serialize_evidence
+
+        pages = [SimpleNamespace(id=1, url="https://x.test/terms", title=None, http_status=200, discovered_via="sitemap"),
+                 SimpleNamespace(id=2, url="https://x.test/", title=None, http_status=200, discovered_via="seed")]
+        assert [p["url"] for p in _serialize_evidence(pages, [], [], [], [], [], [])["pages"]] == ["https://x.test/terms", "https://x.test/"]

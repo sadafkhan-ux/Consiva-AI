@@ -1,6 +1,7 @@
 import type { ReportModel } from "../buildReport";
 import { buildPageReport, FREE_PAGES, type PageReportView } from "../pageReports";
 import { AreasBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, TechCards, UpgradeBand } from "./Blocks";
+import { SNAPSHOT_DISCLAIMER } from "../reportScope";
 import { Icon, PageFrame, SecHead, SheetPageStyle, SHORT_DISCLAIMER } from "./PageParts";
 import "./pages.css";
 
@@ -98,6 +99,7 @@ export function FreeReport({ model }: { model: ReportModel }) {
 
         <UpgradeBand view={view} full={false} />
         <p className="pg-disclaimer" data-testid="pg-disclaimer"><b>Important:</b> {SHORT_DISCLAIMER} It is an automated, point-in-time assessment of publicly accessible website signals within the stated scan scope, and is not an audit, a certification or a guarantee of compliance with the DPDP Act, 2023, the DPDP Rules, 2025, GDPR/ePrivacy, CCPA/CPRA or any other law. A passing score applies only to checks tested within the stated scope and does not establish full organisational compliance. For a detailed assessment, engage a qualified privacy professional.</p>
+        <p className="pg-disclaimer" data-testid="pg-snapshot-disclaimer">{SNAPSHOT_DISCLAIMER}</p>
       </PageFrame>
     </div>
   );

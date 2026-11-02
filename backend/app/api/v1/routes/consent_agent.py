@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/consent-agent",
-    tags=["Consent Agent API"],
+    tags=["Privacy Policy Agent API"],
     responses={
         400: {"model": ApiError, "description": "Malformed request or unsafe URL"},
         401: {"model": ApiError, "description": "Missing or invalid credentials"},

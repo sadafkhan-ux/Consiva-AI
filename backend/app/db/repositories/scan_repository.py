@@ -25,7 +25,7 @@ from app.rules.consent_observation import observed_signal
 from app.rules.consent_rules import RulesClassification
 from app.rules.cookie_purposes import describe_cookie, lifetime_days
 from app.scanner.schemas import ScanResult, ScreenshotRecord
-from app.scanner.url_normalize import selection_reason
+from app.scanner.url_normalize import display_order_key, selection_reason
 
 logger = logging.getLogger(__name__)
 
@@ -85,10 +85,10 @@ async def get_scan(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID) -> C
     return result.scalar_one_or_none()
 
 
-async def list_recent_scans(db: AsyncSession, org_id: uuid.UUID, limit: int = 20) -> list[ConsentScan]:
-    """The organisation's most recent scans, newest first. Scoped to `org_id` in the query for the same reason as get_scan."""
+async def list_recent_scans(db: AsyncSession, org_id: uuid.UUID, limit: int = 20, offset: int = 0) -> list[ConsentScan]:
+    """The organisation's most recent scans, newest first (`offset` skips the newest ones, to page back). Scoped to `org_id` in the query for the same reason as get_scan."""
     result = await db.execute(
-        select(ConsentScan).where(ConsentScan.org_id == org_id).order_by(ConsentScan.created_at.desc()).limit(limit)
+        select(ConsentScan).where(ConsentScan.org_id == org_id).order_by(ConsentScan.created_at.desc(), ConsentScan.id).limit(limit).offset(offset)
     )
     return list(result.scalars().all())
 
@@ -350,7 +350,7 @@ def _serialize_evidence(
              # Why the page was chosen, worked out from its address and how it was found (url_normalize.selection_reason): a read of what is stored, never a stored claim.
              # Only in the API's detailed view, so the agent's own evidence is unchanged.
              **({"selection_reason": selection_reason(p.url, p.discovered_via)} if include_cookie_detail else {})}
-            for p in pages
+            for p in (sorted(pages, key=lambda p: display_order_key(p.url, p.discovered_via)) if include_cookie_detail else pages)
         ],
         "forms": [
             {"id": str(f.id), "selector": f.selector, "fields": f.fields, "purpose_guess": f.purpose_guess,

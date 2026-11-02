@@ -1486,6 +1486,102 @@ async def _run_interaction_pass(
     return result
 
 
+#: Most pages looked at again when something fired before consent (the crawl scans at most MAX_WEB_PAGES, so this is every page of a web scan).
+_RECHECK_MAX_PAGES = MAX_WEB_PAGES
+
+
+def _non_essential_pre_consent_hits(cookies: list[CookieRecord], trackers: list[TrackerRecord]) -> int:
+    """How many analytics or marketing items the crawl saw before consent, classified the way the report will classify them."""
+    from app.rules.consent_rules import classify_cookie, classify_tracker
+
+    tracking = ("analytics", "marketing")
+    return (
+        sum(1 for t in trackers if "pre_consent" in t.consent_states and classify_tracker(t).category in tracking)
+        + sum(1 for c in cookies if "pre_consent" in c.consent_states and classify_cookie(c).category in tracking)
+    )
+
+
+async def _recheck_one_load(browser, url: str, root_url: str, settings: Settings, disallowed_prefixes: RobotsRules | set[str]) -> dict:
+    """One page, loaded alone in a fresh browser context as a first-time visitor, nothing else running: did analytics or marketing fire before any consent choice?
+
+    Returns {"url", "loaded", "fired", "requests", "cookies"}; `loaded` False means the page did not load, so the answer is unknown, never "did not fire"."""
+    from app.rules.consent_rules import classify_cookie, classify_tracker
+
+    tracking = ("analytics", "marketing")
+    out = {"url": url, "loaded": False, "fired": False, "requests": 0, "cookies": 0}
+    if _is_robots_disallowed(url, disallowed_prefixes):
+        return out
+    site_domain = urlparse(root_url).netloc
+    context = await browser.new_context(**_new_context_kwargs(settings))
+    await context.route("**/*", _guard_navigation)
+    request_records: list[tuple[str, str]] = []
+    try:
+        page = await context.new_page()
+        page.on("request", lambda req, _r=request_records: _r.append((req.url, req.resource_type)))
+        _, nav_status, exc, _attempts = await _navigate_with_retry(page, url, settings.scanner_timeout_seconds * 1000)
+        if nav_status != "success":
+            logger.info("The clean re-check could not load %s: %s", url, exc)
+            return out
+        await _wait_for_load_event(page, url, _INTERACTION_LOAD_WAIT_MS)
+        await page.wait_for_timeout(_TRACKER_SETTLE_MS)
+        await _progressive_scroll(page, request_count=lambda: len(request_records))
+        trackers = [classify_tracker(t) for t in detect_trackers(site_domain=site_domain, scripts_by_page={}, network_requests_by_page={"page-0": request_records})]
+        cookies = [classify_cookie(c) for c in detect_cookies(await context.cookies(), site_domain)]
+        out.update(
+            loaded=True,
+            requests=sum(1 for t in trackers if t.category in tracking),
+            cookies=sum(1 for c in cookies if c.category in tracking),
+        )
+        out["fired"] = bool(out["requests"] or out["cookies"])
+        return out
+    except Exception as exc:  # noqa: BLE001 -- best effort: an unreadable re-check leaves the original observation standing
+        logger.info("The clean re-check of %s failed: %s", url, exc)
+        return out
+    finally:
+        await _close_quietly(context, "a re-check context")
+
+
+#: A page that fires in its first clean load is loaded this many more times, each in a fresh context. The re-check is itself a page view with the same race as the crawl (a first load
+#: right after the browser started fired on two of three pages of swaransoft.com, and none of the next eight clean loads did), so one more firing is not yet "it repeats".
+_RECHECK_CONFIRMATION_LOADS = 2
+
+
+async def _recheck_one_page(browser, url: str, root_url: str, settings: Settings, disallowed_prefixes: RobotsRules | set[str]) -> dict:
+    """A page's answer: a clean load; and, only when that load fired, two more. It "fired" when most of its clean loads did, so a single blip is recorded as a blip.
+
+    Returns {"url", "loaded", "fired", "loads", "fired_loads", "requests", "cookies"}; `requests` and `cookies` are the highest counts seen in a load."""
+    first = await _recheck_one_load(browser, url, root_url, settings, disallowed_prefixes)
+    loads = [first]
+    if first["loaded"] and first["fired"]:
+        for _ in range(_RECHECK_CONFIRMATION_LOADS):
+            loads.append(await _recheck_one_load(browser, url, root_url, settings, disallowed_prefixes))
+    counted = [load for load in loads if load["loaded"]]
+    fired_loads = sum(1 for load in counted if load["fired"])
+    return {
+        "url": url, "loaded": first["loaded"], "loads": len(counted), "fired_loads": fired_loads,
+        "fired": bool(counted) and fired_loads * 2 > len(counted),
+        "requests": max((load["requests"] for load in counted), default=0), "cookies": max((load["cookies"] for load in counted), default=0),
+    }
+
+
+async def _recheck_pre_consent(
+    browser, pages: list[PageRecord], cookies: list[CookieRecord], trackers: list[TrackerRecord], root_url: str, settings: Settings,
+    disallowed_prefixes: RobotsRules | set[str],
+) -> dict | None:
+    """Looks again, one page at a time and alone, when the crawl saw analytics or marketing before consent. None when it saw none (nothing to confirm).
+
+    The crawl reads several pages at once, and a consent tool that gives its banner a short time to load (the Consiva SDK: 800 ms) can miss that time under load: the banner is
+    then not drawn for that page view and the tags run unguarded (FR-20261027-D200 against -1DB8, one website, two results). A page view that fired once and not again is
+    different evidence from one that fires every time, so the question is asked again under the best conditions the scanner can give. Every observation of the crawl is kept;
+    this adds the answer. Which page a shared tag URL is attributed to is only the first page that loaded it, so every scanned page is looked at, not only that one."""
+    crawl_hits = _non_essential_pre_consent_hits(cookies, trackers)
+    if not crawl_hits:
+        return None
+    urls = [p.url for p in pages if p.discovered_via in ("seed", "link", "sitemap")][:_RECHECK_MAX_PAGES]
+    results = [await _recheck_one_page(browser, url, root_url, settings, disallowed_prefixes) for url in urls]
+    return {"checked_at": _now_iso(), "crawl_hits": crawl_hits, "pages": results, "reproduced": any(r["fired"] for r in results), "complete": bool(results) and all(r["loaded"] for r in results)}
+
+
 def _reconcile_banner_presence(signal: ConsentSignalRecord, accept_status: str, reject_status: str) -> None:
     """A consent tool's page text only counts as a fact about its banner when banner wording was seen (consent_signal_detector). If an Accept or Reject control was then
     CLICKED, the banner was demonstrably on screen, so what its text said (no reject-all, per-purpose choices) is restored. Without a click it stays unknown."""
@@ -1568,6 +1664,8 @@ async def run_scan(
                 (accept_cookies, accept_trackers, accept_status, accept_confirmed, accept_scroll_steps, accept_gate),
                 (reject_cookies, reject_trackers, reject_status, reject_confirmed, reject_scroll_steps, reject_gate),
             ) = await (passes_task if passes_task is not None else consent_passes())
+            # After everything else has finished, so the re-check really is one page view with nothing else running.
+            recheck = await _recheck_pre_consent(browser, pages, cookies, trackers, root_url, settings, disallowed_prefixes)
         finally:
             await _close_quietly(browser, "the browser")
 
@@ -1587,6 +1685,8 @@ async def run_scan(
         # The one page Accept and Reject were tried on. The mechanism is detected across every crawled page, but the
         # interaction passes only exercise this one -- so "not automatable" can mean "no banner on THIS page".
         "interaction_page_url": root_url,
+        # Whether what fired before consent fired again when a page was loaded alone (absent when nothing fired): read by the score's first consent check.
+        **({"pre_consent_recheck": recheck} if recheck else {}),
         # Set only when the scanned page is a frameset that shows another site: see rule R-012.
         **({"framed_sites": pre_consent_diagnostics["framed_sites"]} if pre_consent_diagnostics.get("framed_sites") else {}),
         # What the scanner answered before the consent choice could be shown (an age gate), per pass.

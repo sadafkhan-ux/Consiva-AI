@@ -928,6 +928,25 @@ table.check-table td.num { text-align: right; font-variant-numeric: tabular-nums
 .usage-history-top { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
 .usage-history-nums { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 3px 0; font-variant-numeric: tabular-nums; }
 .usage-legend { margin-top: 12px; color: var(--muted); line-height: 1.9; }
+/* clickable metrics, stages and history rows: the panel looks as before, and each one opens the numbers behind it */
+.usage-stat-click { display: block; width: 100%; text-align: left; border: 1px solid transparent; color: inherit; font: inherit; cursor: pointer; }
+.usage-stat-click:hover, .usage-stat-click.active { border-color: var(--accent); }
+.usage-table tr.usage-stage { cursor: pointer; }
+.usage-table tr.usage-stage:hover td, .usage-table tr.usage-stage.active td { background: rgba(198, 149, 47, 0.1); }
+.usage-detail { margin-top: 8px; padding: 8px 9px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
+.usage-detail-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+.usage-detail h5 { margin: 10px 0 4px; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.usage-total-row td { font-weight: 700; border-top: 1px solid var(--border); }
+.usage-errors { margin-top: 8px; padding: 6px 8px; border: 1px solid rgba(193, 84, 74, 0.4); border-radius: 6px; }
+.usage-errors ul { margin: 4px 0 0; padding-left: 16px; overflow-wrap: anywhere; }
+.usage-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; overflow-wrap: anywhere; }
+.usage-url-wrap { overflow-wrap: anywhere; }
+.usage-history li.clickable { cursor: pointer; }
+.usage-history li.clickable:hover { border-color: var(--border); }
+.usage-history-saved { display: flex; gap: 8px; margin: 2px 0; }
+.usage-history-saved span.yes { color: var(--green); }
+.usage-history-saved span.no { color: var(--muted); opacity: 0.6; text-decoration: line-through; }
+.usage-more { width: 100%; margin-top: 8px; background: transparent; border: 1px solid var(--border); color: var(--accent-strong); border-radius: 6px; padding: 5px 8px; cursor: pointer; font-size: 11px; }
 
 @media (max-width: 1100px) {
   .shell-content:has(.usage-layout) { padding-right: 16px; }

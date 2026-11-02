@@ -71,6 +71,46 @@ export interface UsageStage {
   cost: number | null;
   embedding_requests: number | null;
   embedding_tokens: number | null;
+  /** True when the identical policy analysis was already saved for this site, so no model was called (zero tokens, a fact rather than a gap). */
+  reused?: boolean;
+  reused_from_scan?: string | null;
+  error?: string | null;
+}
+
+/** One recorded model call: the breakdown behind every number in the usage panel. */
+export interface UsageCall {
+  stage: string;
+  label: string;
+  agent: string | null;
+  provider: string;
+  model: string;
+  status: string;
+  attempts: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number | null;
+  total_tokens: number;
+  duration_ms: number | null;
+  cost: number | null;
+  page_urls: string[];
+  error_type: string | null;
+  at: string | null;
+}
+
+export interface UsageError {
+  where: string;
+  stage: string | null;
+  message: string;
+}
+
+/** What was saved for a scan (from its stage records): whether its evidence, analysis, findings and audit can be opened. */
+export interface UsageResults {
+  evidence: boolean;
+  analysis: boolean;
+  findings: boolean;
+  audit: boolean;
 }
 
 export interface UsagePageRow {
@@ -119,6 +159,9 @@ export interface ScanUsage {
   stages: UsageStage[];
   pages: UsagePages;
   notes: string[];
+  calls?: UsageCall[];
+  errors?: UsageError[];
+  results?: UsageResults;
 }
 
 export interface UsageHistoryItem {
@@ -139,6 +182,9 @@ export interface UsageHistoryItem {
   currency: string;
   source: string;
   analysis_run: boolean;
+  errors?: UsageError[];
+  results?: UsageResults;
+  reused_analysis?: boolean;
 }
 
 // ── Why two scans of one website scored differently (GET /api/v1/consent/scans/{id}/dpdp-score/compare; backend app/scoring/comparison.py).

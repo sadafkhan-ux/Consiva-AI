@@ -184,8 +184,8 @@ export const api = {
   getScanUsage(scanId: string): Promise<ScanUsage> {
     return request(`/api/v1/consent/scans/${scanId}/usage`);
   },
-  getUsageHistory(limit = 20): Promise<UsageHistoryItem[]> {
-    return request(`/api/v1/consent/scans/usage/history?limit=${limit}`);
+  getUsageHistory(limit = 20, offset = 0): Promise<UsageHistoryItem[]> {
+    return request(`/api/v1/consent/scans/usage/history?limit=${limit}${offset ? `&offset=${offset}` : ""}`);
   },
   listScans(limit = 15): Promise<ScanListItem[]> {
     return request(`/api/v1/consent/scans?limit=${limit}`);

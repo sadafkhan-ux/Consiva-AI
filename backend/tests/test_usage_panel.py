@@ -264,7 +264,7 @@ def wired(monkeypatch):
     async def load_scan_usage(db, scan):
         return us.build_usage(SCAN, PIPELINE, [event("policy_analysis", 12106, 4989, reasoning=3875, pages=[PAGES[1]]), event("llm_analysis", 6048, 364, reasoning=354, pages=PAGES)])
 
-    async def list_recent(db, org_id, limit):
+    async def list_recent(db, org_id, limit, offset=0):
         seen["limit"] = limit
         return [SimpleNamespace(**SCAN)]
 

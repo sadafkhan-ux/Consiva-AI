@@ -242,6 +242,15 @@ _REASON_BY_RANK = {
 }
 
 
+def display_order_key(url: str, discovered_via: str | None) -> tuple:
+    """Where a scanned page sits in the report's list: the seed first, then the pages in the order the crawler picks them (rank, then the tie-break), then attempts that failed.
+
+    Pages are stored as each finishes, and with several tabs open that is not a fixed order: two scans of one website that chose the same five pages listed them differently
+    (FR-20261027-D200 and -1DB8). The list is read from the address alone, so the same pages always read in the same order."""
+    group = 0 if discovered_via == "seed" else 2 if discovered_via in ("failed", "timeout", "robots_disallowed") else 1
+    return (group, effective_rank(url), *tie_break_key(url))
+
+
 def selection_reason(url: str, discovered_via: str | None) -> str | None:
     """Why this page was chosen, in one sentence: its kind (the rank the crawler orders pages by) and where the crawler found it. None for a page record that is not a
     chosen page (an attempt that failed keeps the reason it failed, which is its status)."""
