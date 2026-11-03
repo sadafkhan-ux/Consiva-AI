@@ -25,6 +25,9 @@ class ParsedFormField:
     name: str
     field_type: str
     required: bool
+    # What the control says to the person, for a checkbox or a radio button: the text of the label it sits in or the label that points at it. A script-built form gives
+    # such a control a generated name (for example "_R_2apbsnpfiv5stbH1_") that says nothing, so the wording is the only evidence of what is being agreed to. None when there is none.
+    label: str | None = None
 
 
 @dataclass
@@ -57,6 +60,9 @@ class ParsedPage:
     # What the page declares about its language: <html lang> and the hreflang of its rel=alternate links (read-only observations; see page_signals).
     html_lang: str | None = None
     hreflang: list[str] = field(default_factory=list)
+    # The page's text up to FULL_TEXT_LIMIT, for when the browser's own rendered text is empty. `visible_text` is only a 5,000-character excerpt (enough for keyword checks); taking it for a
+    # policy would silently turn a long policy into its first 5,000 characters, which then reads as a policy that lacks everything after that.
+    full_text: str = ""
 
 
 # MIME types a browser runs as script. Anything else (text/plain, text/template, ...) is inert.
@@ -69,6 +75,40 @@ _EXECUTABLE_SCRIPT_TYPES = frozenset({
 def script_executes(type_attr: str | None) -> bool:
     """Whether a <script type=...> is run by the browser."""
     return (type_attr or "").split(";")[0].strip().lower() in _EXECUTABLE_SCRIPT_TYPES
+
+
+_LABEL_MAX = 300
+FULL_TEXT_LIMIT = 60_000
+
+
+def _clean_label(text: str) -> str | None:
+    text = re.sub(r"\s+", " ", text or "").strip()
+    return text[:_LABEL_MAX] or None
+
+
+def field_label(inp, form_tag) -> str | None:
+    """The words next to a checkbox or radio button, in the order a reader would find them: the label it is inside, the label whose `for` names it, its accessible name, then the text of the
+    small element that holds it. Nothing is inferred beyond text that is on the page; a control with no such text has no label."""
+    if inp.name != "input" or inp.get("type") not in ("checkbox", "radio"):
+        return None
+    wrapper = inp.find_parent("label")
+    if wrapper is not None and (text := _clean_label(wrapper.get_text())):
+        return text
+    ident = inp.get("id")
+    if ident:
+        target = form_tag.find("label", attrs={"for": ident})
+        if target is not None and (text := _clean_label(target.get_text())):
+            return text
+    named = _clean_label(str(inp.get("aria-label") or inp.get("title") or ""))
+    if named:
+        return named
+    parent = inp.parent
+    if parent is not None and parent is not form_tag:
+        text = _clean_label(parent.get_text())
+        # a parent that holds the whole form is not this control's label
+        if text and len(text) <= _LABEL_MAX and len(parent.find_all(["input", "textarea", "select"])) <= 1:
+            return text
+    return None
 
 
 def parse_page(html: str, page_url: str) -> ParsedPage:
@@ -122,6 +162,7 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
                 ),
                 field_type=inp.get("type", "text") if inp.name == "input" else inp.name,
                 required=inp.has_attr("required"),
+                label=field_label(inp, form_tag),
             )
             for j, inp in enumerate(form_tag.find_all(["input", "textarea", "select"]))
             if inp.get("type") not in ("hidden", "submit", "button")
@@ -133,7 +174,8 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
             fields=fields,
         ))
 
-    visible_text = soup.get_text(separator=" ", strip=True)[:5000]
+    page_text = soup.get_text(separator=" ", strip=True)
+    visible_text = page_text[:5000]
 
     html_tag = soup.find("html")
     html_lang = (html_tag.get("lang") or "").strip() or None if html_tag else None
@@ -144,7 +186,7 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
 
     return ParsedPage(
         title=title, scripts=scripts, links=links, forms=forms,
-        visible_text=visible_text, control_text=extract_control_text(soup), html_lang=html_lang, hreflang=hreflang,
+        visible_text=visible_text, control_text=extract_control_text(soup), html_lang=html_lang, hreflang=hreflang, full_text=page_text[:FULL_TEXT_LIMIT],
     )
 
 

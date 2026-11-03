@@ -24,6 +24,7 @@ from app.db.models import (
 from app.rules.consent_observation import observed_signal
 from app.rules.consent_rules import RulesClassification
 from app.rules.cookie_purposes import describe_cookie, lifetime_days
+from app.scanner.policy_detector import policy_text_state
 from app.scanner.schemas import ScanResult, ScreenshotRecord
 from app.scanner.url_normalize import display_order_key, selection_reason
 
@@ -176,7 +177,7 @@ async def save_scan_result(
     for page in scan_result.pages:
         row = WebsitePage(
             id=uuid.uuid4(), scan_id=scan_id, url=page.url, title=page.title,
-            http_status=page.http_status, discovered_via=page.discovered_via,
+            http_status=page.http_status, discovered_via=page.discovered_via, final_url=page.final_url, content_type=page.content_type,
         )
         page_id_by_local[page.local_id] = row.id
         page_rows.append(row)
@@ -347,6 +348,7 @@ def _serialize_evidence(
         # attempt did not succeed ("failed", "timeout"): the scan report lists the pages from these.
         "pages": [
             {"id": str(p.id), "url": p.url, "title": p.title, "http_status": p.http_status, "discovered_via": p.discovered_via,
+             "final_url": p.final_url, "content_type": p.content_type,
              # Why the page was chosen, worked out from its address and how it was found (url_normalize.selection_reason): a read of what is stored, never a stored claim.
              # Only in the API's detailed view, so the agent's own evidence is unchanged.
              **({"selection_reason": selection_reason(p.url, p.discovered_via)} if include_cookie_detail else {})}
@@ -376,7 +378,10 @@ def _serialize_evidence(
             {"id": str(s.id), "service_name": s.service_name, "category": s.category, "domains": s.domains}
             for s in services
         ],
-        "policies": [{"id": str(p.id), "url": p.url, "policy_type": p.policy_type} for p in policies],
+        "policies": [
+            {"id": str(p.id), "url": p.url, "policy_type": p.policy_type, "text_state": policy_text_state(p.extracted_text_ref), "text_characters": len((p.extracted_text_ref or "").strip())}
+            for p in policies
+        ],
         "consent_signals": [
             observed_signal({"mechanism_type": s.mechanism_type, "cmp_vendor": s.cmp_vendor,
              "has_reject_all": s.has_reject_all, "has_granular_choices": s.has_granular_choices,

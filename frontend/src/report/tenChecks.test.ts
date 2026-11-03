@@ -3,7 +3,7 @@ import type { DpdpScoreResponse, EvidenceCookieItem, PolicyAnalysis, PolicyRequi
 import fixtures from "../test/dpdpScoreFixtures.json";
 import { buildReportModel, type ReportModel } from "./buildReport";
 import { buildScoreView } from "./dpdpScore";
-import { buildTenChecks, marksLabel, roundScore, scoreChecks, type TenResult } from "./tenChecks";
+import { buildTenChecks, KIND_LABEL, marksLabel, roundScore, scoreChecks, type TenResult } from "./tenChecks";
 
 const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
 const SCAN = { id: "9bd5ccef-6909-4903-8d44-2b52a5668a06" as string, url: "https://x.test/", evidence_counts: { pages: 3, cookies: 2, trackers: 5, third_party_services: 1, policies: 1, forms: 1 } } as never;
@@ -97,8 +97,53 @@ describe("the ten checks", () => {
   });
 
   it("trackers observed before consent and again after Reject fail check 9; before consent only is Partially Passed", () => {
-    expect(buildTenChecks(consent(withPolicy(analysis()), { acceptTested: true, rejectTested: true, known: [2, 3, 2] })).checks[8].result).toBe("Failed");
-    expect(buildTenChecks(consent(withPolicy(analysis()), { acceptTested: true, rejectTested: true, known: [2, 3, 0] })).checks[8].result).toBe("Partially Passed");
+    const ga = (states: string[], url = "https://www.google-analytics.com/g/collect?v=2&tid=G-X") => ({ id: "t", script_src: url, vendor: "Google Analytics", category: "analytics", source: "rule", consent_states: states, page_url: "https://x.test/" });
+    const ev = (trackers: unknown[]) => ({ ...QUIET_EV, trackers } as unknown as ScanEvidenceResponse);
+    const both = buildTenChecks(consent(withPolicy(analysis(), { evidence: ev([ga(["pre_consent", "post_accept", "post_reject"])]) }), CLEAN)).checks[8];
+    const preOnly = buildTenChecks(consent(withPolicy(analysis(), { evidence: ev([ga(["pre_consent", "post_accept"])]) }), CLEAN)).checks[8];
+    expect(both.result).toBe("Failed");
+    expect(preOnly.result).toBe("Partially Passed");
+  });
+
+  it("a tag loader before consent sends nothing about the visitor and is not counted as tracking", () => {
+    const loader = { id: "l", script_src: "https://www.googletagmanager.com/gtm.js?id=GTM-X", vendor: "Google Tag Manager", category: "analytics", source: "rule", consent_states: ["pre_consent", "post_accept", "post_reject"], page_url: "https://x.test/" };
+    const t = buildTenChecks(consent(withPolicy(analysis(), { evidence: { ...QUIET_EV, trackers: [loader] } as unknown as ScanEvidenceResponse }), CLEAN)).checks[8];
+    expect(t.result).toBe("Passed");
+  });
+
+  it("Google requests made in consent-denied mode (gcs=G100) with no cookies set are Partially Passed, not Failed, and the explanation says they still reach Google (cookieyes.com's case)", () => {
+    const ping = (u: string) => ({ id: u, script_src: u, vendor: "Google Analytics", category: "analytics", source: "rule", consent_states: ["pre_consent", "post_accept", "post_reject"], page_url: "https://x.test/" });
+    const trackers = [ping("https://www.google-analytics.com/g/collect?v=2&gcs=G100&gcd=13q3q3q3q5l1"), ping("https://pagead2.googlesyndication.com/ccm/collect?rcb=10&gcs=G100")];
+    const t = buildTenChecks(consent(withPolicy(analysis(), { evidence: { ...QUIET_EV, trackers } as unknown as ScanEvidenceResponse }), CLEAN)).checks[8];
+    expect(t.result).toBe("Partially Passed");
+    expect(t.explanation).toMatch(/consent-denied mode/);
+    expect(t.explanation).toMatch(/still reach Google/);
+    expect(t.explanation).not.toMatch(/violat|breach/i);
+  });
+
+  it("consent-denied pings do not excuse an analytics cookie set before consent, or a request sent with storage granted", () => {
+    const ping = { id: "p", script_src: "https://www.google-analytics.com/g/collect?v=2&gcs=G100", vendor: "Google Analytics", category: "analytics", source: "rule", consent_states: ["pre_consent", "post_accept", "post_reject"], page_url: "https://x.test/" };
+    const cookie = { ...(EVIDENCE.cookies[0] as object), category: "analytics", consent_states: ["pre_consent"] };
+    const withCookie = buildTenChecks(consent(withPolicy(analysis(), { evidence: { ...QUIET_EV, trackers: [ping], cookies: [cookie] } as unknown as ScanEvidenceResponse }), CLEAN)).checks[8];
+    expect(withCookie.result).not.toBe("Passed");
+    expect(withCookie.explanation).not.toMatch(/consent-denied mode/);
+    const granted = { ...ping, script_src: "https://www.google-analytics.com/g/collect?v=2&gcs=G111" };
+    const g = buildTenChecks(consent(withPolicy(analysis(), { evidence: { ...QUIET_EV, trackers: [granted] } as unknown as ScanEvidenceResponse }), CLEAN)).checks[8];
+    expect(g.result).toBe("Failed");
+  });
+
+  it("with no request list the summary counts still decide check 9", () => {
+    const t = buildTenChecks(consent(withPolicy(analysis(), { evidence: { ...QUIET_EV, trackers: [], cookies: [] } as ScanEvidenceResponse }), { acceptTested: true, rejectTested: true, known: [2, 3, 2] })).checks[8];
+    expect(t.result).toBe("Failed");
+  });
+
+  it("check 1 names the policy page itself, not a page whose address only contains the words", () => {
+    const pol = (url: string) => ({ id: url, policy_type: "privacy_policy", url });
+    const m = withPolicy(analysis({}, { documents: [{ url: "https://x.test/privacy-policy-generator/", policy_type: "privacy_policy", characters: 14079, source: "crawl", truncated: false }, { url: "https://x.test/privacy-policy/", policy_type: "privacy_policy", characters: 41974, source: "crawl", truncated: false }] }),
+      { evidence: { ...QUIET_EV, policies: [pol("https://x.test/privacy-policy-generator/"), pol("https://x.test/privacy-policy/")] } as unknown as ScanEvidenceResponse });
+    const c = buildTenChecks(consent(m, CLEAN)).checks[0];
+    expect(c.sourceUrl).toBe("https://x.test/privacy-policy/");
+    expect(c.evidence).toMatch(/41,974/);
   });
 
   it("Reject that could not be tested gives Partially Passed with the reason; neither tested fails as not completed", () => {
@@ -279,6 +324,255 @@ describe("the scoring and how marks are printed", () => {
       expect(t.totalText).toBe(`${sum} / ${max}`);
       expect(t.scoreText).toBe(`${roundScore((sum / max) * 100)}%`);
       expect(t.counts.passed + t.counts.partial + t.counts.failed + t.counts.notApplicable).toBe(10);
+    }
+  });
+});
+
+describe("the scoring scenarios and boundaries", () => {
+  it("scenario A to F: 10 passed, 10 failed, 5+5, 6/2/1/1, 4/3/2/1, and nothing applicable", () => {
+    expect(scoreChecks(mix(10, 0, 0, 0))).toMatchObject({ totalText: "10 / 10", scoreText: "100%" });
+    expect(scoreChecks(mix(0, 0, 10, 0))).toMatchObject({ totalText: "0 / 10", scoreText: "0%" });
+    expect(scoreChecks(mix(5, 5, 0, 0))).toMatchObject({ totalText: "7.5 / 10", scoreText: "75%" });
+    expect(scoreChecks(mix(6, 2, 1, 1))).toMatchObject({ totalText: "7 / 9", scoreText: "77.8%" });
+    expect(scoreChecks(mix(4, 3, 2, 1))).toMatchObject({ totalText: "5.5 / 9", scoreText: "61.1%" });
+    expect(scoreChecks(mix(0, 0, 0, 10))).toMatchObject({ score: null, scoreText: "No meaningful score" });
+    expect(scoreChecks([])).toMatchObject({ score: null });   // no checks at all: no division by zero
+  });
+
+  it("floating-point and rounding boundaries", () => {
+    expect(scoreChecks(mix(2, 0, 1, 0)).scoreText).toBe("66.7%");
+    expect(scoreChecks(mix(1, 0, 2, 0)).scoreText).toBe("33.3%");
+    expect(scoreChecks(mix(0, 3, 0, 0)).scoreText).toBe("50%");
+    expect(scoreChecks(mix(0, 1, 7, 2)).scoreText).toBe("6.3%");   // 0.5 of 8 is 6.25, rounded half up
+  });
+
+  it("every check carries a kind, and technical checks only say they relate to a section", () => {
+    const t = buildTenChecks(consent(withPolicy(analysis()), CLEAN));
+    expect(t.checks.map((c) => c.kind)).toEqual(["dpdp", "dpdp", "dpdp", "practice", "practice", "dpdp", "dpdp", "technical", "technical", "transparency"]);
+    expect(t.checks[7].legal).toMatch(/^Relates to/);
+    expect(t.checks[8].legal).toMatch(/^Relates to/);
+    expect(t.checks[9].legal).toBeNull();
+    expect(KIND_LABEL.practice).toBe("Best practice");
+  });
+
+  it("not found, not tested, evidence unavailable and scan failed are kept apart", () => {
+    const base = model();
+    const noPolicy = buildTenChecks(consent(withPolicy(analysis({}, { status: "unavailable", requirements: [], documents: [] }), { evidence: { ...QUIET_EV, policies: [] }, scanPages: ALL_LOADED(base) }), CLEAN));
+    expect(noPolicy.checks[0].basis).toBe("Not found in scanned pages");
+    expect(noPolicy.checks[1].basis).toBe("Not evidenced");
+    const unreadable = buildTenChecks(consent(withPolicy(analysis({}, { status: "unavailable", requirements: [], documents: [] }), { scanPages: ALL_LOADED(base) }), CLEAN));
+    expect(unreadable.checks[1].basis).toBe("Content extraction failed");
+    const untested = buildTenChecks(consent(withPolicy(analysis()), { acceptTested: false, rejectTested: false, known: [0, 0, 0] }));
+    expect(untested.checks[8].basis).toBe("Not tested");
+    const down = buildTenChecks(withPolicy(null, { evidence: null, visual: null, scanPages: { ...base.scanPages!, scannedCount: 0, rows: [], failed: [] } }));
+    expect(down.checks[0].basis).toBe("Scan failed");
+    expect(down.checks[7].basis).toBe("Scan failed");
+    expect(down.checks[9].basis).toBe("Evidence unavailable");
+    expect(buildTenChecks(consent(withPolicy(analysis()), CLEAN)).checks[0].basis).toBe("Verified");
+  });
+
+  it("a privacy page the scan found a link to but could not load is not reported as a missing policy", () => {
+    const base = model();
+    const m = consent(withPolicy(analysis({}, { status: "unavailable", requirements: [], documents: [] }), { evidence: { ...QUIET_EV, policies: [] }, scanPages: { ...base.scanPages!, failed: [{ url: "https://x.test/privacy-policy", reason: "HTTP 403" }] } }), CLEAN);
+    const t = buildTenChecks(m);
+    expect(t.checks[0].result).toBe("Failed");
+    expect(t.checks[0].basis).toBe("Crawling restricted");     // a 403 is the site refusing access, which is not a missing policy
+    expect(t.checks[0].explanation).toMatch(/does not allow it to be scanned \(HTTP 403\)/);
+    expect(t.checks[0].explanation).toMatch(/not a finding that the policy is missing/);
+    expect(t.checks[0].explanation).not.toMatch(/No privacy policy page was found/);
+    expect(t.checks[1].sourceUrl).toBe("https://x.test/privacy-policy");
+    expect(t.checks[1].basis).toBe("Crawling restricted");       // the checks that read the policy carry the same reason
+  });
+
+  it("invalid evidence: a requirement marked verified with no quoted passage is not counted as a pass", () => {
+    const a = analysis();
+    a.requirements = a.requirements.map((r) => (r.id === "retention" || r.id === "notice_purposes" ? { ...r, quote: "  " } : r));
+    const t = buildTenChecks(consent(withPolicy(a), CLEAN));
+    expect(t.checks[2].result).toBe("Failed");
+    expect(t.checks[4].result).toBe("Failed");
+    expect(t.checks[4].basis).toBe("Evidence unavailable");
+    expect(t.checks[1].result).toBe("Passed");
+  });
+
+  it("an analysis that ran but returned no requirements is a failure to analyse, never a pass", () => {
+    const t = buildTenChecks(consent(withPolicy(analysis({}, { requirements: [] })), CLEAN));
+    for (const id of [2, 3, 4, 5, 6, 7]) expect(t.checks[id - 1].result).toBe("Failed");
+  });
+
+  it("the same passage quoted for every requirement does not raise the total above the maximum", () => {
+    const a = analysis();
+    a.requirements = a.requirements.map((r) => ({ ...r, quote: "one identical passage", source_url: "https://x.test/privacy" }));
+    const t = buildTenChecks(consent(withPolicy(a), CLEAN));
+    expect(t.awarded).toBeLessThanOrEqual(t.applicableMax);
+    expect(t.applicableMax).toBe(10);
+  });
+
+  it("a missing policy analysis (null) fails checks 2 to 7 with a reason and does not throw", () => {
+    const t = buildTenChecks(withPolicy(null));
+    for (const id of [2, 3, 4, 5, 6, 7]) { expect(t.checks[id - 1].result).toBe("Failed"); expect(t.checks[id - 1].explanation.length).toBeGreaterThan(10); }
+  });
+
+  it("failed pages: check 8 is Passed with none and Partially Passed with one (boundary)", () => {
+    const base = model();
+    const none = buildTenChecks(withPolicy(analysis(), { evidence: QUIET_EV, scanPages: { ...base.scanPages!, failed: [] } })).checks[7];
+    const one = buildTenChecks(withPolicy(analysis(), { evidence: QUIET_EV, scanPages: { ...base.scanPages!, failed: [{ url: "https://x.test/a", reason: "HTTP 404" }] } })).checks[7];
+    expect(none.result).toBe("Passed");
+    expect(one.result).toBe("Partially Passed");
+  });
+
+  it("a failed page is never described as proof that a disclosure does not exist", () => {
+    const base = model();
+    const t = buildTenChecks(withPolicy(analysis(), { evidence: QUIET_EV, scanPages: { ...base.scanPages!, failed: [{ url: "https://x.test/a", reason: "HTTP 404" }] } }));
+    expect(JSON.stringify(t)).not.toMatch(/proves|proof that the (policy|disclosure)|non-compliant|violat(es|ion of)/i);
+  });
+});
+
+const CMP = [{ mechanism_type: "cmp", cmp_vendor: "Some CMP", has_reject_all: true, has_granular_choices: true, evidence: {}, banner_displayed: true }];
+const NOT_READ = () => analysis({}, { status: "unavailable", requirements: [], documents: [] });
+const failedAt = (url: string, reason: string) => ({ ...model().scanPages!, failed: [{ url, reason }] });
+const noPolicyEv = { ...QUIET_EV, policies: [] } as ScanEvidenceResponse;
+
+describe("discovery and extraction states, one per situation", () => {
+  it("found and extracted: Passed, Verified, with the readable length and the page", () => {
+    const c = buildTenChecks(consent(withPolicy(analysis()), CLEAN)).checks[0];
+    expect([c.result, c.basis]).toEqual(["Passed", "Verified"]);
+    expect(c.evidence).toMatch(/characters of text read/);
+    expect(c.sourceUrl).toBe("https://x.test/privacy");
+  });
+
+  it("found but the text was cut at the storage limit: Passed with Partially extracted and a limit stated", () => {
+    const a = analysis({}, { documents: [{ url: "https://x.test/privacy", policy_type: "privacy_policy", characters: 60000, source: "crawl", truncated: true }] });
+    const c = buildTenChecks(consent(withPolicy(a), CLEAN)).checks[0];
+    expect([c.result, c.basis]).toEqual(["Passed", "Partially extracted"]);
+    expect(c.limitation).toMatch(/first part of a very long policy/);
+  });
+
+  it("a disclosure not found in text that was cut is limited to the part that was read, not a plain not-found", () => {
+    const a = analysis({ retention: "not_found" }, { documents: [{ url: "https://x.test/privacy", policy_type: "privacy_policy", characters: 60000, source: "crawl", truncated: true }] });
+    const c = buildTenChecks(consent(withPolicy(a), CLEAN)).checks[4];
+    expect([c.result, c.basis]).toEqual(["Failed", "Partially extracted"]);
+    expect(c.explanation).toMatch(/the rest was not reviewed/);
+  });
+
+  it("found but no readable text: Partially Passed with Content extraction failed, never Not found", () => {
+    const c = buildTenChecks(consent(withPolicy(NOT_READ()), CLEAN)).checks[0];
+    expect([c.result, c.basis]).toEqual(["Partially Passed", "Content extraction failed"]);
+    expect(c.explanation).toMatch(/could not be read/);
+  });
+
+  it("found but the analysis never ran: Assessment incomplete, and the policy checks do not say the policy lacks anything", () => {
+    const t = buildTenChecks(consent(withPolicy(analysis({}, { status: "not_run", requirements: [], documents: [] })), CLEAN));
+    expect(t.checks[0].basis).toBe("Assessment incomplete");
+    for (const id of [2, 3, 4, 5, 6, 7]) { expect(t.checks[id - 1].basis).toBe("Assessment incomplete"); expect(t.checks[id - 1].explanation).toMatch(/has not run/); expect(t.checks[id - 1].explanation).not.toMatch(/not found|could not be read/i); }
+    expect(t.incomplete).toBeGreaterThanOrEqual(6);
+  });
+
+  it("URL discovered but the page failed with a server error: Access failed", () => {
+    const m = consent(withPolicy(NOT_READ(), { evidence: noPolicyEv, scanPages: failedAt("https://x.test/privacy-policy", "HTTP 500") }), CLEAN);
+    const c = buildTenChecks(m).checks[0];
+    expect([c.result, c.basis]).toEqual(["Failed", "Access failed"]);
+    expect(c.explanation).toMatch(/did not load \(HTTP 500\)/);
+  });
+
+  it("URL discovered but blocked by robots.txt (from the failed list or the page record): Crawling restricted, not a missing policy", () => {
+    const fromList = buildTenChecks(consent(withPolicy(NOT_READ(), { evidence: noPolicyEv, scanPages: failedAt("https://x.test/privacy", "Blocked by robots.txt") }), CLEAN)).checks[0];
+    expect(fromList.basis).toBe("Crawling restricted");
+    const pages = [...(noPolicyEv.pages ?? []), { id: "r", url: "https://x.test/legal/privacy", title: null, http_status: null, discovered_via: "robots_disallowed" }];
+    const fromPage = buildTenChecks(consent(withPolicy(NOT_READ(), { evidence: { ...noPolicyEv, pages } as ScanEvidenceResponse, scanPages: { ...model().scanPages!, failed: [] } }), CLEAN)).checks[0];
+    expect(fromPage.basis).toBe("Crawling restricted");
+    expect(fromPage.explanation).toMatch(/not a finding that the policy is missing/);
+  });
+
+  it("no candidate in the pages searched: Not found in scanned pages, said to be limited to those pages", () => {
+    const m = consent(withPolicy(NOT_READ(), { evidence: noPolicyEv, scanPages: { ...model().scanPages!, failed: [] } }), CLEAN);
+    const c = buildTenChecks(m).checks[0];
+    expect([c.result, c.basis]).toEqual(["Failed", "Not found in scanned pages"]);
+    expect(c.explanation).toMatch(/limited to the pages actually searched/);
+  });
+
+  it("the site could not be reached at all: Scan failed, not a missing policy", () => {
+    const m = withPolicy(null, { evidence: null, visual: null, scanPages: { ...model().scanPages!, scannedCount: 0, rows: [], failed: [] } });
+    expect(buildTenChecks(m).checks[0].basis).toBe("Scan failed");
+  });
+
+  it("policy text read and the disclosure not in it: Not evidenced, and it is a completed check, not an incomplete one", () => {
+    const t = buildTenChecks(consent(withPolicy(analysis({ retention: "not_found" })), CLEAN));
+    expect([t.checks[4].result, t.checks[4].basis, t.checks[4].completed]).toEqual(["Failed", "Not evidenced", true]);
+    expect(t.incomplete).toBe(0);
+  });
+
+  it("the number of checks that scored 0 only because they could not be completed is counted apart from disclosures that were not found", () => {
+    const t = buildTenChecks(consent(withPolicy(NOT_READ(), { evidence: noPolicyEv, scanPages: { ...model().scanPages!, failed: [] } }), CLEAN));
+    expect(t.incomplete).toBe(t.checks.filter((c) => c.result === "Failed" && !c.completed).length);
+    expect(t.incomplete).toBeGreaterThan(0);
+  });
+});
+
+// ---- 100 varied scenarios through the whole engine: invariants, not one example repeated ------------------------------------------
+function rng(seed: number) { let s = seed >>> 0; return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; }; }
+
+describe("100 varied scenarios keep every invariant", () => {
+  const STATUSES = ["verified", "partial", "not_found", "verified"];
+  it("runs 100 different combinations of policy, extraction, scan, tracker and consent states", () => {
+    const base = model();
+    for (let i = 0; i < 100; i++) {
+      const r = rng(1000 + i), pick = <T,>(xs: T[]) => xs[Math.floor(r() * xs.length)];
+      const policyKind = pick(["read", "read", "not_run", "unavailable", "empty", "null"]);
+      const status: Record<string, string> = {};
+      for (const id of REQ_IDS) status[id] = pick(STATUSES);
+      const a = policyKind === "null" ? null : policyKind === "read" ? analysis(status, { documents: [{ url: "https://x.test/privacy", policy_type: "privacy_policy", characters: 5000 + Math.floor(r() * 60000), source: "crawl", truncated: r() < 0.25 }] })
+        : policyKind === "empty" ? analysis(status, { requirements: [] }) : analysis({}, { status: policyKind, requirements: [], documents: [] });
+      if (a && policyKind === "read" && r() < 0.2) a.requirements = a.requirements.map((q) => (r() < 0.5 ? { ...q, quote: "" } : q));
+      const failed = Array.from({ length: Math.floor(r() * 3) }, (_, k) => ({ url: pick(["https://x.test/privacy", "https://x.test/a", "https://x.test/b"]) + k, reason: pick(["HTTP 404", "HTTP 500", "HTTP 403", "Blocked by robots.txt", "timeout"]) }));
+      const scanned = r() < 0.1 ? 0 : 1 + Math.floor(r() * 5);
+      const cookies = r() < 0.5 ? [] : [{ ...(EVIDENCE.cookies[0] as object), category: pick(["analytics", "marketing", "functional", null]), consent_states: pick([["pre_consent"], ["post_accept"], ["pre_consent", "post_reject"]]) }];
+      const trackers = r() < 0.5 ? [] : [{ id: "t", script_src: pick(["https://www.google-analytics.com/g/collect?gcs=G100", "https://www.google-analytics.com/g/collect", "https://www.googletagmanager.com/gtm.js?id=X", "https://cdn.x.test/a.js"]), vendor: "V", category: pick(["analytics", "marketing", null]), source: "rule", consent_states: pick([["pre_consent", "post_reject"], ["post_accept"], ["pre_consent", "post_accept", "post_reject"]]), page_url: r() < 0.5 ? "https://x.test/" : null }];
+      const ev = r() < 0.08 ? null : { ...EVIDENCE, cookies, trackers, policies: r() < 0.7 ? EVIDENCE.policies : [], consent_signals: r() < 0.7 ? CMP : [] } as unknown as ScanEvidenceResponse;
+      const m0 = { ...base, policyAnalysis: a, evidence: ev, scanPages: { ...base.scanPages!, scannedCount: scanned, failed } } as ReportModel;
+      const m = r() < 0.1 ? { ...m0, visual: null } as ReportModel : consent(m0, { acceptTested: r() < 0.7, rejectTested: r() < 0.7, known: [Math.floor(r() * 3), Math.floor(r() * 5), Math.floor(r() * 3)] as [number, number, number] });
+      const t = buildTenChecks(m);
+
+      expect(t.checks.map((c) => c.id), `run ${i}`).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      for (const c of t.checks) {
+        expect(["Passed", "Partially Passed", "Failed", "Not Applicable"]).toContain(c.result);
+        expect(c.marksText).toBe(c.result === "Not Applicable" ? "N/A" : `${c.awarded} / 1`);
+        expect(c.explanation.length).toBeGreaterThan(5);
+        if (c.result === "Passed") { expect(c.basis).toMatch(/^(Verified|Partially extracted)$/); expect(c.evidence !== "" || c.sourceUrl !== null).toBe(true); }
+        if (c.result === "Failed" && !c.completed) expect(["Evidence unavailable", "Scan failed", "Not evidenced", "Assessment incomplete", "Content extraction failed", "Access failed", "Crawling restricted", "Not tested", "Not found in scanned pages"]).toContain(c.basis);
+        if (c.basis === "Verified") expect(c.result).toBe("Passed");
+      }
+      const sum = t.checks.reduce((n, c) => n + (c.awarded ?? 0), 0), max = t.checks.reduce((n, c) => n + (c.max ?? 0), 0);
+      expect(t.awarded).toBe(sum);
+      expect(t.applicableMax).toBe(max);
+      expect(t.applicableMax).toBeGreaterThanOrEqual(9);                      // only check 9 can be Not Applicable
+      expect(t.totalText).toBe(`${sum} / ${max}`);
+      expect(t.score).toBe(roundScore((sum / max) * 100));
+      expect(t.counts.passed + t.counts.partial + t.counts.failed + t.counts.notApplicable).toBe(10);
+      expect(t.incomplete).toBeLessThanOrEqual(t.counts.failed);
+      const text = JSON.stringify(t);
+      expect(text).not.toMatch(/unable to verify/i);
+      expect(text).not.toMatch(/is a violation|violates|in violation|breach of the law|non-compliant|proof that the (policy|disclosure)/i);
+      // an extraction failure or an access restriction is never worded as a missing disclosure
+      for (const c of t.checks) if (["Content extraction failed", "Access failed", "Crawling restricted", "Assessment incomplete", "Scan failed"].includes(c.basis)) expect(c.explanation).not.toMatch(/was not found in the policy text that was read/);
+    }
+  });
+
+  it("gives the same answer when run again on the same input (deterministic, no state kept between runs)", () => {
+    const m = consent(withPolicy(analysis({ retention: "not_found", notice_purposes: "partial" })), CLEAN);
+    const first = JSON.stringify(buildTenChecks(m));
+    for (let i = 0; i < 100; i++) expect(JSON.stringify(buildTenChecks(m))).toBe(first);
+  });
+});
+
+describe("a blocked or failed policy page is carried through to the checks that read it", () => {
+  it("checks 2 to 7 say Crawling restricted when the policy page is blocked, and Access failed when it did not load", () => {
+    const blocked = buildTenChecks(consent(withPolicy(NOT_READ(), { evidence: noPolicyEv, scanPages: failedAt("https://x.test/privacy", "Blocked by robots.txt") }), CLEAN));
+    const failed = buildTenChecks(consent(withPolicy(NOT_READ(), { evidence: noPolicyEv, scanPages: failedAt("https://x.test/privacy", "HTTP 500") }), CLEAN));
+    for (const id of [2, 3, 4, 5, 6, 7]) {
+      expect(blocked.checks[id - 1].basis).toBe("Crawling restricted");
+      expect(blocked.checks[id - 1].explanation).toMatch(/does not allow it to be scanned/);
+      expect(failed.checks[id - 1].basis).toBe("Access failed");
+      expect(failed.checks[id - 1].explanation).toMatch(/did not load/);
     }
   });
 });

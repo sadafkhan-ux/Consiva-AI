@@ -163,6 +163,9 @@ class EvidencePageItem(BaseModel):
     title: str | None
     http_status: int | None = None
     discovered_via: str | None = None
+    # Where the page ended up after redirects and the Content-Type it was served with; null on scans made before they were recorded.
+    final_url: str | None = None
+    content_type: str | None = None
     # Why the page was chosen (its kind and where it was found), worked out when the evidence is read; null for a page that did not load.
     selection_reason: str | None = None
 
@@ -234,6 +237,9 @@ class EvidencePolicyItem(BaseModel):
     id: str
     url: str
     policy_type: str
+    # How much of the page's text the scan holds: "extracted", "partial" (cut at the storage limit) or "empty" (nothing usable was captured). None on an older response.
+    text_state: str | None = None
+    text_characters: int | None = None
 
 
 class EvidenceConsentSignalItem(BaseModel):

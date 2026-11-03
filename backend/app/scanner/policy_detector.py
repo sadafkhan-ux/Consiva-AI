@@ -12,6 +12,19 @@ from app.scanner.url_normalize import normalize_url
 #: The most policy text kept per document. A policy is read in full for the content analysis (app/policy), so the old 2,000-character
 #: excerpt was far too short; this still bounds what one page can add to the database.
 POLICY_TEXT_LIMIT = 60_000
+#: Added to the end of a policy text that was cut at POLICY_TEXT_LIMIT, so every later stage can tell a complete text from a partial one (the analysis reads it and reports the text as partially extracted).
+TRUNCATION_MARK = "\n[Policy text truncated at 60,000 characters.]"
+#: Under this many characters a page's text is not a policy: it is an empty shell, a loading screen or an error page.
+MIN_POLICY_TEXT = 200
+
+
+def policy_text_state(text: str | None) -> str:
+    """How much of a policy page's text the scan holds: "empty" (nothing, or too little to be a policy), "partial" (cut at the storage limit) or "extracted". A discovered address is not a read page:
+    the three are different findings and the report words them differently."""
+    t = (text or "").strip()
+    if len(t) < MIN_POLICY_TEXT:
+        return "empty"
+    return "partial" if t.endswith(TRUNCATION_MARK.strip()) else "extracted"
 
 _KEYWORDS = {
     "privacy_policy": ("privacy",),
@@ -69,7 +82,7 @@ def detect_policies(
             local_id=f"policy-{counter}",
             url=link.href,
             policy_type=policy_type,  # type: ignore[arg-type]
-            extracted_text_ref=text[:POLICY_TEXT_LIMIT] if text else None,
+            extracted_text_ref=((text[:POLICY_TEXT_LIMIT] + TRUNCATION_MARK) if len(text) > POLICY_TEXT_LIMIT else text) if text else None,
         ))
         counter += 1
     return records

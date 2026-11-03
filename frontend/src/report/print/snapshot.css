@@ -172,3 +172,12 @@
 /* what kind of check it is, and why a result is what it is */
 .sn-kind { margin-left: 6px; font-size: 8px; font-weight: 700; color: #5b36c8; background: #efeaff; border-radius: 4px; padding: 0 5px; white-space: nowrap; } .sn-kind[data-kind="practice"] { color: #8a4b00; background: #fff4de; } .sn-kind[data-kind="technical"] { color: #1f4fd8; background: #eaf0ff; } .sn-kind[data-kind="transparency"] { color: #50597f; background: #eef0f8; }
 .sn-basis { display: block; margin-top: 1px; font-size: 8px; color: var(--sn-mut); white-space: nowrap; }
+/* cookie names and domains get a column wide enough for a normal value, so short names are not broken mid-word; only a very long one wraps */
+.sn-cookies th:nth-child(2), .sn-cookies td:nth-child(2) { min-width: 96px; } .sn-cookies th:nth-child(3), .sn-cookies td:nth-child(3) { min-width: 100px; }
+
+/* the last resort before a third page: smaller section headings and tighter blocks; body type stays at 8px or more */
+.sn-fit-6 .sn-h { font-size: 11px; } .sn-fit-6 .sn-h i { width: 20px; height: 20px; } .sn-fit-6.sn-p2 .sn-panel { padding-top: 8px; padding-bottom: 6px; gap: 2px; }
+.sn-fit-6 .sn-cookies td { padding-top: 0; padding-bottom: 0; } .sn-fit-6 .sn-foot { padding-top: 0; } .sn-fit-6 .sn-kind { padding: 0 4px; } .sn-fit-6 .sn-basis { margin-top: 0; } .sn-fit-6 .sn-end { gap: 8px; } .sn-fit-6 .sn-block { gap: 2px; }
+.sn-wording { font-style: italic; color: var(--sn-ink) !important; }
+.sn-src { color: var(--sn-blue); text-decoration: none; overflow-wrap: anywhere; } .sn-nosrc { color: var(--sn-mut); font-style: italic; }
+.sn-incomplete { color: #8a4b00; font-weight: 700; }

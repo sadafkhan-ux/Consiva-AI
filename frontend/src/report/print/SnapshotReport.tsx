@@ -10,7 +10,7 @@ import "./snapshot.css";
 /** The two-page "Website Privacy Readiness Report" (variant "summary"), laid out as the approved reference: page 1 is the website overview, page 2 the detailed findings. */
 export const SNAPSHOT_COOKIES = 5;
 /** How far a page may be tightened (spacing, then type) until its content fits the sheet. */
-export const SNAPSHOT_MAX_FIT = 5;
+export const SNAPSHOT_MAX_FIT = 6;
 /** One sheet, in CSS pixels: 296.6mm at 96 dpi, the height the print rule in pages.css gives it (just under A4, so it never spills onto a blank page). */
 const PAGE_HEIGHT = (296.6 * 96) / 25.4;
 /** True on the page the server prints (/?report=<id>&print=1). */
@@ -31,6 +31,8 @@ const ELEMENT_ORDER: { key: string; label: string; icon: IconName }[] = [
 ];
 const TILE_ICON: IconName[] = ["nodes", "globe", "bars", "cookie"];
 const CONSENT_FIELD = /consent|agree|accept|privacy|terms|gdpr|dpdp|policy/i;
+/** Wording that asks for agreement: what a consent checkbox says. Read from the checkbox's own label, not guessed from its name. */
+const CONSENT_WORDS = /\b(agree|accept|consent|authori[sz]e|permit|allow|subscribe|opt[- ]?in|receive|terms|privacy|policy)\b/i;
 
 /** A URL as printed: no scheme, no trailing slash, and cut with an ellipsis when longer than `max` (the full address stays in the scan's evidence). */
 const short = (url: string | null | undefined, max = 80): string => {
@@ -38,7 +40,8 @@ const short = (url: string | null | undefined, max = 80): string => {
   return u.length > max ? `${u.slice(0, max - 1)}…` : u;
 };
 
-type Item = { label: string; found: boolean | null; source: string | null };
+/** `found` is true or false, null when the evidence was not loaded, or "checkbox": a checkbox was recorded in a form that collects personal data, but the scan does not record what the checkbox says. */
+type Item = { label: string; found: boolean | null | "checkbox"; source: string | null; wording?: string | null };
 
 /** What the forms and the consent choices the scan found, each with the page it was found on. Nothing is inferred beyond the scan's own records. */
 function formsAndConsent(model: ReportModel, s: SummaryView): Item[] {
@@ -51,10 +54,17 @@ function formsAndConsent(model: ReportModel, s: SummaryView): Item[] {
     { label: "Consent purpose (choices per purpose)", found: null, source: null },
   ];
   const forms = ev.forms ?? [];
-  const consentForm = forms.find((f) => f.fields.some((x) => /checkbox/i.test(x.field_type) && CONSENT_FIELD.test(x.name)));
+  const isBox = (x: { field_type: string }) => /checkbox/i.test(x.field_type);
+  // What a checkbox says (its recorded label) decides first; its name is only a fallback for a scan that did not record the wording.
+  const worded = forms.flatMap((f) => f.fields.filter((x) => isBox(x) && !!x.label && CONSENT_WORDS.test(x.label)).map((x) => ({ f, label: x.label as string })))[0];
+  const consentForm = worded?.f ?? forms.find((f) => f.fields.some((x) => isBox(x) && CONSENT_FIELD.test(x.name)));
+  // Forms built by a script often give a checkbox a generated name (for example "_R_2apbsnpfiv5stbH1_"), so the name says nothing. A checkbox in a form that also collects an e-mail address or
+  // other personal data is then recorded as found, and the report says plainly that its wording was not recorded, instead of "Not found".
+  const PERSONAL = /mail|phone|tel|name|address/i;
+  const boxForm = consentForm ?? forms.find((f) => f.fields.some((x) => isBox(x) && !x.label) && f.fields.some((x) => !isBox(x) && (PERSONAL.test(x.name) || PERSONAL.test(x.field_type))));
   return [
     { label: "Contact / Enquiry form", found: forms.length > 0, source: forms.length > 0 ? forms[0].page_url ?? null : null },
-    { label: "Explicit consent (e.g. checkbox)", found: !!consentForm, source: consentForm?.page_url ?? null },
+    { label: "Explicit consent (e.g. checkbox)", found: consentForm ? true : boxForm ? "checkbox" : false, source: boxForm?.page_url ?? null, wording: worded?.label ?? null },
     { label: "Consent purpose (choices per purpose)", found: per ? per.label === "Found" : null, source: per?.label === "Found" ? home : null },
   ];
 }
@@ -143,9 +153,10 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
             <b className="sn-card-t">Compliance Score</b>
             <div className="pg-score-ring"><BigRing percent={ten.score} label={ten.score === null ? "" : String(ten.score)} id="snapshot" /></div>
             <span className={`sn-badge${ten.score === null || ten.counts.passed === 0 ? " sn-b-low" : ten.counts.passed < ten.applicableMax ? " sn-b-mid" : ""}`} data-testid="sn-chip"><Icon name={ten.counts.passed === 0 ? "info" : "check"} size={12} />{ten.score === null ? "No meaningful score" : `${ten.counts.passed} of ${ten.applicableMax} checks passed`}</span>
-            <div className="sn-score-line" data-testid="sn-total-line">Total Weightage Awarded: {ten.totalText}</div>
+            <div className="sn-score-line" data-testid="sn-total-line">Total Weightage Awarded: <span className="sn-nowrap">{ten.totalText}</span></div>
             <div className="sn-score-note sn-score-pct" data-testid="sn-score-text">Privacy Readiness Score: {ten.scoreText}</div>
             <div className="sn-score-note" data-testid="sn-counts">{ten.applicableMax} of {ten.checks.length} checks applicable</div>
+            {ten.incomplete > 0 && <div className="sn-score-note sn-incomplete" data-testid="sn-incomplete">{ten.incomplete} check{ten.incomplete === 1 ? "" : "s"} could not be completed (scored 0)</div>}
           </div>
           <figure className="sn-card sn-shot" data-testid="pg-hero-preview">
             {preview.src ? (
@@ -217,6 +228,13 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
   );
 }
 
+/** The page a result rests on, as a link to the real address; when there is no address it says so, and never shows an invented one. */
+function Source({ url, id }: { url: string | null; id: number }) {
+  if (url && /^https?:\/\//i.test(url)) return <a className="sn-src" href={url} data-testid="sn-source">[{short(url)}]</a>;
+  if (url) return <span className="sn-src" data-testid="sn-source">[{short(url)}]</span>;
+  return id === 10 ? null : <span className="sn-nosrc" data-testid="sn-nosource">[no source URL available]</span>;
+}
+
 function CheckTable({ checks, ten }: { checks: TenCheck[]; ten: TenAssessment }) {
   return (
     <table className="sn-table sn-checks" data-testid="sn-checkpoints">
@@ -228,8 +246,8 @@ function CheckTable({ checks, ten }: { checks: TenCheck[]; ten: TenAssessment })
             <td className="sn-cp">
               <b>{c.name}</b>
               {c.legal && <span className="sn-prov">{c.legal}</span>}<span className="sn-kind" data-testid="sn-kind" data-kind={c.kind}>{KIND_LABEL[c.kind]}</span>
-              {c.evidence && <span className="sn-ev" data-testid="sn-evidence"><i>Evidence:</i> {c.evidence}{c.sourceUrl && <> <u>[{short(c.sourceUrl)}]</u></>}</span>}
-              {c.result !== "Passed" && <span className="sn-why" data-testid="sn-why"><i>Why:</i> {c.explanation}{!c.evidence && c.sourceUrl && c.completed && <> <u>[{short(c.sourceUrl)}]</u></>}</span>}
+              {c.evidence && <span className="sn-ev" data-testid="sn-evidence"><i>Evidence:</i> {c.evidence} <Source url={c.sourceUrl} id={c.id} /></span>}
+              {c.result !== "Passed" && <span className="sn-why" data-testid="sn-why"><i>Why:</i> {c.explanation}{!c.evidence && c.sourceUrl && c.completed && <> <Source url={c.sourceUrl} id={c.id} /></>}</span>}
             </td>
             <td><Pill s={{ label: c.result, tone: TONE[c.result] }} />{c.result !== "Passed" && c.result !== "Not Applicable" && <span className="sn-basis" data-testid="sn-basis">{c.basis}</span>}</td>
             <td className="sn-num" data-testid="sn-marks">{c.marksText}</td>
@@ -273,8 +291,8 @@ function Page2({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
             <Title icon="form">Forms &amp; Consent</Title>
             {forms.map((f) => (
               <div key={f.label} className="sn-form-row" data-testid="sn-form-row">
-                <div><b>{f.label}</b>{f.source ? <small>{short(f.source)}</small> : f.found ? <small>page not recorded</small> : null}</div>
-                <Pill s={f.found === null ? { label: "Not Tested", tone: "mute" } : f.found ? { label: "Found", tone: "good" } : { label: "Not found", tone: "warn" }} />
+                <div><b>{f.label}</b>{f.wording && <small className="sn-wording" data-testid="sn-checkbox-wording">&ldquo;{f.wording.length > 110 ? `${f.wording.slice(0, 109)}…` : f.wording}&rdquo;</small>}{f.found === "checkbox" && <small data-testid="sn-checkbox-note">wording not recorded</small>}{f.source ? <small>{short(f.source)}</small> : f.found ? <small>page not recorded</small> : null}</div>
+                <Pill s={f.found === null ? { label: "Not Tested", tone: "mute" } : f.found === "checkbox" ? { label: "Checkbox found", tone: "good" } : f.found ? { label: "Found", tone: "good" } : { label: "Not found", tone: "warn" }} />
               </div>
             ))}
           </div>

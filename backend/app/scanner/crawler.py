@@ -853,6 +853,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         "rendered_control_text": rendered_control_text,
         "set_cookie_events": set_cookie_events,
         "final_url": final_url,
+        "content_type": (response_headers(response).get("content-type") or "")[:200].strip() or None if response is not None else None,
         "frame_sources": _frameset_sources(html, url),
         "screenshot": screenshot,
     }
@@ -1057,7 +1058,7 @@ async def _crawl_full_site(
         detected_global_vars.update(result["global_vars"])
         pages.append(PageRecord(
             local_id=page_local_id, url=url, title=result["title"], http_status=result["http_status"],
-            discovered_via=via,
+            discovered_via=via, final_url=result.get("final_url"), content_type=result.get("content_type"),
         ))
         forms.extend(detect_forms(page_local_id, parsed.forms))
         scripts_by_page[page_local_id] = parsed.scripts + result["iframe_scripts"]
@@ -1065,7 +1066,7 @@ async def _crawl_full_site(
         all_links.extend(parsed.links)
         # The rendered text (the whole page, shadow roots included), not the 5,000-character excerpt: a policy found among the crawled
         # pages is kept in full for the content analysis. policy_detector is the only reader of this dictionary.
-        crawled_page_text[url] = result["rendered_text"] or parsed.visible_text
+        crawled_page_text[url] = result["rendered_text"] or parsed.full_text or parsed.visible_text
         # rendered_text (document.body.innerText + every open shadow root's text,
         # see _SHADOW_DOM_TEXT_JS) is a strict superset of parsed.visible_text for
         # THIS purpose -- used only for consent-signal keyword detection, not for

@@ -245,4 +245,17 @@ describe("the hero shows the compliance score only, never coverage", () => {
     expect(v.coverageValue).toBe(F.mixed.readiness.coverage_percent);
     expect(v.coverageLine).toContain("Assessment coverage");
   });
+
+  it("shows the 10-check Privacy Readiness Score, the one the summary PDF prints, when it is given", () => {
+    render(<ScanHero score={score} siteUrl="https://x.test/" screenshot={null} tenScore={{ score: 75, totalText: "7.5 / 10", scoreText: "75%", passed: 7, applicable: 10 }} />);
+    expect(screen.getByTestId("hero-score-label")).toHaveTextContent("Privacy Readiness Score: 75% (7.5 / 10)");
+    expect(screen.getByTestId("hero-band")).toHaveTextContent("7 of 10 checks passed");
+    expect(screen.getByTestId("hero-headline")).toHaveTextContent(/not a certified DPDP compliance score/);
+  });
+
+  it("with no applicable check it shows no score, not 0 or 100", () => {
+    render(<ScanHero score={score} siteUrl="https://x.test/" screenshot={null} tenScore={{ score: null, totalText: "No applicable check", scoreText: "No meaningful score", passed: 0, applicable: 0 }} />);
+    expect(screen.getByTestId("hero-band")).toHaveTextContent("No meaningful score");
+    expect(screen.getByTestId("hero-ring")).toHaveAttribute("aria-label", "No score");
+  });
 });

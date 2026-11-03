@@ -24,6 +24,7 @@ import { DpdpReferencesSection, RecommendationsSection } from "./components/Dpdp
 import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnostics";
 import { ANALYSIS_INCOMPLETE_NOTE, untestedConsentStates } from "./report/buildReport";
 import { reportModelFromState } from "./report/modelFromState";
+import { buildTenChecks } from "./report/tenChecks";
 import { buildInsightSections } from "./report/insights";
 import { buildReadinessReview } from "./report/readiness";
 import { downloadReport } from "./report/downloadReport";
@@ -32,6 +33,17 @@ import { ApiError } from "./api/types";
 
 // The stages that turn rule results into findings; if one fails, "no findings" says nothing about what the rules found.
 const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
+
+/** The 10-check score for the scan on screen, from the same report model the PDF is drawn from; null when the scan has no evidence to score or the model cannot be built. */
+function tenScoreFor(state: Parameters<typeof reportModelFromState>[0]) {
+  if (!state.scan || !state.evidence) return null;
+  try {
+    const t = buildTenChecks(reportModelFromState(state));
+    return { score: t.score, totalText: t.totalText, scoreText: t.scoreText, passed: t.counts.passed, applicable: t.applicableMax };
+  } catch {
+    return null;
+  }
+}
 
 export function ConsentAgentView() {
   const { state, run, open, afterReviewDecision } = useConsentScan();
@@ -218,8 +230,14 @@ export function ConsentAgentView() {
               incomplete: absent evidence here is not a clean result, and nothing below is the outcome of a completed scan.
             </div>
           )}
-          <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} />
+          <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} tenScore={tenScoreFor(state)} />
           <ConsentSummarySection meta={state.websiteScanMeta} />
+          {isDpdpScore(state.dpdpScore) && (
+            <p className="muted small" data-testid="score-systems-note" style={{ margin: "4px 0 10px" }}>
+              The score above is the 10-check Privacy Readiness Score, the same one the summary PDF prints. The section below is a separate weighted reading of the DPDP requirements
+              (methodology {state.dpdpScore.methodology_version}); its figures are not the 10-check score.
+            </p>
+          )}
           <DpdpScoreSection score={state.dpdpScore} analysisNote={analysisNote} />
           {isDpdpScore(state.dpdpScore) && <ScoreComparisonPanel scanId={state.scanId} />}
           <PolicyAnalysisSection analysis={state.policyAnalysis} />

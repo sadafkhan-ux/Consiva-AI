@@ -17,7 +17,7 @@ from app.policy import analysis as pa
 from app.policy.analysis import (NOT_APPLICABLE, NOT_FOUND, PARTIAL, VERIFIED, PolicyDocument, PolicyExtraction, PolicyReqResult, analyse,
                                  collect_documents, has_contact, response_days, verify_quote)
 from app.policy.requirements import BY_ID, CHILD_SECTORS, GROUPS, REQUIREMENTS
-from app.scanner.policy_detector import POLICY_TEXT_LIMIT, detect_policies
+from app.scanner.policy_detector import POLICY_TEXT_LIMIT, TRUNCATION_MARK, detect_policies
 from app.scanner.page_parser import ParsedLink
 
 POLICY = (
@@ -225,7 +225,32 @@ def test_a_policy_with_no_captured_text_is_fetched_and_one_that_cannot_be_read_i
 
 def test_a_very_long_policy_is_cut_to_the_budget_and_says_so():
     docs, _ = asyncio.run(collect_documents([pol("https://x.test/privacy", "privacy_policy", "word " * 20000)], _no_fetch))
-    assert len(docs[0].text) == pa.MAX_DOC_CHARS and docs[0].truncated
+    assert len(docs[0].text) == pa.PRIMARY_DOC_CHARS and docs[0].truncated       # the privacy policy itself gets the larger budget
+    other, _ = asyncio.run(collect_documents([pol("https://x.test/pricing", "cookie_policy", "word " * 20000)], _no_fetch))
+    assert len(other[0].text) == pa.MAX_DOC_CHARS and other[0].truncated         # a page that only mentions cookies gets the ordinary one
+
+
+def test_a_long_privacy_policy_keeps_its_retention_section_near_the_end():
+    # cookieyes.com's privacy policy is about 42,000 characters and puts "Data retention" at 35,600: a 30,000 cut made it look absent
+    text = ("lorem ipsum " * 2966)[:35_583] + " DATA RETENTION We retain personal data for as long as reasonably necessary. " + "tail " * 1000
+    docs, _ = asyncio.run(collect_documents([pol("https://x.test/privacy-policy/", "privacy_policy", text)], _no_fetch))
+    assert "DATA RETENTION" in docs[0].text and "as long as reasonably necessary" in docs[0].text
+
+
+def test_the_policy_pages_themselves_are_read_before_pages_that_only_mention_one():
+    pols = [pol("https://x.test/privacy-policy-generator/", "privacy_policy", "generator " * 50), pol("https://x.test/product/cookie-consent/", "cookie_policy", "product " * 50),
+            pol("https://x.test/privacy-policy/", "privacy_policy", "policy " * 50), pol("https://x.test/cookie-policy/", "cookie_policy", "cookies " * 50)]
+    docs, _ = asyncio.run(collect_documents(pols, _no_fetch))
+    assert [d.url for d in docs[:2]] == ["https://x.test/privacy-policy/", "https://x.test/cookie-policy/"]
+    assert pa._is_legal_page("https://x.test/privacy") and pa._is_legal_page("https://x.test/legal/cookie-policy/")
+    assert not pa._is_legal_page("https://x.test/privacy-policy-generator/") and not pa._is_legal_page("https://x.test/product/cookie-consent/")
+
+
+def test_the_number_of_pages_read_is_capped_and_the_cap_is_said():
+    pols = [pol(f"https://x.test/page-{i}/", "cookie_policy", f"cookie page {i} " * 60) for i in range(pa.MAX_DOCS + 5)]
+    docs, notes = asyncio.run(collect_documents(pols, _no_fetch))
+    assert len(docs) == pa.MAX_DOCS
+    assert any("5 other pages" in n for n in notes)
 
 
 # --- the whole step, fail-soft ------------------------------------------------------------------------------------------------------
@@ -336,7 +361,9 @@ def test_a_policy_keeps_its_full_text_and_is_listed_once_across_www_and_apex():
 
 def test_policy_text_is_bounded():
     recs = detect_policies([_link("https://x.test/privacy")], {"https://x.test/privacy": "a" * (POLICY_TEXT_LIMIT + 5000)}, "x.test")
-    assert len(recs[0].extracted_text_ref) == POLICY_TEXT_LIMIT
+    stored = recs[0].extracted_text_ref
+    assert stored.startswith("a" * POLICY_TEXT_LIMIT) and len(stored) == POLICY_TEXT_LIMIT + len(TRUNCATION_MARK)    # cut at the limit, and marked as cut
+    assert stored.endswith("[Policy text truncated at 60,000 characters.]")
 
 
 # --- the endpoint --------------------------------------------------------------------------------------------------------------------

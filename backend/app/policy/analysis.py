@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 import httpx
+
+from app.scanner.policy_detector import TRUNCATION_MARK
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -43,6 +45,12 @@ VERIFIED, PARTIAL, NOT_FOUND, NOT_APPLICABLE = "verified", "partial", "not_found
 
 #: Per document, so one very long policy cannot crowd out the others or the prompt budget.
 MAX_DOC_CHARS = 30_000
+#: The privacy policy and the cookie policy themselves are read further: a long privacy policy keeps its retention, rights and grievance sections near the END (cookieyes.com's puts
+#: "Your legal rights" at 30,600 and "Data retention" at 35,600 of 42,000 characters, so a 30,000 cut made both look absent). Equal to what the crawl stores (scanner POLICY_TEXT_LIMIT).
+PRIMARY_DOC_CHARS = 60_000
+#: A site that mentions cookies on every page (a cookie-banner vendor) has dozens of pages the detector files as policies. Only the best few are read, so the legal pages are not
+#: crowded out by marketing pages and the prompt does not grow with the size of the site.
+MAX_DOCS = 8
 MIN_QUOTE_CHARS = 25
 MAX_QUOTE_CHARS = 450
 FETCH_TIMEOUT = 15.0
@@ -208,17 +216,36 @@ def _same_page(a: str, b: str) -> bool:
     return host(pa) == host(pb) and pa.path.rstrip("/") == pb.path.rstrip("/")
 
 
+_LEGAL_PATH = re.compile(r"/(privacy|cookie)[-_]?(policy|policies|notice|statement)?/?$", re.IGNORECASE)
+
+
+def _is_legal_page(url: str) -> bool:
+    """The address of a privacy or cookie policy itself (/privacy-policy, /cookie-policy, /privacy), as against a page that only mentions one (/privacy-policy-generator, /product/cookie-consent)."""
+    return bool(_LEGAL_PATH.search(urlparse(url).path))
+
+
+def _rank(p: Policy) -> tuple[int, int]:
+    return (0 if _is_legal_page(p.url) else 1, 0 if p.policy_type == "privacy_policy" else 1)
+
+
 async def collect_documents(policies: list[Policy], fetcher=fetch_policy_text) -> tuple[list[PolicyDocument], list[str]]:
     """Privacy and cookie policies, one per page, with the text the crawl captured or else a fetched copy. Terms pages are not read:
     they are about the contract, not the processing of personal data. Returns the documents and notes on what could not be read."""
     docs: list[PolicyDocument] = []
     notes: list[str] = []
-    for p in policies:
+    skipped = 0
+    for p in sorted(policies, key=_rank):          # stable: the legal pages first, the crawl's order within each group
         if p.policy_type not in ("privacy_policy", "cookie_policy"):
             continue
         if any(_same_page(p.url, d.url) for d in docs):
             continue
+        if len(docs) >= MAX_DOCS:
+            skipped += 1
+            continue
         text, source = (p.extracted_text_ref or "").strip(), "crawl"
+        cut_at_storage = text.endswith(TRUNCATION_MARK.strip())      # the crawl kept only the first part of a very long policy
+        if cut_at_storage:
+            text = text[: -len(TRUNCATION_MARK.strip())].rstrip()
         if len(text) < 200:
             fetched = await fetcher(p.url)
             text, source = (fetched or "").strip(), "fetch"
@@ -226,11 +253,14 @@ async def collect_documents(policies: list[Policy], fetcher=fetch_policy_text) -
             notes.append(f"{p.url} could not be read (no text was captured and it could not be fetched as a plain page).")
             continue
         # Some sites render several legal documents into every legal page, so two policy URLs can yield the very same text. It is read once.
-        twin = next((d for d in docs if normalise(d.text) == normalise(text[:MAX_DOC_CHARS])), None)
+        limit = PRIMARY_DOC_CHARS if _is_legal_page(p.url) else MAX_DOC_CHARS
+        twin = next((d for d in docs if normalise(d.text) == normalise(text[:limit])), None)
         if twin is not None:
             notes.append(f"{p.url} has the same text as {twin.url}, so it was read once.")
             continue
-        docs.append(PolicyDocument(p.url, p.policy_type, text[:MAX_DOC_CHARS], source, truncated=len(text) > MAX_DOC_CHARS))
+        docs.append(PolicyDocument(p.url, p.policy_type, text[:limit], source, truncated=len(text) > limit or cut_at_storage))
+    if skipped:
+        notes.append(f"{skipped} other page{'s' if skipped != 1 else ''} that mention cookies or privacy were not read: the {MAX_DOCS} most likely policy pages were.")
     return docs, notes
 
 

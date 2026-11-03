@@ -20,12 +20,17 @@ class PageRecord(BaseModel):
     # per the scanner-hardening audit's section 4): "robots_disallowed" | "failed" |
     # "timeout". http_status is None in all of the failure cases.
     discovered_via: str | None = None
+    # Where the navigation ended after redirects, and the Content-Type the server answered with. None for a page that did not load, and on scans made before they were recorded.
+    final_url: str | None = None
+    content_type: str | None = None
 
 
 class FormField(BaseModel):
     name: str
     field_type: str
     required: bool = False
+    # The wording beside a checkbox or radio button (see page_parser.field_label); None when the control has none, and on scans made before it was recorded.
+    label: str | None = None
 
 
 class FormRecord(BaseModel):

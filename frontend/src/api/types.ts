@@ -395,6 +395,10 @@ export interface EvidencePageItem {
   http_status?: number | null;
   /** How the page was found: "seed" (the entered address), "link", "sitemap" -- or "failed" / "timeout" for an attempt that did not load. */
   discovered_via?: string | null;
+  /** Where the page ended up after redirects; null for a page that did not load. Absent on scans made before it was recorded. */
+  final_url?: string | null;
+  /** The Content-Type the server answered with (for example "text/html; charset=utf-8"). Absent on scans made before it was recorded. */
+  content_type?: string | null;
   /** Why the page was chosen: its kind and where it was found. Worked out when the evidence is read; absent for a page that did not load. */
   selection_reason?: string | null;
 }
@@ -402,6 +406,8 @@ export interface EvidencePageItem {
 export interface FormField {
   name: string;
   field_type: string;
+  /** The wording beside a checkbox or radio button, read from the page; null or absent when there is none or on a scan made before it was recorded. */
+  label?: string | null;
   required: boolean;
 }
 
@@ -476,6 +482,9 @@ export interface EvidencePolicyItem {
   id: string;
   url: string;
   policy_type: string;
+  /** How much of the page's text the scan holds: "extracted", "partial" (cut at the storage limit) or "empty" (nothing usable was captured). Absent on an older response. */
+  text_state?: "extracted" | "partial" | "empty" | string | null;
+  text_characters?: number | null;
 }
 
 export interface EvidenceConsentSignalItem {

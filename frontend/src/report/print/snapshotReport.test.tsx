@@ -119,4 +119,66 @@ describe("the two-page report (variant summary)", () => {
     expect(container.textContent).not.toMatch(/unable to verify/i);
     expect(screen.getByTestId("sn-banner")).toHaveTextContent("Not tested");
   });
+
+  it("a required checkbox with a generated name in a form that collects an e-mail address is not reported as Not found", () => {
+    const m = model();
+    const form = { id: "f2", selector: "form", purpose_guess: "newsletter_signup", page_url: "https://x.test/contact/", fields: [{ name: "email", field_type: "email", required: true }, { name: "_R_2apbsnpfiv5stbH1_", field_type: "checkbox", required: true }] };
+    const withBox = { ...m, evidence: { ...m.evidence!, forms: [form] } } as typeof m;
+    render(<SnapshotReport model={withBox} />);
+    const row = screen.getAllByTestId("sn-form-row")[1];
+    expect(row).toHaveTextContent("Checkbox found");
+    expect(row).toHaveTextContent("wording not recorded");
+    expect(row).not.toHaveTextContent("Not found");
+    expect(row).toHaveTextContent("x.test/contact");
+  });
+
+  it("with no checkbox in any form, explicit consent is still Not found", () => {
+    const m = model();
+    const noBox = { ...m, evidence: { ...m.evidence!, forms: [{ id: "f3", selector: "form", purpose_guess: null, page_url: "https://x.test/", fields: [{ name: "q", field_type: "text", required: false }] }] } } as typeof m;
+    render(<SnapshotReport model={noBox} />);
+    expect(screen.getAllByTestId("sn-form-row")[1]).toHaveTextContent("Not found");
+  });
+
+  it("a checkbox whose recorded wording asks for agreement is Found, and the wording is printed", () => {
+    const m = model();
+    const form = { id: "f4", selector: "form", purpose_guess: "newsletter_signup", page_url: "https://x.test/contact/", fields: [{ name: "email", field_type: "email", required: true }, { name: "_r_1_", field_type: "checkbox", required: true, label: "I agree to receive newsletters from CookieYes and accept the Privacy Policy." }] };
+    render(<SnapshotReport model={{ ...m, evidence: { ...m.evidence!, forms: [form] } } as typeof m} />);
+    const row = screen.getAllByTestId("sn-form-row")[1];
+    expect(row).toHaveTextContent("Found");
+    expect(row).not.toHaveTextContent("Checkbox found");
+    expect(screen.getByTestId("sn-checkbox-wording")).toHaveTextContent("I agree to receive newsletters from CookieYes and accept the Privacy Policy.");
+    expect(row).not.toHaveTextContent("wording not recorded");
+  });
+
+  it("a checkbox whose recorded wording is not about agreement (for example Show password) is not taken for consent", () => {
+    const m = model();
+    const form = { id: "f5", selector: "form", purpose_guess: "login", page_url: "https://x.test/login", fields: [{ name: "email", field_type: "email", required: true }, { name: "show", field_type: "checkbox", required: false, label: "Show password" }] };
+    render(<SnapshotReport model={{ ...m, evidence: { ...m.evidence!, forms: [form] } } as typeof m} />);
+    expect(screen.getAllByTestId("sn-form-row")[1]).toHaveTextContent("Not found");
+  });
+
+  it("a source is a link to the real address, and a result with evidence but no address says so instead of showing one", () => {
+    const m = model();
+    render(<SnapshotReport model={m} />);
+    const links = screen.getAllByTestId("sn-source");
+    expect(links.length).toBeGreaterThan(0);
+    for (const l of links.filter((x) => x.tagName === "A")) expect(l.getAttribute("href")).toMatch(/^https?:\/\//);
+    for (const l of links) expect(l.textContent).not.toMatch(/^\[https?:/);        // shown short, linked whole
+  });
+
+  it("says how many checks could not be completed, apart from disclosures that were not found", () => {
+    const m = model();
+    const bare = { ...m, policyAnalysis: null, evidence: { ...m.evidence!, policies: [] } } as typeof m;
+    render(<SnapshotReport model={bare} />);
+    expect(screen.getByTestId("sn-incomplete")).toHaveTextContent(/could not be completed \(scored 0\)/);
+  });
+
+  it("shows each result's state under its pill (for example Not evidenced, Content extraction failed, Crawling restricted)", () => {
+    const m = model();
+    const bare = { ...m, policyAnalysis: null, evidence: { ...m.evidence!, policies: [] } } as typeof m;
+    render(<SnapshotReport model={bare} />);
+    const states = screen.getAllByTestId("sn-basis").map((e) => e.textContent);
+    expect(states.length).toBeGreaterThan(0);
+    for (const s of states) expect(s).toMatch(/^(Partially verified|Not evidenced|Not found in scanned pages|Content extraction failed|Partially extracted|Access failed|Crawling restricted|Not tested|Assessment incomplete|Evidence unavailable|Scan failed)$/);
+  });
 });

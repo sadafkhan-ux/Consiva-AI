@@ -86,6 +86,8 @@ class WebsitePage(Base):
     title: Mapped[str | None] = mapped_column(String, nullable=True)
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     discovered_via: Mapped[str | None] = mapped_column(String, nullable=True)
+    final_url: Mapped[str | None] = mapped_column(String, nullable=True)       # migration 0046
+    content_type: Mapped[str | None] = mapped_column(String, nullable=True)    # migration 0046
 
 
 class ScanScreenshot(Base):

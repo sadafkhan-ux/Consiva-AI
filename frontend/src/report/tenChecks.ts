@@ -11,7 +11,9 @@ export type TenResult = "Passed" | "Partially Passed" | "Failed" | "Not Applicab
 /** What a check is, so a technical observation is never read as a legal requirement and a best practice is never read as a required item. */
 export type TenKind = "dpdp" | "practice" | "technical" | "transparency";
 /** Why the result is what it is. Not found, not tested, evidence unavailable and scan failed are different things and are never merged. */
-export type TenBasis = "Verified" | "Partially verified" | "Not found" | "Not tested" | "Evidence unavailable" | "Scan failed" | "Not applicable";
+export type TenBasis =
+  | "Verified" | "Partially verified" | "Not evidenced" | "Not found in scanned pages" | "Content extraction failed" | "Partially extracted" | "Access failed" | "Crawling restricted"
+  | "Not tested" | "Assessment incomplete" | "Evidence unavailable" | "Scan failed" | "Not applicable";
 
 export interface TenCheck {
   id: number;
@@ -51,6 +53,8 @@ export interface TenAssessment {
   /** The score as printed: "75%", or "No meaningful score" when no check applies. */
   scoreText: string;
   counts: { passed: number; partial: number; failed: number; notApplicable: number };
+  /** Checks that scored 0 because they could not be completed (a scan failure, an unreadable page, an analysis that did not run), as against a disclosure that was looked for and not found. */
+  incomplete: number;
   pages: { discovered: number | null; scanned: number; failed: number; skipped: number };
   limitations: string[];
 }
@@ -94,7 +98,7 @@ interface Draft { basis?: TenBasis; result: TenResult; evidence?: string; source
 
 function make(id: number, name: string, legal: string | null, kind: TenKind, d: Draft): TenCheck {
   const m = MARKS[d.result];
-  const basis: TenBasis = d.basis ?? (d.result === "Passed" ? "Verified" : d.result === "Partially Passed" ? "Partially verified" : d.result === "Not Applicable" ? "Not applicable" : d.completed === false ? "Evidence unavailable" : "Not found");
+  const basis: TenBasis = d.basis ?? (d.result === "Passed" ? "Verified" : d.result === "Partially Passed" ? "Partially verified" : d.result === "Not Applicable" ? "Not applicable" : d.completed === false ? "Evidence unavailable" : "Not evidenced");
   return {
     kind, basis,
     id, name, result: d.result, awarded: m, max: m === null ? null : 1,
@@ -105,32 +109,43 @@ function make(id: number, name: string, legal: string | null, kind: TenKind, d: 
 
 /** What the policy analysis says about one requirement: its status, the verified quote and its page. */
 const find = (a: PolicyAnalysis | null, id: string): PolicyRequirementResult | undefined => a?.requirements.find((r) => r.id === id);
+/** A requirement counts as verified only when it carries the quoted passage it was verified by: a "verified" status with no quote is not evidence. */
+const isVerified = (r: PolicyRequirementResult | undefined): boolean => r?.status === "verified" && r.quote.trim().length > 0;
 const read = (a: PolicyAnalysis | null): boolean => !!a && a.status === "analysed" && a.requirements.length > 0;
 
 /** A check that rests on one policy requirement. */
-function policyCheck(a: PolicyAnalysis | null, reqId: string, what: string, sourceLimit: string | null, foundUrl: string | null = null): Draft {
+function policyCheck(a: PolicyAnalysis | null, reqId: string, what: string, sourceLimit: string | null, foundUrl: string | null = null, unread: TenBasis = "Content extraction failed"): Draft {
+  // An analysis that never ran is not a policy that says nothing: nothing was assessed.
+  if (a?.status === "not_run") return { result: "Failed", completed: false, basis: "Assessment incomplete", sourceUrl: foundUrl, explanation: "The policy analysis has not run for this scan, so what the policy says was not assessed.", limitation: "The policy analysis has not run." };
   if (!read(a)) {
     // A policy page that exists but could not be read is a limit of the scan, not an absence on the site: it is said so and the page is named.
     if (foundUrl) {
       return {
-        result: "Failed", completed: false, sourceUrl: foundUrl, basis: "Evidence unavailable",
-        explanation: "Policy page found, but its text could not be read: not evidenced (a limit of the scan, not a legal finding).",
-        limitation: "A privacy policy page was found but its text could not be read.",
+        result: "Failed", completed: false, sourceUrl: foundUrl, basis: unread,
+        explanation: unread === "Crawling restricted" ? "Policy page found, but the site does not allow it to be scanned: not evidenced (a limit of the scan, not a legal finding)."
+          : unread === "Access failed" ? "Policy page found, but it did not load: not evidenced (a limit of the scan, not a legal finding)."
+          : "Policy page found, but its text could not be read: not evidenced (a limit of the scan, not a legal finding).",
+        limitation: unread === "Crawling restricted" ? "The site restricts access to the privacy policy page." : unread === "Access failed" ? "The privacy policy page did not load." : "A privacy policy page was found but its text could not be read.",
       };
     }
-    return { result: "Failed", completed: false, basis: "Not found", explanation: NO_POLICY_WORDS, limitation: sourceLimit };
+    return { result: "Failed", completed: false, basis: "Not evidenced", explanation: NO_POLICY_WORDS, limitation: sourceLimit };
   }
   const r = find(a, reqId);
   if (!r) return { result: "Failed", completed: false, explanation: `The policy analysis did not assess ${what}.`, limitation: sourceLimit };
+  if (r.status === "verified" && !isVerified(r)) return { result: "Failed", completed: false, basis: "Evidence unavailable", sourceUrl: r.source_url, explanation: "The analysis marked this as verified but gave no quoted passage, so it is not counted.", limitation: sourceLimit };
   if (r.status === "verified") return { result: "Passed", evidence: clip(r.quote), sourceUrl: r.source_url, explanation: `The policy states ${what}; the quoted passage was verified word for word against the policy text.` };
   if (r.status === "partial") return { result: "Partially Passed", evidence: clip(r.quote), sourceUrl: r.source_url, explanation: `The policy says part of ${what}: ${r.detail || "not every element was found"}.` };
+  // Policy text that was read but cut at the storage limit: what came after the cut was not read, so a "not found" is limited to the part that was.
+  if (a!.documents.some((d) => d.truncated)) {
+    return { result: "Failed", basis: "Partially extracted", explanation: `${what[0].toUpperCase()}${what.slice(1)} was not found in the part of the policy text that was read; the text was cut at the storage limit, so the rest was not reviewed.`, sourceUrl: a!.documents[0]?.url ?? null, limitation: sourceLimit };
+  }
   return {
     result: "Failed", explanation: `${what[0].toUpperCase()}${what.slice(1)} was not found in the policy text that was read (not a finding that the law was broken; it may be given elsewhere).`,
     sourceUrl: a!.documents[0]?.url ?? null, limitation: sourceLimit,
   };
 }
 
-const pickBest = (rs: (PolicyRequirementResult | undefined)[]) => rs.find((r) => r?.status === "verified") ?? rs.find((r) => r?.status === "partial");
+const pickBest = (rs: (PolicyRequirementResult | undefined)[]) => rs.find((r) => isVerified(r)) ?? rs.find((r) => r?.status === "partial");
 
 export function buildTenChecks(model: ReportModel): TenAssessment {
   const ev = model.evidence;
@@ -142,49 +157,60 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   const pageNote = scanned > 0 ? `${scanned} page${scanned === 1 ? "" : "s"} of the entered domain ${scanned === 1 ? "was" : "were"} scanned${sp?.discovered != null ? ` of ${sp.discovered} found` : ""}; the text of pages other than the privacy policy is not kept.` : null;
 
   // 1. Privacy policy availability
-  const policies = (ev?.policies ?? []).filter((p) => /privacy/i.test(p.policy_type));
-  const doc = a?.documents.find((d) => /privacy/i.test(d.policy_type)) ?? a?.documents[0];
+  // The page at the policy's own address (/privacy-policy) comes before a page that only mentions one (/privacy-policy-generator, a product page), so that is the page named as the evidence.
+  const LEGAL_PATH = /\/(privacy|cookie)[-_]?(policy|policies|notice|statement)?\/?$/i;
+  const pathOf = (u: string) => { try { return new URL(u, "https://x.invalid").pathname; } catch { return u; } };
+  const legalFirst = <T extends { url: string }>(list: T[]): T[] => [...list].sort((x, y) => Number(LEGAL_PATH.test(pathOf(y.url))) - Number(LEGAL_PATH.test(pathOf(x.url))));
+  const policies = legalFirst((ev?.policies ?? []).filter((p) => /privacy/i.test(p.policy_type)));
+  const privacyDocs = legalFirst((a?.documents ?? []).filter((d) => /privacy/i.test(d.policy_type)));
+  const doc = privacyDocs[0] ?? a?.documents[0];
   // A privacy page the scan found a link to but could not load is not a missing policy: it is a page that could not be read.
-  const failedPolicy = (sp?.failed ?? []).find((f) => /privacy|policy/i.test(f.url));
+  const failedPolicy = (sp?.failed ?? []).find((f) => /privacy|policy/i.test(f.url)) ?? (ev?.pages ?? []).filter((p) => /privacy|policy/i.test(p.url) && p.discovered_via === "robots_disallowed").map((p) => ({ url: p.url, reason: "Blocked by robots.txt" }))[0];
+  const policyBlocked = !!failedPolicy && /robots|restrict|denied|forbidden|401|403/i.test(failedPolicy.reason);
   const c1: Draft = policies.length > 0 || doc
     ? (read(a) || (doc && doc.characters > 0)
-      ? { result: "Passed", sourceUrl: policies[0]?.url ?? doc?.url ?? null, evidence: `Privacy policy page found${doc ? ` (${doc.characters.toLocaleString("en-IN")} characters of text read)` : ""}.`, explanation: "A privacy policy page was found on the scanned pages and its text was read." }
-      : { result: "Partially Passed", sourceUrl: policies[0]?.url ?? null, evidence: "Privacy policy page found.", explanation: "A privacy policy page was found, but its text could not be read, so what it says could not be assessed.", limitation: "The policy text was not available." })
+      ? (doc?.truncated || policies[0]?.text_state === "partial"
+        ? { result: "Passed", basis: "Partially extracted", sourceUrl: policies[0]?.url ?? doc?.url ?? null, evidence: `Privacy policy page found (${(doc?.characters ?? 0).toLocaleString("en-IN")} characters of text read).`, explanation: "A privacy policy page was found and readable text extracted, but the text was cut at the storage limit, so the rest was not reviewed.", limitation: "Only the first part of a very long policy was read." }
+        : { result: "Passed", sourceUrl: policies[0]?.url ?? doc?.url ?? null, evidence: `Privacy policy page found${doc ? ` (${doc.characters.toLocaleString("en-IN")} characters of text read)` : ""}.`, explanation: "A privacy policy page was found on the scanned pages and its text was read." })
+      : { result: "Partially Passed", basis: a?.status === "not_run" ? "Assessment incomplete" : "Content extraction failed", sourceUrl: policies[0]?.url ?? null, evidence: "Privacy policy page found.", explanation: a?.status === "not_run" ? "A privacy policy page was found, but the policy analysis has not run, so what it says was not assessed." : "A privacy policy page was found, but its text could not be read, so what it says could not be assessed.", limitation: "The policy text was not available." })
     : failedPolicy
-      ? { result: "Failed", completed: false, basis: "Scan failed", sourceUrl: failedPolicy.url, explanation: `A privacy policy page was found at this address but did not load (${failedPolicy.reason}), so it could not be read.`, limitation: "The privacy policy page did not load." }
+      ? { result: "Failed", completed: false, basis: policyBlocked ? "Crawling restricted" : "Access failed", sourceUrl: failedPolicy.url,
+          explanation: policyBlocked ? `A privacy policy page was found at this address, but the site does not allow it to be scanned (${failedPolicy.reason}), so it was not read. This is not a finding that the policy is missing.` : `A privacy policy page was found at this address but did not load (${failedPolicy.reason}), so it could not be read.`,
+          limitation: policyBlocked ? "The site restricts access to this page." : "The privacy policy page did not load." }
     : scanned === 0
       ? { result: "Failed", completed: false, basis: "Scan failed", explanation: "The website could not be accessed, so no page could be scanned and the search for a privacy policy was not made.", limitation: "No page loaded." }
-      : { result: "Failed", explanation: `No privacy policy page was found after scanning ${scanned} page${scanned === 1 ? "" : "s"}${sp?.discovered != null ? ` of the ${sp.discovered} found` : ""} on the entered domain (privacy and cookie pages are tried first). It may exist on another domain or on a page the scan did not reach. This is not a finding that the law was broken.`,
+      : { result: "Failed", basis: "Not found in scanned pages", explanation: `No privacy policy page was found after scanning ${scanned} page${scanned === 1 ? "" : "s"}${sp?.discovered != null ? ` of the ${sp.discovered} found` : ""} on the entered domain (privacy and cookie pages are tried first). It may exist on another domain or on a page the scan did not reach, so this is limited to the pages actually searched, and is not a finding that the law was broken.`,
         limitation: sp?.stopReason ?? "Only the entered domain was searched." };
 
   // 2-5 policy content
   const noPol = "No privacy policy text was available to read; the text of other pages is not kept.";
   const foundUrl = policies[0]?.url ?? failedPolicy?.url ?? null;
-  const c2 = policyCheck(a, "notice_data_itemised", "the personal data it collects", noPol, foundUrl);
-  const c3 = policyCheck(a, "notice_purposes", "why personal data is collected and used", noPol, foundUrl);
-  const c4 = policyCheck(a, "data_sharing", "sharing of personal data with processors and other third parties", noPol, foundUrl);
-  const c5 = policyCheck(a, "retention", "how long personal data is kept", noPol, foundUrl);
+  const unread: TenBasis = policies.length > 0 ? "Content extraction failed" : failedPolicy ? (policyBlocked ? "Crawling restricted" : "Access failed") : "Content extraction failed";
+  const c2 = policyCheck(a, "notice_data_itemised", "the personal data it collects", noPol, foundUrl, unread);
+  const c3 = policyCheck(a, "notice_purposes", "why personal data is collected and used", noPol, foundUrl, unread);
+  const c4 = policyCheck(a, "data_sharing", "sharing of personal data with processors and other third parties", noPol, foundUrl, unread);
+  const c5 = policyCheck(a, "retention", "how long personal data is kept", noPol, foundUrl, unread);
 
   // 6. user rights
   let c6: Draft;
-  if (!read(a)) c6 = policyCheck(a, "rights_means", "the user rights and how to exercise them", noPol, foundUrl);
+  if (!read(a)) c6 = policyCheck(a, "rights_means", "the user rights and how to exercise them", noPol, foundUrl, unread);
   else {
     const means = find(a, "rights_means");
     const rights = ["rights_access", "rights_correction_erasure", "rights_nominate"].map((id) => find(a, id));
-    const rightsFound = rights.filter((r) => r?.status === "verified").length;
+    const rightsFound = rights.filter((r) => isVerified(r)).length;
     const best = pickBest([means, ...rights]);
-    if (means?.status === "verified" && rightsFound > 0) c6 = { result: "Passed", evidence: clip(best?.quote ?? ""), sourceUrl: best?.source_url ?? null, explanation: `The policy names ${rightsFound} user right${rightsFound === 1 ? "" : "s"} and the means of making a request.` };
-    else if (best) c6 = { result: "Partially Passed", evidence: clip(best.quote), sourceUrl: best.source_url, explanation: `Only part is evidenced: ${means?.status === "verified" ? "the means of making a request, but no right is named" : rightsFound > 0 ? "rights are named, but no means of making a request" : "some wording, not a complete statement of rights and the means"}.` };
+    if (isVerified(means) && rightsFound > 0) c6 = { result: "Passed", evidence: clip(best?.quote ?? ""), sourceUrl: best?.source_url ?? null, explanation: `The policy names ${rightsFound} user right${rightsFound === 1 ? "" : "s"} and the means of making a request.` };
+    else if (best) c6 = { result: "Partially Passed", evidence: clip(best.quote), sourceUrl: best.source_url, explanation: `Only part is evidenced: ${isVerified(means) ? "the means of making a request, but no right is named" : rightsFound > 0 ? "rights are named, but no means of making a request" : "some wording, not a complete statement of rights and the means"}.` };
     else c6 = { result: "Failed", explanation: "No statement of user rights or of how to exercise them was found in the policy text that was read. This is not a finding that the law was broken.", sourceUrl: a!.documents[0]?.url ?? null, limitation: noPol };
   }
 
   // 7. contact and grievance
   let c7: Draft;
-  if (!read(a)) c7 = policyCheck(a, "grievance_contact", "a privacy contact or grievance mechanism", noPol, foundUrl);
+  if (!read(a)) c7 = policyCheck(a, "grievance_contact", "a privacy contact or grievance mechanism", noPol, foundUrl, unread);
   else {
     const g = find(a, "grievance_contact"), d = find(a, "dpo_contact");
     const t = find(a, "grievance_timeline");
-    const gOk = g?.status === "verified", dOk = d?.status === "verified", tOk = t?.status === "verified";
+    const gOk = isVerified(g), dOk = isVerified(d), tOk = isVerified(t);
     const best = pickBest([g, d, t]);
     if (gOk && (dOk || tOk)) c7 = { result: "Passed", evidence: clip(g!.quote), sourceUrl: g!.source_url, explanation: `A grievance contact was found together with ${dOk && tOk ? "a business contact and a response period" : dOk ? "a business contact of a Data Protection Officer or answering person" : "a response period"}.` };
     else if (best) c7 = { result: "Partially Passed", evidence: clip(best.quote), sourceUrl: best.source_url, explanation: `Only part is evidenced: ${gOk ? "a grievance contact, but neither a response period nor a business contact" : dOk ? "a business contact, but no grievance contact" : "some wording, not a complete contact"}.` };
@@ -213,13 +239,22 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   const TRACKING = /analytic|market|advert|track/i;
   const trackCookie = (state: string) => cookies.filter((c) => TRACKING.test(c.category ?? "") && c.consent_states.includes(state)).length;
   const trackReq = (state: string) => trackers.filter((t) => TRACKING.test(t.category ?? "") && t.consent_states.includes(state)).length;
-  const preTracking = trackCookie("pre_consent") + trackReq("pre_consent");
-  const rejectTracking = trackCookie("post_reject") + trackReq("post_reject");
+  // A tag loader (the script that loads Google Tag Manager or gtag) sends nothing about the visitor; a Google request made in consent-denied mode (gcs=G100: advertising and analytics storage both
+  // denied) is a cookieless ping. Neither is the same as an analytics request made with consent, so they are counted apart, and a cookieless ping is never called clean.
+  const LOADER = /googletagmanager\.com\/(gtm\.js|gtag\/js)/i;
+  const DENIED = /[?&]gcs=G100(&|$)/i;
+  const sends = (state: string) => trackers.filter((t) => TRACKING.test(t.category ?? "") && t.consent_states.includes(state) && !LOADER.test(t.script_src));
+  const deniedOnly = (state: string) => { const x = sends(state); return x.length > 0 && x.every((t) => DENIED.test(t.script_src)); };
+  const preCookies = trackCookie("pre_consent"), rejectCookies = trackCookie("post_reject");
+  const preTracking = preCookies + (trackers.length > 0 ? sends("pre_consent").length : trackReq("pre_consent"));
+  const rejectTracking = rejectCookies + (trackers.length > 0 ? sends("post_reject").length : trackReq("post_reject"));
+  const preDenied = preCookies === 0 && deniedOnly("pre_consent"), rejectDenied = rejectCookies === 0 && deniedOnly("post_reject");
   const anyTracking = cookies.some((c) => TRACKING.test(c.category ?? "")) || trackers.some((t) => TRACKING.test(t.category ?? ""));
   let c9: Draft;
   if (!cons) c9 = { result: "Failed", completed: false, basis: "Evidence unavailable", explanation: "The consent states were not loaded, so Accept and Reject could not be compared.", limitation: "Consent behaviour could not be assessed." };
   else {
-    const preClean = cons.known[0] === 0 && preTracking === 0, rejectClean = cons.known[2] === 0 && (!cons.rejectTested || rejectTracking === 0);
+    const known = (n: number) => (trackers.length > 0 ? 0 : n);   // with the request list in hand, what a request carries decides; the summary count only stands in when there is no list
+    const preClean = known(cons.known[0]) === 0 && preTracking === 0, rejectClean = known(cons.known[2]) === 0 && (!cons.rejectTested || rejectTracking === 0);
     const line = `Analytics/marketing requests: before consent ${cons.known[0]}, after Accept ${cons.acceptTested ? cons.known[1] : "not tested"}, after Reject ${cons.rejectTested ? cons.known[2] : "not tested"}. Analytics/marketing cookies and requests seen before consent: ${preTracking}.`;
     const home = model.screenshot?.page_url ?? null;
     if (!hasBanner && !anyTracking && unclassified === 0 && cons.known[0] === 0 && cons.known[1] === 0 && cons.known[2] === 0) {
@@ -230,6 +265,9 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
       c9 = { result: "Failed", completed: false, basis: "Not tested", evidence: line, sourceUrl: home, explanation: "A banner was found, but neither Accept nor Reject could be clicked and confirmed, so only the state before consent was observed.", limitation: "Accept and Reject were not tested." };
     } else if (cons.acceptTested && cons.rejectTested && preClean && rejectClean) {
       c9 = { result: "Passed", evidence: line, sourceUrl: home, explanation: "All three states were tested: no analytics or marketing before consent, and none after Reject." };
+    } else if (cons.acceptTested && cons.rejectTested && (preClean || preDenied) && (rejectClean || rejectDenied)) {
+      c9 = { result: "Partially Passed", evidence: `${line} Requests that carry data: ${sends("pre_consent").length} before consent and ${sends("post_reject").length} after Reject, sent in consent-denied mode (gcs=G100); no analytics or marketing cookie was set before consent.`, sourceUrl: home,
+        explanation: "Google tags sent requests before consent and after Reject in consent-denied mode, and no analytics or marketing cookie was set. The requests still reach Google, so this is not a clean result." };
     } else if (!preClean && !rejectClean) {
       c9 = { result: "Failed", evidence: line, sourceUrl: home, explanation: "Analytics or marketing requests were observed before consent and again after Reject." };
     } else {
@@ -279,6 +317,7 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
 
   return {
     checks, awarded: sc.awarded, applicableMax: sc.applicableMax, score: sc.score, counts: sc.counts, formula: sc.formula, totalText: sc.totalText, scoreText: sc.scoreText,
+    incomplete: checks.filter((c) => c.result === "Failed" && !c.completed).length,
     pages: { discovered: sp?.discovered ?? model.visual?.pagesFound ?? null, scanned, failed: failedPages, skipped: skippedPages },
     limitations,
   };

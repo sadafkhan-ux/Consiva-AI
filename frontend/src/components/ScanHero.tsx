@@ -28,19 +28,22 @@ export function ScoreRing({ percent, label }: { percent: number | null; label: s
  * of its homepage as the scanner saw it, so a reader can see at a glance that the right site was scanned. The words come from report/hero.ts,
  * the same module the PDF reads. Without a picture the same space says plainly why, in client-safe words.
  */
-export function ScanHero({ score, siteUrl, screenshot, scanId = null }: { score: ScoreView | null; siteUrl: string; screenshot: ScanScreenshot | null | undefined; scanId?: string | null }) {
+/** The 10-check Privacy Readiness Score (report/tenChecks.ts): the one the summary PDF prints, so the dashboard and the PDF show the same number for the same scan. */
+export interface TenScoreView { score: number | null; totalText: string; scoreText: string; passed: number; applicable: number }
+
+export function ScanHero({ score, siteUrl, screenshot, scanId = null, tenScore = null }: { score: ScoreView | null; siteUrl: string; screenshot: ScanScreenshot | null | undefined; scanId?: string | null; tenScore?: TenScoreView | null }) {
   if (!siteUrl) return null;
   const hero = buildHeroView(score);
   const preview = buildPreviewView(screenshot, siteUrl, scanId);
   return (
     <section className="section scan-hero" data-testid="scan-hero">
       <div className="hero-score" data-testid="hero-score">
-        <ScoreRing percent={hero.percent} label={hero.percentLabel} />
-        <div className="hero-score-label">{hero.scoreLabel}</div>
+        <ScoreRing percent={tenScore ? tenScore.score : hero.percent} label={tenScore ? (tenScore.score === null ? "" : String(tenScore.score)) : hero.percentLabel} />
+        <div className="hero-score-label" data-testid="hero-score-label">{tenScore ? `Privacy Readiness Score: ${tenScore.scoreText} (${tenScore.totalText})` : hero.scoreLabel}</div>
       </div>
       <div className="hero-text">
-        <span className={`badge ${hero.tone === "good" ? "ok" : hero.tone === "warn" ? "warn" : "neutral"}`} data-testid="hero-band">{hero.band}</span>
-        <p className="hero-headline" data-testid="hero-headline">{hero.headline}</p>
+        <span className={`badge ${tenScore ? (tenScore.passed === tenScore.applicable ? "ok" : tenScore.passed === 0 ? "neutral" : "warn") : hero.tone === "good" ? "ok" : hero.tone === "warn" ? "warn" : "neutral"}`} data-testid="hero-band">{tenScore ? (tenScore.score === null ? "No meaningful score" : `${tenScore.passed} of ${tenScore.applicable} checks passed`) : hero.band}</span>
+        <p className="hero-headline" data-testid="hero-headline">{tenScore ? "The 10-check assessment, the same score the summary PDF prints. It is an internal readiness measure, not a certified DPDP compliance score." : hero.headline}</p>
       </div>
       <figure className="hero-preview" data-testid="hero-preview">
         <figcaption className="hero-domain" data-testid="hero-domain">{preview.domain}</figcaption>
