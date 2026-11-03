@@ -4,6 +4,7 @@ import type { DpdpScoreResponse, ScanEvidenceResponse, ScanScreenshot, WebsiteSc
 import fixtures from "../../test/dpdpScoreFixtures.json";
 import { buildReportModel } from "../buildReport";
 import { buildScoreView } from "../dpdpScore";
+import { buildTenChecks } from "../tenChecks";
 import { buildPageReport, FREE_PAGES, FULL_PAGES, reportIdFor } from "../pageReports";
 import { ctaKeyFor, resolveCta } from "../reportCta";
 import { FreeReport } from "./FreeReport";
@@ -139,9 +140,11 @@ describe("the Free Scan report", () => {
     expect(screen.queryByTestId("pg-hero-screenshot")).toBeNull();
   });
 
-  it("shows no score number when the score is withheld, and asks to complete the assessment", () => {
-    render(<FreeReport model={model({ score: "insufficient" })} />);
-    expect(screen.getByTestId("pg-percent-free").textContent).toBe("No score");
+  it("prints the 10-check Privacy Readiness Score even when the weighted score is withheld, and asks to complete the assessment", () => {
+    const m = model({ score: "insufficient" });
+    render(<FreeReport model={m} />);
+    expect(screen.getByTestId("pg-percent-free").textContent).toBe(String(buildTenChecks(m).score));
+    expect(screen.getByTestId("pg-score-free")).toHaveAttribute("data-source", "ten-checks");
     expect(screen.getByTestId("pg-cta")).toHaveAttribute("data-cta", "complete");
   });
 

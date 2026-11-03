@@ -53,7 +53,7 @@ describe("the two-page report (variant summary)", () => {
   it("page 1: the score, the screenshot with the address, the consent banner, the privacy elements, the framework counts and the key metrics", () => {
     render(<SnapshotReport model={model()} />);
     const p1 = within(screen.getByTestId("sn-page-1"));
-    expect(p1.getByTestId("sn-score")).toHaveTextContent("Compliance Score");
+    expect(p1.getByTestId("sn-score")).toHaveTextContent("Privacy Readiness Score");
     expect(p1.getByTestId("pg-hero-preview")).toHaveTextContent("https://x.test");
     expect(p1.getByTestId("sn-banner")).toHaveTextContent("Consent Banner");
     expect(p1.getByTestId("sn-elements")).toHaveTextContent(/of 6 found/);
@@ -84,7 +84,7 @@ describe("the two-page report (variant summary)", () => {
     render(<SnapshotReport model={model()} />);
     const rows = screen.getAllByTestId("sn-checkpoint");
     expect(rows).toHaveLength(10);
-    for (const r of rows) expect(["Passed", "Partially Passed", "Failed", "Not Applicable"]).toContain(r.getAttribute("data-status"));
+    for (const r of rows) expect(["Passed", "Partially Passed", "Failed", "Not Assessed", "Not Applicable"]).toContain(r.getAttribute("data-status"));
     expect(screen.queryByTestId("sn-formula")).toBeNull();   // the formula line is not printed in the report
     expect(document.body.textContent).not.toMatch(/unable to verify/i);
     expect(screen.getAllByTestId("sn-why").length).toBeGreaterThan(0);   // every Failed or Partially Passed check says why
@@ -94,7 +94,7 @@ describe("the two-page report (variant summary)", () => {
     render(<SnapshotReport model={model()} />);
     const rows = screen.getAllByTestId("sn-checkpoint");
     expect(new Set(rows.map((r) => r.textContent)).size).toBe(rows.length);
-    for (const r of rows) expect(r.textContent).toMatch(/\d+(\.\d+)? \/ \d+(\.\d+)?|–/);
+    for (const r of rows) expect(r.textContent).toMatch(/\d+(\.\d+)? \/ \d+(\.\d+)?|Not assessed|N\/A/);
   });
 
   it("every mark is printed as obtained / maximum, and the total and the score come from the one engine result", () => {
@@ -103,11 +103,9 @@ describe("the two-page report (variant summary)", () => {
     const ten = buildTenChecks(m);
     const marks = screen.getAllByTestId("sn-marks").map((e) => e.textContent);
     expect(marks).toEqual(ten.checks.map((c) => c.marksText));
-    for (const x of marks) expect(x).toMatch(/^(1|0\.5|0) \/ 1$|^N\/A$/);
+    for (const x of marks) expect(x).toMatch(/^(1|0\.5|0) \/ 1$|^N\/A$|^Not assessed$/);
     expect(screen.getByTestId("sn-total-marks")).toHaveTextContent(`${ten.totalText}`);
     expect(screen.getByTestId("sn-total-row")).toHaveTextContent(ten.scoreText);
-    expect(screen.getByTestId("sn-total-line")).toHaveTextContent(`Total Weightage Awarded: ${ten.totalText}`);
-    expect(screen.getByTestId("sn-score-text")).toHaveTextContent(`Privacy Readiness Score: ${ten.scoreText}`);
     expect(ten.totalText).toMatch(/^\d+(\.\d)? \/ \d+$/);
   });
 
@@ -166,11 +164,11 @@ describe("the two-page report (variant summary)", () => {
     for (const l of links) expect(l.textContent).not.toMatch(/^\[https?:/);        // shown short, linked whole
   });
 
-  it("says how many checks could not be completed, apart from disclosures that were not found", () => {
+  it("states how many checks could not be assessed in the score band, since page 1 no longer carries a breakdown", () => {
     const m = model();
     const bare = { ...m, policyAnalysis: null, evidence: { ...m.evidence!, policies: [] } } as typeof m;
     render(<SnapshotReport model={bare} />);
-    expect(screen.getByTestId("sn-incomplete")).toHaveTextContent(/could not be completed \(scored 0\)/);
+    expect(screen.getByTestId("sn-summary")).toHaveTextContent(/could not be assessed and are left out/);
   });
 
   it("shows each result's state under its pill (for example Not evidenced, Content extraction failed, Crawling restricted)", () => {
@@ -180,5 +178,54 @@ describe("the two-page report (variant summary)", () => {
     const states = screen.getAllByTestId("sn-basis").map((e) => e.textContent);
     expect(states.length).toBeGreaterThan(0);
     for (const s of states) expect(s).toMatch(/^(Partially verified|Not evidenced|Not found in scanned pages|Content extraction failed|Partially extracted|Access failed|Crawling restricted|Not tested|Assessment incomplete|Evidence unavailable|Scan failed)$/);
+  });
+
+  it("page 1 shows the score only, with no breakdown; the statuses and marks stay on page 2", () => {
+    const m = model();
+    render(<SnapshotReport model={m} />);
+    const ten = buildTenChecks(m);
+    const card = within(screen.getByTestId("sn-score"));
+    expect(card.getByTestId("pg-percent-snapshot")).toHaveTextContent(String(ten.score));
+    for (const id of ["sn-tally", "sn-chip", "sn-total-line", "sn-score-text", "sn-counts", "sn-incomplete"]) expect(screen.queryByTestId(id)).toBeNull();
+    const p1 = within(screen.getByTestId("sn-page-1")), p2 = within(screen.getByTestId("sn-page-2"));
+    expect(p1.queryAllByTestId("sn-checkpoint")).toHaveLength(0);
+    expect(p2.getAllByTestId("sn-checkpoint")).toHaveLength(10);
+    expect(p2.getByTestId("sn-total-marks")).toHaveTextContent(ten.totalText);
+  });
+
+  it("the consent banner sits in the left column under the score, with a prominent status and only what was detected", () => {
+    render(<SnapshotReport model={model()} />);
+    const left = document.querySelector(".sn-left")!;
+    const kids = [...left.children].map((e) => e.getAttribute("data-testid"));
+    expect(kids).toEqual(["sn-score", "sn-banner"]);
+    expect(within(screen.getByTestId("sn-banner")).getByTestId("sn-banner-status")).toHaveTextContent("Detected");
+    expect(screen.getByTestId("sn-banner-facts")).toHaveTextContent("Consent management platform");
+  });
+
+  it("says what the score rests on and that it is not a legal determination, and what was and was not covered", () => {
+    const m = model();
+    render(<SnapshotReport model={m} />);
+    const ten = buildTenChecks(m);
+    expect(screen.getByTestId("sn-summary")).toHaveTextContent(ten.summary);
+    expect(screen.getByTestId("sn-summary")).toHaveTextContent(/not a legal determination or certification/);
+    expect(screen.getByTestId("sn-scope-pages")).toHaveTextContent(/of 40 pages scanned/);
+    expect(screen.getByTestId("sn-scope-consent")).toHaveTextContent(/homepage only/);
+  });
+
+  it("each result says how good its evidence is, and a passed check with a limited scope says so", () => {
+    const m = model();
+    render(<SnapshotReport model={m} />);
+    const q = screen.getAllByTestId("sn-quality").map((e) => e.textContent);
+    expect(q.length).toBeGreaterThan(0);
+    for (const x of q) expect(x).toMatch(/^Evidence: (Specific|General|Limited|None)$/);
+  });
+
+  it("recommendations name the check they come from and none is worded as a violation", () => {
+    const m = model();
+    const weak = { ...m, policyAnalysis: null } as typeof m;
+    render(<SnapshotReport model={weak} />);
+    const items = within(screen.getByTestId("sn-next")).getAllByRole("listitem").map((e) => e.textContent ?? "");
+    expect(items.length).toBeGreaterThan(0);
+    for (const x of items) expect(x).not.toMatch(/violat|illegal/i);
   });
 });

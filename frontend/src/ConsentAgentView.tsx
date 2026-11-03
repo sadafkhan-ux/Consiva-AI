@@ -25,6 +25,7 @@ import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnosti
 import { ANALYSIS_INCOMPLETE_NOTE, untestedConsentStates } from "./report/buildReport";
 import { reportModelFromState } from "./report/modelFromState";
 import { buildTenChecks } from "./report/tenChecks";
+import { TenChecksPanel } from "./components/TenChecksPanel";
 import { buildInsightSections } from "./report/insights";
 import { buildReadinessReview } from "./report/readiness";
 import { downloadReport } from "./report/downloadReport";
@@ -35,15 +36,15 @@ import { ApiError } from "./api/types";
 const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
 
 /** The 10-check score for the scan on screen, from the same report model the PDF is drawn from; null when the scan has no evidence to score or the model cannot be built. */
-function tenScoreFor(state: Parameters<typeof reportModelFromState>[0]) {
+function tenAssessmentFor(state: Parameters<typeof reportModelFromState>[0]) {
   if (!state.scan || !state.evidence) return null;
   try {
-    const t = buildTenChecks(reportModelFromState(state));
-    return { score: t.score, totalText: t.totalText, scoreText: t.scoreText, passed: t.counts.passed, applicable: t.applicableMax };
+    return buildTenChecks(reportModelFromState(state));
   } catch {
     return null;
   }
 }
+const tenScoreOf = (t: ReturnType<typeof tenAssessmentFor>) => (t ? { score: t.score, totalText: t.totalText, scoreText: t.scoreText, passed: t.counts.passed, applicable: t.applicableMax } : null);
 
 export function ConsentAgentView() {
   const { state, run, open, afterReviewDecision } = useConsentScan();
@@ -230,7 +231,8 @@ export function ConsentAgentView() {
               incomplete: absent evidence here is not a clean result, and nothing below is the outcome of a completed scan.
             </div>
           )}
-          <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} tenScore={tenScoreFor(state)} />
+          <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} tenScore={tenScoreOf(tenAssessmentFor(state))} />
+          <TenChecksPanel ten={tenAssessmentFor(state)} />
           <ConsentSummarySection meta={state.websiteScanMeta} />
           {isDpdpScore(state.dpdpScore) && (
             <p className="muted small" data-testid="score-systems-note" style={{ margin: "4px 0 10px" }}>

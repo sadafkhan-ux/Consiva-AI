@@ -5,6 +5,7 @@ import { DpdpScoreSection } from "../components/DpdpScoreSection";
 import fixtures from "../test/dpdpScoreFixtures.json";
 import { buildReportModel } from "./buildReport";
 import { buildScoreView } from "./dpdpScore";
+import { buildTenChecks } from "./tenChecks";
 import { buildPageReport } from "./pageReports";
 import { FreeReport } from "./print/FreeReport";
 import { FullReport } from "./print/FullReport";
@@ -44,10 +45,10 @@ describe("every surface shows the number the server sent", () => {
     expect(screen.getByTestId("rpt-framework-score").textContent).toBe(v.headline);
     cleanup();
 
-    // the fixed sheets, as drawn
+    // the fixed Free and Full sheets print the Privacy Readiness Score of the 10-check assessment: the same number as the two-page summary and the dashboard hero, never the weighted section's
     for (const R of [FreeReport, FullReport]) {
       const { container } = render(<R model={m} />);
-      expect(container.querySelector(".pg-score-ring")!.textContent).toContain(String(server % 1 === 0 ? server : server));
+      expect(container.querySelector(".pg-score-ring")!.textContent).toContain(String(buildTenChecks(m).score));
       cleanup();
     }
 

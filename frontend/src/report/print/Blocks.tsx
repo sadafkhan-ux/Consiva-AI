@@ -1,12 +1,34 @@
 import type { ReactNode } from "react";
 import { findingPill, type PageReportView } from "../pageReports";
 import type { ElementStatus } from "../reportVisual";
+import type { TenAssessment } from "../tenChecks";
 import { BigRing, Flag, Icon, Mark, Pill, type IconName } from "./PageParts";
 
 // The blocks both fixed-page reports are built from. Each one only lays out values already worked out in report/pageReports.ts.
 
-export function ScoreCard({ view, id }: { view: PageReportView; id: string }) {
+/** The Privacy Readiness Score card. `ten` is the 10-check assessment (report/tenChecks.ts), the one source of the score: the Summary, Free and Full reports and the dashboard all print its number. */
+export function ScoreCard({ view, id, ten }: { view: PageReportView; id: string; ten?: TenAssessment }) {
   const { hero } = view;
+  if (ten) {
+    const tone = ten.score === null ? "mute" : ten.limitedBasis || ten.score < 80 ? "warn" : "good";
+    return (
+      <div className="pg-scorecard" data-testid={`pg-score-${id}`} data-source="ten-checks">
+        <div className="pg-score-ring">
+          <BigRing percent={ten.score} label={ten.score === null ? "No score" : String(ten.score)} id={id} />
+          <div className="pg-score-name">Privacy Readiness Score</div>
+        </div>
+        <div className="pg-score-text">
+          <span className={`pg-chip pg-${tone}`}><Icon name="check" size={11} /> {ten.score === null ? "No meaningful score" : `${ten.counts.passed} of ${ten.applicableMax} assessed checks passed`}</span>
+          <p>Total Weightage Awarded: {ten.totalText}. {ten.summary}</p>
+          <div className="pg-cov">
+            <div className="pg-cov-head"><b>Coverage</b> <span>{view.coverageLabel}</span></div>
+            <div className="pg-bar"><i style={{ width: `${view.coveragePct ?? 0}%` }} /></div>
+            {view.testedLine && <div className="pg-cov-note">{view.testedLine}</div>}
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="pg-scorecard" data-testid={`pg-score-${id}`}>
       <div className="pg-score-ring">

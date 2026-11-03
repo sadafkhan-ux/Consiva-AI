@@ -190,7 +190,7 @@ class TestEachPageCarriesItsReason:
 
         from app.db.repositories.scan_repository import _serialize_evidence
 
-        pages = [SimpleNamespace(id=1, url="https://x.test/privacy", title="P", http_status=200, discovered_via="sitemap"), SimpleNamespace(id=2, url="https://x.test/x", title=None, http_status=None, discovered_via="failed")]
+        pages = [SimpleNamespace(id=1, url="https://x.test/privacy", title="P", http_status=200, discovered_via="sitemap", final_url=None, content_type=None), SimpleNamespace(id=2, url="https://x.test/x", title=None, http_status=None, discovered_via="failed", final_url=None, content_type=None)]
         detailed = _serialize_evidence(pages, [], [], [], [], [], [], include_cookie_detail=True)["pages"]
         assert "Privacy or cookie page" in detailed[0]["selection_reason"] and detailed[1]["selection_reason"] is None
         assert all("selection_reason" not in p for p in _serialize_evidence(pages, [], [], [], [], [], [])["pages"])
@@ -208,7 +208,7 @@ class TestTheListOrderDoesNotDependOnWhichPageFinishedFirst:
 
         from app.db.repositories.scan_repository import _serialize_evidence
 
-        pages = [SimpleNamespace(id=i, url=u, title=None, http_status=200, discovered_via=v) for i, (u, v) in enumerate(stored)]
+        pages = [SimpleNamespace(id=i, url=u, title=None, http_status=200, discovered_via=v, final_url=None, content_type=None) for i, (u, v) in enumerate(stored)]
         return [p["url"] for p in _serialize_evidence(pages, [], [], [], [], [], [], include_cookie_detail=True)["pages"]]
 
     def test_every_completion_order_lists_the_same_way(self):
@@ -230,6 +230,6 @@ class TestTheListOrderDoesNotDependOnWhichPageFinishedFirst:
 
         from app.db.repositories.scan_repository import _serialize_evidence
 
-        pages = [SimpleNamespace(id=1, url="https://x.test/terms", title=None, http_status=200, discovered_via="sitemap"),
-                 SimpleNamespace(id=2, url="https://x.test/", title=None, http_status=200, discovered_via="seed")]
+        pages = [SimpleNamespace(id=1, url="https://x.test/terms", title=None, http_status=200, discovered_via="sitemap", final_url=None, content_type=None),
+                 SimpleNamespace(id=2, url="https://x.test/", title=None, http_status=200, discovered_via="seed", final_url=None, content_type=None)]
         assert [p["url"] for p in _serialize_evidence(pages, [], [], [], [], [], [])["pages"]] == ["https://x.test/terms", "https://x.test/"]

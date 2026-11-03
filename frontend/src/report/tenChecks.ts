@@ -6,7 +6,10 @@ import type { ReportModel } from "./buildReport";
  * fails check 1 and nothing else stops. There is no "Unable to Verify" result: a check whose evidence could not be established is Failed, with the reason and the limit stated, and the wording
  * never says the law was broken (a missing disclosure is "not evidenced", not a violation). Pure: it reads the report model and invents nothing.
  */
-export type TenResult = "Passed" | "Partially Passed" | "Failed" | "Not Applicable";
+export type TenResult = "Passed" | "Partially Passed" | "Failed" | "Not Assessed" | "Not Applicable";
+
+/** How good the evidence behind a result is, apart from whether there is any: Specific (direct and itemised), General (broad wording that does not name what it covers), Limited (narrow in scope or in the pages it covers). */
+export type TenQuality = "Specific" | "General" | "Limited" | "None" | "Not assessed" | "n/a";
 
 /** What a check is, so a technical observation is never read as a legal requirement and a best practice is never read as a required item. */
 export type TenKind = "dpdp" | "practice" | "technical" | "transparency";
@@ -39,6 +42,10 @@ export interface TenCheck {
   marksText: string;
   kind: TenKind;
   basis: TenBasis;
+  /** The quality of the evidence: what it states, and how specifically. */
+  quality: TenQuality;
+  /** How much of the requirement the evidence covers, in words ("One data category only", "Homepage only"), or null when it covers it as far as the scan can tell. */
+  coverage: string | null;
 }
 
 export interface TenAssessment {
@@ -52,16 +59,27 @@ export interface TenAssessment {
   totalText: string;
   /** The score as printed: "75%", or "No meaningful score" when no check applies. */
   scoreText: string;
-  counts: { passed: number; partial: number; failed: number; notApplicable: number };
-  /** Checks that scored 0 because they could not be completed (a scan failure, an unreadable page, an analysis that did not run), as against a disclosure that was looked for and not found. */
+  counts: { passed: number; partial: number; failed: number; notAssessed: number; notApplicable: number };
+  /** Checks that could not be assessed (a scan failure, an unreadable page, an analysis that did not run). They are left out of the score, never scored 0: a missing page is not a failed check. A disclosure that was looked for and not found is Failed. */
   incomplete: number;
+  /** True when fewer than half the checks could be assessed: the score then rests on very little and is only provisional. */
+  limitedBasis: boolean;
+  /** What the score rests on and what it does not show, in two or three sentences. One text, used by the dashboard and the PDF. */
+  summary: string;
+  /** One recommendation for each check that did not pass, each tied to that check's own finding; none for a check that passed. */
+  recommendations: { id: number; text: string }[];
   pages: { discovered: number | null; scanned: number; failed: number; skipped: number };
   limitations: string[];
 }
 
-const MARKS: Record<TenResult, number | null> = { Passed: 1, "Partially Passed": 0.5, Failed: 0, "Not Applicable": null };
+const MARKS: Record<TenResult, number | null> = { Passed: 1, "Partially Passed": 0.5, Failed: 0, "Not Assessed": null, "Not Applicable": null };
 const fmt = (n: number): string => String(Math.round(n * 100) / 100);
-const clip = (t: string, n = 150): string => (t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t);
+/** A passage cut to `n` characters, at a word boundary when one is near, so a quotation never ends mid-word. */
+const clip = (t: string, n = 150): string => {
+  if (t.length <= n) return t;
+  const cut = t.slice(0, n - 1), sp = cut.lastIndexOf(" ");
+  return `${(sp > n * 0.6 ? cut.slice(0, sp) : cut).trimEnd()}…`;
+};
 
 /** Marks as printed: awarded over maximum, or N/A for a check that does not apply. */
 export const marksLabel = (awarded: number | null, max: number | null): string => (max === null ? "N/A" : `${fmt(awarded ?? 0)} / ${fmt(max)}`);
@@ -81,10 +99,10 @@ export function scoreChecks(checks: readonly Pick<TenCheck, "result" | "awarded"
   const applicableMax = applicable.reduce((n, c) => n + (c.max ?? 0), 0);
   const score = applicableMax === 0 ? null : roundScore((awarded / applicableMax) * 100);
   const count = (r: TenResult) => checks.filter((c) => c.result === r).length;
-  const counts = { passed: count("Passed"), partial: count("Partially Passed"), failed: count("Failed"), notApplicable: count("Not Applicable") };
+  const counts = { passed: count("Passed"), partial: count("Partially Passed"), failed: count("Failed"), notAssessed: count("Not Assessed"), notApplicable: count("Not Applicable") };
   const formula = score === null
     ? "No check applies to this website, so no meaningful score can be calculated."
-    : `Score = marks awarded ÷ applicable marks × 100 = ${fmt(awarded)} ÷ ${fmt(applicableMax)} × 100 = ${fmt(score)}${counts.notApplicable ? ` (${counts.notApplicable} check${counts.notApplicable === 1 ? "" : "s"} not applicable, left out of the maximum)` : ""}`;
+    : `Score = marks awarded ÷ applicable marks × 100 = ${fmt(awarded)} ÷ ${fmt(applicableMax)} × 100 = ${fmt(score)}${counts.notApplicable ? ` (${counts.notApplicable} check${counts.notApplicable === 1 ? "" : "s"} not applicable, left out of the maximum)` : ""}${counts.notAssessed ? ` (${counts.notAssessed} check${counts.notAssessed === 1 ? "" : "s"} could not be assessed, left out of the maximum)` : ""}`;
   return {
     awarded, applicableMax, score, counts, formula,
     totalText: score === null ? "No applicable check" : `${fmt(awarded)} / ${fmt(applicableMax)}`,
@@ -94,16 +112,20 @@ export function scoreChecks(checks: readonly Pick<TenCheck, "result" | "awarded"
 
 const NO_POLICY_WORDS = "No privacy policy text was available to read, so this could not be evidenced (not a finding that the law was broken).";
 
-interface Draft { basis?: TenBasis; result: TenResult; evidence?: string; sourceUrl?: string | null; explanation: string; completed?: boolean; limitation?: string | null }
+interface Draft { basis?: TenBasis; result: TenResult; evidence?: string; sourceUrl?: string | null; explanation: string; completed?: boolean; limitation?: string | null; quality?: TenQuality; coverage?: string | null }
 
-function make(id: number, name: string, legal: string | null, kind: TenKind, d: Draft): TenCheck {
+function make(id: number, name: string, legal: string | null, kind: TenKind, d0: Draft): TenCheck {
+  // A check that could not be run to the end is Not Assessed: it is left out of the score, not scored 0 (a page that could not be reached is not a failed check).
+  const d: Draft = d0.result === "Failed" && d0.completed === false ? { ...d0, result: "Not Assessed" } : d0;
   const m = MARKS[d.result];
   const basis: TenBasis = d.basis ?? (d.result === "Passed" ? "Verified" : d.result === "Partially Passed" ? "Partially verified" : d.result === "Not Applicable" ? "Not applicable" : d.completed === false ? "Evidence unavailable" : "Not evidenced");
+  const quality: TenQuality = d.quality ?? (d.result === "Passed" ? "Specific" : d.result === "Partially Passed" ? "Limited" : d.result === "Not Assessed" ? "Not assessed" : d.result === "Not Applicable" ? "n/a" : "None");
   return {
-    kind, basis,
+    kind, basis, quality, coverage: d.coverage ?? null,
     id, name, result: d.result, awarded: m, max: m === null ? null : 1,
     evidence: d.evidence ?? "", sourceUrl: d.sourceUrl ?? null, explanation: d.explanation, legal,
-    completed: d.completed ?? true, limitation: d.limitation ?? null, marksText: marksLabel(m, m === null ? null : 1),
+    completed: d.result === "Not Assessed" ? false : d.completed ?? true, limitation: d.limitation ?? null,
+    marksText: d.result === "Not Assessed" ? "Not assessed" : marksLabel(m, m === null ? null : 1),
   };
 }
 
@@ -144,6 +166,19 @@ function policyCheck(a: PolicyAnalysis | null, reqId: string, what: string, sour
     sourceUrl: a!.documents[0]?.url ?? null, limitation: sourceLimit,
   };
 }
+
+/**
+ * Evidence QUALITY, as against evidence that merely exists. A requirement the analysis verified word for word is still only as good as what the passage says: a retention period for one kind of data
+ * is not a retention disclosure, and "service providers" with no kind of provider named is not a statement of who data is shared with. These read the verified passage itself (never the page), and
+ * lower a Passed to Partially Passed with the gap stated. They are the documented rules of the 10-check methodology; none of them is specific to one website.
+ */
+const GENERIC_SCOPE = /\b(personal (data|information|details)|your (data|information|details)|(data|information) (that )?we (collect|hold|process|receive)|all (of )?(your |the )?(data|information)|(we|company) (retain|keep|store|hold)s? (your|personal|the))\b/i;
+const CATEGORY_ONLY = /\b(contact (form|us)|enquir(y|ies)|inquir(y|ies)|form submissions?|submissions?|newsletters?|subscribers?|job applications?|applicants?|resumes?|surveys?|support (tickets?|requests?)|server logs?|log files?|backups?|cookies?)\b/i;
+/** True when a retention passage names a period or criterion for one kind of data only. */
+export const retentionIsCategoryOnly = (quote: string): boolean => CATEGORY_ONLY.test(quote) && !GENERIC_SCOPE.test(quote);
+const RECIPIENT_NAMED = /\b(analytics|advertis\w*|marketing|payment (processors?|providers?|gateways?)|cloud|hosting|(sub-?)?processors?|affiliates?|subsidiar\w+|group compan\w+|government|law enforcement|regulator\w*|authorit\w+|courts?|legal (process|obligations?|requirements?)|crm|email (service|delivery) providers?|shipping|logistics|auditors?|professional advis[eo]rs?)\b/i;
+/** True when a sharing passage names at least one kind of recipient (not only "service providers" or "third parties"). */
+export const sharingNamesRecipients = (quote: string): boolean => RECIPIENT_NAMED.test(quote);
 
 const pickBest = (rs: (PolicyRequirementResult | undefined)[]) => rs.find((r) => isVerified(r)) ?? rs.find((r) => r?.status === "partial");
 
@@ -190,6 +225,23 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   const c3 = policyCheck(a, "notice_purposes", "why personal data is collected and used", noPol, foundUrl, unread);
   const c4 = policyCheck(a, "data_sharing", "sharing of personal data with processors and other third parties", noPol, foundUrl, unread);
   const c5 = policyCheck(a, "retention", "how long personal data is kept", noPol, foundUrl, unread);
+  {
+    const sq = find(a, "data_sharing")?.quote ?? "";
+    if (c4.result === "Passed" && !sharingNamesRecipients(sq)) {
+      const seen = [...new Set((ev?.trackers ?? []).filter((t) => /analytic|market|advert/i.test(t.category ?? "") && t.vendor).map((t) => t.vendor as string))].slice(0, 3);
+      c4.result = "Partially Passed"; c4.quality = "General";
+      c4.coverage = "Recipients not named";
+      c4.explanation = `The policy says data is shared with service providers, but the passage names no kind of recipient (analytics, advertising, payment, hosting, authorities and so on), so who receives it is not established.${seen.length ? ` The scan observed ${seen.join(", ")}, which the passage does not name.` : ""}`;
+      c4.limitation = "Only the sharing passage the analysis verified was assessed; the policy may name recipients elsewhere.";
+    }
+    const rq = find(a, "retention")?.quote ?? "";
+    if (c5.result === "Passed" && retentionIsCategoryOnly(rq)) {
+      c5.result = "Partially Passed"; c5.quality = "Limited";
+      c5.coverage = "One kind of data only";
+      c5.explanation = "The policy gives a retention period for one kind of data only (for example form submissions). Periods or criteria for the other personal data it collects are not evidenced.";
+      c5.limitation = "Retention for the policy's other data categories is not established by the verified passage.";
+    }
+  }
 
   // 6. user rights
   let c6: Draft;
@@ -199,8 +251,11 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
     const rights = ["rights_access", "rights_correction_erasure", "rights_nominate"].map((id) => find(a, id));
     const rightsFound = rights.filter((r) => isVerified(r)).length;
     const best = pickBest([means, ...rights]);
-    if (isVerified(means) && rightsFound > 0) c6 = { result: "Passed", evidence: clip(best?.quote ?? ""), sourceUrl: best?.source_url ?? null, explanation: `The policy names ${rightsFound} user right${rightsFound === 1 ? "" : "s"} and the means of making a request.` };
-    else if (best) c6 = { result: "Partially Passed", evidence: clip(best.quote), sourceUrl: best.source_url, explanation: `Only part is evidenced: ${isVerified(means) ? "the means of making a request, but no right is named" : rightsFound > 0 ? "rights are named, but no means of making a request" : "some wording, not a complete statement of rights and the means"}.` };
+    const namedRight = rights.find((r) => isVerified(r));
+    const shown = namedRight ?? best;
+    // A right is explained when it is stated, not when the policy only says "contact us": two of the three rights the analysis looks for (access, correction and erasure, nomination) and the means of making a request.
+    if (isVerified(means) && rightsFound >= 2) c6 = { result: "Passed", evidence: clip(shown?.quote ?? ""), sourceUrl: shown?.source_url ?? null, explanation: `The policy names ${rightsFound} of 3 user rights and the means of making a request.`, coverage: `${rightsFound} of 3 rights named` };
+    else if (best) c6 = { result: "Partially Passed", evidence: clip((shown ?? best).quote), sourceUrl: (shown ?? best).source_url, quality: "Limited", coverage: `${rightsFound} of 3 rights named`, explanation: `Only part is evidenced: ${isVerified(means) && rightsFound === 1 ? "the means of making a request and one right, but fewer rights than are needed to say the rights are explained" : isVerified(means) ? "the means of making a request, but no right is named" : rightsFound > 0 ? "rights are named, but no means of making a request" : "some wording, not a complete statement of rights and the means"}.` };
     else c6 = { result: "Failed", explanation: "No statement of user rights or of how to exercise them was found in the policy text that was read. This is not a finding that the law was broken.", sourceUrl: a!.documents[0]?.url ?? null, limitation: noPol };
   }
 
@@ -223,13 +278,14 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   const unclassified = cookies.filter((c) => !c.category && !c.vendor).length + trackers.filter((t) => !t.category && !t.vendor).length;
   const names = [...new Set([...trackers.map((t) => t.vendor).filter((v): v is string => !!v), ...cookies.map((c) => c.name)])].slice(0, 4).join(", ");
   const classNote = unclassified > 0 ? `${unclassified} observed item${unclassified === 1 ? "" : "s"} could not be classified as necessary, analytics or advertising.` : null;
-  const lim8 = ["Absence of a tracker is not proof that none exists under all conditions.", classNote].filter(Boolean).join(" ");
-  const seen8 = cookies.length + trackers.length === 0 ? "No cookie or tracking request was observed on the scanned pages." : `${cookies.length} cookie${cookies.length === 1 ? "" : "s"} and ${trackers.length} tracking request${trackers.length === 1 ? "" : "s"} observed${names ? ` (${names})` : ""}.`;
+  const covNote = scanned > 0 && sp?.discovered != null && sp.discovered > scanned ? `Detection covers ${scanned} of ${sp.discovered} pages.` : null;
+  const lim8 = ["Absence of a tracker is not proof that none exists under all conditions.", covNote, classNote].filter(Boolean).join(" ");
+  const seen8 = cookies.length + trackers.length === 0 ? "No cookie or third-party request was observed on the scanned pages." : `${cookies.length} cookie${cookies.length === 1 ? "" : "s"} and ${trackers.length} third-party request${trackers.length === 1 ? "" : "s"} observed${names ? ` (${names})` : ""}.`;
   const c8: Draft = !detectionRan
     ? { result: "Failed", completed: false, basis: scanned === 0 ? "Scan failed" : "Evidence unavailable", explanation: scanned === 0 ? "No page loaded, so cookies and trackers could not be detected." : "The scan's cookie and tracker evidence was not loaded, so the detection could not be assessed.", limitation: "Detection could not be completed." }
     : failedPages > 0
       ? { result: "Partially Passed", evidence: seen8, sourceUrl: trackers[0]?.page_url ?? null, explanation: `Detection ran on the pages that loaded, but ${failedPages} page${failedPages === 1 ? "" : "s"} did not load, so tracking there could not be observed.`, limitation: lim8 }
-      : { result: "Passed", evidence: seen8, sourceUrl: trackers[0]?.page_url ?? null, explanation: "Cookies and tracking requests were detected on every scanned page.", limitation: lim8 };
+      : { result: "Passed", evidence: seen8, sourceUrl: trackers[0]?.page_url ?? null, explanation: "Cookies and third-party requests were detected on every scanned page. This records what the site does; it does not assess whether the policy discloses it.", limitation: lim8, coverage: covNote ? `${scanned} of ${sp!.discovered} pages` : null };
 
   // 9. consent behaviour
   const cons = model.visual?.consent ?? null;
@@ -264,7 +320,7 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
     } else if (!cons.acceptTested && !cons.rejectTested) {
       c9 = { result: "Failed", completed: false, basis: "Not tested", evidence: line, sourceUrl: home, explanation: "A banner was found, but neither Accept nor Reject could be clicked and confirmed, so only the state before consent was observed.", limitation: "Accept and Reject were not tested." };
     } else if (cons.acceptTested && cons.rejectTested && preClean && rejectClean) {
-      c9 = { result: "Passed", evidence: line, sourceUrl: home, explanation: "All three states were tested: no analytics or marketing before consent, and none after Reject." };
+      c9 = { result: "Passed", evidence: line, sourceUrl: home, quality: "Limited", coverage: "Homepage only", limitation: "Accept and Reject were tested once, on the homepage. Other pages and other tracking technologies were not tested, so this does not show that every consent requirement is met across the website.", explanation: "All three states were tested on the homepage: no analytics or marketing before consent, and none after Reject." };
     } else if (cons.acceptTested && cons.rejectTested && (preClean || preDenied) && (rejectClean || rejectDenied)) {
       c9 = { result: "Partially Passed", evidence: `${line} Requests that carry data: ${sends("pre_consent").length} before consent and ${sends("post_reject").length} after Reject, sent in consent-denied mode (gcs=G100); no analytics or marketing cookie was set before consent.`, sourceUrl: home,
         explanation: "Google tags sent requests before consent and after Reject in consent-denied mode, and no analytics or marketing cookie was set. The requests still reach Google, so this is not a clean result." };
@@ -287,22 +343,35 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
     make(9, "Consent Behaviour", "Relates to DPDP Act s.6(1), 6(4); Rules r.3(c)(i)", "technical", c9),
   ];
 
-  // 10. evidence and transparency: can the results that could be assessed be traced to a page or an observation? A check that could not be completed has no result to trace, and its gap is
-  // named here instead of being counted against this check a second time.
-  const gaps = first.filter((c) => c.result === "Failed" && !c.completed).map((c) => c.id);
-  const rest = first.filter((c) => c.result !== "Not Applicable" && !(c.result === "Failed" && !c.completed));
-  const witnessed = rest.filter((c) => c.evidence !== "" || c.sourceUrl !== null).length;
-  const frac = rest.length === 0 ? 0 : witnessed / rest.length;
-  const gapNote = gaps.length ? ` Check${gaps.length === 1 ? "" : "s"} ${gaps.join(", ")} could not be completed and ${gaps.length === 1 ? "is" : "are"} listed under the limitations.` : "";
+  // 10. evidence and transparency: can each positive finding of checks 1 to 9 be traced to a page the scan actually read? Check 10 is not counted in its own evidence. A finding is traceable when it carries
+  // an evidence excerpt or observation AND a source address that is one of the pages the scan read (or a policy document the analysis read). A check that could not be assessed has no result to trace; it
+  // is named under the limitations. A completed "not found" result records what was searched, so it is listed apart and is not counted as evidence.
+  const norm = (u: string): string => u.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[#?].*$/, "").replace(/\/$/, "");
+  const readPages = new Set<string>([
+    ...(ev?.pages ?? []).filter((p) => p.discovered_via !== "failed" && p.discovered_via !== "timeout" && p.discovered_via !== "robots_disallowed").flatMap((p) => [p.url, p.final_url ?? ""]),
+    ...(sp?.rows ?? []).filter((r) => r.scanned).map((r) => r.url), ...(a?.documents ?? []).map((d) => d.url), ...(ev?.policies ?? []).map((p) => p.url), model.screenshot?.page_url ?? "",
+  ].filter(Boolean).map(norm));
+  const inScan = (u: string | null): boolean => !!u && (readPages.size === 0 || readPages.has(norm(u)));
+  const gaps = first.filter((c) => c.result === "Not Assessed").map((c) => c.id);
+  const rest = first.filter((c) => c.result !== "Not Applicable" && c.result !== "Not Assessed");
+  const positive = rest.filter((c) => c.result === "Passed" || c.result === "Partially Passed");
+  const absence = rest.length - positive.length;
+  const witnessed = positive.filter((c) => c.evidence !== "" && inScan(c.sourceUrl)).length;
+  const frac = positive.length === 0 ? 0 : witnessed / positive.length;
+  const gapNote = gaps.length ? ` Check${gaps.length === 1 ? "" : "s"} ${gaps.join(", ")} could not be assessed and ${gaps.length === 1 ? "is" : "are"} listed under the limitations.` : "";
+  const absNote = absence > 0 ? ` ${absence} completed result${absence === 1 ? " records" : "s record"} only what was searched for and not found, and ${absence === 1 ? "is" : "are"} not counted as evidence.` : "";
+  const ofLine = `${witnessed} of ${positive.length} findings (checks 1 to 9; this check is not counted in its own evidence) trace to an evidence excerpt and a page the scan read.`;
   const c10: Draft = !ev
     ? { result: "Failed", completed: false, basis: "Evidence unavailable", explanation: "The scan's evidence was not loaded, so the other results could not be traced to their source.", limitation: "Evidence unavailable." }
     : rest.length === 0
-      ? { result: "Failed", completed: false, basis: "Evidence unavailable", explanation: `None of the other checks could be completed, so there is no result to trace to its source.${gapNote}`, limitation: "No check could be completed." }
-      : frac >= 0.8
-        ? { result: "Passed", evidence: `${witnessed} of ${rest.length} completed results carry a source page or an observation.`, sourceUrl: null, explanation: `The completed results can be traced to a source page and its text, or to a technical observation.${gapNote}` }
-        : frac >= 0.5
-          ? { result: "Partially Passed", evidence: `${witnessed} of ${rest.length} completed results carry a source page or an observation.`, explanation: `Some completed results rest on evidence that could be traced; the others found nothing to cite.${gapNote}`, limitation: failedPages > 0 ? `${failedPages} page${failedPages === 1 ? "" : "s"} did not load.` : null }
-          : { result: "Failed", evidence: `${witnessed} of ${rest.length} completed results carry a source page or an observation.`, explanation: `Most completed results have no source page or observation behind them, so they cannot be independently reviewed. Missing evidence is not proof of a violation.${gapNote}`, limitation: failedPages > 0 ? `${failedPages} page${failedPages === 1 ? "" : "s"} did not load.` : null };
+      ? { result: "Failed", completed: false, basis: "Evidence unavailable", explanation: `None of the other checks could be assessed, so there is no result to trace to its source.${gapNote}`, limitation: "No check could be assessed." }
+      : positive.length === 0
+        ? { result: "Failed", evidence: "", explanation: `No finding rests on positive evidence: every completed result records only that something was not found.${absNote}${gapNote}`, limitation: failedPages > 0 ? `${failedPages} page${failedPages === 1 ? "" : "s"} did not load.` : null }
+        : frac >= 0.8
+          ? { result: "Passed", evidence: ofLine, sourceUrl: null, quality: "Specific", explanation: `Each finding can be traced to its excerpt and to a page that was read.${absNote}${gapNote}`, coverage: scanned > 0 && sp?.discovered != null && sp.discovered > scanned ? `${scanned} of ${sp.discovered} pages read` : null }
+          : frac >= 0.5
+            ? { result: "Partially Passed", evidence: ofLine, quality: "Limited", explanation: `Some findings can be traced to a page that was read; the others carry no excerpt or name no page the scan read.${absNote}${gapNote}`, limitation: failedPages > 0 ? `${failedPages} page${failedPages === 1 ? "" : "s"} did not load.` : null }
+            : { result: "Failed", evidence: ofLine, explanation: `Most findings cannot be traced to a page the scan read, so they cannot be independently reviewed. Missing evidence is not proof of a violation.${absNote}${gapNote}`, limitation: failedPages > 0 ? `${failedPages} page${failedPages === 1 ? "" : "s"} did not load.` : null };
   const checks = [...first, make(10, "Privacy Evidence and Transparency", null, "transparency", c10)];
 
   const sc = scoreChecks(checks);
@@ -312,16 +381,39 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   if (skippedPages > 0) limitations.push(`${skippedPages} page${skippedPages === 1 ? " was" : "s were"} found but not scanned.`);
   // Checks that could not be completed, grouped by the limit they share, so one limit is said once.
   const byLimit = new Map<string, number[]>();
-  for (const c of checks) if (c.result === "Failed" && !c.completed) byLimit.set(c.limitation ?? c.explanation, [...(byLimit.get(c.limitation ?? c.explanation) ?? []), c.id]);
-  for (const [text, ids] of byLimit) limitations.push(`Check${ids.length === 1 ? "" : "s"} ${ids.join(", ")} could not be completed: ${text}`);
+  for (const c of checks) if (c.result === "Not Assessed") byLimit.set(c.limitation ?? c.explanation, [...(byLimit.get(c.limitation ?? c.explanation) ?? []), c.id]);
+  for (const [text, ids] of byLimit) limitations.push(`Check${ids.length === 1 ? "" : "s"} ${ids.join(", ")} could not be assessed (left out of the score): ${text}`);
+  const discovered = sp?.discovered ?? model.visual?.pagesFound ?? null;
+  const assessedN = checks.filter((c) => c.max !== null).length;
+  const limitedBasis = assessedN < 5;
+  const where = scanned > 0 ? (discovered != null && discovered > scanned ? `${scanned} of the ${discovered} pages found` : `${scanned} ${scanned === 1 ? "page" : "pages"}`) : "no page";
+  const summary = sc.score === null
+    ? "No meaningful score: no check could be assessed on the evidence available. This is not a finding about the website."
+    : `${sc.totalText} marks across ${assessedN} assessed check${assessedN === 1 ? "" : "s"}, from ${where} on the entered domain.${sc.counts.notAssessed ? ` ${sc.counts.notAssessed} could not be assessed and ${sc.counts.notAssessed === 1 ? "is" : "are"} left out.` : ""}${limitedBasis ? " Fewer than half the checks could be assessed, so this score is provisional." : ""} Consent was tested once, on the homepage. An indicative readiness reading, not a legal determination or certification.`;
 
   return {
     checks, awarded: sc.awarded, applicableMax: sc.applicableMax, score: sc.score, counts: sc.counts, formula: sc.formula, totalText: sc.totalText, scoreText: sc.scoreText,
-    incomplete: checks.filter((c) => c.result === "Failed" && !c.completed).length,
+    incomplete: sc.counts.notAssessed, limitedBasis, summary,
+    recommendations: checks.filter((c) => c.result === "Partially Passed" || c.result === "Failed").map((c) => ({ id: c.id, text: ADVICE[c.id] })).concat(
+      checks.some((c) => c.result === "Not Assessed") ? [{ id: 0, text: "Run the scan again when the pages it could not read are reachable, so the checks left out can be assessed." }] : []),
     pages: { discovered: sp?.discovered ?? model.visual?.pagesFound ?? null, scanned, failed: failedPages, skipped: skippedPages },
     limitations,
   };
 }
+
+/** What to do about a check that did not pass in full. Plain advice about the website's own text or behaviour; it never says the law was broken. */
+const ADVICE: Record<number, string> = {
+  1: "Publish a privacy policy page that is linked from the homepage and can be read by the scan.",
+  2: "List each category of personal data collected, including data collected automatically.",
+  3: "State the purpose for which each category of personal data is used.",
+  4: "Name the kinds of recipients data is shared with (processors, analytics and advertising providers, authorities).",
+  5: "State a retention period or criterion for every category of personal data, not for one.",
+  6: "Explain each right (access, correction and erasure, nomination) and how to exercise it.",
+  7: "Give a grievance contact, a response period and a Data Protection Officer or business contact.",
+  8: "Review the cookies and trackers observed and classify each as necessary, analytics or advertising.",
+  9: "Confirm that analytics and advertising stay off before consent and after Reject, on every page with a banner.",
+  10: "Make sure each finding cites the page and the passage it came from.",
+};
 
 /** The words printed beside a check for its kind. A technical observation or a best practice is never presented as a required DPDP item. */
 export const KIND_LABEL: Record<TenKind, string> = { dpdp: "DPDP-related", practice: "Best practice", technical: "Technical check", transparency: "Report transparency" };

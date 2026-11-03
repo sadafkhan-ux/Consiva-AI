@@ -181,3 +181,85 @@
 .sn-wording { font-style: italic; color: var(--sn-ink) !important; }
 .sn-src { color: var(--sn-blue); text-decoration: none; overflow-wrap: anywhere; } .sn-nosrc { color: var(--sn-mut); font-style: italic; }
 .sn-incomplete { color: #8a4b00; font-weight: 700; }
+
+/* ── Privacy Policy Report, qualitative layout ── */
+/* page 1: the score card holds the full tally; the screenshot keeps its own proportions (never stretched or cropped) and gets the room the score card no longer needs */
+.sn-hero { grid-template-columns: 196px minmax(0, 1fr); }
+.sn-score { gap: 4px; padding: 10px 10px; justify-content: flex-start; }
+.sn-score .pg-ring { width: 96px; height: 96px; }
+.sn-score-pct { font-size: 9.6px; }
+.sn-tally { margin: 3px 0 0; width: 100%; display: flex; flex-direction: column; gap: 2px; font-size: 8.8px; text-align: left; }
+.sn-tally > div { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 6px; background: #f1f4fc; }
+.sn-tally dt { color: #2c3358; } .sn-tally dd { margin: 0; font-weight: 800; color: var(--sn-navy); }
+.sn-tally > div[data-tone="good"] { background: #e0f6ea; } .sn-tally > div[data-tone="warn"] { background: #fff4de; } .sn-tally > div[data-tone="bad"] { background: #fde8ea; } .sn-tally > div[data-tone="na"] { background: #efeaff; }
+.sn-shot { padding: 8px; gap: 6px; }
+.sn-shot-img { height: auto; max-height: 360px; object-fit: contain; object-position: top center; background: #f1f3fa; }
+.sn-readme { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--sn-line); border-left: 4px solid var(--sn-blue); border-radius: 10px; background: var(--sn-soft); padding: 8px 12px; font-size: 9.4px; line-height: 1.45; color: #2f3350; }
+.sn-readme svg { color: var(--sn-blue); flex: 0 0 auto; margin-top: 1px; } .sn-readme b { display: block; font-size: 10.4px; color: var(--sn-navy); margin-bottom: 1px; } .sn-readme p { margin: 0; }
+.sn-tile { padding: 11px 12px; } .sn-tile b { font-size: 21px; }
+.sn-fit-1 .sn-shot-img { height: auto; max-height: 300px; } .sn-fit-2 .sn-shot-img { height: auto; max-height: 250px; } .sn-fit-3 .sn-shot-img { height: auto; max-height: 210px; } .sn-fit-4 .sn-shot-img { height: auto; max-height: 170px; }
+
+/* page 2: technical findings and policy assessments are told apart by a coloured edge on each row, and every result says how good its evidence is */
+.sn-checks tbody tr { box-shadow: inset 3px 0 0 #1f4fd8; }
+.sn-checks tbody tr[data-kind="practice"] { box-shadow: inset 3px 0 0 #d99a1a; } .sn-checks tbody tr[data-kind="technical"] { box-shadow: inset 3px 0 0 #7a4dff; } .sn-checks tbody tr[data-kind="transparency"] { box-shadow: inset 3px 0 0 #8b93b8; }
+.sn-quality { display: block; margin-top: 1px; font-size: 8px; color: var(--sn-mut); white-space: nowrap; } .sn-quality[data-quality="General"], .sn-quality[data-quality="Limited"] { color: #8a4b00; }
+.sn-ev { font-size: 8.6px; } .sn-why { font-size: 8.6px; }
+.sn-checks th:nth-child(3), .sn-checks td:nth-child(3) { width: 104px; }
+
+/* ── Refinement (visual only): a tighter header and spacing, a slimmer score ring, one corner radius, and the page's spare height shared evenly between sections instead of left blank at the bottom ── */
+.sn-head { padding: 8px 24px; } .sn-logo { height: 38px; } .sn-head-r { gap: 3px; } .sn-pill { font-size: 12px; padding: 2px 14px; }
+.sn-p1 .sn-panel { margin: 8px 8px 8px; padding: 12px 16px 10px; gap: 8px; justify-content: space-between; border-radius: 16px; box-shadow: 0 1px 6px rgba(5, 15, 70, .28); }
+.sn-domain { font-size: 25px; } .sn-title h1 { font-size: 12.5px; }
+.sn-meta { padding: 5px 4px; border-radius: 12px; }
+.sn-card, .sn-dpdp, .sn-contacts > div, .sn-readme, .sn-tile { border-radius: 12px; }
+.sn-card { box-shadow: 0 1px 3px rgba(20, 40, 120, .07); }
+.sn-hero { grid-template-columns: 184px minmax(0, 1fr); gap: 8px; }
+.sn-score { padding: 8px 8px; gap: 3px; }
+.sn-card-t { font-size: 11px; letter-spacing: .01em; }
+.sn-score .pg-ring { width: 92px; height: 92px; }
+.sn-score .pg-ring circle { stroke-width: 10; } .sn-score .pg-ring text[data-testid^="pg-percent"] { font-size: 40px; } .sn-score .pg-ring text:last-of-type { font-size: 13px; }
+.sn-score-line { font-size: 9.4px; line-height: 1.25; } .sn-score-pct { font-size: 9.4px; }
+.sn-tally { gap: 2px; font-size: 8.6px; } .sn-tally > div { padding: 1.5px 8px; border-radius: 6px; }
+.sn-shot { padding: 6px; gap: 5px; } .sn-browser { padding: 2px 10px; } .sn-shot-img { border-radius: 6px; max-height: 372px; }
+.sn-contacts { gap: 8px; } .sn-contacts > div { padding: 6px 12px; }
+.sn-two { gap: 8px; } .sn-card-head { margin-bottom: 5px; }
+.sn-el { padding: 5px 4px 5px; }
+.sn-dpdp { padding: 5px 12px; }
+.sn-tile { padding: 8px 12px; } .sn-tile b { font-size: 20px; }
+.sn-readme { padding: 6px 12px; }
+
+/* page 2 */
+.sn-p2 .sn-panel { padding: 14px 24px 10px; gap: 6px; }
+.sn-p2 .sn-h { margin-top: 0; font-size: 12.5px; }
+.sn-table { border-radius: 10px; } .sn-table th { padding: 4px 7px; } .sn-table td { padding-top: 3px; padding-bottom: 3px; }
+.sn-ev, .sn-why { line-height: 1.28; }
+.sn-forms { border-radius: 12px; } .sn-cta { border-radius: 12px; padding: 6px 16px; } .sn-disc { border-radius: 10px; }
+
+/* ── Page 1 arrangement: a compact score above the consent banner on the left, the homepage on the right; no score breakdown on this page (it is on page 2, in Key Compliance Checks) ── */
+.sn-hero { grid-template-columns: 212px minmax(0, 1fr); gap: 8px; align-items: stretch; }
+.sn-left { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sn-left .sn-score { flex: 0 0 auto; flex-direction: row; justify-content: flex-start; align-items: center; gap: 8px; padding: 7px 12px; text-align: left; }
+.sn-left .sn-score .sn-card-t { flex: 1 1 auto; font-size: 11.5px; line-height: 1.25; }
+.sn-left .sn-score .pg-score-ring { flex: 0 0 auto; }
+.sn-left .sn-score .pg-ring { width: 66px; height: 66px; }
+.sn-left .sn-banner { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; padding: 9px 12px; }
+.sn-left .sn-banner .sn-card-head { margin-bottom: 0; }
+.sn-status { display: flex; align-items: center; justify-content: center; text-transform: uppercase; letter-spacing: .08em; font-size: 15px; font-weight: 800; border-radius: 10px; padding: 7px 10px; background: #dff6ea; color: #0c7a4a; border: 1px solid #b9e8cf; }
+.sn-status[data-tone="warn"] { background: #fff4de; color: #9a6200; border-color: #f7dca6; } .sn-status[data-tone="bad"] { background: #fde8ea; color: #b32630; border-color: #f6c3c8; } .sn-status[data-tone="mute"] { background: #eef0f8; color: #50597f; border-color: #d8dcee; }
+.sn-left .sn-facts { margin: 0; font-size: 8.8px; gap: 3px; } .sn-left .sn-facts > div { padding: 2px 0; }
+.sn-left .sn-opts { margin-top: auto; }
+.sn-shot { align-self: stretch; } .sn-shot-img { max-height: 330px; }
+.sn-one { grid-template-columns: minmax(0, 1fr); }
+.sn-one .sn-els { grid-template-columns: repeat(6, 1fr); } .sn-one .sn-el { padding: 6px 3px; }
+
+/* page 1 balance: the banner card is a little tighter so the left column and the screenshot end together; the lower cards take a share of the spare height so the gaps stay even */
+.sn-hero { grid-template-columns: 206px minmax(0, 1fr); }
+.sn-left { gap: 7px; } .sn-left .sn-banner { padding: 8px 12px; gap: 5px; } .sn-status { padding: 5px 10px; font-size: 14px; }
+.sn-left .sn-facts { gap: 1px; } .sn-left .sn-facts > div { padding: 1px 0; } .sn-left .sn-facts dd { text-align: right; }
+.sn-left .sn-opts { gap: 6px; } .sn-left .sn-opts > span { padding: 2px 8px; }
+.sn-shot { justify-content: flex-start; }
+.sn-contacts > div { padding: 9px 14px; font-size: 10px; } .sn-contacts b { font-size: 11px; }
+.sn-one .sn-el { padding: 10px 3px; } .sn-one .sn-el-icon { width: 22px; height: 22px; }
+.sn-tile { padding: 12px 14px; } .sn-tile b { font-size: 22px; }
+.sn-readme { padding: 8px 14px; font-size: 9.8px; }
+.sn-dpdp { padding: 7px 14px; }

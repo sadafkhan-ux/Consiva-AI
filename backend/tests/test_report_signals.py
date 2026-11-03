@@ -127,7 +127,7 @@ def test_the_cookie_inventory_carries_purpose_provider_and_lifetime():
 
 def test_the_agents_own_evidence_is_unchanged_by_the_report_additions():
     form = SimpleNamespace(id="f", selector="form", fields=[], purpose_guess=None, submit_url="https://x.test/send", page_id="p")
-    page = SimpleNamespace(id="p", url="https://x.test/", title="t", http_status=200, discovered_via="seed")
+    page = SimpleNamespace(id="p", url="https://x.test/", title="t", http_status=200, discovered_via="seed", final_url=None, content_type=None)
     cookie = SimpleNamespace(id="c", name="_ga", domain="x.test", category="analytics", vendor="Google Analytics", is_first_party=True, source="rule",
                              consent_states=["pre_consent"], path="/", expiry=None, secure=False, http_only=False, same_site="Lax", observations=[])
     plain = scan_repository._serialize_evidence([page], [form], [cookie], [], [], [], [])
