@@ -1,7 +1,8 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ReportModel } from "../buildReport";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
-import { buildSummaryReport, provisionLines, shortLine, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, weightage, type CheckRow, type SummaryView } from "../summaryReport";
+import { buildSummaryReport, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, type SummaryView } from "../summaryReport";
+import { buildTenChecks, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
 import { BigRing, Icon, Pill, SheetPageStyle, type IconName } from "./PageParts";
 import "./pages.css";
 import "./snapshot.css";
@@ -9,7 +10,13 @@ import "./snapshot.css";
 /** The two-page "Website Privacy Readiness Report" (variant "summary"), laid out as the approved reference: page 1 is the website overview, page 2 the detailed findings. */
 export const SNAPSHOT_COOKIES = 5;
 /** How far a page may be tightened (spacing, then type) until its content fits the sheet. */
-export const SNAPSHOT_MAX_FIT = 4;
+export const SNAPSHOT_MAX_FIT = 5;
+/** One sheet, in CSS pixels: 296.6mm at 96 dpi, the height the print rule in pages.css gives it (just under A4, so it never spills onto a blank page). */
+const PAGE_HEIGHT = (296.6 * 96) / 25.4;
+/** True on the page the server prints (/?report=<id>&print=1). */
+const PRINTING = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("print") === "1";
+/** A sheet is 794px wide (210mm at 96 dpi). */
+const PAGE_WIDTH = 794;
 /** The disclaimer printed at the foot of page 2, exactly as worded. */
 export const SNAPSHOT_DISCLAIMER =
   "Consiva AI's Website Privacy Snapshot is a limited, browser-based review of up to five publicly accessible website pages, intended solely for awareness, education and preliminary privacy benchmarking. The requester represents that they own the submitted domain or have obtained the necessary authorisation. Findings and proprietary scores are indicative, time-specific and subject to technical limitations. They do not constitute legal advice, a legal or regulatory determination, compliance certification, comprehensive privacy audit or security assessment. The requester is responsible for ensuring appropriate authorisation. Consiva AI remains responsible for its own service operations and obligations under applicable law.";
@@ -25,7 +32,11 @@ const ELEMENT_ORDER: { key: string; label: string; icon: IconName }[] = [
 const TILE_ICON: IconName[] = ["nodes", "globe", "bars", "cookie"];
 const CONSENT_FIELD = /consent|agree|accept|privacy|terms|gdpr|dpdp|policy/i;
 
-const short = (url: string | null | undefined): string => (url ? url.replace(/^https?:\/\//, "").replace(/\/$/, "") : "");
+/** A URL as printed: no scheme, no trailing slash, and cut with an ellipsis when longer than `max` (the full address stays in the scan's evidence). */
+const short = (url: string | null | undefined, max = 80): string => {
+  const u = url ? url.replace(/^https?:\/\//, "").replace(/\/$/, "") : "";
+  return u.length > max ? `${u.slice(0, max - 1)}…` : u;
+};
 
 type Item = { label: string; found: boolean | null; source: string | null };
 
@@ -82,6 +93,8 @@ function officers(s: SummaryView) {
   ];
 }
 
+const TONE: Record<TenResult, "good" | "warn" | "bad" | "mute"> = { Passed: "good", "Partially Passed": "warn", Failed: "bad", "Not Applicable": "mute" };
+
 function Sheet({ n, fit, testId, children }: { n: 1 | 2; fit: number; testId: string; children: ReactNode }) {
   const steps = Array.from({ length: Math.max(0, Math.min(fit, SNAPSHOT_MAX_FIT)) }, (_, i) => ` sn-fit-${i + 1}`).join("");
   return <section className={`pg sn sn-p${n}${steps}`} data-testid={testId} data-page={n} data-fit={fit}>{children}</section>;
@@ -91,14 +104,13 @@ const Title = ({ icon, children, note }: { icon: IconName; children: ReactNode; 
   <h2 className="sn-h"><i><Icon name={icon} size={15} /></i><span>{children}</span>{note && <em>{note}</em>}</h2>
 );
 
-function Page1({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: number }) {
+function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; model: ReportModel; fit: number }) {
   const { page } = s;
-  const { preview, hero } = page;
-  const applicable = s.assessedRows.length + s.unassessedRows.length;
-  const el = (key: string) => s.elements.find((e) => e.title === key);
+  const { preview } = page;
+  // This report has no "Unable to Verify" result: an element the scan could not see (for example the buttons of a banner that was never shown to it) is "Not tested".
+  const el = (key: string) => { const e = s.elements.find((x) => x.title === key); return e ? { ...e, label: e.label === "Unable to Verify" ? "Not tested" : e.label } : undefined; };
   const foundCount = ELEMENT_ORDER.filter((e) => el(e.key)?.label === "Found").length;
   const address = preview.address ?? `https://${preview.domain}`;
-  const c = s.framework.counts;
   // The four key metrics, each only when the scan recorded it.
   const metrics = [
     s.requests !== null && { value: String(s.requests), label: "Third-party requests" },
@@ -129,10 +141,11 @@ function Page1({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: num
         <div className="sn-row sn-hero">
           <div className="sn-card sn-score" data-testid="sn-score">
             <b className="sn-card-t">Compliance Score</b>
-            <div className="pg-score-ring"><BigRing percent={hero.percent} label={hero.percentLabel} id="snapshot" /></div>
-            <span className="sn-badge" data-testid="sn-chip"><Icon name="check" size={12} />{s.scoreChip.replace(/\.$/, "")}</span>
-            <div className="sn-score-line" data-testid="sn-total-line">Total Weightage: {weightage(s.totalAwarded)} / {weightage(s.totalMax)}</div>
-            <div className="sn-score-note" data-testid="sn-counts">{s.assessedRows.length} of {applicable} applicable checkpoints assessed</div>
+            <div className="pg-score-ring"><BigRing percent={ten.score} label={ten.score === null ? "" : String(ten.score)} id="snapshot" /></div>
+            <span className={`sn-badge${ten.score === null || ten.counts.passed === 0 ? " sn-b-low" : ten.counts.passed < ten.applicableMax ? " sn-b-mid" : ""}`} data-testid="sn-chip"><Icon name={ten.counts.passed === 0 ? "info" : "check"} size={12} />{ten.score === null ? "No meaningful score" : `${ten.counts.passed} of ${ten.applicableMax} checks passed`}</span>
+            <div className="sn-score-line" data-testid="sn-total-line">Total Weightage Awarded: {ten.totalText}</div>
+            <div className="sn-score-note sn-score-pct" data-testid="sn-score-text">Privacy Readiness Score: {ten.scoreText}</div>
+            <div className="sn-score-note" data-testid="sn-counts">{ten.applicableMax} of {ten.checks.length} checks applicable</div>
           </div>
           <figure className="sn-card sn-shot" data-testid="pg-hero-preview">
             {preview.src ? (
@@ -167,6 +180,7 @@ function Page1({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: num
                 {bannerFacts(model).map((f) => <div key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}
               </dl>
             )}
+            {bannerFacts(model).length === 0 && !el("Consent banner") && <p className="sn-muted" data-testid="sn-banner-none">No consent banner evidence was recorded for this scan.</p>}
             <div className="sn-opts">
               {["Accept option", "Reject option"].map((k) => el(k) && <span key={k}><b>{k}</b><Pill s={{ label: el(k)!.label, tone: el(k)!.tone }} /></span>)}
             </div>
@@ -190,8 +204,8 @@ function Page1({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: num
 
         <div className="sn-dpdp" data-testid="sn-framework">
           <b>{s.framework.name}</b>
-          <span className="sn-chip sn-good">{c.met} met</span><span className="sn-chip sn-warn">{c.partly} partly met</span><span className="sn-chip sn-bad">{c.notMet} not met</span>
-          <span className="sn-chip sn-mute">{c.unverified} could not be verified</span><span className="sn-chip sn-na">{c.notApplicable} not applicable</span>
+          <span className="sn-chip sn-good">{ten.counts.passed} passed</span><span className="sn-chip sn-warn">{ten.counts.partial} partially passed</span><span className="sn-chip sn-bad">{ten.counts.failed} failed</span>
+          <span className="sn-chip sn-na">{ten.counts.notApplicable} not applicable</span>
         </div>
 
         <Title icon="bars" note="at a glance">Key Metrics</Title>
@@ -203,42 +217,40 @@ function Page1({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: num
   );
 }
 
-function CheckTable({ rows }: { rows: CheckRow[] }) {
-  const seen = new Map<string, number>();
+function CheckTable({ checks, ten }: { checks: TenCheck[]; ten: TenAssessment }) {
   return (
     <table className="sn-table sn-checks" data-testid="sn-checkpoints">
-      <thead><tr><th>#</th><th>Checkpoint (with legal reference)</th><th>Status</th><th className="sn-num">Score (Awarded / Max)</th></tr></thead>
+      <thead><tr><th>#</th><th>Check, evidence and source</th><th>Result</th><th className="sn-num">Marks (Awarded / Max)</th></tr></thead>
       <tbody>
-        {rows.map((r) => {
-          const prov = provisionLines(r.provisions);
-          const first = r.note.length > 80 ? seen.get(r.note) : undefined;
-          if (r.note.length > 80 && first === undefined) seen.set(r.note, r.n);
-          const ev = first !== undefined ? `Same evidence as checkpoint ${first}.` : shortLine(r.note, 150);
-          return (
-            <tr key={r.id} data-testid="sn-checkpoint" data-status={r.status.label}>
-              <td className="sn-n">{r.n}</td>
-              <td className="sn-cp">
-                <b>{r.title}</b>
-                {prov.length > 0 && <span className="sn-prov">{prov.map((l) => <span key={l.label + l.text}>{l.label && <b>{l.label}: </b>}{l.text}</span>)}</span>}
-                {ev && <span className="sn-ev">{ev}</span>}
-              </td>
-              <td><Pill s={r.status} /></td>
-              <td className="sn-num">{r.scored ? `${weightage(r.awarded ?? 0)} / ${weightage(r.max ?? 0)}` : "–"}</td>
-            </tr>
-          );
-        })}
-        {rows.length === 0 && <tr><td colSpan={4} className="sn-muted">No applicable checkpoint could be identified for this scan.</td></tr>}
+        {checks.map((c) => (
+          <tr key={c.id} data-testid="sn-checkpoint" data-status={c.result}>
+            <td className="sn-n">{c.id}</td>
+            <td className="sn-cp">
+              <b>{c.name}</b>
+              {c.legal && <span className="sn-prov">{c.legal}</span>}
+              {c.evidence && <span className="sn-ev" data-testid="sn-evidence"><i>Evidence:</i> {c.evidence}{c.sourceUrl && <> <u>[{short(c.sourceUrl)}]</u></>}</span>}
+              {c.result !== "Passed" && <span className="sn-why" data-testid="sn-why"><i>Why:</i> {c.explanation}{!c.evidence && c.sourceUrl && c.completed && <> <u>[{short(c.sourceUrl)}]</u></>}</span>}
+            </td>
+            <td><Pill s={{ label: c.result, tone: TONE[c.result] }} /></td>
+            <td className="sn-num" data-testid="sn-marks">{c.marksText}</td>
+          </tr>
+        ))}
       </tbody>
+      <tfoot>
+        <tr className="sn-total" data-testid="sn-total-row">
+          <td colSpan={3}>Total Weightage Awarded (applicable checks) &middot; Privacy Readiness Score {ten.scoreText}</td>
+          <td className="sn-num" data-testid="sn-total-marks">{ten.totalText}</td>
+        </tr>
+      </tfoot>
     </table>
   );
 }
 
-function Page2({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: number }) {
+function Page2({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; model: ReportModel; fit: number }) {
   const cc = s.cookieCounts;
   const lines = s.cookieLines.slice(0, SNAPSHOT_COOKIES);
   const forms = formsAndConsent(model, s);
   const ps = pageSummary(model, s);
-  const rows = [...s.assessedRows, ...s.unassessedRows].map((r, i) => ({ ...r, n: i + 1 }));
   const unit = (n: number | null, one: string) => (n === null ? "Not recorded" : String(n) + (one ? ` ${one}` : ""));
   return (
     <Sheet n={2} fit={fit} testId="sn-page-2">
@@ -277,13 +289,13 @@ function Page2({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: num
         )}
 
         <Title icon="shield" note="India DPDP Act, 2023 and Rules, 2025">Key Compliance Checks</Title>
-        <CheckTable rows={rows} />
+        <CheckTable checks={ten.checks} ten={ten} />
 
         <Title icon="page" note={s.selectionNotes[0]}>Page URLs (Scanned)</Title>
         {s.selection.length === 0 ? <p className="sn-muted">The page list was not loaded for this scan.</p> : (
           <table className="sn-table sn-pages" data-testid="sn-pages">
             <thead><tr><th>#</th><th>Page URL</th><th>Why it was chosen</th><th>Result</th></tr></thead>
-            <tbody>{s.selection.map((r) => <tr key={r.url}><td className="sn-n">{r.n}</td><td className="sn-url">{r.url}</td><td>{r.reason}</td><td className="sn-nowrap">{r.status}</td></tr>)}</tbody>
+            <tbody>{s.selection.map((r) => <tr key={r.url}><td className="sn-n">{r.n}</td><td className="sn-url" title={r.url}>{short(r.url, 90)}</td><td>{r.reason}</td><td className="sn-nowrap">{r.status}</td></tr>)}</tbody>
           </table>
         )}
 
@@ -291,17 +303,19 @@ function Page2({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: num
           <div className="sn-block sn-summary" data-testid="sn-page-summary">
             <Title icon="board">Page Scan Summary</Title>
             <dl>
-              <div><dt>Pages scanned</dt><dd>{s.pagesScanned ?? "–"}</dd></div>
+              <div><dt>Pages discovered</dt><dd>{ten.pages.discovered ?? "Not recorded"}</dd></div>
+              <div><dt>Pages scanned</dt><dd>{ten.pages.scanned}</dd></div>
+              <div><dt>Pages failed to load</dt><dd>{ten.pages.failed}</dd></div>
+              <div><dt>Pages found, not scanned</dt><dd>{ten.pages.skipped}</dd></div>
               <div><dt>Pages with forms</dt><dd>{unit(ps.withForms, "")}</dd></div>
               <div><dt>Pages where tracking scripts were first seen</dt><dd>{unit(ps.trackerPages, "")}</dd></div>
-              <div><dt>Pages with consent banner</dt><dd>Not recorded per page</dd></div>
-              <div><dt>Pages without tracking</dt><dd>Not recorded per page</dd></div>
+              <div><dt>Consent banner / tracking, page by page</dt><dd>Not recorded per page</dd></div>
             </dl>
           </div>
           <div className="sn-block sn-reco" data-testid="sn-reco">
             <Title icon="target">Recommendations</Title>
             <ul data-testid="sn-next">{s.nextSteps.map((t) => <li key={t}>{t}</li>)}</ul>
-            <ul className="sn-limits" data-testid="sn-limits">{s.limitations.map((l) => <li key={l}>{l}</li>)}</ul>
+            <ul className="sn-limits" data-testid="sn-limits">{[...s.limitations.filter((l) => !/found on the main domain/.test(l)), ...ten.limitations.filter((l) => !s.limitations.includes(l))].map((l) => <li key={l}>{l}</li>)}</ul>
           </div>
         </div>
 
@@ -322,14 +336,21 @@ function Page2({ s, model, fit }: { s: SummaryView; model: ReportModel; fit: num
  */
 export function SnapshotReport({ model }: { model: ReportModel }) {
   const s = buildSummaryReport(model);
+  const ten = buildTenChecks(model);
   const doc = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState<[number, number]>([0, 0]);
   useLayoutEffect(() => {
     const sheets = doc.current?.querySelectorAll("section.pg");
     if (!sheets) return;
+    // A sheet is as tall as its content (never clipped); it is over when that is more than one A4 page.
     const over = (i: number) => {
-      const p = sheets[i]?.querySelector<HTMLElement>(".sn-panel");
-      return !!p && p.scrollHeight > p.clientHeight + 1;
+      const el = sheets[i] as HTMLElement | undefined;
+      if (!el) return false;
+      // On a narrow screen (the server prints from a 794px-wide viewport) pages.css zooms the document down; the printed page is not zoomed. Measure in the sheet's own units: undo the zoom
+      // by the ratio of its drawn width to its real width, or a sheet that is too tall would look as if it fitted.
+      const r = el.getBoundingClientRect();
+      const zoom = r.width > 0 ? r.width / PAGE_WIDTH : 1;
+      return r.height / zoom > PAGE_HEIGHT + 0.05;
     };
     const next: [number, number] = [fit[0], fit[1]];
     let changed = false;
@@ -337,10 +358,12 @@ export function SnapshotReport({ model }: { model: ReportModel }) {
     if (changed) setFit(next);
   });
   return (
-    <div className="pg-doc" data-testid="summary-report" ref={doc}>
+    // The server prints from a narrow viewport, where pages.css would zoom the sheets down for a small screen. The printed page is not zoomed, so when printing the zoom is turned off:
+    // the layout that is measured and fitted is then the layout that is printed.
+    <div className="pg-doc" data-testid="summary-report" ref={doc} style={PRINTING ? { zoom: 1 } : undefined}>
       <SheetPageStyle />
-      <Page1 s={s} model={model} fit={fit[0]} />
-      <Page2 s={s} model={model} fit={fit[1]} />
+      <Page1 s={s} ten={ten} model={model} fit={fit[0]} />
+      <Page2 s={s} ten={ten} model={model} fit={fit[1]} />
     </div>
   );
 }

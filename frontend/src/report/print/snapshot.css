@@ -91,6 +91,8 @@
 .sn-checks td { vertical-align: top; } .sn-checks td:not(.sn-cp) { vertical-align: middle; }
 .sn-cp > b { font-size: 9.6px; font-weight: 800; color: var(--sn-navy); }
 .sn-prov { margin-left: 8px; font-size: 8px; color: var(--sn-mut); white-space: nowrap; } .sn-prov span { margin-right: 6px; } .sn-prov b { font-size: inherit; color: var(--sn-ink); }
+.sn-why { display: block; font-size: 8.4px; line-height: 1.3; color: #8a4b00; } .sn-ev i, .sn-why i { font-style: normal; font-weight: 800; } .sn-ev u { text-decoration: none; color: var(--sn-blue); }
+.sn-formula { margin: 2px 0 0; font-size: 8.8px; line-height: 1.4; color: #2c3358; background: var(--sn-soft); border: 1px solid var(--sn-line); border-radius: 8px; padding: 5px 9px; }
 .sn-ev { display: block; font-size: 8.4px; line-height: 1.3; color: var(--sn-mut); }
 .sn-checks th:nth-child(3), .sn-checks td:nth-child(3) { width: 88px; } .sn-checks th:nth-child(4), .sn-checks td:nth-child(4) { width: 96px; }
 .sn-url { color: var(--sn-blue); font-weight: 600; overflow-wrap: anywhere; }
@@ -116,4 +118,53 @@
 .sn-fit-1 .sn-panel { gap: 8px; } .sn-fit-1 .sn-shot-img { height: 205px; } .sn-fit-1 .sn-banner-shot img { height: 100px; } .sn-fit-1 .sn-table { font-size: 9px; } .sn-fit-1 .sn-table td { padding-top: 3px; padding-bottom: 3px; }
 .sn-fit-2 .sn-panel { gap: 6px; } .sn-fit-2 .sn-shot-img { height: 170px; } .sn-fit-2 .sn-banner-shot img { height: 80px; } .sn-fit-2 .sn-table td { padding-top: 2px; padding-bottom: 2px; } .sn-fit-2 .sn-ev { font-size: 7.8px; }
 .sn-fit-3 .sn-table { font-size: 8.4px; } .sn-fit-3 .sn-table td { padding-top: 1px; padding-bottom: 1px; } .sn-fit-3 .sn-shot-img { height: 140px; } .sn-fit-3 .sn-banner-shot img { height: 64px; } .sn-fit-3 .sn-tile b { font-size: 16px; } .sn-fit-3 .sn-limits { font-size: 7.6px; }
-.sn-fit-4 .sn-cta span { display: none; } .sn-fit-4 .sn-shot-img { height: 100px; } .sn-fit-4 .sn-banner-shot { display: none; } .sn-fit-4 .sn-ev { display: none; }
+.sn-fit-4 .sn-cta span { display: none; } .sn-fit-4 .sn-shot-img { height: 100px; } .sn-fit-4 .sn-banner-shot { display: none; }
+
+/* page 2 compaction: the page summary in two columns, the limits in two columns, a lighter Forms & Consent panel */
+.sn-summary dl { display: grid; grid-template-columns: 1fr 1fr; } .sn-summary dl > div { border-right: 1px solid #eceff8; } .sn-summary dl > div:nth-child(2n) { border-right: 0; }
+.sn-summary dt { font-size: 8.4px; line-height: 1.25; } .sn-summary dd { font-size: 9px; }
+.pg-doc .sn-reco .sn-limits { columns: 2; column-gap: 14px; } .sn-reco .sn-limits li { break-inside: avoid; }
+.sn-forms { padding: 6px 8px; gap: 4px; } .sn-form-row { padding: 3px 7px; } .sn-forms .sn-h { margin-top: 0; }
+.sn-end { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.sn-fit-3 .sn-cta { padding: 6px 14px; } .sn-fit-3 .sn-cta span { display: none; }
+.sn-fit-3.sn-p2 .sn-panel { padding-top: 16px; padding-bottom: 10px; } .sn-fit-3 .sn-disc { font-size: 7.8px; line-height: 1.4; padding: 5px 10px; } .sn-fit-3 .sn-table td { line-height: 1.2; }
+.sn-fit-4 .sn-ev, .sn-fit-4 .sn-why { font-size: 7.4px; line-height: 1.2; } .sn-fit-4 .sn-cp > b { font-size: 9px; } .sn-fit-4 .sn-table td { padding-top: 0.5px; padding-bottom: 0.5px; } .sn-fit-4 .sn-panel { gap: 4px; }
+.sn-fit-4 .sn-formula { font-size: 8px; padding: 3px 8px; } .sn-fit-4 .sn-summary dl > div { padding-top: 1px; padding-bottom: 1px; }
+
+/* ── Never clip. A sheet is at least one A4 page and grows with its content; if the content is more than a page the print engine continues it on the next page instead of cutting it off.
+   (Before: a fixed 1123px sheet with overflow hidden silently cut everything below the last visible line: the end of the recommendations, the sign-up band and the disclaimer.) ── */
+/* 296.6mm is what the print rule in pages.css gives a sheet: just under A4 (297mm), so a sheet is never a fraction of a pixel taller than the page and spills onto a blank next page */
+.pg.sn { height: auto; min-height: 296.6mm; overflow: visible; }
+.sn-p1 .sn-panel, .sn-p2 .sn-panel { overflow: visible; min-height: 0; }
+.sn-p2 .sn-panel { -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+/* a row, card or band is never split across two pages, and a heading stays with what it heads */
+.sn-table tr, .sn-card, .sn-block, .sn-cta, .sn-disc, .sn-contacts > div, .sn-form-row { break-inside: avoid; }
+.sn-h { break-after: avoid; }
+/* long words and addresses wrap inside their cell instead of pushing past it */
+.sn-table td, .sn-form-row, .sn-contacts, .sn-reco, .sn-summary dd { overflow-wrap: anywhere; word-break: normal; }
+/* a column heading is never broken inside a word: the column grows to its heading instead */
+.sn-table th { overflow-wrap: normal; word-break: normal; white-space: nowrap; }
+.sn-prov { white-space: normal; }
+.sn-total td { background: var(--sn-soft); font-weight: 800; color: var(--sn-navy); border-top: 1px solid var(--sn-line); }
+.sn-total .sn-num { font-size: 10.5px; }
+.sn-score-pct { font-weight: 800; color: var(--sn-navy); }
+/* page list: the reason and the result get room, so they do not wrap to three lines */
+.sn-pages th:nth-child(3), .sn-pages td:nth-child(3) { width: 200px; } .sn-pages th:nth-child(4), .sn-pages td:nth-child(4) { width: 150px; }
+/* fitting tightens spacing, not type: nothing printed goes below 8px */
+.sn-fit-2 .sn-ev, .sn-fit-2 .sn-why, .sn-fit-3 .sn-ev, .sn-fit-3 .sn-why, .sn-fit-4 .sn-ev, .sn-fit-4 .sn-why { font-size: 8.2px; line-height: 1.25; }
+.sn-fit-3 .sn-limits, .sn-fit-4 .sn-limits { font-size: 8px; } .sn-fit-3 .sn-table { font-size: 9px; } .sn-fit-4 .sn-cp > b { font-size: 9.4px; }
+
+/* page 2 spacing: tighter by default, so ordinary reports stay on two pages; long content still flows to a third page rather than being cut */
+:where(.sn-p2) .sn-panel { padding: 18px 26px 12px; gap: 7px; }
+.sn-p2 .sn-h { margin-top: 2px; }
+.sn-table td { padding-top: 3.5px; padding-bottom: 3.5px; }
+.sn-cta { padding: 7px 16px; } .sn-disc { padding: 6px 12px; line-height: 1.4; }
+.sn-end { gap: 12px; } .sn-summary dl > div { padding-top: 2px; padding-bottom: 2px; }
+.sn-forms { padding: 5px 8px; gap: 3px; }
+.sn-badge.sn-b-mid { background: #fff4de; color: #9a6200; } .sn-badge.sn-b-low { background: #fde8ea; color: #b32630; }
+.sn-hero { grid-template-columns: 172px minmax(0, 1fr); }
+
+/* the last fitting step: spacing only, the type stays at 8px or more */
+.sn-fit-5.sn-p2 .sn-panel { padding-top: 12px; padding-bottom: 8px; gap: 3px; } .sn-fit-5 .sn-h { margin-top: 0; } .sn-fit-5 .sn-cta { padding: 4px 14px; } .sn-fit-5 .sn-disc { padding: 4px 10px; line-height: 1.3; }
+.sn-fit-5 .sn-table td { padding-top: 0; padding-bottom: 0; } .sn-fit-5 .sn-summary dl > div { padding-top: 1px; padding-bottom: 1px; } .sn-fit-5 .sn-forms { padding: 4px 8px; gap: 2px; }
+.sn-cookies td:nth-child(5), .sn-cookies td:nth-child(6), .sn-cookies td:nth-child(7) { overflow-wrap: normal; }

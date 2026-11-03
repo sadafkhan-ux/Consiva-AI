@@ -4,6 +4,7 @@ import type { DpdpScoreResponse, EvidenceCookieItem, ScanEvidenceResponse, ScanS
 import fixtures from "../../test/dpdpScoreFixtures.json";
 import { buildReportModel } from "../buildReport";
 import { buildScoreView } from "../dpdpScore";
+import { buildTenChecks } from "../tenChecks";
 import { SNAPSHOT_DISCLAIMER, SnapshotReport } from "./SnapshotReport";
 
 const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
@@ -79,10 +80,43 @@ describe("the two-page report (variant summary)", () => {
     expect(p2.getByTestId("sn-disclaimer")).toHaveTextContent(SNAPSHOT_DISCLAIMER);
   });
 
+  it("lists all ten checks with a result and marks, and never says Unable to Verify", () => {
+    render(<SnapshotReport model={model()} />);
+    const rows = screen.getAllByTestId("sn-checkpoint");
+    expect(rows).toHaveLength(10);
+    for (const r of rows) expect(["Passed", "Partially Passed", "Failed", "Not Applicable"]).toContain(r.getAttribute("data-status"));
+    expect(screen.queryByTestId("sn-formula")).toBeNull();   // the formula line is not printed in the report
+    expect(document.body.textContent).not.toMatch(/unable to verify/i);
+    expect(screen.getAllByTestId("sn-why").length).toBeGreaterThan(0);   // every Failed or Partially Passed check says why
+  });
+
   it("every checkpoint is listed once, with its score", () => {
     render(<SnapshotReport model={model()} />);
     const rows = screen.getAllByTestId("sn-checkpoint");
     expect(new Set(rows.map((r) => r.textContent)).size).toBe(rows.length);
     for (const r of rows) expect(r.textContent).toMatch(/\d+(\.\d+)? \/ \d+(\.\d+)?|–/);
+  });
+
+  it("every mark is printed as obtained / maximum, and the total and the score come from the one engine result", () => {
+    const m = model();
+    render(<SnapshotReport model={m} />);
+    const ten = buildTenChecks(m);
+    const marks = screen.getAllByTestId("sn-marks").map((e) => e.textContent);
+    expect(marks).toEqual(ten.checks.map((c) => c.marksText));
+    for (const x of marks) expect(x).toMatch(/^(1|0\.5|0) \/ 1$|^N\/A$/);
+    expect(screen.getByTestId("sn-total-marks")).toHaveTextContent(`${ten.totalText}`);
+    expect(screen.getByTestId("sn-total-row")).toHaveTextContent(ten.scoreText);
+    expect(screen.getByTestId("sn-total-line")).toHaveTextContent(`Total Weightage Awarded: ${ten.totalText}`);
+    expect(screen.getByTestId("sn-score-text")).toHaveTextContent(`Privacy Readiness Score: ${ten.scoreText}`);
+    expect(ten.totalText).toMatch(/^\d+(\.\d)? \/ \d+$/);
+  });
+
+  it("never prints Unable to Verify, even for banner buttons the scan could not see", () => {
+    const m = model();
+    const elements = m.visual!.elements.map((e) => (/accept|reject|per-purpose/i.test(e.title) ? { ...e, status: "unverified" as const } : e));
+    const unseen = { ...m, visual: { ...m.visual!, elements } };
+    const { container } = render(<SnapshotReport model={unseen} />);
+    expect(container.textContent).not.toMatch(/unable to verify/i);
+    expect(screen.getByTestId("sn-banner")).toHaveTextContent("Not tested");
   });
 });
