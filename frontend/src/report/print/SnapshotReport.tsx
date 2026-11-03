@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ReportModel } from "../buildReport";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
 import { buildSummaryReport, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, type SummaryView } from "../summaryReport";
-import { buildTenChecks, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
+import { buildTenChecks, KIND_LABEL, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
 import { BigRing, Icon, Pill, SheetPageStyle, type IconName } from "./PageParts";
 import "./pages.css";
 import "./snapshot.css";
@@ -227,11 +227,11 @@ function CheckTable({ checks, ten }: { checks: TenCheck[]; ten: TenAssessment })
             <td className="sn-n">{c.id}</td>
             <td className="sn-cp">
               <b>{c.name}</b>
-              {c.legal && <span className="sn-prov">{c.legal}</span>}
+              {c.legal && <span className="sn-prov">{c.legal}</span>}<span className="sn-kind" data-testid="sn-kind" data-kind={c.kind}>{KIND_LABEL[c.kind]}</span>
               {c.evidence && <span className="sn-ev" data-testid="sn-evidence"><i>Evidence:</i> {c.evidence}{c.sourceUrl && <> <u>[{short(c.sourceUrl)}]</u></>}</span>}
               {c.result !== "Passed" && <span className="sn-why" data-testid="sn-why"><i>Why:</i> {c.explanation}{!c.evidence && c.sourceUrl && c.completed && <> <u>[{short(c.sourceUrl)}]</u></>}</span>}
             </td>
-            <td><Pill s={{ label: c.result, tone: TONE[c.result] }} /></td>
+            <td><Pill s={{ label: c.result, tone: TONE[c.result] }} />{c.result !== "Passed" && c.result !== "Not Applicable" && <span className="sn-basis" data-testid="sn-basis">{c.basis}</span>}</td>
             <td className="sn-num" data-testid="sn-marks">{c.marksText}</td>
           </tr>
         ))}

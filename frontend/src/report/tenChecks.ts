@@ -8,6 +8,11 @@ import type { ReportModel } from "./buildReport";
  */
 export type TenResult = "Passed" | "Partially Passed" | "Failed" | "Not Applicable";
 
+/** What a check is, so a technical observation is never read as a legal requirement and a best practice is never read as a required item. */
+export type TenKind = "dpdp" | "practice" | "technical" | "transparency";
+/** Why the result is what it is. Not found, not tested, evidence unavailable and scan failed are different things and are never merged. */
+export type TenBasis = "Verified" | "Partially verified" | "Not found" | "Not tested" | "Evidence unavailable" | "Scan failed" | "Not applicable";
+
 export interface TenCheck {
   id: number;
   name: string;
@@ -30,6 +35,8 @@ export interface TenCheck {
   limitation: string | null;
   /** The marks as printed: "1 / 1", "0.5 / 1", "0 / 1", or "N/A" when the check does not apply. */
   marksText: string;
+  kind: TenKind;
+  basis: TenBasis;
 }
 
 export interface TenAssessment {
@@ -83,11 +90,13 @@ export function scoreChecks(checks: readonly Pick<TenCheck, "result" | "awarded"
 
 const NO_POLICY_WORDS = "No privacy policy text was available to read, so this could not be evidenced (not a finding that the law was broken).";
 
-interface Draft { result: TenResult; evidence?: string; sourceUrl?: string | null; explanation: string; completed?: boolean; limitation?: string | null }
+interface Draft { basis?: TenBasis; result: TenResult; evidence?: string; sourceUrl?: string | null; explanation: string; completed?: boolean; limitation?: string | null }
 
-function make(id: number, name: string, legal: string | null, d: Draft): TenCheck {
+function make(id: number, name: string, legal: string | null, kind: TenKind, d: Draft): TenCheck {
   const m = MARKS[d.result];
+  const basis: TenBasis = d.basis ?? (d.result === "Passed" ? "Verified" : d.result === "Partially Passed" ? "Partially verified" : d.result === "Not Applicable" ? "Not applicable" : d.completed === false ? "Evidence unavailable" : "Not found");
   return {
+    kind, basis,
     id, name, result: d.result, awarded: m, max: m === null ? null : 1,
     evidence: d.evidence ?? "", sourceUrl: d.sourceUrl ?? null, explanation: d.explanation, legal,
     completed: d.completed ?? true, limitation: d.limitation ?? null, marksText: marksLabel(m, m === null ? null : 1),
@@ -104,12 +113,12 @@ function policyCheck(a: PolicyAnalysis | null, reqId: string, what: string, sour
     // A policy page that exists but could not be read is a limit of the scan, not an absence on the site: it is said so and the page is named.
     if (foundUrl) {
       return {
-        result: "Failed", completed: false, sourceUrl: foundUrl,
+        result: "Failed", completed: false, sourceUrl: foundUrl, basis: "Evidence unavailable",
         explanation: "Policy page found, but its text could not be read: not evidenced (a limit of the scan, not a legal finding).",
         limitation: "A privacy policy page was found but its text could not be read.",
       };
     }
-    return { result: "Failed", completed: false, explanation: NO_POLICY_WORDS, limitation: sourceLimit };
+    return { result: "Failed", completed: false, basis: "Not found", explanation: NO_POLICY_WORDS, limitation: sourceLimit };
   }
   const r = find(a, reqId);
   if (!r) return { result: "Failed", completed: false, explanation: `The policy analysis did not assess ${what}.`, limitation: sourceLimit };
@@ -135,18 +144,22 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   // 1. Privacy policy availability
   const policies = (ev?.policies ?? []).filter((p) => /privacy/i.test(p.policy_type));
   const doc = a?.documents.find((d) => /privacy/i.test(d.policy_type)) ?? a?.documents[0];
+  // A privacy page the scan found a link to but could not load is not a missing policy: it is a page that could not be read.
+  const failedPolicy = (sp?.failed ?? []).find((f) => /privacy|policy/i.test(f.url));
   const c1: Draft = policies.length > 0 || doc
     ? (read(a) || (doc && doc.characters > 0)
       ? { result: "Passed", sourceUrl: policies[0]?.url ?? doc?.url ?? null, evidence: `Privacy policy page found${doc ? ` (${doc.characters.toLocaleString("en-IN")} characters of text read)` : ""}.`, explanation: "A privacy policy page was found on the scanned pages and its text was read." }
       : { result: "Partially Passed", sourceUrl: policies[0]?.url ?? null, evidence: "Privacy policy page found.", explanation: "A privacy policy page was found, but its text could not be read, so what it says could not be assessed.", limitation: "The policy text was not available." })
+    : failedPolicy
+      ? { result: "Failed", completed: false, basis: "Scan failed", sourceUrl: failedPolicy.url, explanation: `A privacy policy page was found at this address but did not load (${failedPolicy.reason}), so it could not be read.`, limitation: "The privacy policy page did not load." }
     : scanned === 0
-      ? { result: "Failed", completed: false, explanation: "The website could not be accessed, so no page could be scanned and the search for a privacy policy was not made.", limitation: "No page loaded." }
+      ? { result: "Failed", completed: false, basis: "Scan failed", explanation: "The website could not be accessed, so no page could be scanned and the search for a privacy policy was not made.", limitation: "No page loaded." }
       : { result: "Failed", explanation: `No privacy policy page was found after scanning ${scanned} page${scanned === 1 ? "" : "s"}${sp?.discovered != null ? ` of the ${sp.discovered} found` : ""} on the entered domain (privacy and cookie pages are tried first). It may exist on another domain or on a page the scan did not reach. This is not a finding that the law was broken.`,
         limitation: sp?.stopReason ?? "Only the entered domain was searched." };
 
   // 2-5 policy content
   const noPol = "No privacy policy text was available to read; the text of other pages is not kept.";
-  const foundUrl = policies[0]?.url ?? null;
+  const foundUrl = policies[0]?.url ?? failedPolicy?.url ?? null;
   const c2 = policyCheck(a, "notice_data_itemised", "the personal data it collects", noPol, foundUrl);
   const c3 = policyCheck(a, "notice_purposes", "why personal data is collected and used", noPol, foundUrl);
   const c4 = policyCheck(a, "data_sharing", "sharing of personal data with processors and other third parties", noPol, foundUrl);
@@ -187,7 +200,7 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   const lim8 = ["Absence of a tracker is not proof that none exists under all conditions.", classNote].filter(Boolean).join(" ");
   const seen8 = cookies.length + trackers.length === 0 ? "No cookie or tracking request was observed on the scanned pages." : `${cookies.length} cookie${cookies.length === 1 ? "" : "s"} and ${trackers.length} tracking request${trackers.length === 1 ? "" : "s"} observed${names ? ` (${names})` : ""}.`;
   const c8: Draft = !detectionRan
-    ? { result: "Failed", completed: false, explanation: scanned === 0 ? "No page loaded, so cookies and trackers could not be detected." : "The scan's cookie and tracker evidence was not loaded, so the detection could not be assessed.", limitation: "Detection could not be completed." }
+    ? { result: "Failed", completed: false, basis: scanned === 0 ? "Scan failed" : "Evidence unavailable", explanation: scanned === 0 ? "No page loaded, so cookies and trackers could not be detected." : "The scan's cookie and tracker evidence was not loaded, so the detection could not be assessed.", limitation: "Detection could not be completed." }
     : failedPages > 0
       ? { result: "Partially Passed", evidence: seen8, sourceUrl: trackers[0]?.page_url ?? null, explanation: `Detection ran on the pages that loaded, but ${failedPages} page${failedPages === 1 ? "" : "s"} did not load, so tracking there could not be observed.`, limitation: lim8 }
       : { result: "Passed", evidence: seen8, sourceUrl: trackers[0]?.page_url ?? null, explanation: "Cookies and tracking requests were detected on every scanned page.", limitation: lim8 };
@@ -204,7 +217,7 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   const rejectTracking = trackCookie("post_reject") + trackReq("post_reject");
   const anyTracking = cookies.some((c) => TRACKING.test(c.category ?? "")) || trackers.some((t) => TRACKING.test(t.category ?? ""));
   let c9: Draft;
-  if (!cons) c9 = { result: "Failed", completed: false, explanation: "The consent states were not loaded, so Accept and Reject could not be compared.", limitation: "Consent behaviour could not be assessed." };
+  if (!cons) c9 = { result: "Failed", completed: false, basis: "Evidence unavailable", explanation: "The consent states were not loaded, so Accept and Reject could not be compared.", limitation: "Consent behaviour could not be assessed." };
   else {
     const preClean = cons.known[0] === 0 && preTracking === 0, rejectClean = cons.known[2] === 0 && (!cons.rejectTested || rejectTracking === 0);
     const line = `Analytics/marketing requests: before consent ${cons.known[0]}, after Accept ${cons.acceptTested ? cons.known[1] : "not tested"}, after Reject ${cons.rejectTested ? cons.known[2] : "not tested"}. Analytics/marketing cookies and requests seen before consent: ${preTracking}.`;
@@ -212,9 +225,9 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
     if (!hasBanner && !anyTracking && unclassified === 0 && cons.known[0] === 0 && cons.known[1] === 0 && cons.known[2] === 0) {
       c9 = { result: "Not Applicable", evidence: line, sourceUrl: home, explanation: "No consent banner was found and every cookie and request observed was classified as necessary or functional (none as analytics, marketing or advertising), so there was no consent interface to test." };
     } else if (!hasBanner) {
-      c9 = { result: "Failed", evidence: line, sourceUrl: home, explanation: "Analytics, marketing or advertising cookies or requests were observed, but no consent banner was displayed to the scanner, so Accept and Reject could not be tested.", limitation: "A banner that was not shown to the scanner may still exist." };
+      c9 = { result: "Failed", basis: "Not tested", evidence: line, sourceUrl: home, explanation: "Analytics, marketing or advertising cookies or requests were observed, but no consent banner was displayed to the scanner, so Accept and Reject could not be tested.", limitation: "A banner that was not shown to the scanner may still exist." };
     } else if (!cons.acceptTested && !cons.rejectTested) {
-      c9 = { result: "Failed", completed: false, evidence: line, sourceUrl: home, explanation: "A banner was found, but neither Accept nor Reject could be clicked and confirmed, so only the state before consent was observed.", limitation: "Accept and Reject were not tested." };
+      c9 = { result: "Failed", completed: false, basis: "Not tested", evidence: line, sourceUrl: home, explanation: "A banner was found, but neither Accept nor Reject could be clicked and confirmed, so only the state before consent was observed.", limitation: "Accept and Reject were not tested." };
     } else if (cons.acceptTested && cons.rejectTested && preClean && rejectClean) {
       c9 = { result: "Passed", evidence: line, sourceUrl: home, explanation: "All three states were tested: no analytics or marketing before consent, and none after Reject." };
     } else if (!preClean && !rejectClean) {
@@ -225,15 +238,15 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   }
 
   const first = [
-    make(1, "Privacy Policy Availability", "DPDP Act s.5(1); Rules r.3(a), 3(b)", c1),
-    make(2, "Personal Data Collection Disclosure", "DPDP Act s.5(1)(i); Rules r.3(b)(i)", c2),
-    make(3, "Purpose of Data Processing", "DPDP Act s.5(1)(i); Rules r.3(b)(ii)", c3),
-    make(4, "Data Sharing and Third Parties", "DPDP Act s.8(2)", c4),
-    make(5, "Data Retention Disclosure", "DPDP Act s.8(7)", c5),
-    make(6, "User Rights Disclosure", "DPDP Act s.11, 12, 13, 14; Rules r.14(1)", c6),
-    make(7, "Contact and Grievance Mechanism", "DPDP Act s.8(9), 8(10), 13; Rules r.9, 14(3)", c7),
-    make(8, "Cookie and Tracker Detection", "DPDP Act s.6(1); Rules r.3", c8),
-    make(9, "Consent Behaviour", "DPDP Act s.6(1), 6(4); Rules r.3(c)(i)", c9),
+    make(1, "Privacy Policy Availability", "DPDP Act s.5(1); Rules r.3(a), 3(b)", "dpdp", c1),
+    make(2, "Personal Data Collection Disclosure", "DPDP Act s.5(1)(i); Rules r.3(b)(i)", "dpdp", c2),
+    make(3, "Purpose of Data Processing", "DPDP Act s.5(1)(i); Rules r.3(b)(ii)", "dpdp", c3),
+    make(4, "Data Sharing and Third Parties", "DPDP Act s.8(2)", "practice", c4),
+    make(5, "Data Retention Disclosure", "DPDP Act s.8(7)", "practice", c5),
+    make(6, "User Rights Disclosure", "DPDP Act s.11, 12, 13, 14; Rules r.14(1)", "dpdp", c6),
+    make(7, "Contact and Grievance Mechanism", "DPDP Act s.8(9), 8(10), 13; Rules r.9, 14(3)", "dpdp", c7),
+    make(8, "Cookie and Tracker Detection", "Relates to DPDP Act s.6(1); Rules r.3", "technical", c8),
+    make(9, "Consent Behaviour", "Relates to DPDP Act s.6(1), 6(4); Rules r.3(c)(i)", "technical", c9),
   ];
 
   // 10. evidence and transparency: can the results that could be assessed be traced to a page or an observation? A check that could not be completed has no result to trace, and its gap is
@@ -244,15 +257,15 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
   const frac = rest.length === 0 ? 0 : witnessed / rest.length;
   const gapNote = gaps.length ? ` Check${gaps.length === 1 ? "" : "s"} ${gaps.join(", ")} could not be completed and ${gaps.length === 1 ? "is" : "are"} listed under the limitations.` : "";
   const c10: Draft = !ev
-    ? { result: "Failed", completed: false, explanation: "The scan's evidence was not loaded, so the other results could not be traced to their source.", limitation: "Evidence unavailable." }
+    ? { result: "Failed", completed: false, basis: "Evidence unavailable", explanation: "The scan's evidence was not loaded, so the other results could not be traced to their source.", limitation: "Evidence unavailable." }
     : rest.length === 0
-      ? { result: "Failed", completed: false, explanation: `None of the other checks could be completed, so there is no result to trace to its source.${gapNote}`, limitation: "No check could be completed." }
+      ? { result: "Failed", completed: false, basis: "Evidence unavailable", explanation: `None of the other checks could be completed, so there is no result to trace to its source.${gapNote}`, limitation: "No check could be completed." }
       : frac >= 0.8
         ? { result: "Passed", evidence: `${witnessed} of ${rest.length} completed results carry a source page or an observation.`, sourceUrl: null, explanation: `The completed results can be traced to a source page and its text, or to a technical observation.${gapNote}` }
         : frac >= 0.5
           ? { result: "Partially Passed", evidence: `${witnessed} of ${rest.length} completed results carry a source page or an observation.`, explanation: `Some completed results rest on evidence that could be traced; the others found nothing to cite.${gapNote}`, limitation: failedPages > 0 ? `${failedPages} page${failedPages === 1 ? "" : "s"} did not load.` : null }
           : { result: "Failed", evidence: `${witnessed} of ${rest.length} completed results carry a source page or an observation.`, explanation: `Most completed results have no source page or observation behind them, so they cannot be independently reviewed. Missing evidence is not proof of a violation.${gapNote}`, limitation: failedPages > 0 ? `${failedPages} page${failedPages === 1 ? "" : "s"} did not load.` : null };
-  const checks = [...first, make(10, "Privacy Evidence and Transparency", null, c10)];
+  const checks = [...first, make(10, "Privacy Evidence and Transparency", null, "transparency", c10)];
 
   const sc = scoreChecks(checks);
   const limitations: string[] = [];
@@ -270,3 +283,6 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
     limitations,
   };
 }
+
+/** The words printed beside a check for its kind. A technical observation or a best practice is never presented as a required DPDP item. */
+export const KIND_LABEL: Record<TenKind, string> = { dpdp: "DPDP-related", practice: "Best practice", technical: "Technical check", transparency: "Report transparency" };

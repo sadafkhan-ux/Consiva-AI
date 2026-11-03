@@ -168,3 +168,7 @@
 .sn-fit-5.sn-p2 .sn-panel { padding-top: 12px; padding-bottom: 8px; gap: 3px; } .sn-fit-5 .sn-h { margin-top: 0; } .sn-fit-5 .sn-cta { padding: 4px 14px; } .sn-fit-5 .sn-disc { padding: 4px 10px; line-height: 1.3; }
 .sn-fit-5 .sn-table td { padding-top: 0; padding-bottom: 0; } .sn-fit-5 .sn-summary dl > div { padding-top: 1px; padding-bottom: 1px; } .sn-fit-5 .sn-forms { padding: 4px 8px; gap: 2px; }
 .sn-cookies td:nth-child(5), .sn-cookies td:nth-child(6), .sn-cookies td:nth-child(7) { overflow-wrap: normal; }
+
+/* what kind of check it is, and why a result is what it is */
+.sn-kind { margin-left: 6px; font-size: 8px; font-weight: 700; color: #5b36c8; background: #efeaff; border-radius: 4px; padding: 0 5px; white-space: nowrap; } .sn-kind[data-kind="practice"] { color: #8a4b00; background: #fff4de; } .sn-kind[data-kind="technical"] { color: #1f4fd8; background: #eaf0ff; } .sn-kind[data-kind="transparency"] { color: #50597f; background: #eef0f8; }
+.sn-basis { display: block; margin-top: 1px; font-size: 8px; color: var(--sn-mut); white-space: nowrap; }
