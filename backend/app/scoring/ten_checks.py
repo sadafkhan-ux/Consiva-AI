@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
+from app.scoring import disclosure
+
 # ── JavaScript-compatible helpers ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 _F = re.IGNORECASE | re.ASCII          # JavaScript's \w and \b are ASCII; /i folds case
@@ -273,12 +275,16 @@ def _pick_best(rs: list[dict | None]) -> dict | None:
 
 def assess_ten_checks(
     evidence: dict | None, policy_analysis: dict | None, scan_pages: dict | None, visual: dict | None, screenshot_page_url: str | None,
+    cross_check: bool = True,
 ) -> dict[str, Any]:
     """The ten checks and the score for one scan.
 
     `evidence`: the scan's evidence as the API serves it (pages, policies, cookies, trackers, consent_signals). `policy_analysis`: the analysis result, or None when it has not run.
     `scan_pages`: scannedCount-style page accounting (see ten_inputs.build_scan_pages). `visual`: pages scanned/found and the consent comparison (ten_inputs.build_visual).
     `screenshot_page_url`: the address of the homepage the preview was taken of.
+    `cross_check`: the 1.1.0 additions (scoring/disclosure.py): checks 2 to 5 compare what the scan observed the site collecting with what the policy says, check 7 lists the parts of the
+    contact found, and check 9's evidence names what was seen in each consent state. Always on in the product;
+    False reproduces the 1.0.0 results, which tests/test_ten_checks_parity.py holds to the recorded browser engine.
     """
     ev = evidence
     a = policy_analysis
@@ -372,6 +378,8 @@ def assess_ten_checks(
         c5.coverage = "One kind of data only"
         c5.explanation = "The policy gives a retention period for one kind of data only (for example form submissions). Periods or criteria for the other personal data it collects are not evidenced."
         c5.limitation = "Retention for the policy's other data categories is not established by the verified passage."
+    if cross_check:
+        disclosure.cross_check(a, ev, c2, c3, c4, c5)
 
     # 6. user rights
     if not _read(a):
@@ -422,6 +430,9 @@ def assess_ten_checks(
         else:
             c7 = Draft(result="Failed", explanation="No privacy contact, Data Protection Officer or grievance mechanism was found in the policy text that was read. This is not a finding that the law was broken: it may be published elsewhere.",
                        source_url=a["documents"][0]["url"] if a.get("documents") else None, limitation=no_pol)
+
+    if cross_check:
+        disclosure.contact_advisory(a, c7)
 
     # 8. cookie and tracker detection
     detection_ran = scanned > 0 and ev is not None
@@ -488,6 +499,8 @@ def assess_ten_checks(
         reject_clean = known(known_[2]) == 0 and (not reject_t or reject_tracking == 0)
         line = (f"Analytics/marketing requests: before consent {known_[0]}, after Accept {known_[1] if accept_t else 'not tested'}, after Reject {known_[2] if reject_t else 'not tested'}. "
                 f"Analytics/marketing cookies and requests seen before consent: {pre_tracking}.")
+        if cross_check:
+            line = f"{line} {disclosure.consent_events(ev, accept_t, reject_t)}"
         home = screenshot_page_url
         if not has_banner and not any_tracking and unclassified == 0 and known_[0] == 0 and known_[1] == 0 and known_[2] == 0:
             c9 = Draft(result="Not Applicable", evidence=line, source_url=home,

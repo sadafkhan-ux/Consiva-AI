@@ -45,7 +45,7 @@ def test_the_oracle_is_the_size_it_should_be():
 @pytest.mark.parametrize("i", range(len(GOLDEN["cases"])))
 def test_the_python_engine_matches_the_browser_engine(i):
     case = GOLDEN["cases"][i]
-    got = assess_ten_checks(*_inputs(case))
+    got = assess_ten_checks(*_inputs(case), cross_check=False)   # 1.0.0 behaviour: the recorded browser engine did not compare observed collection with the policy
     want = case["expected"]
     # check by check first, so a difference names the check and the field
     assert [c["id"] for c in got["checks"]] == [c["id"] for c in want["checks"]]

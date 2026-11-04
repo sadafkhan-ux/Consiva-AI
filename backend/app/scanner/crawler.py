@@ -62,6 +62,7 @@ from app.scanner.cookie_detector import (
     detect_cookies,
     parse_set_cookie_headers,
 )
+from app.scanner.crawl_controls import DomainRateLimiter, ResourceGuard
 from app.scanner.failures import (
     DNS,
     PERMANENT,
@@ -87,11 +88,7 @@ from app.scanner.page_signals import (
 )
 from app.scanner.policy_detector import detect_policies
 from app.scanner.robots import RobotsRules, parse_robots
-from app.scanner.tls_diagnostics import describe_certificate
-from app.scanner.tls_diagnostics import sentence as tls_sentence
-from app.scanner.crawl_controls import DomainRateLimiter, ResourceGuard
 from app.scanner.scan_profiles import APPLICATION, MAX_WEB_PAGES, ScanProfile, resolve_profile
-from app.scanner.url_inventory import SITEMAP_DEPTH, UNCONTROLLED_CAP, InventoryTracker, incomplete_extraction
 from app.scanner.schemas import (
     ConsentSignalRecord,
     CookieRecord,
@@ -103,8 +100,23 @@ from app.scanner.schemas import (
     TrackerRecord,
 )
 from app.scanner.sitemap import discover_sitemap_urls
+from app.scanner.tls_diagnostics import describe_certificate
+from app.scanner.tls_diagnostics import sentence as tls_sentence
 from app.scanner.tracker_detector import detect_trackers
-from app.scanner.url_normalize import effective_rank, normalize_url, path_without_query, query_variant_of, section_of, tie_break_key
+from app.scanner.url_inventory import (
+    SITEMAP_DEPTH,
+    UNCONTROLLED_CAP,
+    InventoryTracker,
+    incomplete_extraction,
+)
+from app.scanner.url_normalize import (
+    effective_rank,
+    normalize_url,
+    path_without_query,
+    query_variant_of,
+    section_of,
+    tie_break_key,
+)
 from app.scanner.url_safety import assert_safe_url
 
 logger = logging.getLogger(__name__)
@@ -145,7 +157,7 @@ def _frameset_sources(html: str, base_url: str) -> list[str]:
 def _host_key(url: str) -> str:
     """A page's host for the main-domain-vs-subdomain comparison: lowercase, without a leading "www."."""
     host = (urlparse(url).hostname or "").lower()
-    return host[4:] if host.startswith("www.") else host
+    return host.removeprefix("www.")
 
 #: Longest a page waits for its own "load" event after navigation has returned at "domcontentloaded".
 _LOAD_EVENT_WAIT_MS = 10_000
@@ -317,12 +329,27 @@ _SHADOW_DOM_CONTROL_TEXT_JS = """() => {
     return out.join(' ');
 }"""
 
+# A shadow root's textContent includes its <style> and <script> text. A consent widget that keeps its stylesheet in its shadow root put about 50,000 characters of CSS into a
+# policy page's text on the runs where the widget had loaded by then (digitalanumati.com: 7,808 characters on most runs, 60,000 and cut on one), and the policy text was cut
+# before its sharing and retention sections. Only the text a reader sees is collected, as on the plain-HTTP path (policy.analysis._html_to_text).
 _SHADOW_DOM_TEXT_JS = """() => {
+    const SKIP = new Set(['STYLE', 'SCRIPT', 'NOSCRIPT', 'TEMPLATE']);
+    function visibleText(root) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+            acceptNode: (n) => {
+                for (let p = n.parentNode; p && p !== root; p = p.parentNode) { if (p.nodeType === 1 && SKIP.has(p.tagName)) return NodeFilter.FILTER_REJECT; }
+                return NodeFilter.FILTER_ACCEPT;
+            },
+        });
+        const parts = [];
+        while (walker.nextNode()) parts.push(walker.currentNode.nodeValue);
+        return parts.join(' ');
+    }
     function collect(root, depth, out) {
         if (depth > 6) return;
         for (const el of root.querySelectorAll('*')) {
             if (el.shadowRoot) {
-                out.push(el.shadowRoot.textContent || '');
+                out.push(visibleText(el.shadowRoot));
                 collect(el.shadowRoot, depth + 1, out);
             }
         }
@@ -358,7 +385,7 @@ async def _robots_get(context: BrowserContext, url: str):
     timeout_ms = get_settings().scanner_robots_timeout_seconds * 1000
     try:
         return await context.request.get(url, timeout=timeout_ms, max_redirects=0)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         if "timeout" not in str(exc).lower():
             raise
         logger.info("robots.txt request to %s timed out after %d ms; trying once more", url, timeout_ms)
@@ -402,7 +429,7 @@ async def _fetch_robots(context: BrowserContext, root_url: str, user_agent: str 
             unreadable = f"it answered HTTP {response.status}"
         elif 300 <= response.status < 400 and not unreadable:
             logger.info("robots.txt of %s redirected more than %d times or without a location: treated as unavailable, no restrictions", root_url, _ROBOTS_MAX_REDIRECTS)
-    except Exception as exc:  # noqa: BLE001 — whatever went wrong, the file was not read
+    except Exception as exc:
         if is_certificate_error(exc):
             # Permanent: not "unreadable, retry later". The certificate the site presents is read (public fields only, scanner/tls_diagnostics.py) so the report can say which one failed and why.
             host = urlparse(root_url).hostname

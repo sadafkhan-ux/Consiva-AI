@@ -13,7 +13,7 @@ from app.scoring.ten_checks import assess_ten_checks
 from app.scoring.ten_inputs import build_scan_pages, build_visual
 
 #: The version of the ten-check methodology the numbers come from. Raise it when a rule that can change a result changes.
-TEN_CHECK_VERSION = "1.0.0"
+TEN_CHECK_VERSION = "1.1.1"
 
 
 def policy_stage_state(stages: list[Any]) -> str:
