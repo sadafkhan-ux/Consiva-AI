@@ -289,15 +289,15 @@ describe("the scoring and how marks are printed", () => {
     expect(s.applicableMax).toBe(9);
     expect(s.score).toBe(77.8);
     expect(s.totalText).toBe("7 / 9");
-    expect(s.scoreText).toBe("77.8%");
+    expect(s.scoreText).toBe("77.8/100");
     expect(s.formula).toContain("7 ÷ 9 × 100 = 77.8");
   });
 
   it("all Passed is 10 / 10, 100%; all Failed is 0 / 10, 0%; many Partially Passed is half marks each", () => {
-    expect(scoreChecks(mix(10, 0, 0, 0))).toMatchObject({ totalText: "10 / 10", scoreText: "100%", score: 100 });
-    expect(scoreChecks(mix(0, 0, 10, 0))).toMatchObject({ totalText: "0 / 10", scoreText: "0%", score: 0 });
-    expect(scoreChecks(mix(2, 6, 2, 0))).toMatchObject({ awarded: 5, totalText: "5 / 10", scoreText: "50%" });
-    expect(scoreChecks(mix(1, 3, 6, 0))).toMatchObject({ awarded: 2.5, totalText: "2.5 / 10", scoreText: "25%" });
+    expect(scoreChecks(mix(10, 0, 0, 0))).toMatchObject({ totalText: "10 / 10", scoreText: "100/100", score: 100 });
+    expect(scoreChecks(mix(0, 0, 10, 0))).toMatchObject({ totalText: "0 / 10", scoreText: "0/100", score: 0 });
+    expect(scoreChecks(mix(2, 6, 2, 0))).toMatchObject({ awarded: 5, totalText: "5 / 10", scoreText: "50/100" });
+    expect(scoreChecks(mix(1, 3, 6, 0))).toMatchObject({ awarded: 2.5, totalText: "2.5 / 10", scoreText: "25/100" });
   });
 
   it("when every check is Not Applicable there is no score, not a misleading 0 or 100", () => {
@@ -309,9 +309,9 @@ describe("the scoring and how marks are printed", () => {
   });
 
   it("rounds half up in the printed percentage", () => {
-    expect(scoreChecks(mix(1, 0, 7, 0)).scoreText).toBe("12.5%");        // 1 of 8
-    expect(scoreChecks(mix(5, 0, 3, 0)).scoreText).toBe("62.5%");
-    expect(scoreChecks(mix(1, 0, 2, 0)).scoreText).toBe("33.3%");
+    expect(scoreChecks(mix(1, 0, 7, 0)).scoreText).toBe("12.5/100");        // 1 of 8
+    expect(scoreChecks(mix(5, 0, 3, 0)).scoreText).toBe("62.5/100");
+    expect(scoreChecks(mix(1, 0, 2, 0)).scoreText).toBe("33.3/100");
   });
 
   it("the engine's own total equals the sum of its rows, and the printed figures come from that one result", () => {
@@ -322,7 +322,7 @@ describe("the scoring and how marks are printed", () => {
       expect(t.awarded).toBe(sum);
       expect(t.applicableMax).toBe(max);
       expect(t.totalText).toBe(`${sum} / ${max}`);
-      expect(t.scoreText).toBe(`${roundScore((sum / max) * 100)}%`);
+      expect(t.scoreText).toBe(`${roundScore((sum / max) * 100)}/100`);
       expect(t.counts.passed + t.counts.partial + t.counts.failed + t.counts.notAssessed + t.counts.notApplicable).toBe(10);
     }
   });
@@ -330,20 +330,20 @@ describe("the scoring and how marks are printed", () => {
 
 describe("the scoring scenarios and boundaries", () => {
   it("scenario A to F: 10 passed, 10 failed, 5+5, 6/2/1/1, 4/3/2/1, and nothing applicable", () => {
-    expect(scoreChecks(mix(10, 0, 0, 0))).toMatchObject({ totalText: "10 / 10", scoreText: "100%" });
-    expect(scoreChecks(mix(0, 0, 10, 0))).toMatchObject({ totalText: "0 / 10", scoreText: "0%" });
-    expect(scoreChecks(mix(5, 5, 0, 0))).toMatchObject({ totalText: "7.5 / 10", scoreText: "75%" });
-    expect(scoreChecks(mix(6, 2, 1, 1))).toMatchObject({ totalText: "7 / 9", scoreText: "77.8%" });
-    expect(scoreChecks(mix(4, 3, 2, 1))).toMatchObject({ totalText: "5.5 / 9", scoreText: "61.1%" });
+    expect(scoreChecks(mix(10, 0, 0, 0))).toMatchObject({ totalText: "10 / 10", scoreText: "100/100" });
+    expect(scoreChecks(mix(0, 0, 10, 0))).toMatchObject({ totalText: "0 / 10", scoreText: "0/100" });
+    expect(scoreChecks(mix(5, 5, 0, 0))).toMatchObject({ totalText: "7.5 / 10", scoreText: "75/100" });
+    expect(scoreChecks(mix(6, 2, 1, 1))).toMatchObject({ totalText: "7 / 9", scoreText: "77.8/100" });
+    expect(scoreChecks(mix(4, 3, 2, 1))).toMatchObject({ totalText: "5.5 / 9", scoreText: "61.1/100" });
     expect(scoreChecks(mix(0, 0, 0, 10))).toMatchObject({ score: null, scoreText: "No meaningful score" });
     expect(scoreChecks([])).toMatchObject({ score: null });   // no checks at all: no division by zero
   });
 
   it("floating-point and rounding boundaries", () => {
-    expect(scoreChecks(mix(2, 0, 1, 0)).scoreText).toBe("66.7%");
-    expect(scoreChecks(mix(1, 0, 2, 0)).scoreText).toBe("33.3%");
-    expect(scoreChecks(mix(0, 3, 0, 0)).scoreText).toBe("50%");
-    expect(scoreChecks(mix(0, 1, 7, 2)).scoreText).toBe("6.3%");   // 0.5 of 8 is 6.25, rounded half up
+    expect(scoreChecks(mix(2, 0, 1, 0)).scoreText).toBe("66.7/100");
+    expect(scoreChecks(mix(1, 0, 2, 0)).scoreText).toBe("33.3/100");
+    expect(scoreChecks(mix(0, 3, 0, 0)).scoreText).toBe("50/100");
+    expect(scoreChecks(mix(0, 1, 7, 2)).scoreText).toBe("6.3/100");   // 0.5 of 8 is 6.25, rounded half up
   });
 
   it("every check carries a kind, and technical checks only say they relate to a section", () => {
@@ -447,11 +447,45 @@ describe("discovery and extraction states, one per situation", () => {
     expect(c.limitation).toMatch(/first part of a very long policy/);
   });
 
-  it("a disclosure not found in text that was cut is limited to the part that was read, not a plain not-found", () => {
+  it("a disclosure not found in a policy page that was cut is Not Assessed, never Failed: what came after the cut was not read", () => {
     const a = analysis({ retention: "not_found" }, { documents: [{ url: "https://x.test/privacy", policy_type: "privacy_policy", characters: 60000, source: "crawl", truncated: true }] });
     const c = buildTenChecks(consent(withPolicy(a), CLEAN)).checks[4];
-    expect([c.result, c.basis]).toEqual(["Failed", "Partially extracted"]);
-    expect(c.explanation).toMatch(/the rest was not reviewed/);
+    expect([c.result, c.basis, c.awarded, c.max]).toEqual(["Not Assessed", "Partially extracted", null, null]);
+    expect(c.explanation).toMatch(/first 60,000 characters of x\.test\/privacy/);
+    expect(c.explanation).toMatch(/the rest was not reviewed, so this is not assessed/);
+    expect(c.explanation).not.toMatch(/storage limit/);
+  });
+
+  it("a long page that only mentions a policy being cut does not make a policy disclosure Not Assessed (the 7,808-character policy that was reported as cut)", () => {
+    const a = analysis({ data_sharing: "not_found", retention: "not_found" }, { documents: [
+      { url: "https://x.test/privacy", policy_type: "privacy_policy", characters: 7808, source: "crawl", truncated: false },
+      { url: "https://x.test/training/dpdp", policy_type: "privacy_policy", characters: 30000, source: "crawl", truncated: true },
+    ] });
+    const t = buildTenChecks(consent(withPolicy(a), CLEAN));
+    for (const i of [3, 4]) {
+      expect(t.checks[i].result).toBe("Failed");                        // a plain not-found: the policy was read in full
+      expect(t.checks[i].basis).toBe("Not evidenced");
+      expect(t.checks[i].explanation).not.toMatch(/cut|storage limit|first .* characters/);
+    }
+    expect(t.counts.notAssessed).toBe(0);
+  });
+
+  it("the same applies to the rights and contact checks: a cut policy page makes a missing statement Not Assessed", () => {
+    const docs = [{ url: "https://x.test/privacy-policy", policy_type: "privacy_policy", characters: 60000, source: "crawl", truncated: true }];
+    const a = analysis({ rights_means: "not_found", rights_access: "not_found", rights_correction_erasure: "not_found", rights_nominate: "not_found", grievance_contact: "not_found", dpo_contact: "not_found", grievance_timeline: "not_found" }, { documents: docs });
+    const t = buildTenChecks(consent(withPolicy(a), CLEAN));
+    expect([t.checks[5].result, t.checks[6].result]).toEqual(["Not Assessed", "Not Assessed"]);
+    expect(t.checks[5].sourceUrl).toBe("https://x.test/privacy-policy");
+  });
+
+  it("a cookie policy page that was cut counts the same as a privacy policy page", () => {
+    const a = analysis({ data_sharing: "not_found" }, { documents: [{ url: "https://x.test/cookie-policy", policy_type: "cookie_policy", characters: 60000, source: "crawl", truncated: true }] });
+    expect(buildTenChecks(consent(withPolicy(a), CLEAN)).checks[3].result).toBe("Not Assessed");
+  });
+
+  it("a verified requirement is unaffected by a cut policy page (what was found stays found)", () => {
+    const a = analysis({}, { documents: [{ url: "https://x.test/privacy", policy_type: "privacy_policy", characters: 60000, source: "crawl", truncated: true }] });
+    expect(buildTenChecks(consent(withPolicy(a), CLEAN)).checks[4].result).toBe("Passed");
   });
 
   it("found but no readable text: Partially Passed with Content extraction failed, never Not found", () => {
@@ -652,7 +686,7 @@ describe("Not Assessed is left out of the score; it is never scored 0", () => {
   it("scoreChecks counts Not Assessed apart and leaves it out of the maximum", () => {
     const rows = [...mix(6, 2, 1, 0), { result: "Not Assessed" as TenResult, awarded: null, max: null }];
     const s = scoreChecks(rows);
-    expect([s.awarded, s.applicableMax, s.scoreText, s.counts.notAssessed]).toEqual([7, 9, "77.8%", 1]);
+    expect([s.awarded, s.applicableMax, s.scoreText, s.counts.notAssessed]).toEqual([7, 9, "77.8/100", 1]);
   });
 });
 

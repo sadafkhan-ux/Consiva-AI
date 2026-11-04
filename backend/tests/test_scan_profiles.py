@@ -585,8 +585,12 @@ async def test_the_application_endpoint_has_no_fixed_page_cap_and_requires_a_ver
     assert out.profile == APPLICATION and out.max_pages is None, "null == no fixed page-count cap"
     assert out.max_seconds == 1800, "...but it is bounded by a deadline"
     assert rec.request_scan_kwargs["profile"].requires_verified_domain is True
+    from app.scanner.scan_profiles import application_crawl_options
+
     assert rec.scan.scan_options == {
         "profile": APPLICATION, "max_pages": None, "max_seconds": 1800,
+        # the crawl controls the server filled in (defaults, inside the ceilings); a caller that asked for none gets exactly these
+        "crawl": application_crawl_options(None),
         "scan_consent_states": True, "scan_before_consent": True,
         "scan_after_accept": True, "scan_after_reject": True,
     }

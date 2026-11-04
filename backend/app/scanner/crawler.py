@@ -89,7 +89,9 @@ from app.scanner.policy_detector import detect_policies
 from app.scanner.robots import RobotsRules, parse_robots
 from app.scanner.tls_diagnostics import describe_certificate
 from app.scanner.tls_diagnostics import sentence as tls_sentence
+from app.scanner.crawl_controls import DomainRateLimiter, ResourceGuard
 from app.scanner.scan_profiles import APPLICATION, MAX_WEB_PAGES, ScanProfile, resolve_profile
+from app.scanner.url_inventory import SITEMAP_DEPTH, UNCONTROLLED_CAP, InventoryTracker, incomplete_extraction
 from app.scanner.schemas import (
     ConsentSignalRecord,
     CookieRecord,
@@ -920,6 +922,11 @@ async def _crawl_full_site(
     # feed it: whatever number arrived, a web scan navigates to at most MAX_WEB_PAGES distinct pages.
     if budget is not None and (profile is None or profile.name != APPLICATION):
         budget = min(budget, MAX_WEB_PAGES)
+    # Crawl controls exist only for an application scan. A web scan has none: its page cap and behaviour are exactly what they were.
+    controls = profile.crawl if profile is not None and profile.name == APPLICATION else None
+    tracker = InventoryTracker(max_urls=controls.max_urls if controls is not None else UNCONTROLLED_CAP)
+    limiter = DomainRateLimiter(controls.requests_per_second) if controls is not None else None
+    guard = ResourceGuard(controls.memory_budget_mb) if controls is not None else None
     diagnostics = {
         "page_limit": budget,
         "page_limit_mode": "capped" if budget is not None else "uncapped",
@@ -945,6 +952,8 @@ async def _crawl_full_site(
         # block). Not counted as trackers; recorded so a reviewer can see the CMP did block something.
         "script_tags_not_executed": 0,
         "total_scroll_steps": 0,
+        "pages_excluded_depth_limit": 0,
+        "crawl_controls": controls.as_options() if controls is not None else None,
     }
 
     # (priority, insertion order, url as first spelled, discovered_via). The insertion
@@ -962,13 +971,14 @@ async def _crawl_full_site(
 
     seed_section = section_of(root_url)
 
-    def _discover(url: str, via: str) -> None:
+    def _discover(url: str, via: str, depth: int = 0) -> None:
         if via != "seed" and _host_key(url) != main_host:
             # The scan stays on the entered main domain. A link to a subdomain or to another website is neither followed
             # nor recorded: it is not a page of this site and not a reason to spend one of the pages.
             return
         key = normalize_url(url)
         if key in seen_keys:
+            tracker.discover(url, via, depth)       # already known: the inventory just learns one more source for it
             if url not in seen_spellings:
                 seen_spellings.add(url)
                 diagnostics["pages_skipped_duplicate"] += 1
@@ -976,9 +986,18 @@ async def _crawl_full_site(
             return
         seen_keys.add(key)
         seen_spellings.add(url)
+        if tracker.discover(url, via, depth) is None:
+            # The inventory is full (max_urls): this URL is counted in tracker.over_limit and not recorded or queued.
+            return
         diagnostics["pages_discovered"] += 1
+        if controls is not None and controls.max_depth is not None and depth > controls.max_depth:
+            diagnostics["pages_excluded_depth_limit"] += 1
+            tracker.exclude(url, "depth_limit")
+            _skip(url, "depth_limit")
+            return
         if _is_robots_disallowed(url, disallowed_prefixes):
             logger.info("Skipping %s (robots.txt disallow)", url)
+            tracker.exclude(url, "robots_disallowed")
             # Not a page record: a robots-disallowed link used to be appended to `pages`, one per link, with no limit --
             # which is how a scan capped at 5 reported 12 or more "pages". The count and the reason are kept.
             diagnostics["pages_blocked_robots"] += 1
@@ -994,9 +1013,9 @@ async def _crawl_full_site(
 
     _discover(root_url, "seed")
     for url in sitemap_urls or ():
-        _discover(url, "sitemap")
+        _discover(url, "sitemap", SITEMAP_DEPTH)
 
-    max_concurrent = settings.scanner_max_concurrent_pages
+    max_concurrent = controls.effective_concurrency if controls is not None else settings.scanner_max_concurrent_pages
     # Where each cookie was first seen, filled after every completed group -- see
     # cookie_detector.attribute_new_cookies. Read-only bookkeeping: the cookie LIST
     # still comes from the single jar read after the crawl, exactly as before.
@@ -1026,6 +1045,7 @@ async def _crawl_full_site(
                 local_id=page_local_id, url=url, title=None, http_status=result.get("http_status"),
                 discovered_via=result["status"],  # "failed" | "timeout"
             ))
+            tracker.fail(url, result.get("error") or ("the page timed out" if result["status"] == "timeout" else "the page could not be loaded"), result.get("http_status"))
             diagnostics["pages_timeout" if result["status"] == "timeout" else "pages_failed"] += 1
             if via != "seed" and result["status"] == "failed" and result.get("http_status") in _DEAD_PAGE_STATUSES:
                 diagnostics["pages_dead"] = diagnostics.get("pages_dead", 0) + 1
@@ -1036,8 +1056,11 @@ async def _crawl_full_site(
             # once, not twice) or on another host entirely (not a page of the main domain); neither brings in evidence.
             final_url = result.get("final_url") or url
             if _host_key(final_url) != main_host:
+                # Another website is not a page of this site and is never listed: only the reason is kept, not where it went.
+                tracker.exclude(url, "redirected_to_another_site")
                 return
             if normalize_url(final_url) in scanned_keys:
+                tracker.exclude(url, "redirected_to_already_scanned_page", final_url=final_url, http_status=result.get("http_status"))
                 _skip(url, "redirected_to_already_scanned_page")
                 return
         sig = result.get("page_signals") or {}
@@ -1085,8 +1108,15 @@ async def _crawl_full_site(
         diagnostics["script_tags_not_executed"] += sum(1 for sc in parsed.scripts if sc.src and not sc.executes)
         diagnostics["total_scroll_steps"] += result["scroll_steps"]
 
+        # A page loaded with a good status is only COMPLETED when its content was extracted: a page with no text, or a file that is not HTML, is PARTIALLY_SCANNED.
+        page_text = result["rendered_text"] or parsed.full_text or parsed.visible_text
+        tracker.finish(
+            url, final_url=result.get("final_url"), title=result["title"], http_status=result["http_status"], content_type=result.get("content_type"),
+            incomplete_reason=incomplete_extraction(text_length=len((page_text or "").strip()), content_type=result.get("content_type")),
+        )
+        child_depth = (tracker.depth_of(url) or 0) + 1
         for link in parsed.links:
-            _discover(link.href, "link")
+            _discover(link.href, "link", child_depth)
 
     # Rolling pool, not fixed lockstep batches: a page is launched the instant a
     # slot frees up, rather than waiting for every other page in its cohort to
@@ -1113,20 +1143,30 @@ async def _crawl_full_site(
 
     launched_paths: set[str] = set()
 
+    async def _launch_page(url: str) -> dict:
+        # An application scan spaces its navigation starts (requests per second against the domain); a web scan has no limiter and starts at once, as before.
+        if limiter is not None:
+            await limiter.acquire()
+        return await _fetch_one_page(context, url, root_url, settings)
+
     def _fill_pool() -> None:
         # The entered address is loaded ALONE first. The pages are chosen by priority (privacy and cookie pages first), but the links that rank highest are only
         # found when the seed has loaded; with the pool already full of the sitemap's addresses, a slow seed let the fastest pages (often dead sitemap entries) use the
         # whole attempt budget before any priority link was known, so which pages were scanned depended on timing (heavy pages: 10 of 100 scans of the same kind of site
         # skipped the privacy page). Waiting for the seed costs one page load and makes the choice the same every time.
         while queue and len(in_flight) < max_concurrent and _budget_left() and (seed_processed or not in_flight):
+            if guard is not None and guard.over_budget():
+                break       # memory is over the scan's budget: launch nothing until a page in flight finishes and frees some (recorded in guard.events)
             _rank, _n, url, via = heapq.heappop(queue)
             variant_of = query_variant_of(url) if via != "seed" else None
             if variant_of is not None and variant_of in launched_paths:
                 # /blog?page=2 after /blog: the same page with another query string. It would spend one of the pages on content already seen.
+                tracker.exclude(url, "query_variant_of_known_page")
                 _skip(url, "query_variant_of_known_page")
                 continue
             launched_paths.add(path_without_query(url))
-            in_flight[asyncio.create_task(_fetch_one_page(context, url, root_url, settings))] = (url, via)
+            tracker.start(url)
+            in_flight[asyncio.create_task(_launch_page(url))] = (url, via)
 
     async def _check_stop() -> str | None:
         """Why no NEW page may start, or None. Checked between completions, never inside a navigation: a
@@ -1188,13 +1228,22 @@ async def _crawl_full_site(
 
     if stop_launching is not None:
         stop_reason = stop_launching
+    elif queue and guard is not None and guard.is_throttled:
+        stop_reason = "resource_limit"
     elif queue and not _budget_left():
         stop_reason = "page_limit" if budget is not None and diagnostics["pages_scanned"] >= budget else "attempt_limit"
 
     diagnostics["framed_sites"] = sorted(framed_sites)
     diagnostics["stop_reason"] = stop_reason
+    _not_reached = {"page_limit": "page_limit", "deadline": "time_limit", "cancelled": "scan_cancelled", "slow_site": "slow_site", "resource_limit": "resource_limit"}.get(stop_reason, "not_reached")
     for _rank, _n, queued_url, _via in sorted(queue):
-        _skip(queued_url, {"page_limit": "page_limit", "deadline": "time_limit", "cancelled": "scan_cancelled", "slow_site": "slow_site"}.get(stop_reason, "not_reached"))
+        _skip(queued_url, _not_reached)
+    # Discovered is not scanned: what the crawl never started stays PENDING, with the reason it was not reached.
+    tracker.leave_pending({u: _not_reached for u in tracker.pending_urls()})
+    diagnostics["url_inventory_counts"] = tracker.counts()
+    diagnostics["discovery_limit"] = {"max_urls": controls.max_urls if controls is not None else UNCONTROLLED_CAP, "urls_not_recorded": tracker.over_limit}
+    diagnostics["resource_events"] = guard.events if guard is not None else []
+    diagnostics["url_inventory_records"] = tracker.records()      # carried to the ScanResult and removed from the diagnostics before they are stored
     if stop_reason == "deadline":
         diagnostics["pages_not_attempted_deadline_exceeded"] = len(queue)
         diagnostics["pages_not_attempted_budget_exhausted"] = 0
@@ -1660,6 +1709,7 @@ async def run_scan(
             finally:
                 await _close_quietly(context, "the crawl context")
             homepage_screenshot = pre_consent_diagnostics.pop("homepage_screenshot", None)
+            url_inventory = pre_consent_diagnostics.pop("url_inventory_records", [])
 
             (
                 (accept_cookies, accept_trackers, accept_status, accept_confirmed, accept_scroll_steps, accept_gate),
@@ -1717,6 +1767,7 @@ async def run_scan(
         consent_signals=consent_signal,
         scan_diagnostics=scan_diagnostics,
         screenshot=ScreenshotRecord(**homepage_screenshot) if homepage_screenshot else None,
+        url_inventory=url_inventory,
     )
 
 

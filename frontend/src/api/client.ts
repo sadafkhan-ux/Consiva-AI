@@ -10,7 +10,10 @@ import type {
   ScanUsage,
   UsageHistoryItem,
   ScanScreenshot,
+  CrawlConfig,
   ScanResponse,
+  UrlInventoryFilters,
+  UrlInventoryResponse,
   ScanStatusResponse,
   StageResponse,
 } from "./types";
@@ -192,6 +195,24 @@ export const api = {
   },
   createScan(url: string, authorized: boolean): Promise<ScanResponse> {
     return request("/api/v1/consent/scans", { method: "POST", body: JSON.stringify({ url, authorized }) });
+  },
+  /** A whole-site scan (the application profile): organisation administrators, and domains that have passed DNS ownership verification, only. The server decides; this only asks. */
+  async createApplicationScan(url: string, authorized: boolean, crawl: CrawlConfig): Promise<ScanResponse> {
+    const body = { website_url: url, authorized, scan_options: Object.fromEntries(Object.entries(crawl).filter(([, v]) => v !== null && v !== undefined)) };
+    const res = await request<{ scan_id: string; status: string }>("/api/v1/consent-agent/scans/application", { method: "POST", body: JSON.stringify(body) });
+    return { id: res.scan_id, url, status: res.status };
+  },
+  getUrlInventory(scanId: string, filters: UrlInventoryFilters = {}, limit = 100, offset = 0): Promise<UrlInventoryResponse> {
+    const q = new URLSearchParams();
+    if (filters.status) q.set("status", filters.status);
+    if (filters.http_status != null) q.set("http_status", String(filters.http_status));
+    if (filters.source) q.set("source", filters.source);
+    if (filters.depth != null) q.set("depth", String(filters.depth));
+    if (filters.q?.trim()) q.set("q", filters.q.trim());
+    if (filters.failure?.trim()) q.set("failure", filters.failure.trim());
+    q.set("limit", String(limit));
+    q.set("offset", String(offset));
+    return request(`/api/v1/consent/scans/${scanId}/url-inventory?${q.toString()}`);
   },
   getScan(scanId: string): Promise<ScanStatusResponse> {
     return request(`/api/v1/consent/scans/${scanId}`);

@@ -1,5 +1,6 @@
 import type { PolicyAnalysis, PolicyRequirementResult } from "../api/types";
 import type { ReportModel } from "./buildReport";
+import { formatScore } from "./scoreFormat";
 
 /**
  * The ten predefined checks every scanned website is assessed on, and the one 10-mark score they give. Every check is assessed on its own evidence: the missing of a privacy policy page
@@ -57,7 +58,7 @@ export interface TenAssessment {
   formula: string;
   /** The total as printed: "7.5 / 10" (marks awarded over the applicable maximum), or "No applicable check" when none applies. */
   totalText: string;
-  /** The score as printed: "75%", or "No meaningful score" when no check applies. */
+  /** The score as printed everywhere: "75/100" (report/scoreFormat.ts), or "No meaningful score" when no check applies. */
   scoreText: string;
   counts: { passed: number; partial: number; failed: number; notAssessed: number; notApplicable: number };
   /** Checks that could not be assessed (a scan failure, an unreadable page, an analysis that did not run). They are left out of the score, never scored 0: a missing page is not a failed check. A disclosure that was looked for and not found is Failed. */
@@ -106,7 +107,7 @@ export function scoreChecks(checks: readonly Pick<TenCheck, "result" | "awarded"
   return {
     awarded, applicableMax, score, counts, formula,
     totalText: score === null ? "No applicable check" : `${fmt(awarded)} / ${fmt(applicableMax)}`,
-    scoreText: score === null ? "No meaningful score" : `${fmt(score)}%`,
+    scoreText: formatScore(score),
   };
 }
 
@@ -135,6 +136,24 @@ const find = (a: PolicyAnalysis | null, id: string): PolicyRequirementResult | u
 const isVerified = (r: PolicyRequirementResult | undefined): boolean => r?.status === "verified" && r.quote.trim().length > 0;
 const read = (a: PolicyAnalysis | null): boolean => !!a && a.status === "analysed" && a.requirements.length > 0;
 
+const LEGAL_DOC = /\/(privacy|cookie)[-_]?(policy|policies|notice|statement)?\/?$/i;
+const docPath = (u: string): string => { try { return new URL(u, "https://x.invalid").pathname; } catch { return u; } };
+/**
+ * The privacy and cookie policy pages whose text was cut. Only these matter: a long page that merely mentions a policy (a course or product page the scan filed as one) being
+ * cut says nothing about what the policy says, so it is never the reason a requirement was not found. (A report once blamed "the storage limit" for a 7,808-character policy
+ * because an unrelated long page in the same scan had been cut.)
+ */
+const cutPolicyDocs = (a: PolicyAnalysis) => a.documents.filter((d) => d.truncated && LEGAL_DOC.test(docPath(d.url)));
+/** Why a requirement not found cannot be called Failed when a policy page was cut: what came after the cut was not read. */
+function cutPolicyDraft(a: PolicyAnalysis, what: string, sourceLimit: string | null): Draft {
+  const cut = cutPolicyDocs(a)[0];
+  return {
+    result: "Failed", completed: false, basis: "Partially extracted", sourceUrl: cut.url,
+    explanation: `${what[0].toUpperCase()}${what.slice(1)} was not found in the first ${cut.characters.toLocaleString("en-IN")} characters of ${cut.url.replace(/^https?:\/\//, "")}, which is longer than the scan keeps; the rest was not reviewed, so this is not assessed.`,
+    limitation: sourceLimit ?? "Only the first part of a very long policy page was read.",
+  };
+}
+
 /** A check that rests on one policy requirement. */
 function policyCheck(a: PolicyAnalysis | null, reqId: string, what: string, sourceLimit: string | null, foundUrl: string | null = null, unread: TenBasis = "Content extraction failed"): Draft {
   // An analysis that never ran is not a policy that says nothing: nothing was assessed.
@@ -157,10 +176,8 @@ function policyCheck(a: PolicyAnalysis | null, reqId: string, what: string, sour
   if (r.status === "verified" && !isVerified(r)) return { result: "Failed", completed: false, basis: "Evidence unavailable", sourceUrl: r.source_url, explanation: "The analysis marked this as verified but gave no quoted passage, so it is not counted.", limitation: sourceLimit };
   if (r.status === "verified") return { result: "Passed", evidence: clip(r.quote), sourceUrl: r.source_url, explanation: `The policy states ${what}; the quoted passage was verified word for word against the policy text.` };
   if (r.status === "partial") return { result: "Partially Passed", evidence: clip(r.quote), sourceUrl: r.source_url, explanation: `The policy says part of ${what}: ${r.detail || "not every element was found"}.` };
-  // Policy text that was read but cut at the storage limit: what came after the cut was not read, so a "not found" is limited to the part that was.
-  if (a!.documents.some((d) => d.truncated)) {
-    return { result: "Failed", basis: "Partially extracted", explanation: `${what[0].toUpperCase()}${what.slice(1)} was not found in the part of the policy text that was read; the text was cut at the storage limit, so the rest was not reviewed.`, sourceUrl: a!.documents[0]?.url ?? null, limitation: sourceLimit };
-  }
+  // A privacy or cookie policy page that was cut: what came after the cut was not read, so "not found" cannot be called Failed. It is not assessed.
+  if (cutPolicyDocs(a!).length > 0) return cutPolicyDraft(a!, what, sourceLimit);
   return {
     result: "Failed", explanation: `${what[0].toUpperCase()}${what.slice(1)} was not found in the policy text that was read (not a finding that the law was broken; it may be given elsewhere).`,
     sourceUrl: a!.documents[0]?.url ?? null, limitation: sourceLimit,
@@ -256,7 +273,8 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
     // A right is explained when it is stated, not when the policy only says "contact us": two of the three rights the analysis looks for (access, correction and erasure, nomination) and the means of making a request.
     if (isVerified(means) && rightsFound >= 2) c6 = { result: "Passed", evidence: clip(shown?.quote ?? ""), sourceUrl: shown?.source_url ?? null, explanation: `The policy names ${rightsFound} of 3 user rights and the means of making a request.`, coverage: `${rightsFound} of 3 rights named` };
     else if (best) c6 = { result: "Partially Passed", evidence: clip((shown ?? best).quote), sourceUrl: (shown ?? best).source_url, quality: "Limited", coverage: `${rightsFound} of 3 rights named`, explanation: `Only part is evidenced: ${isVerified(means) && rightsFound === 1 ? "the means of making a request and one right, but fewer rights than are needed to say the rights are explained" : isVerified(means) ? "the means of making a request, but no right is named" : rightsFound > 0 ? "rights are named, but no means of making a request" : "some wording, not a complete statement of rights and the means"}.` };
-    else c6 = { result: "Failed", explanation: "No statement of user rights or of how to exercise them was found in the policy text that was read. This is not a finding that the law was broken.", sourceUrl: a!.documents[0]?.url ?? null, limitation: noPol };
+    else c6 = cutPolicyDocs(a!).length > 0 ? cutPolicyDraft(a!, "a statement of user rights and how to exercise them", noPol)
+      : { result: "Failed", explanation: "No statement of user rights or of how to exercise them was found in the policy text that was read. This is not a finding that the law was broken.", sourceUrl: a!.documents[0]?.url ?? null, limitation: noPol };
   }
 
   // 7. contact and grievance
@@ -269,7 +287,8 @@ export function buildTenChecks(model: ReportModel): TenAssessment {
     const best = pickBest([g, d, t]);
     if (gOk && (dOk || tOk)) c7 = { result: "Passed", evidence: clip(g!.quote), sourceUrl: g!.source_url, explanation: `A grievance contact was found together with ${dOk && tOk ? "a business contact and a response period" : dOk ? "a business contact of a Data Protection Officer or answering person" : "a response period"}.` };
     else if (best) c7 = { result: "Partially Passed", evidence: clip(best.quote), sourceUrl: best.source_url, explanation: `Only part is evidenced: ${gOk ? "a grievance contact, but neither a response period nor a business contact" : dOk ? "a business contact, but no grievance contact" : "some wording, not a complete contact"}.` };
-    else c7 = { result: "Failed", explanation: "No privacy contact, Data Protection Officer or grievance mechanism was found in the policy text that was read. This is not a finding that the law was broken: it may be published elsewhere.", sourceUrl: a!.documents[0]?.url ?? null, limitation: noPol };
+    else c7 = cutPolicyDocs(a!).length > 0 ? cutPolicyDraft(a!, "a privacy contact, Data Protection Officer or grievance mechanism", noPol)
+      : { result: "Failed", explanation: "No privacy contact, Data Protection Officer or grievance mechanism was found in the policy text that was read. This is not a finding that the law was broken: it may be published elsewhere.", sourceUrl: a!.documents[0]?.url ?? null, limitation: noPol };
   }
 
   // 8. cookie and tracker detection

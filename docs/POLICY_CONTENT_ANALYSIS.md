@@ -125,3 +125,7 @@ None of these change the DPDP score, and an absence is never called a violation.
 - Top five gaps are ranked by a fixed risk (1 to 5) per check; the riskiest page is the one whose gaps carry the most risk in total.
 - Backend: the detailed evidence view now gives each form's `page_url` (agent's own evidence unchanged).
 - Worded as a readiness check, with the 13 May 2027 date, and ends "This is a compliance readiness review, not legal advice."
+
+## Fixed-pattern second look (contact, rights, grievance, sharing, retention)
+When the model reports one of these as not found, the policy text is searched with a fixed pattern (`policy/analysis.py`, `locate_by_pattern`). Sharing and retention were added on 2026-11-04, after one site's sharing and retention sentences were found by one run and missed by another run of the same pages. A sentence is accepted only if it is an exact slice of a document, names a recipient (sharing) or a period or criterion (retention), and it is judged by the same rules as a model quote. Legal pages are searched before other pages. See `docs/PRIVACY_READINESS_TEN_CHECKS.md` for what the report does when a policy page was cut.
+

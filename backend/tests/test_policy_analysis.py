@@ -30,6 +30,8 @@ POLICY = (
     "Certain service providers may process data outside India (including in the USA and EU). " + "Padding sentence about nothing in particular. " * 12
 )
 DOC = PolicyDocument("https://swaransoft.com/privacy", "privacy_policy", POLICY, "crawl")
+# The same policy with its one retention sentence taken out: for the tests that need a requirement the page really does not state.
+NO_RETENTION = PolicyDocument("https://swaransoft.com/privacy", "privacy_policy", POLICY.replace("Contact form submissions are retained for 24 months. ", ""), "crawl")
 
 
 def res(id_, quote, doc=1, found=True):
@@ -139,14 +141,14 @@ def test_the_grievance_period_is_judged_against_the_ninety_day_limit():
 # --- analysing an extraction --------------------------------------------------------------------------------------------------------
 
 def test_an_unquoted_requirement_is_not_found_not_a_violation():
-    out = analyse(ext(), [DOC], None, False)
+    out = analyse(ext(), [NO_RETENTION], None, False)
     row = next(r for r in out["requirements"] if r["id"] == "retention")
     assert row["status"] == NOT_FOUND and row["detail"] == "Not found in the policy text."
     assert "violation" not in row["detail"].lower()
 
 
 def test_a_rejected_quote_is_counted_and_reported_as_not_found():
-    out = analyse(ext(res("retention", "Contact form submissions are retained for forty months, not twenty-four.")), [DOC], None, False)
+    out = analyse(ext(res("retention", "Contact form submissions are retained for forty months, not twenty-four.")), [NO_RETENTION], None, False)
     row = next(r for r in out["requirements"] if r["id"] == "retention")
     assert row["status"] == NOT_FOUND and "rejected" in row["detail"] and row["quote"] == ""
     assert out["summary"]["quotes_rejected"] == 1
@@ -160,8 +162,14 @@ def test_a_quote_is_accepted_from_the_right_document_even_if_the_model_named_ano
 
 
 def test_a_requirement_the_model_found_but_which_has_no_quote_is_not_found():
-    out = analyse(ext(res("retention", "", found=True)), [DOC], None, False)
+    out = analyse(ext(res("retention", "", found=True)), [NO_RETENTION], None, False)
     assert next(r for r in out["requirements"] if r["id"] == "retention")["status"] == NOT_FOUND
+
+
+def test_a_retention_sentence_the_policy_does_state_is_found_even_when_the_model_gives_no_usable_quote():
+    for extraction in (ext(), ext(res("retention", "", found=True)), ext(res("retention", "Contact form submissions are retained for forty months, not twenty-four."))):
+        row = next(r for r in analyse(extraction, [DOC], None, False)["requirements"] if r["id"] == "retention")
+        assert row["status"] == VERIFIED and row["quote"] == "Contact form submissions are retained for 24 months." and row["found_by"] == "pattern"
 
 
 def test_the_childrens_requirement_applies_only_where_children_are_plausible():
@@ -432,3 +440,96 @@ def test_the_endpoint_404s_for_a_scan_that_is_not_the_callers_and_refuses_no_tok
         assert client.get(f"/api/v1/consent/scans/{uuid.uuid4()}/policy-analysis").status_code == 401
     finally:
         app.dependency_overrides.pop(key, None)
+
+
+# ── sharing and retention are rescued by a fixed pattern when the model misses them (digitalanumati.com: one run found both, another run of the same pages found neither) ──
+
+COOKIE_POLICY = (
+    "Cookie Policy. This page explains how we use cookies on our website and the choices you have. Essential cookies keep the site working and cannot be switched off. "
+    "We may use carefully selected third-party service providers to support analytics, security, cloud hosting, customer engagement, embedded content, and similar services. "
+    "Consent records are retained only for as long as necessary to demonstrate compliance with applicable legal obligations. You can change your choice at any time."
+)
+
+
+def _rows(docs, extraction=None):
+    return {r["id"]: r for r in analyse(extraction, docs, None, False)["requirements"]}
+
+
+def test_a_sharing_sentence_the_model_missed_is_found_by_the_pattern_and_is_an_exact_quote():
+    doc = PolicyDocument("https://x.test/cookie-policy", "cookie_policy", COOKIE_POLICY, "crawl")
+    row = _rows([doc], ext(res("data_sharing", "", found=False)))["data_sharing"]
+    assert row["status"] == VERIFIED and row["found_by"] == "pattern" and row["source_url"] == doc.url
+    assert row["quote"].startswith("We may use carefully selected third-party service providers") and verify_quote(row["quote"], doc.text)
+
+
+def test_a_retention_sentence_the_model_missed_is_found_by_the_pattern_and_is_an_exact_quote():
+    doc = PolicyDocument("https://x.test/cookie-policy", "cookie_policy", COOKIE_POLICY, "crawl")
+    row = _rows([doc], ext(res("retention", "", found=False)))["retention"]
+    assert row["status"] == VERIFIED and row["found_by"] == "pattern"
+    assert row["quote"] == "Consent records are retained only for as long as necessary to demonstrate compliance with applicable legal obligations." and verify_quote(row["quote"], doc.text)
+
+
+def test_the_pattern_never_replaces_a_passage_the_model_found():
+    doc = PolicyDocument("https://x.test/privacy", "privacy_policy", POLICY + " " + COOKIE_POLICY, "crawl")
+    mine = "Contact form submissions are retained for 24 months."
+    row = _rows([doc], ext(res("retention", mine)))["retention"]
+    assert row["quote"] == mine and "found_by" not in row
+
+
+def test_the_pattern_finds_nothing_in_text_that_states_neither():
+    doc = PolicyDocument("https://x.test/privacy", "privacy_policy", ("We collect your name and email address when you contact us. We keep our website secure. We store cookies in your browser. " * 6), "crawl")
+    rows = _rows([doc])
+    assert rows["data_sharing"]["status"] == NOT_FOUND and rows["retention"]["status"] == NOT_FOUND and rows["retention"]["quote"] == ""
+
+
+def test_a_retention_sentence_needs_a_period_or_a_criterion_not_just_the_word_stored():
+    doc = PolicyDocument("https://x.test/privacy", "privacy_policy", "Your enquiry is stored in our support system so that our team can answer it. " * 4, "crawl")
+    assert _rows([doc])["retention"]["status"] == NOT_FOUND
+
+
+@pytest.mark.parametrize("sentence", [
+    "We retain your personal data for 24 months after your last contact with us.",
+    "Personal data is kept only for as long as it is needed for the purposes described in this policy.",
+    "We will delete your account data within 30 days of a closure request.",
+    "Records are stored for the period required by applicable law.",
+])
+def test_retention_wordings_that_state_a_period_or_a_criterion_are_found(sentence):
+    doc = PolicyDocument("https://x.test/privacy", "privacy_policy", f"Intro text about our services and who we are. {sentence} Closing text about how to contact us.", "crawl")
+    assert _rows([doc])["retention"]["quote"] == sentence
+
+
+@pytest.mark.parametrize("sentence", [
+    "We share personal data with trusted partners who help us deliver our services.",
+    "Data may be disclosed to payment processors and hosting providers.",
+    "Our third-party service providers support analytics and security on this site.",
+    "Information is passed to affiliates in the same corporate group.",
+])
+def test_sharing_wordings_that_name_a_recipient_are_found(sentence):
+    doc = PolicyDocument("https://x.test/privacy", "privacy_policy", f"Intro text about our services and who we are. {sentence} Closing text about how to contact us.", "crawl")
+    assert _rows([doc])["data_sharing"]["quote"] == sentence
+
+
+def test_the_legal_pages_are_searched_before_a_marketing_page_that_was_filed_as_a_policy():
+    legal = PolicyDocument("https://x.test/cookies-policy", "cookie_policy", COOKIE_POLICY, "crawl")
+    other = PolicyDocument("https://x.test/training/dpdp", "privacy_policy", "Our course covers how organisations share data with third-party processors and for how long records are kept: 5 years. " * 3, "crawl")
+    row = _rows([legal, other])["data_sharing"]
+    assert row["source_url"] == legal.url
+
+
+def test_the_same_text_gives_the_same_result_every_time():
+    doc = PolicyDocument("https://x.test/cookie-policy", "cookie_policy", COOKIE_POLICY, "crawl")
+    first = _rows([doc])
+    for _ in range(20):
+        assert _rows([doc]) == first
+
+
+async def test_only_the_page_that_was_cut_is_marked_truncated():
+    big = "Course content about data protection for organisations. " * 800      # far over the per-page limit for a page that is not a policy
+    pols = [
+        SimpleNamespace(url="https://x.test/privacy-policy", policy_type="privacy_policy", extracted_text_ref=POLICY),
+        SimpleNamespace(url="https://x.test/training/dpdp", policy_type="privacy_policy", extracted_text_ref=big),
+    ]
+    docs, _notes = await collect_documents(pols, fetcher=lambda u: None)
+    by_url = {d.url: d for d in docs}
+    assert by_url["https://x.test/privacy-policy"].truncated is False
+    assert by_url["https://x.test/training/dpdp"].truncated is True

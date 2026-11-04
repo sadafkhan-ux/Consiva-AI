@@ -26,6 +26,9 @@ import { ANALYSIS_INCOMPLETE_NOTE, untestedConsentStates } from "./report/buildR
 import { reportModelFromState } from "./report/modelFromState";
 import { buildTenChecks } from "./report/tenChecks";
 import { TenChecksPanel } from "./components/TenChecksPanel";
+import { CrawlSettings } from "./components/CrawlSettings";
+import { UrlInventoryPanel } from "./components/UrlInventoryPanel";
+import type { CrawlConfig } from "./api/types";
 import { buildInsightSections } from "./report/insights";
 import { buildReadinessReview } from "./report/readiness";
 import { downloadReport } from "./report/downloadReport";
@@ -44,7 +47,7 @@ function tenAssessmentFor(state: Parameters<typeof reportModelFromState>[0]) {
     return null;
   }
 }
-const tenScoreOf = (t: ReturnType<typeof tenAssessmentFor>) => (t ? { score: t.score, totalText: t.totalText, scoreText: t.scoreText, passed: t.counts.passed, applicable: t.applicableMax } : null);
+const tenScoreOf = (t: ReturnType<typeof tenAssessmentFor>, pending: boolean) => (t ? { score: t.score, totalText: t.totalText, scoreText: t.scoreText, passed: t.counts.passed, applicable: t.applicableMax, notAssessed: t.counts.notAssessed, pending } : null);
 
 export function ConsentAgentView() {
   const { state, run, open, afterReviewDecision } = useConsentScan();
@@ -62,6 +65,10 @@ export function ConsentAgentView() {
   function handleScan() {
     if (!url.trim()) return;
     run(url.trim(), authorized);
+  }
+  function handleWholeSiteScan(crawl: CrawlConfig) {
+    if (!url.trim()) return;
+    run(url.trim(), authorized, crawl);
   }
 
   const hasRun = state.phase !== "idle";
@@ -131,6 +138,7 @@ export function ConsentAgentView() {
           {busy ? "Scanning…" : "Scan Website"}
         </button>
       </div>
+      <CrawlSettings disabled={busy || !url.trim()} onStart={handleWholeSiteScan} />
       <div className="hint">SSRF-protected — private/internal/loopback addresses are always rejected regardless of this checkbox.</div>
 
       {state.phase === "failed" && state.error && (
@@ -231,8 +239,9 @@ export function ConsentAgentView() {
               incomplete: absent evidence here is not a clean result, and nothing below is the outcome of a completed scan.
             </div>
           )}
-          <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} tenScore={tenScoreOf(tenAssessmentFor(state))} />
+          <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} tenScore={tenScoreOf(tenAssessmentFor(state), busy)} />
           <TenChecksPanel ten={tenAssessmentFor(state)} />
+          <UrlInventoryPanel scanId={state.scanId} />
           <ConsentSummarySection meta={state.websiteScanMeta} />
           {isDpdpScore(state.dpdpScore) && (
             <p className="muted small" data-testid="score-systems-note" style={{ margin: "4px 0 10px" }}>

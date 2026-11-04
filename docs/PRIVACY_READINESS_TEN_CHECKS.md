@@ -14,7 +14,7 @@ Score = marks awarded ÷ applicable marks × 100, rounded half up to one decimal
 | Passed | The check ran and the evidence meets the pass condition. | 1 / 1 |
 | Partially Passed | Evidence exists but covers only part of the requirement, or its quality is limited. | 0.5 / 1 |
 | Failed | The check ran to the end and the disclosure or behaviour was not found or was seen to fail. A limit of the scan, not a finding that the law was broken. | 0 / 1 |
-| Not Assessed | The check could not be run: no page loaded, the policy page was blocked or did not load, its text could not be read, or the analysis did not run. | none, left out of the maximum |
+| Not Assessed | The check could not be run: no page loaded, the policy page was blocked or did not load, its text could not be read, the analysis did not run, or the requirement was not found in a privacy or cookie policy page whose text was cut (what came after the cut was not read). | none, left out of the maximum |
 | Not Applicable | The check does not apply (only check 9, with no banner and nothing that tracks). | none, left out of the maximum |
 
 Change recorded 2026-11-03: before this, a check that could not be run scored 0 and stayed in the maximum. A page that could not be reached is not a failed check, so it is now Not Assessed. If fewer than five checks can be assessed the score is marked provisional (`limitedBasis`).
@@ -49,3 +49,11 @@ Evidence quality is stated beside every result (Specific, General, Limited, None
 - The 10-check engine runs in the browser at render time. There is no API or database copy of the score.
 - Evidence per page now stores the final URL after redirects and the content type (migration 0046). Page title and HTTP status were already stored.
 - The weighted DPDP Compliance Score section and the long Evidence report still use the 17-requirement engine.
+
+## Same page, different score: what was fixed (2026-11-04)
+Two runs of one site (digitalanumati.com) gave 95 and 70 from the same five pages. Checks 4 (sharing) and 5 (retention) were found in one run and "not found" in the other, and the second run said "the text was cut at the storage limit" about a policy page of 7,808 characters. Three causes, three fixes:
+1. **Wrong page blamed.** The engine treated any cut document as the reason a requirement was missing, including a long course page the scan had filed as a policy. Only a cut privacy or cookie policy page (by its address) counts now.
+2. **A cut policy scored 0.** A requirement not found in a policy page that really was cut is now Not Assessed (no marks, left out of the maximum), with the page and how much of it was read. It is never Failed. This applies to checks 2 to 7.
+3. **No safety net for two statements.** The model sometimes misses the sharing or retention sentence and finds it on the next run of the same page. The fixed-pattern second look that already covered contact, rights and grievance now covers sharing and retention. It runs only when the model reported "not found", accepts only an exact sentence of the page that names a recipient (sharing) or a period or criterion (retention), searches the privacy and cookie policy pages first, and never replaces a passage the model found. The engine's quality rules (check 4 needs a named kind of recipient, check 5 must not be one kind of data only) still apply to what it finds.
+Not fixed: the model's own run-to-run variation on other requirements. The pattern second look covers sharing, retention, contact, rights and grievance; the other requirements can still differ between two runs of the same page.
+

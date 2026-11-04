@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import { ApiError, type ScoreComparison } from "../api/types";
+import { formatScore } from "../report/scoreFormat";
 
 const CAUSE_WORDS: Record<string, string> = {
   scan_coverage: "scan coverage (what the scan could test)",
@@ -9,7 +10,7 @@ const CAUSE_WORDS: Record<string, string> = {
   unexplained: "no recorded cause (a data-quality question)",
 };
 
-const score = (n: number | null) => (n === null ? "no score" : `${n}%`);
+const score = (n: number | null) => formatScore(n, "no score");
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC" : "not recorded");
 
 /**

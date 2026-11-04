@@ -1,3 +1,4 @@
+import { formatScore } from "./scoreFormat";
 import type { DpdpFindingEntry, DpdpGroupKey, DpdpLedgerMetric, DpdpNeed, DpdpScoreBlock, DpdpScoreResponse, DpdpStatus, SectorAssessment } from "../api/types";
 import { assessedCategories } from "./reportScope";
 
@@ -436,7 +437,7 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
   return {
     sector: score.sector ?? null,
     title: "DPDP Compliance Score (proposed methodology)",
-    headline: r.status === "scored" && r.score_percent !== null ? `${r.score_percent}%` : "Insufficient Evidence",
+    headline: r.status === "scored" && r.score_percent !== null ? formatScore(r.score_percent) : "Insufficient Evidence",
     scoreValue: r.status === "scored" ? r.score_percent : null,
     coverageValue: r.coverage_percent,
     scored: r.status === "scored",
@@ -498,7 +499,7 @@ export function buildScoreView(score: DpdpScoreResponse): ScoreView {
     pageLimit: score.assessment.page_limit,
     scanTime: formatDateTimeUtc(score.assessment.scanned_at),
     scoreWorking: r.status === "scored" && r.score_percent !== null
-      ? `${pts(r.points_earned)} ÷ ${r.points_assessed} × 100 = ${r.score_percent}%` : null,
+      ? `${pts(r.points_earned)} ÷ ${r.points_assessed} × 100 = ${formatScore(r.score_percent)}` : null,
     coverageWorking: r.coverage_percent === null ? null : `${r.assessed_weight} ÷ ${r.applicable_weight} × 100 = ${r.coverage_percent}%`,
     scanTimeLine: `Scan time: ${formatDateTimeUtc(score.assessment.scanned_at)} · assessed against effective dates on ${formatDate(score.assessment.assessed_on)}`,
     versionsLine: `Scoring methodology v${score.methodology.version} · Legal mapping v${score.methodology.legal_mapping_version}`,

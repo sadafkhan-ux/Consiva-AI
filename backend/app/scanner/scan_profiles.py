@@ -28,9 +28,10 @@ trusted to pick or widen a profile: a client-supplied `max_pages` can only LOWER
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.config import Settings, get_settings
+from app.scanner.crawl_controls import CrawlControls, build_controls, controls_from_options
 
 WEB = "web"
 APPLICATION = "application"
@@ -70,6 +71,9 @@ class ScanProfile:
     #: An application scan runs against a domain the organisation has proven it controls;
     #: a public web scan follows the existing deployment-wide policy instead.
     requires_verified_domain: bool
+    #: Crawl controls for an application scan (depth, URL count, rate, concurrency, memory), read from the options the server stored. None for every web
+    #: scan and for application scans made before the controls existed, which run exactly as they did.
+    crawl: CrawlControls | None = None
 
     @property
     def page_cap_label(self) -> str:
@@ -143,4 +147,12 @@ def profile_for_scan_options(options: dict | None, settings: Settings | None = N
     or scheduled scan) is a web scan.
     """
     name = options.get("profile") if isinstance(options, dict) else None
-    return resolve_profile(name, settings)
+    profile = resolve_profile(name, settings)
+    if profile.name != APPLICATION:
+        return profile      # the public profile has no crawl controls, whatever the stored options say
+    return replace(profile, crawl=controls_from_options(options, settings or get_settings()))
+
+
+def application_crawl_options(requested: dict | None, settings: Settings | None = None) -> dict:
+    """The crawl controls an application scan is created with: the caller's request clamped to the ceilings, defaults filled in. Stored on the scan."""
+    return build_controls(requested, settings or get_settings()).as_options()

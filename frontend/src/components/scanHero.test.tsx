@@ -36,7 +36,7 @@ describe("the hero on the dashboard", () => {
     const order = Array.from(hero.children).map((c) => c.getAttribute("data-testid") ?? c.className);
     expect(order[0]).toBe("hero-score");                                  // the score is the first thing: top left
     expect(order[order.length - 1]).toBe("hero-preview");                  // the picture is the last: top right
-    expect(screen.getByTestId("hero-percent")).toHaveTextContent("56.5%");
+    expect(screen.getByTestId("hero-percent")).toHaveTextContent("56.5");
     expect(within(screen.getByTestId("hero-score")).getByText("Compliance Score")).toBeInTheDocument();
   });
 
@@ -70,7 +70,7 @@ describe("the hero on the dashboard", () => {
     expect(screen.getByTestId("hero-preview-missing")).toHaveTextContent("Homepage preview not available");
     expect(screen.getByTestId("hero-preview-missing")).toHaveTextContent(message);
     expect(screen.getByTestId("hero-domain")).toHaveTextContent("swaransoft.com");
-    expect(screen.getByTestId("hero-percent")).toHaveTextContent("56.5%");        // the score is untouched
+    expect(screen.getByTestId("hero-percent")).toHaveTextContent("56.5");        // the score is untouched
   });
 
   it("uses a plain default when the preview could not be loaded at all", () => {
@@ -177,7 +177,7 @@ describe("the figure inside the ring", () => {
   };
   const text = () => screen.getByTestId("hero-percent");
 
-  it.each([[100, "100%", 22], [64, "64%", 22], [45.5, "45.5%", 18], [76.2, "76.2%", 18]])("%s shows %s at size %i, the figure the server sent", (value, label, size) => {
+  it.each([[100, "100", 32], [64, "64", 32], [45.5, "45.5", 32], [76.2, "76.2", 32], [33.33, "33.33", 26]])("%s shows %s at size %i, the figure the server sent (the ring prints /100 beneath it)", (value, label, size) => {
     render(<ScanHero score={withPercent(value)} siteUrl="https://x.test/" screenshot={undefined} />);
     expect(text().textContent).toBe(label);
     expect(text().getAttribute("font-size")).toBe(String(size));
@@ -185,11 +185,15 @@ describe("the figure inside the ring", () => {
     expect(text().getAttribute("x")).toBe("55");                                              // the ring's centre, across
   });
 
-  it("puts the baseline half a capital's height below the ring's centre, at every size, so the figure is centred down as well", () => {
+  it("puts the figure just above the centre and a small /100 beneath it, so the pair is centred in the ring, as in the PDF", () => {
     for (const value of [100, 45.5]) {
       const { unmount } = render(<ScanHero score={withPercent(value)} siteUrl="https://x.test/" screenshot={undefined} />);
-      const size = Number(text().getAttribute("font-size"));
-      expect(Number(text().getAttribute("y"))).toBeCloseTo(55 + size * 0.36, 5);
+      expect(Number(text().getAttribute("y"))).toBe(58);
+      const ring = screen.getByTestId("hero-ring");
+      const outOf = [...ring.querySelectorAll("text")].find((t) => t.textContent === "/100");
+      expect(outOf).toBeTruthy();
+      expect(Number(outOf!.getAttribute("y"))).toBeGreaterThan(58);
+      expect(ring.getAttribute("aria-label")).toMatch(/Privacy Readiness Score .* out of 100/);
       unmount();
     }
   });
@@ -221,7 +225,7 @@ describe("the hero shows the compliance score only, never coverage", () => {
     expect(screen.queryByTestId("hero-coverage")).not.toBeInTheDocument();
     const label = screen.getByTestId("hero-percent").textContent;
     if (s.readiness.status === "scored") {
-      expect(label).toBe(`${s.readiness.score_percent}%`);                                      // the backend's own score, not coverage
+      expect(label).toBe(`${s.readiness.score_percent}`);                                      // the backend's own score, not coverage
       expect(label).not.toBe(`${s.readiness.coverage_percent}%`);
     } else {
       expect(label).toBe("No score");
@@ -247,9 +251,9 @@ describe("the hero shows the compliance score only, never coverage", () => {
   });
 
   it("shows the 10-check Privacy Readiness Score, the one the summary PDF prints, when it is given", () => {
-    render(<ScanHero score={score} siteUrl="https://x.test/" screenshot={null} tenScore={{ score: 75, totalText: "7.5 / 10", scoreText: "75%", passed: 7, applicable: 10 }} />);
-    expect(screen.getByTestId("hero-score-label")).toHaveTextContent("Privacy Readiness Score: 75% (7.5 / 10)");
-    expect(screen.getByTestId("hero-band")).toHaveTextContent("7 of 10 checks passed");
+    render(<ScanHero score={score} siteUrl="https://x.test/" screenshot={null} tenScore={{ score: 75, totalText: "7.5 / 10", scoreText: "75/100", passed: 7, applicable: 10 }} />);
+    expect(screen.getByTestId("hero-score-label")).toHaveTextContent("Privacy Readiness Score: 75/100 (7.5 / 10 marks)");
+    expect(screen.getByTestId("hero-band")).toHaveTextContent("7 of 10 assessed checks passed");
     expect(screen.getByTestId("hero-headline")).toHaveTextContent(/not a certified DPDP compliance score/);
   });
 

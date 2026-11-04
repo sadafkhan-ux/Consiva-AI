@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ringNumber } from "../scoreFormat";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
 import type { ReportVariant, StatusPillView } from "../pageReports";
 
@@ -72,7 +73,7 @@ export function BigRing({ percent, label, id }: { percent: number | null; label:
       </defs>
       <circle cx="70" cy="70" r={R} fill="none" stroke="#e6eaf8" strokeWidth="13" />
       {filled > 0 && <circle cx="70" cy="70" r={R} fill="none" stroke={`url(#rg-${id})`} strokeWidth="13" strokeLinecap="round" strokeDasharray={`${filled} ${C}`} transform="rotate(-90 70 70)" />}
-      <text x="70" y={percent === null ? 74 : 72} textAnchor="middle" fontSize={size} fontWeight="800" fill="#111b4d" data-testid={`pg-percent-${id}`}>{percent === null ? "No score" : label.replace("%", "")}</text>
+      <text x="70" y={percent === null ? 74 : 72} textAnchor="middle" fontSize={size} fontWeight="800" fill="#111b4d" data-testid={`pg-percent-${id}`}>{percent === null ? "No score" : ringNumber(label)}</text>
       {percent !== null && <text x="70" y="94" textAnchor="middle" fontSize="15" fill="#5d6086">/100</text>}
     </svg>
   );

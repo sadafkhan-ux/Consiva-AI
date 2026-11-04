@@ -187,7 +187,7 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
   it.each([["mixed", 56.5], ["confirmed", 60], ["thin", 100]])("%s: the percentage is inside the ring, centred, and the label sits directly beneath it", async (key, score) => {
     await pdf(F[key]);
     const ring = bigRing();
-    const pct = recorded.calls.find((c) => c.page === 0 && c.t === `${score}%`)!;
+    const pct = recorded.calls.find((c) => c.page === 0 && c.t === `${score}`)!;
     const label = recorded.calls.find((c) => c.page === 0 && c.t === "Compliance Score")!;
     expect(ring.r).toBeGreaterThan(30);
     expect(pct.align).toBe("center");
@@ -218,20 +218,20 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
   it("uses one number for the text and the arc, whatever the display string says", () => {
     const v = buildScoreView(mixed);
     expect(v.scoreValue).toBe(mixed.readiness.score_percent);
-    expect(v.headline).toBe(`${v.scoreValue}%`);
+    expect(v.headline).toBe(`${v.scoreValue}/100`);
   });
 
   it("shows the percentage only: no formula, working or raw expression on pages 1 and 2", async () => {
     const p = await pdf(mixed);
     const summary = p.page(0) + p.page(1);
     expect(summary).not.toMatch(/÷|×|Score = |Coverage = |This scan:/);
-    expect(summary).toContain("56.5%");
+    expect(summary).toContain("56.5/100");
     expect(summary).not.toContain("Coverage 62.2%");   // the overall coverage is not shown on the hero or the summary pages
   });
 
   it("shows the same percentage in the ring, the headline sentence and the framework card", async () => {
     const t = (await pdf(mixed)).page(0);
-    expect(t.split("56.5%").length - 1).toBeGreaterThanOrEqual(3);
+    expect(t.split("56.5").length - 1).toBeGreaterThanOrEqual(3);
   });
 
   it("leaves the ledger and the penalty rules to the dashboard", async () => {
@@ -1022,11 +1022,11 @@ describe("the hero: score top left, domain above the homepage picture top right"
   it("the ring holds the percentage, centred, with no domain or address inside or under it", async () => {
     await pdfWith(shot());
     const ring = bigRing();
-    const pct = recorded.calls.find((c) => c.page === 0 && c.t === "56.5%")!;
+    const pct = recorded.calls.find((c) => c.page === 0 && c.t === "56.5")!;
     expect(pct.x).toBe(ring.x);
     expect(Math.abs(pct.y - ring.y)).toBeLessThan(ring.r / 3);                       // centred both ways
     const inside = recorded.calls.filter((c) => c.page === 0 && Math.hypot(c.x - ring.x, c.y - ring.y) < ring.r);
-    expect(inside.map((c) => c.t)).toEqual(["56.5%"]);                               // only the percentage is inside the circle
+    expect(inside.map((c) => c.t)).toEqual(["56.5", "/100"]);                       // only the score and its "/100" are inside the circle
     expect(recorded.calls.filter((c) => c.page === 0 && c.t.startsWith("https://"))).toHaveLength(0);
   });
 
@@ -1081,9 +1081,9 @@ describe("the hero's words and facts, worked out once for the dashboard and the 
   it("reads the score into a band and a headline, with no coverage in either", () => {
     const h = buildHeroView(buildScoreView(mixed));
     expect(h.scored).toBe(true);
-    expect(h.percentLabel).toBe("56.5%");
+    expect(h.percentLabel).toBe("56.5/100");
     expect(h.scoreLabel).toBe("Compliance Score");
-    expect(h.headline).toContain("we could test scored 56.5%");
+    expect(h.headline).toContain("we could test scored 56.5/100");
     expect(JSON.stringify(h)).not.toMatch(/coverage/i);
     expect(["good", "warn", "mute"]).toContain(h.tone);
   });
@@ -1407,6 +1407,6 @@ describe("the five-page readiness review in the PDF", () => {
 
   it("does not move the score the report shows", async () => {
     await build();
-    expect(recorded.calls.some((c) => c.page === 0 && c.t === "56.5%")).toBe(true);
+    expect(recorded.calls.some((c) => c.page === 0 && c.t === "56.5")).toBe(true);
   });
 });

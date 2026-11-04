@@ -24,3 +24,6 @@ dnspython>=2.6
 # Envelope encryption for ROPA data-source credentials (connectors/factory.py's
 # optional encrypted-at-rest path, alongside the existing env-var one).
 cryptography>=43
+
+# Memory budget for application scans (scanner/crawl_controls.py): measures the scanner process and its browsers.
+psutil>=5.9

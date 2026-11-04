@@ -1,3 +1,4 @@
+import { ringNumber } from "./scoreFormat";
 import type { ReportModel } from "./buildReport";
 import type { ElementStatus } from "./reportVisual";
 import { pagesCoverageLine, pagesTileValue } from "./scanPages";
@@ -421,7 +422,9 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   doc.circle(ringX, ringY, RING_R + 4 + 1.5, "S");
   if (hero.scored) {
     // centred in the ring both ways: the baseline sits half a cap height below the centre
-    text(hero.percentLabel, ringX, ringY + 6.2, { size: 17, bold: true, align: "center" });
+    // the number, and "/100" beneath it: the same pattern as the PDF and the dashboard
+    text(ringNumber(hero.percentLabel), ringX, ringY + 3, { size: 17, bold: true, align: "center" });
+    text("/100", ringX, ringY + 14, { size: 8, bold: false, color: MUTED, align: "center" });
   } else {
     text(hero.percentLabel, ringX, ringY + 4, { size: 10, bold: true, color: MUTED, align: "center" });
   }

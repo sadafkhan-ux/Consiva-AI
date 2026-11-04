@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.scanner.url_inventory import UrlInventoryRecord
+
 
 class PageRecord(BaseModel):
     local_id: str
@@ -159,3 +161,5 @@ class ScanResult(BaseModel):
     scan_diagnostics: dict = Field(default_factory=dict)
     # The homepage preview. None only when the scan never reached the point of taking one (an unreachable seed fails the scan first).
     screenshot: ScreenshotRecord | None = None
+    # Every URL the scan discovered and what became of it (scanner/url_inventory.py). Empty for a result made before the inventory existed.
+    url_inventory: list[UrlInventoryRecord] = Field(default_factory=list)

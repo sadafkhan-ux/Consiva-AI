@@ -20,7 +20,7 @@ describe("buildScoreView: the one place the score becomes words", () => {
   it("shows the server's number, never a recalculated one", () => {
     const v = buildScoreView(mixed);
     expect(v.scored).toBe(true);
-    expect(v.headline).toBe("56.5%");
+    expect(v.headline).toBe("56.5/100");
     expect(v.coverageLine).toBe("Assessment coverage 62.2%: 23 of 37 weighted points of applicable requirements were assessed.");
     expect(v.formulaLine).toContain("weighted points earned (13) divided by weighted points assessed (23), times 100");
     expect(v.formulaLine).toContain("Met = 100%");
@@ -107,7 +107,7 @@ describe("DpdpScoreSection", () => {
 
   it("shows the headline, coverage, basis and the methodology note", () => {
     render(<DpdpScoreSection score={mixed} />);
-    expect(screen.getByTestId("dpdp-headline")).toHaveTextContent("56.5%");
+    expect(screen.getByTestId("dpdp-headline")).toHaveTextContent("56.5/100");
     expect(screen.getByTestId("dpdp-coverage-figure")).toHaveTextContent("62.2%");
     // the card shows the final percentages only: no formula or working in view, and the arithmetic is behind a closed disclosure
     const card = screen.getByTestId("dpdp-score");
@@ -175,7 +175,7 @@ describe("DpdpScoreSection", () => {
 
   it("keeps the score, the coverage and the status counts as they were", () => {
     render(<DpdpScoreSection score={mixed} />);
-    expect(screen.getByTestId("dpdp-headline")).toHaveTextContent("56.5%");
+    expect(screen.getByTestId("dpdp-headline")).toHaveTextContent("56.5/100");
     expect(screen.getByTestId("dpdp-coverage-figure")).toHaveTextContent("62.2%");
     expect(screen.getByTestId("dpdp-status-counts")).toHaveTextContent(buildScoreView(mixed).statusCountsLine);
   });
@@ -488,10 +488,10 @@ describe("the methodology, weights and calculation explanation", () => {
 
   it("shows coverage as its own figure, apart from the score", () => {
     const v = buildScoreView(mixed);
-    expect(v.headline).toBe("56.5%");
+    expect(v.headline).toBe("56.5/100");
     expect(v.coverageHeadline).toBe("62.2%");
     render(<DpdpScoreSection score={mixed} />);
-    expect(screen.getByTestId("dpdp-headline")).toHaveTextContent("56.5%");
+    expect(screen.getByTestId("dpdp-headline")).toHaveTextContent("56.5/100");
     expect(screen.getByTestId("dpdp-coverage-figure")).toHaveTextContent("62.2%");
   });
 

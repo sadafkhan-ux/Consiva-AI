@@ -129,8 +129,14 @@ def _clamp_options(body: CreateScanRequest, profile: scan_profiles.ScanProfile |
     profile = profile or scan_profiles.resolve_profile(scan_profiles.WEB)
     requested = body.scan_options
     states = requested.scan_consent_states
+    crawl = {}
+    if profile.name == scan_profiles.APPLICATION:
+        # Only an application scan has crawl controls. They are stored clamped, with the defaults filled in, so the scan record says what really ran.
+        crawl = {"crawl": scan_profiles.application_crawl_options(requested.model_dump(include={
+            "max_depth", "max_urls", "concurrency", "per_domain_concurrency", "requests_per_second", "memory_budget_mb"}))}
     return {
         **profile.as_options(requested.max_pages),
+        **crawl,
         "scan_consent_states": states,
         # The three per-state flags are only meaningful when consent-state testing is
         # on at all; an option set that says "don't test consent states, but do test

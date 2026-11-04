@@ -167,6 +167,18 @@ class Settings(BaseSettings):
     # set here, the scan as a whole still has a fixed ceiling (scan_profiles._APP_HARD_CEILING_SECONDS)
     # so a hung browser cannot hold a worker, and its job lease, forever.
     consent_app_max_seconds: int = Field(default=0, ge=0, le=86_400)
+    # ── Application-scan crawl controls (scanner/crawl_controls.py) ──────────────────────────────
+    # What an authorized caller may ask for on POST /scans/application. Each value is a request clamped to the ceiling here; the public web profile
+    # ignores all of them. The defaults apply when a request names nothing. Validated at start-up like the bounds above.
+    consent_app_crawl_max_depth_ceiling: int = Field(default=50, ge=1, le=1_000)
+    consent_app_default_max_urls: int = Field(default=10_000, ge=1, le=10_000_000)
+    consent_app_max_urls_ceiling: int = Field(default=1_000_000, ge=1, le=10_000_000)
+    consent_app_concurrency_ceiling: int = Field(default=16, ge=1, le=256)
+    consent_app_default_rps: float = Field(default=5.0, gt=0, le=1_000)
+    consent_app_rps_ceiling: float = Field(default=20.0, gt=0, le=1_000)
+    # Pause launching pages while the scanner's browsers (this process and its children) use more than the budget. 0 = no budget. The ceiling is the
+    # most a caller may ask for; the budget itself is chosen per scan.
+    consent_app_memory_budget_ceiling_mb: int = Field(default=16_384, ge=0, le=1_048_576)
 
     @field_validator("scanner_max_pages", "consent_web_max_pages")
     @classmethod

@@ -1,3 +1,4 @@
+import { ringNumber } from "./scoreFormat";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DpdpScoreResponse, ScanEvidenceResponse, StageResponse, WebsiteScanMetadata } from "../api/types";
@@ -234,7 +235,7 @@ describe("one score everywhere", () => {
     expect(free.coverageLabel).toBe(v.coverageHeadline);
     expect(m.transparency.coverage.requirement.value).toContain(v.coverageHeadline);
     render(<ReportDocument model={m} />);
-    expect(screen.getByTestId("hero-percent").textContent).toBe(v.headline);
+    expect(screen.getByTestId("hero-percent").textContent).toBe(ringNumber(v.headline));
   });
 
   it("an unavailable score is unavailable in every view, never a number", () => {

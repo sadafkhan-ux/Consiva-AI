@@ -170,6 +170,48 @@ class EvidencePageItem(BaseModel):
     selection_reason: str | None = None
 
 
+class UrlInventorySummary(BaseModel):
+    total: int = 0
+    pending: int = 0
+    in_progress: int = 0
+    completed: int = 0
+    failed: int = 0
+    partially_scanned: int = 0
+    excluded: int = 0
+
+
+class UrlInventoryItem(BaseModel):
+    id: uuid.UUID
+    domain: str
+    original_url: str
+    normalized_url: str
+    final_url: str | None = None
+    page_title: str | None = None
+    http_status: int | None = None
+    content_type: str | None = None
+    discovery_source: str
+    discovery_sources: list[str] = []
+    crawl_depth: int
+    scan_status: str
+    status_reason: str | None = None
+    failure_reason: str | None = None
+    discovered_at: datetime
+    scan_started_at: datetime | None = None
+    scan_completed_at: datetime | None = None
+    last_updated_at: datetime
+
+
+class UrlInventoryResponse(BaseModel):
+    """Every URL a scan discovered and what became of it. `summary` counts the whole inventory; `urls` is one page of what matches the filters. A scan made
+    before the inventory existed returns zero counts and no rows, never invented ones."""
+
+    summary: UrlInventorySummary
+    urls: list[UrlInventoryItem]
+    total: int
+    limit: int
+    offset: int
+
+
 class EvidenceFormItem(BaseModel):
     id: str
     selector: str | None
@@ -948,6 +990,33 @@ async def get_scan_evidence(
     evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)
     return ScanEvidenceResponse(**evidence)
 
+
+
+@router.get("/{scan_id}/url-inventory", response_model=UrlInventoryResponse)
+async def get_scan_url_inventory(
+    scan_id: uuid.UUID,
+    status: Literal["PENDING", "IN_PROGRESS", "COMPLETED", "FAILED", "PARTIALLY_SCANNED", "EXCLUDED"] | None = Query(default=None),
+    http_status: int | None = Query(default=None, ge=100, le=599),
+    source: str | None = Query(default=None, max_length=40, description="A discovery source: seed, link or sitemap."),
+    depth: int | None = Query(default=None, ge=0, le=1000),
+    q: str | None = Query(default=None, max_length=300, description="Part of the URL."),
+    failure: str | None = Query(default=None, max_length=300, description="Part of the failure or exclusion reason."),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The URL inventory of a scan: counts by status, and a filtered, paged list. Org-scoped like every scan read (another organisation's scan is a 404)."""
+    scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
+    if scan is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    found = await scan_repository.get_url_inventory(
+        db, scan_id, status=status, http_status=http_status, source=source, depth=depth, q=q, failure=failure, limit=limit, offset=offset,
+    )
+    return UrlInventoryResponse(
+        summary=UrlInventorySummary(**found["summary"]), urls=[UrlInventoryItem.model_validate(r, from_attributes=True) for r in found["rows"]],
+        total=found["total"], limit=limit, offset=offset,
+    )
 
 
 @router.get("/{scan_id}/dpdp-score", response_model=DpdpScoreResponse)

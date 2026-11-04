@@ -16,6 +16,7 @@ from app.db.models import (
     Cookie,
     Policy,
     ScanScreenshot,
+    ScanUrlInventory,
     ThirdPartyService,
     Tracker,
     Website,
@@ -26,7 +27,7 @@ from app.rules.consent_rules import RulesClassification
 from app.rules.cookie_purposes import describe_cookie, lifetime_days
 from app.scanner.policy_detector import policy_text_state
 from app.scanner.schemas import ScanResult, ScreenshotRecord
-from app.scanner.url_normalize import display_order_key, selection_reason
+from app.scanner.url_normalize import display_order_key, normalize_url, selection_reason
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +239,7 @@ async def save_scan_result(
     ))
 
     await _save_screenshot(db, scan_id, scan_result.screenshot)
+    await _save_url_inventory(db, scan_id, scan_result, {normalize_url(p.url): page_id_by_local[p.local_id] for p in scan_result.pages})
 
     scan = await db.get(ConsentScan, scan_id)
     if scan:
@@ -299,6 +301,65 @@ async def _save_screenshot(db: AsyncSession, scan_id: uuid.UUID, rec: Screenshot
             await db.flush()
     except Exception as exc:   # noqa: BLE001 -- any failure here must leave the scan result intact
         logger.warning("Could not store the homepage preview for scan %s: %s", scan_id, exc)
+
+
+async def _save_url_inventory(db: AsyncSession, scan_id: uuid.UUID, scan_result: ScanResult, page_ids: dict[str, uuid.UUID]) -> None:
+    """Stores the URL inventory of a scan. Like the preview it runs in its own savepoint, so a problem here cannot undo the evidence; unlike the preview a
+    failure is logged as an error, because the inventory is meant to be complete and a missing one must be noticed."""
+    records = scan_result.url_inventory
+    if not records:
+        return
+    try:
+        async with db.begin_nested():
+            db.add_all([
+                ScanUrlInventory(
+                    scan_id=scan_id, website_page_id=page_ids.get(r.normalized_url), domain=r.domain, original_url=r.original_url, normalized_url=r.normalized_url,
+                    final_url=r.final_url, page_title=(r.page_title or "")[:500] or None, http_status=r.http_status, content_type=r.content_type,
+                    discovery_source=r.discovery_source, discovery_sources=r.discovery_sources, crawl_depth=r.crawl_depth, scan_status=r.scan_status,
+                    status_reason=r.status_reason, failure_reason=r.failure_reason, discovered_at=r.discovered_at, scan_started_at=r.scan_started_at,
+                    scan_completed_at=r.scan_completed_at, last_updated_at=r.last_updated_at,
+                )
+                for r in records
+            ])
+            await db.flush()
+    except Exception:   # the evidence is already staged; the scan must not be lost for the inventory
+        logger.exception("Could not store the URL inventory (%d URLs) for scan %s", len(records), scan_id)
+
+
+_INVENTORY_STATUS_KEYS = {"PENDING": "pending", "IN_PROGRESS": "in_progress", "COMPLETED": "completed", "FAILED": "failed", "PARTIALLY_SCANNED": "partially_scanned", "EXCLUDED": "excluded"}
+
+
+async def get_url_inventory(
+    db: AsyncSession, scan_id: uuid.UUID, *, status: str | None = None, http_status: int | None = None, source: str | None = None, depth: int | None = None,
+    q: str | None = None, failure: str | None = None, limit: int = 100, offset: int = 0,
+) -> dict:
+    """The inventory of a scan: counts by status over the WHOLE inventory, and one page of rows that match the filters (ordered by depth, then URL).
+    The caller has already checked that the scan belongs to the caller's organisation."""
+    base = [ScanUrlInventory.scan_id == scan_id]
+    counted = await db.execute(select(ScanUrlInventory.scan_status, func.count()).where(*base).group_by(ScanUrlInventory.scan_status))
+    summary = {key: 0 for key in _INVENTORY_STATUS_KEYS.values()}
+    for st, n in counted.all():
+        summary[_INVENTORY_STATUS_KEYS.get(st, st.lower())] = n
+    summary["total"] = sum(summary.values())
+
+    filters = list(base)
+    if status:
+        filters.append(ScanUrlInventory.scan_status == status.upper())
+    if http_status is not None:
+        filters.append(ScanUrlInventory.http_status == http_status)
+    if source:
+        filters.append(ScanUrlInventory.discovery_sources.any(source))
+    if depth is not None:
+        filters.append(ScanUrlInventory.crawl_depth == depth)
+    if q:
+        filters.append(func.lower(ScanUrlInventory.original_url).contains(q.lower(), autoescape=True))
+    if failure:
+        filters.append(func.lower(func.coalesce(ScanUrlInventory.failure_reason, "") + " " + func.coalesce(ScanUrlInventory.status_reason, "")).contains(failure.lower(), autoescape=True))
+    total = (await db.execute(select(func.count()).select_from(ScanUrlInventory).where(*filters))).scalar_one()
+    rows = (await db.execute(
+        select(ScanUrlInventory).where(*filters).order_by(ScanUrlInventory.crawl_depth, ScanUrlInventory.original_url).limit(limit).offset(offset)
+    )).scalars().all()
+    return {"summary": summary, "total": total, "rows": rows}
 
 
 async def get_screenshot(db: AsyncSession, scan_id: uuid.UUID) -> ScanScreenshot | None:

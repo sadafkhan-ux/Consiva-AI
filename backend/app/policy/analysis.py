@@ -328,6 +328,36 @@ _RESCUE_TOPIC: dict[str, re.Pattern[str]] = {
 }
 _SENTENCE_START = re.compile(r"[.!?]\s+")
 
+# Sharing and retention are the two statements a model most often misses and then finds on the next run of the same page (digitalanumati.com: one run quoted the
+# sharing and retention sentences of its cookie policy, another run of the same five pages found neither, and a score moved from 95 to 70). Like the contact statements
+# they sit in one sentence recognised by fixed words, so the same second look applies. It is stricter than the model: a sentence is accepted only when it names a
+# recipient (sharing) or a period or criterion (retention), and the quality rules of the ten-check engine still apply to what it finds.
+_SHARING_SENTENCE = re.compile(
+    r"\b(?:share|shares|shared|sharing|disclose|discloses|disclosed|transfer|transfers|transferred|provide|provides|provided|pass|passes|passed|make available|made available)\b"
+    r"[^.!?]{0,140}?\b(?:third[- ]part(?:y|ies)|service providers?|processors?|sub-?processors?|vendors?|partners?|affiliates?|advertisers?|analytics providers?|payment providers?|hosting providers?)\b"
+    r"|\b(?:third[- ]part(?:y|ies)|service providers?|processors?|sub-?processors?)\b[^.!?]{0,80}?\b(?:support|assist|help|perform|process|host|provide|receive)\b",
+    re.IGNORECASE)
+_RETENTION_TOPIC = re.compile(r"\b(?:retain|retains|retained|retention|keep|keeps|kept|store|stores|stored|storage|delete|deletes|deleted|erase|erased|erasure)\b", re.IGNORECASE)
+_RETENTION_DETAIL = re.compile(
+    r"\b\d+\s*(?:day|week|month|year)s?\b|as long as (?:is |it is )?(?:necessary|needed|required|reasonable)|only as long as|no longer than|until (?:the|you|your|such|it)\b|"
+    r"for the (?:period|duration)|(?:statutory|legal|regulatory) (?:retention|requirements?|obligations?)|retention (?:period|schedule|policy)|"
+    r"(?:legal|regulatory) (?:purposes?|obligations?|requirements?)", re.IGNORECASE)
+_RESCUE_SENTENCE: dict[str, tuple[re.Pattern[str], re.Pattern[str] | None]] = {
+    "data_sharing": (_SHARING_SENTENCE, None),
+    "retention": (_RETENTION_TOPIC, _RETENTION_DETAIL),
+}
+
+
+def _sentence_around(text: str, start: int, end: int) -> str | None:
+    """The whole sentence of `text` that holds text[start:end], as an exact slice, or None when it is too short or too long to be a quotation."""
+    lo = max(0, start - 300)
+    before = [m.end() for m in _SENTENCE_START.finditer(text, lo, start)]
+    first = before[-1] if before else lo
+    stop = _SENTENCE_START.search(text, end)
+    last = stop.start() + 1 if stop else min(len(text), end + 300)
+    quote = _slice_at_words(text, first, min(last, first + MAX_QUOTE_CHARS))
+    return quote if MIN_QUOTE_CHARS <= len(quote) <= MAX_QUOTE_CHARS else None
+
 
 def _slice_at_words(text: str, start: int, end: int) -> str:
     """text[start:end] trimmed so it neither starts nor ends in the middle of a word."""
@@ -341,6 +371,15 @@ def _slice_at_words(text: str, start: int, end: int) -> str:
 def locate_by_pattern(req_id: str, docs: list[PolicyDocument]) -> tuple[str, PolicyDocument] | None:
     """A passage of one of the documents that states this requirement, found by a fixed pattern, or None. The first match in document order wins; the result is
     always an exact slice of that document's text, between the minimum and maximum length of a quotation."""
+    sentence_rule = _RESCUE_SENTENCE.get(req_id)
+    if sentence_rule is not None:
+        topic_re, detail_re = sentence_rule
+        for doc in docs:
+            for m in topic_re.finditer(doc.text):
+                quote = _sentence_around(doc.text, m.start(), m.end())
+                if quote and (detail_re is None or detail_re.search(quote)) and verify_quote(quote, doc.text):
+                    return quote, doc
+        return None
     topic = _RESCUE_TOPIC.get(req_id)
     if topic is None:
         return None

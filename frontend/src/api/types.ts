@@ -921,3 +921,59 @@ export class ApiError extends Error {
     this.detail = detail;
   }
 }
+
+/** The URL inventory of one scan (GET /api/v1/consent/scans/{id}/url-inventory): every URL discovered and what became of it. Discovered is not scanned. */
+export type UrlStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "FAILED" | "PARTIALLY_SCANNED" | "EXCLUDED";
+export interface UrlInventorySummary {
+  total: number;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  failed: number;
+  partially_scanned: number;
+  excluded: number;
+}
+export interface UrlInventoryItem {
+  id: string;
+  domain: string;
+  original_url: string;
+  normalized_url: string;
+  final_url: string | null;
+  page_title: string | null;
+  http_status: number | null;
+  content_type: string | null;
+  discovery_source: string;
+  discovery_sources: string[];
+  crawl_depth: number;
+  scan_status: UrlStatus;
+  status_reason: string | null;
+  failure_reason: string | null;
+  discovered_at: string;
+  scan_started_at: string | null;
+  scan_completed_at: string | null;
+  last_updated_at: string;
+}
+export interface UrlInventoryResponse {
+  summary: UrlInventorySummary;
+  urls: UrlInventoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+export interface UrlInventoryFilters {
+  status?: UrlStatus | "";
+  http_status?: number | null;
+  source?: string;
+  depth?: number | null;
+  q?: string;
+  failure?: string;
+}
+/** Crawl controls for a whole-site (application) scan. Each is a request: the server clamps it to its own ceiling and returns what ran. */
+export interface CrawlConfig {
+  max_depth?: number | null;
+  max_urls?: number | null;
+  concurrency?: number | null;
+  per_domain_concurrency?: number | null;
+  requests_per_second?: number | null;
+  memory_budget_mb?: number | null;
+}

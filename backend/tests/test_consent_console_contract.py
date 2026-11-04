@@ -65,8 +65,10 @@ def _normalise(path: str) -> str:
     return re.sub(r"\{\w+\}", "{}", path)
 
 
-def test_the_console_calls_the_sixteen_documented_endpoints():
-    assert len(_console_calls()) == 17, _console_calls()
+def test_the_console_calls_the_eighteen_documented_endpoints():
+    # 17 before the URL inventory; Phase 2 added GET /consent/scans/{id}/url-inventory. (The whole-site scan, POST /consent-agent/scans/application, is outside
+    # the /consent/ prefix this contract covers; it is tested with the scan profiles.) Each endpoint is also checked below to exist on the backend with that method.
+    assert len(_console_calls()) == 18, _console_calls()
 
 
 @pytest.mark.parametrize("method,path", _console_calls())

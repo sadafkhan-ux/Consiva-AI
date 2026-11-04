@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { api } from "../api/client";
-import { ApiError } from "../api/types";
+import { ApiError, type CrawlConfig } from "../api/types";
 import type {
   AuditLogResponse,
   PolicyAnalysis,
@@ -402,12 +402,13 @@ export function useConsentScan() {
   );
 
   const run = useCallback(
-    async (url: string, authorized: boolean) => {
+    async (url: string, authorized: boolean, wholeSite?: CrawlConfig) => {
       const myRunId = ++runIdRef.current;
       setState({ ...INITIAL_STATE, phase: "starting", startedAt: Date.now() });
 
       try {
-        const scan = await api.createScan(url, authorized);
+        // A whole-site scan goes to the application endpoint; the server alone decides whether this caller and domain are allowed.
+        const scan = wholeSite ? await api.createApplicationScan(url, authorized, wholeSite) : await api.createScan(url, authorized);
         if (runIdRef.current !== myRunId) return;
         setState((s) => ({ ...s, scanId: scan.id, phase: "scanning" }));
 

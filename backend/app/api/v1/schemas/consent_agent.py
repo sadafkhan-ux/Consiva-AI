@@ -29,6 +29,13 @@ class ScanOptions(BaseModel):
         description="Pages to crawl. A request can only LOWER the limit: it is clamped to the "
                     "scan profile's own maximum, so a larger value never widens a web scan.",
     )
+    # Crawl controls. Honoured ONLY on POST /scans/application and only inside the server's ceilings (CONSENT_APP_*); a web scan ignores every one of them.
+    max_depth: int | None = Field(default=None, ge=0, le=1_000, description="Application scans: deepest link level crawled (the entry address is 0).")
+    max_urls: int | None = Field(default=None, ge=1, le=10_000_000, description="Application scans: most distinct URLs recorded.")
+    concurrency: int | None = Field(default=None, ge=1, le=256, description="Application scans: pages in flight at once.")
+    per_domain_concurrency: int | None = Field(default=None, ge=1, le=256, description="Application scans: pages in flight against the domain.")
+    requests_per_second: float | None = Field(default=None, gt=0, le=1_000, description="Application scans: navigation starts per second against the domain.")
+    memory_budget_mb: int | None = Field(default=None, ge=0, le=1_048_576, description="Application scans: pause launching pages while the scanner uses more memory than this. 0 = no budget.")
     scan_consent_states: bool = Field(
         default=True,
         description="Run the Accept and Reject passes. When false, only the pre-consent "

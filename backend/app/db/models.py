@@ -90,6 +90,34 @@ class WebsitePage(Base):
     content_type: Mapped[str | None] = mapped_column(String, nullable=True)    # migration 0046
 
 
+class ScanUrlInventory(Base):
+    """One row per distinct normalized URL a scan discovered (migration 0047), with its depth, status and what the page said. Later modules (page extraction, cookies,
+    tokens, storage, network) attach their observations through scan_id and website_page_id. Discovered is not scanned: see scanner/url_inventory.py."""
+
+    __tablename__ = "scan_url_inventory"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("consent_scans.id", ondelete="CASCADE"), nullable=False)
+    website_page_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("website_pages.id", ondelete="SET NULL"), nullable=True)
+    domain: Mapped[str] = mapped_column(Text, nullable=False)
+    original_url: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_url: Mapped[str] = mapped_column(Text, nullable=False)
+    final_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovery_source: Mapped[str] = mapped_column(Text, nullable=False)
+    discovery_sources: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, server_default=text("'{}'"))
+    crawl_depth: Mapped[int] = mapped_column(Integer, nullable=False)
+    scan_status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'PENDING'"))
+    status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    scan_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scan_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
 class ScanScreenshot(Base):
     """The homepage preview of one scan (migration 0040). One row per scan; an image only when status is "ok"."""
 

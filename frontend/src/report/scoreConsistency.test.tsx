@@ -6,6 +6,7 @@ import fixtures from "../test/dpdpScoreFixtures.json";
 import { buildReportModel } from "./buildReport";
 import { buildScoreView } from "./dpdpScore";
 import { buildTenChecks } from "./tenChecks";
+import { ringNumber } from "./scoreFormat";
 import { buildPageReport } from "./pageReports";
 import { FreeReport } from "./print/FreeReport";
 import { FullReport } from "./print/FullReport";
@@ -41,7 +42,7 @@ describe("every surface shows the number the server sent", () => {
 
     // the long report
     render(<ReportDocument model={m} />);
-    expect(screen.getByTestId("hero-percent").textContent).toBe(v.headline);
+    expect(screen.getByTestId("hero-percent").textContent).toBe(ringNumber(v.headline));
     expect(screen.getByTestId("rpt-framework-score").textContent).toBe(v.headline);
     cleanup();
 

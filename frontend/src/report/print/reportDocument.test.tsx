@@ -56,9 +56,9 @@ describe("the printable report: the hero", () => {
 
   it("shows the backend's compliance score in the ring and no coverage anywhere in the hero", () => {
     render(<ReportDocument model={model()} />);
-    expect(screen.getByTestId("hero-percent").textContent).toBe("56.5%");
+    expect(screen.getByTestId("hero-percent").textContent).toBe("56.5");
     expect(screen.getByTestId("rpt-hero").textContent ?? "").not.toMatch(/coverage/i);
-    expect(screen.getByTestId("rpt-hero-headline")).toHaveTextContent("we could test scored 56.5%");
+    expect(screen.getByTestId("rpt-hero-headline")).toHaveTextContent("we could test scored 56.5/100");
   });
 
   it("says the score is unavailable, with no number and no coverage, when too few requirements could be assessed", () => {
