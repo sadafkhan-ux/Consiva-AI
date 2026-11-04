@@ -1,13 +1,13 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { DpdpScoreResponse, EvidenceCookieItem, PolicyAnalysis, PolicyRequirementResult, WebsiteScanMetadata } from "../api/types";
-import fixtures from "../test/dpdpScoreFixtures.json";
+import type { DpdpRequirementsResponse, EvidenceCookieItem, PolicyAnalysis, PolicyRequirementResult, WebsiteScanMetadata } from "../api/types";
+import fixtures from "../test/requirementsFixtures.json";
 import { buildInsightSections } from "../report/insights";
 import { CookiesTable } from "./CookiesTable";
-import { DpdpScoreSection } from "./DpdpScoreSection";
+import { RequirementsSection } from "./RequirementsSection";
 import { InsightSections } from "./InsightSections";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
 
 const row = (id: string, status: string, over: Partial<PolicyRequirementResult> = {}): PolicyRequirementResult => ({
   id, title: id, group: "Grievance", basis: "required", provisions: ["DPDP Act s.13(1)"], status, quote: status === "verified" ? `A passage for ${id} that is long enough to count.` : "",
@@ -132,19 +132,19 @@ describe("the cookie table on the dashboard", () => {
   });
 });
 
-describe("the score card's remediation steps", () => {
-  it("say what fixing each does to the score and why it matters, when the server gave the figures", () => {
-    const s = JSON.parse(JSON.stringify(F.review)) as DpdpScoreResponse;
-    s.remediation_plan = s.remediation_plan.map((p) => ({ ...p, current_percent: 45.5, percent_if_fixed: 90.9, gain_percent: 45.4, impact: "Visitors' browsing is shared before they have chosen." }));
-    render(<DpdpScoreSection score={s} />);
+describe("the requirements card's remediation steps", () => {
+  it("say why each matters, and never what fixing it does to a score", () => {
+    const s = JSON.parse(JSON.stringify(F.review)) as DpdpRequirementsResponse;
+    s.remediation_plan = s.remediation_plan.map((p) => ({ ...p, impact: "Visitors' browsing is shared before they have chosen." }));
+    render(<RequirementsSection reading={s} />);
     const first = screen.getByTestId("dpdp-step-1");
-    expect(first).toHaveTextContent("Impact on the score: Fixing this alone would raise the readiness score from 45.5% to 90.9% (+45.4 percentage points).");
+    expect(first).not.toHaveTextContent("Impact on the score");
     expect(first).toHaveTextContent("Why it matters: Visitors' browsing is shared before they have chosen.");
-    expect(screen.getByTestId("dpdp-step-1-impact")).toBeInTheDocument();
+    expect(screen.queryByTestId("dpdp-step-1-impact")).not.toBeInTheDocument();
   });
 
-  it("show no impact line when there are no figures", () => {
-    render(<DpdpScoreSection score={F.review} />);
+  it("show no impact line when the server gave no impact text", () => {
+    render(<RequirementsSection reading={F.review} />);
     expect(screen.queryByTestId("dpdp-step-1-impact")).not.toBeInTheDocument();
     expect(screen.getByTestId("dpdp-step-1")).not.toHaveTextContent("Why it matters");
   });

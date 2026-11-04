@@ -1,7 +1,6 @@
 """The additions behind the report's new sections: language and security observations, the cookie inventory's purposes and lifetimes, contact details
 found beside a policy quotation, and what fixing each gap does to the score."""
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -12,7 +11,7 @@ from app.policy.analysis import PolicyDocument, PolicyExtraction, PolicyReqResul
 from app.rules.cookie_purposes import LONG_LIVED_DAYS, UNKNOWN_PURPOSE, describe_cookie, lifetime_days
 from app.scanner import page_signals as ps
 from app.scanner.page_parser import parse_page
-from app.scoring import dpdp_score
+from app.scoring import requirements as dpdp_score
 
 HINDI = "नमस्ते यह हमारी वेबसाइट है"
 TAMIL = "வணக்கம்"
@@ -187,26 +186,11 @@ def _evidence(pre_trackers=True):
                                                                               "evidence": {"accept_interaction": "clicked", "reject_interaction": "clicked", "accept_click_confirmed": True, "reject_click_confirmed": True}}]}
 
 
-def test_each_remediation_step_says_what_fixing_it_does_to_the_same_score():
+def test_remediation_steps_carry_no_score_effect():
     s = dpdp_score.assess(_evidence())
-    r = s.readiness
     assert s.remediation_plan, "the evidence has a gap"
     for step in s.remediation_plan:
-        res = next(x for x in s.requirements if x.id == step.requirement_id)
-        regained = res.weight * (1.0 if step.outcome == "Not Met" else 0.5)
-        assert step.current_percent == r.score_percent                                              # the number the report shows now
-        assert step.percent_if_fixed == pytest.approx(round((r.points_earned + regained) / r.assessed_weight * 100, 1), abs=0.05)
-        assert step.gain_percent == pytest.approx(step.percent_if_fixed - step.current_percent, abs=0.11)
-        assert step.gain_percent > 0 and step.percent_if_fixed <= 100
-
-
-def test_a_partly_met_gap_regains_half_of_what_a_not_met_gap_of_the_same_weight_would():
-    s = dpdp_score.assess(_evidence())
-    by = {x.requirement_id: x for x in s.remediation_plan}
-    weights = {x.id: x.weight for x in s.requirements}
-    for rid, step in by.items():
-        factor = 1.0 if step.outcome == "Not Met" else 0.5
-        assert step.gain_percent == pytest.approx(weights[rid] * factor / s.readiness.assessed_weight * 100, abs=0.11)
+        assert not [k for k in vars(step) if "percent" in k or "gain" in k or "weight" in k], step.requirement_id
 
 
 def test_the_impact_is_the_documented_one_or_empty_never_invented():
@@ -216,13 +200,10 @@ def test_the_impact_is_the_documented_one_or_empty_never_invented():
         assert step.impact == BUSINESS_IMPACT.get(step.requirement_id, "")
 
 
-def test_no_impact_figures_are_given_when_the_score_is_withheld():
+def test_a_scan_with_no_pages_has_no_remediation_steps():
     s = dpdp_score.assess({"pages": [], "forms": [], "cookies": [], "trackers": [], "policies": [], "third_party_services": [], "consent_signals": []})
-    assert s.readiness.status != "scored" and all(p.gain_percent is None and p.percent_if_fixed is None for p in s.remediation_plan)
+    assert s.remediation_plan == []
 
 
-def test_a_clean_scan_has_nothing_to_fix_and_the_score_is_untouched_by_the_plan():
-    s = dpdp_score.assess(_evidence(pre_trackers=False))
-    before = s.readiness.score_percent
-    assert all(p.gain_percent is not None for p in s.remediation_plan)
-    assert dpdp_score.assess(_evidence(pre_trackers=False)).readiness.score_percent == before
+def test_the_plan_is_the_same_for_the_same_evidence():
+    assert dpdp_score.assess(_evidence()).remediation_plan == dpdp_score.assess(_evidence()).remediation_plan

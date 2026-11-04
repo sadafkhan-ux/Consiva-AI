@@ -25,19 +25,20 @@ vi.mock("jspdf", () => {
   return { jsPDF: FakeDoc };
 });
 
-import type { DpdpScoreResponse } from "../api/types";
+import type { DpdpRequirementsResponse } from "../api/types";
 import type { ConsentScanState } from "../hooks/useConsentScan";
 import { ANALYSIS_STAGES, phaseAfterStageFailure } from "../hooks/useConsentScan";
 import { ANALYSIS_INCOMPLETE_NOTE, buildReportModel } from "../report/buildReport";
-import { buildScoreView } from "../report/dpdpScore";
+import { buildRequirementsView } from "../report/requirements";
 import { downloadReport } from "../report/downloadReport";
-import fixtures from "../test/dpdpScoreFixtures.json";
-import { DpdpScoreSection } from "./DpdpScoreSection";
+import { A } from "../test/assessments";
+import fixtures from "../test/requirementsFixtures.json";
+import { RequirementsSection } from "./RequirementsSection";
 import { RecommendationsSection } from "./DpdpAndRecommendations";
 import { FindingsSection } from "./FindingsSection";
 import { ScanStatusSection } from "./ScanStatusSection";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
 
 function state(over: Partial<ConsentScanState> = {}): ConsentScanState {
   return {
@@ -78,24 +79,24 @@ describe("a scan that completed but whose analysis did not", () => {
     expect(recs.container.textContent).toContain("no findings to recommend against");
   });
 
-  it("states on the score card that the score does not depend on the analysis, without changing the score", () => {
-    const { container } = render(<DpdpScoreSection score={F.mixed} analysisNote={ANALYSIS_INCOMPLETE_NOTE} />);
+  it("states on the requirements card that the reading does not depend on the analysis", () => {
+    const { container } = render(<RequirementsSection reading={F.mixed} analysisNote={ANALYSIS_INCOMPLETE_NOTE} />);
     expect(screen.getByTestId("dpdp-analysis-note")).toHaveTextContent("do not depend on it");
-    expect(screen.getByTestId("dpdp-headline")).toHaveTextContent(buildScoreView(F.mixed).headline);
+    expect(container.textContent).not.toMatch(/\d+(\.\d+)?\/100|score_percent/);   // the card carries no score
     expect(container.querySelector('[data-testid="dpdp-analysis-note"]')).not.toBeNull();
   });
 
   it("shows no note when the analysis completed", () => {
-    render(<DpdpScoreSection score={F.mixed} />);
+    render(<RequirementsSection reading={F.mixed} />);
     expect(screen.queryByTestId("dpdp-analysis-note")).not.toBeInTheDocument();
   });
 
   it("says so in the PDF beside the score, and nowhere when the analysis completed", async () => {
     const scan = { id: "499b709a-0000", url: "https://x.test/", evidence_counts: { pages: 1, cookies: 0, trackers: 0, third_party_services: 0, policies: 0, forms: 0 } } as never;
-    await downloadReport(buildReportModel(scan, [], null, [], [], buildScoreView(F.mixed), null, ANALYSIS_INCOMPLETE_NOTE));
+    await downloadReport(buildReportModel(scan, [], null, [], [], buildRequirementsView(F.mixed), null, ANALYSIS_INCOMPLETE_NOTE, null, undefined, undefined, A.mixed));
     expect(drawn[0].join("")).toContain("The analysis did not complete for this scan");
-    expect(drawn[0].join("")).toContain(buildScoreView(F.mixed).headline);   // the score itself is unchanged
-    await downloadReport(buildReportModel(scan, [], null, [], [], buildScoreView(F.mixed), null, null));
+    expect(drawn[0].join("")).toContain(A.mixed.scoreText);   // the score itself is unchanged
+    await downloadReport(buildReportModel(scan, [], null, [], [], buildRequirementsView(F.mixed), null, null));
     expect(drawn.map((p) => p.join("")).join("")).not.toContain("The analysis did not complete");
     expect(drawn.map((p) => p.join("")).join("")).not.toContain("Everything the scan recorded");   // still only the summary: there is no appendix without the scan's evidence
   });

@@ -3,10 +3,10 @@
 from dataclasses import asdict
 from datetime import date
 
-from app.api.v1.routes.consent_scans import DpdpScoreResponse
+from app.api.v1.routes.consent_scans import DpdpRequirementsResponse
 from app.scoring import findings as fg
-from app.scoring.dpdp_score import assess
-from tests.test_dpdp_score import AFTER, TODAY, evidence, tr
+from app.scoring.requirements import assess
+from tests.test_requirements_reading import AFTER, TODAY, evidence, tr
 
 
 def t(i, page="https://x.test/pricing", **kw):
@@ -74,11 +74,11 @@ class TestClassification:
 
 
 class TestSeverityOnlyWhereJustified:
-    def test_a_direct_observation_on_a_duty_in_force_is_rated_from_its_weight(self):
+    def test_a_direct_observation_on_a_duty_in_force_is_rated_from_its_fixed_severity(self):
         e = entry(assess(evidence(trackers=[t(1)], pages=3), AFTER).finding_groups.confirmed, "DPDP-C1")
-        assert e.severity == "High" and "weight (5)" in e.severity_note
+        assert e.severity == "High" and "fixed severity" in e.severity_note
 
-    def test_a_weight_four_check_is_medium(self):
+    def test_a_medium_severity_duty_is_rated_medium(self):
         e = entry(assess(evidence(reject=False, pages=3), AFTER).finding_groups.confirmed, "DPDP-C4")
         assert e.severity == "Medium"
 
@@ -193,12 +193,12 @@ class TestUpcomingDates:
         assert assess(evidence(pages=3), AFTER).finding_groups.upcoming == []
 
     def test_a_declared_consent_manager_duty_starts_a_year_after_publication(self):
-        from app.scoring.dpdp_score import Applicability
+        from app.scoring.requirements import Applicability
 
         g = assess(evidence(pages=3), TODAY, Applicability(consent_manager=True)).finding_groups
         assert "2026-11-13" in [u.date for u in g.upcoming]
 
 
 def test_the_whole_structure_serialises_through_the_api_model():
-    m = DpdpScoreResponse(**asdict(assess(evidence(trackers=[t(1)], pages=5), TODAY)))
+    m = DpdpRequirementsResponse(**asdict(assess(evidence(trackers=[t(1)], pages=5), TODAY)))
     assert m.finding_groups.future_readiness and m.finding_groups.needs_review and m.finding_groups.unable_to_verify

@@ -66,7 +66,8 @@ def _normalise(path: str) -> str:
 
 
 def test_the_console_calls_the_eighteen_documented_endpoints():
-    # 17 before the URL inventory; Phase 2 added GET /consent/scans/{id}/url-inventory. (The whole-site scan, POST /consent-agent/scans/application, is outside
+    # 17 before the URL inventory; Phase 2 added GET /consent/scans/{id}/url-inventory; GET /assessment (the one score) was added and the weighted /dpdp-score and its /compare
+    # were removed, which nets one fewer than the nineteen of the day before. (The whole-site scan, POST /consent-agent/scans/application, is outside
     # the /consent/ prefix this contract covers; it is tested with the scan profiles.) Each endpoint is also checked below to exist on the backend with that method.
     assert len(_console_calls()) == 18, _console_calls()
 
@@ -120,12 +121,9 @@ PAIRS = [
     ("EvidenceConsentSignalItem", "EvidenceConsentSignalItem"),
     ("EvidencePolicyItem", "EvidencePolicyItem"),
     ("ScanEvidenceResponse", "ScanEvidenceResponse"),
-    ("DpdpScoreResponse", "DpdpScoreResponse"),
-    ("DpdpScoreBlock", "DpdpScoreBlock"),
-    ("DpdpCategoryScore", "DpdpCategoryScore"),
+    ("DpdpRequirementsResponse", "DpdpRequirementsResponse"),
     ("DpdpRequirementResult", "DpdpRequirementResult"),
     ("DpdpLedger", "DpdpLedger"),
-    ("DpdpLedgerMetric", "DpdpLedgerMetric"),
     ("DpdpStatusRule", "DpdpStatusRule"),
     ("UsageTotals", "UsageTotals"),
     ("UsageCost", "UsageCost"),
@@ -135,7 +133,6 @@ PAIRS = [
     ("UsagePages", "UsagePages"),
     ("ScanUsage", "UsageResponse"),
     ("UsageHistoryItem", "UsageHistoryItem"),
-    ("ScoreComparison", "ScoreComparisonResponse"),
 ]
 
 
@@ -160,8 +157,8 @@ ENDPOINTS = [
     ("GET", f"/api/v1/consent/scans/{SCAN}", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/stages", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/evidence", None),
-    ("GET", f"/api/v1/consent/scans/{SCAN}/dpdp-score", None),
-    ("GET", f"/api/v1/consent/scans/{SCAN}/dpdp-score/compare", None),
+    ("GET", f"/api/v1/consent/scans/{SCAN}/requirements", None),
+    ("GET", f"/api/v1/consent/scans/{SCAN}/assessment", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/usage", None),
     ("GET", "/api/v1/consent/scans/usage/history", None),
     ("POST", f"/api/v1/consent/scans/{SCAN}/analyze", None),
@@ -191,8 +188,8 @@ def test_every_console_endpoint_refuses_a_forged_token(method, path, body):
     "/api/v1/consent/scans/not-a-uuid",
     "/api/v1/consent/scans/not-a-uuid/stages",
     "/api/v1/consent/scans/not-a-uuid/evidence",
-    "/api/v1/consent/scans/not-a-uuid/dpdp-score",
-    "/api/v1/consent/scans/not-a-uuid/dpdp-score/compare",
+    "/api/v1/consent/scans/not-a-uuid/requirements",
+    "/api/v1/consent/scans/not-a-uuid/assessment",
     "/api/v1/consent/scans/not-a-uuid/findings",
     "/api/v1/consent/scans/not-a-uuid/audit",
     "/api/v1/consent/scans/not-a-uuid/usage",
@@ -270,11 +267,11 @@ def test_the_scan_list_query_filters_by_organisation_and_orders_newest_first():
     assert "org_id" in sql and "order by" in sql and "created_at desc" in sql and "limit" in sql
 
 
-def test_business_sector_is_validated_on_the_score_endpoint():
+def test_business_sector_is_validated_on_the_requirements_endpoint():
     sid = uuid.uuid4()
-    resp = client.get(f"/api/v1/consent/scans/{sid}/dpdp-score?business_sector=nonsense", headers=_headers())
+    resp = client.get(f"/api/v1/consent/scans/{sid}/requirements?business_sector=nonsense", headers=_headers())
     assert resp.status_code == 422
-    resp = client.get(f"/api/v1/consent/scans/{sid}/dpdp-score?business_sector=general", headers=_headers())
+    resp = client.get(f"/api/v1/consent/scans/{sid}/requirements?business_sector=general", headers=_headers())
     assert resp.status_code == 422                     # "general" means undeclared: it is not an accepted declaration
 
 
@@ -292,7 +289,15 @@ def test_business_sector_accepts_each_declarable_sector_before_any_lookup(monkey
     app.dependency_overrides[get_db] = fake_db
     try:
         for key in (k for k in SECTORS if k != "general"):
-            resp = client.get(f"/api/v1/consent/scans/{uuid.uuid4()}/dpdp-score?business_sector={key}", headers=_headers())
+            resp = client.get(f"/api/v1/consent/scans/{uuid.uuid4()}/requirements?business_sector={key}", headers=_headers())
             assert resp.status_code == 404, (key, resp.status_code)   # passed validation, then the scan was (rightly) not found
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.mark.parametrize("path", ["/dpdp-score", "/dpdp-score/compare", "/dpdp-score/comparison", "/deductions"])
+def test_the_weighted_score_endpoints_are_gone(path):
+    """The ten-check assessment is the only score. The weighted score and its comparison were removed outright, with no alias."""
+    resp = client.get(f"/api/v1/consent/scans/{uuid.uuid4()}{path}", headers=_headers())
+    assert resp.status_code == 404
+    assert not any("dpdp-score" in p or "deduction" in p for p in app.openapi()["paths"])

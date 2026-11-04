@@ -1,34 +1,13 @@
 import type { ReactNode } from "react";
 import { findingPill, type PageReportView } from "../pageReports";
 import type { ElementStatus } from "../reportVisual";
-import type { TenAssessment } from "../tenChecks";
 import { BigRing, Flag, Icon, Mark, Pill, type IconName } from "./PageParts";
 
 // The blocks both fixed-page reports are built from. Each one only lays out values already worked out in report/pageReports.ts.
 
-/** The Privacy Readiness Score card. `ten` is the 10-check assessment (report/tenChecks.ts), the one source of the score: the Summary, Free and Full reports and the dashboard all print its number. */
-export function ScoreCard({ view, id, ten }: { view: PageReportView; id: string; ten?: TenAssessment }) {
+/** The Privacy Readiness Score card: the server's ten-check score (GET /assessment), the same number the dashboard, the Summary PDF, the web page and the email print. */
+export function ScoreCard({ view, id }: { view: PageReportView; id: string }) {
   const { hero } = view;
-  if (ten) {
-    const tone = ten.score === null ? "mute" : ten.limitedBasis || ten.score < 80 ? "warn" : "good";
-    return (
-      <div className="pg-scorecard" data-testid={`pg-score-${id}`} data-source="ten-checks">
-        <div className="pg-score-ring">
-          <BigRing percent={ten.score} label={ten.score === null ? "No score" : String(ten.score)} id={id} />
-          <div className="pg-score-name">Privacy Readiness Score</div>
-        </div>
-        <div className="pg-score-text">
-          <span className={`pg-chip pg-${tone}`}><Icon name="check" size={11} /> {ten.score === null ? "No meaningful score" : `${ten.counts.passed} of ${ten.applicableMax} assessed checks passed`}</span>
-          <p>Total Weightage Awarded: {ten.totalText}. {ten.summary}</p>
-          <div className="pg-cov">
-            <div className="pg-cov-head"><b>Coverage</b> <span>{view.coverageLabel}</span></div>
-            <div className="pg-bar"><i style={{ width: `${view.coveragePct ?? 0}%` }} /></div>
-            {view.testedLine && <div className="pg-cov-note">{view.testedLine}</div>}
-          </div>
-        </div>
-      </div>
-    );
-  }
   return (
     <div className="pg-scorecard" data-testid={`pg-score-${id}`}>
       <div className="pg-score-ring">
@@ -36,13 +15,9 @@ export function ScoreCard({ view, id, ten }: { view: PageReportView; id: string;
         <div className="pg-score-name">Privacy Readiness Score</div>
       </div>
       <div className="pg-score-text">
-        <span className={`pg-chip pg-${hero.tone}`}><Icon name="check" size={11} /> {view.coveragePct !== null && view.coveragePct < 50 && hero.percent !== null ? `${hero.band} · limited coverage` : hero.band}</span>
-        <p>{hero.headline} {hero.percent !== null && "Read the score with the coverage."}</p>
-        <div className="pg-cov">
-          <div className="pg-cov-head"><b>Coverage</b> <span>{view.coverageLabel}</span></div>
-          <div className="pg-bar"><i style={{ width: `${view.coveragePct ?? 0}%` }} /></div>
-          {view.testedLine && <div className="pg-cov-note">{view.testedLine.replace("tested from outside.", "tested from outside.")}</div>}
-        </div>
+        <span className={`pg-chip pg-${hero.tone}`}><Icon name="check" size={11} /> {hero.band}</span>
+        <p>{hero.headline}</p>
+        {view.testedLine && <div className="pg-cov-note" data-testid="pg-checks-assessed">{view.checksAssessedLabel}. {view.testedLine}</div>}
       </div>
     </div>
   );
@@ -96,16 +71,17 @@ export function FrameworkBlock({ view, withNote, hideScore }: { view: PageReport
   );
 }
 
-export function AreasBlock({ view }: { view: PageReportView }) {
-  if (view.areas.length === 0) return <p className="pg-muted">The score was not loaded, so no privacy area is shown.</p>;
+const rank = (label: string) => (label === "Failed" ? 0 : label === "Partially passed" ? 1 : label === "Passed" ? 3 : 2);
+
+/** The ten checks as the assessment marked them: each one's result and marks. */
+export function ChecksResultBlock({ view }: { view: PageReportView }) {
+  if (view.checks.length === 0) return <p className="pg-muted">The assessment was not loaded, so no check result is shown.</p>;
   const icons: IconName[] = ["shield", "doc", "form", "globe"];
   return (
-    <div className="pg-areas">
-      {view.areas.map((a, i) => (
-        <div className="pg-area" key={a.name}>
-          <div className="pg-area-head"><span className="pg-area-icon"><Icon name={icons[i] ?? "doc"} size={20} /></span><div><b>{a.name}</b><div className="pg-area-score">{a.scoreLabel}</div></div></div>
-          {a.pct !== null && <div className="pg-bar pg-bar-lg"><i style={{ width: `${Math.max(2, Math.min(100, a.pct))}%` }} /></div>}
-          <div className="pg-cov-note">{a.coverageLabel}</div>
+    <div className="pg-areas" data-testid="pg-check-results">
+      {[...view.checks].sort((x, y) => rank(x.status.label) - rank(y.status.label)).slice(0, 4).map((c, i) => (
+        <div className="pg-area" key={c.id}>
+          <div className="pg-area-head"><span className="pg-area-icon"><Icon name={icons[i] ?? "doc"} size={20} /></span><div><b>{c.title}</b><div className="pg-area-score">{c.status.label} · {c.marks}</div></div></div>
         </div>
       ))}
     </div>

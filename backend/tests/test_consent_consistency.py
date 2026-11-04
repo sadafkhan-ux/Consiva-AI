@@ -16,7 +16,7 @@ from app.rules.tracker_catalog import CMP_CATALOG
 from app.scanner import crawler
 from app.scanner.consent_signal_detector import detect_consent_signal
 from app.scanner.page_parser import ParsedScript
-from app.scoring.dpdp_score import assess
+from app.scoring.requirements import assess
 
 TODAY = datetime(2026, 10, 27, tzinfo=UTC).date()
 
@@ -130,7 +130,7 @@ class TestMissingEvidenceIsNeverAVerdict:
         for rid in ("DPDP-C3", "DPDP-C4", "DPDP-C5"):
             assert by_id[rid].status in ("unable_to_verify", "not_applicable"), (rid, by_id[rid].status)      # never met, partially met or not met on no evidence
 
-    def test_a_scan_with_no_loaded_page_has_no_score_and_nothing_verified(self):
+    def test_a_scan_with_no_loaded_page_has_nothing_verified(self):
         sig = detect_consent_signal(scripts=[script(CMP_CATALOG[0])], visible_text="", detected_global_vars=[], control_text="")
-        s = assess(evidence(sig, accept="cmp_not_automatable", reject="cmp_not_automatable", pages=0), TODAY).readiness
-        assert s.status == "insufficient_evidence" and s.score_percent is None
+        s = assess(evidence(sig, accept="cmp_not_automatable", reject="cmp_not_automatable", pages=0), TODAY)
+        assert s.ledger.passed_checks == 0 and s.ledger.failed_checks == 0

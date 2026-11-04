@@ -2,7 +2,8 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ReportModel } from "../buildReport";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
 import { buildSummaryReport, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, type SummaryView } from "../summaryReport";
-import { buildTenChecks, KIND_LABEL, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
+import { KIND_LABEL, NO_ASSESSMENT, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
+import { ringNumber } from "../scoreFormat";
 import { BigRing, Icon, Pill, SheetPageStyle, type IconName } from "./PageParts";
 import "./pages.css";
 import "./snapshot.css";
@@ -103,6 +104,13 @@ function officers(s: SummaryView) {
   ];
 }
 
+/** What the headline score is and is not: the ten checks below it are marked and totalled, and the score is that total over the maximum. One engine, so there is nothing else to explain. */
+function scoreStory(ten: TenAssessment): string {
+  const lead = ten.score === null ? "No Privacy Readiness Score is shown." : `The Privacy Readiness Score is ${ten.scoreText}.`;
+  const provisional = ten.score !== null && !ten.final ? " The policy reading had not finished or was not run, so these marks could still change." : "";
+  return `${lead} ${ten.summary}${provisional}`.replace(/\s+/g, " ").trim();
+}
+
 const TONE: Record<TenResult, "good" | "warn" | "bad" | "mute"> = { Passed: "good", "Partially Passed": "warn", Failed: "bad", "Not Assessed": "mute", "Not Applicable": "mute" };
 
 function Sheet({ n, fit, testId, children }: { n: 1 | 2; fit: number; testId: string; children: ReactNode }) {
@@ -152,7 +160,7 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
           <div className="sn-left">
             <div className="sn-card sn-score" data-testid="sn-score">
               <b className="sn-card-t">Privacy Readiness Score</b>
-              <div className="pg-score-ring"><BigRing percent={ten.score} label={ten.score === null ? "" : String(ten.score)} id="snapshot" /></div>
+              <div className="pg-score-ring"><BigRing percent={ten.score} label={ten.score === null ? "" : ringNumber(ten.scoreText)} id="snapshot" /></div>
             </div>
             <div className="sn-card sn-banner" data-testid="sn-banner">
               <div className="sn-card-head"><b><Icon name="shield" size={17} />Consent Banner</b></div>
@@ -225,7 +233,7 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
 
         <div className="sn-readme" data-testid="sn-summary">
           <Icon name="info" size={18} />
-          <div><b>How to read this score</b><p>{ten.summary}</p></div>
+          <div><b>How to read this score</b><p data-testid="sn-summary-text">{scoreStory(ten)}</p></div>
         </div>
       </div>
     </Sheet>
@@ -358,7 +366,7 @@ function Page2({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
  */
 export function SnapshotReport({ model }: { model: ReportModel }) {
   const s = buildSummaryReport(model);
-  const ten = buildTenChecks(model);
+  const ten = model.assessment ?? NO_ASSESSMENT;
   const doc = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState<[number, number]>([0, 0]);
   useLayoutEffect(() => {

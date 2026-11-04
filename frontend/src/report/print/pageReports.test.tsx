@@ -1,17 +1,18 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DpdpScoreResponse, ScanEvidenceResponse, ScanScreenshot, WebsiteScanMetadata } from "../../api/types";
-import fixtures from "../../test/dpdpScoreFixtures.json";
+import type { DpdpRequirementsResponse, ScanEvidenceResponse, ScanScreenshot, WebsiteScanMetadata } from "../../api/types";
+import { A } from "../../test/assessments";
+import type { TenAssessment } from "../tenChecks";
+import fixtures from "../../test/requirementsFixtures.json";
 import { buildReportModel } from "../buildReport";
-import { buildScoreView } from "../dpdpScore";
-import { buildTenChecks } from "../tenChecks";
+import { buildRequirementsView } from "../requirements";
 import { buildPageReport, FREE_PAGES, FULL_PAGES, reportIdFor } from "../pageReports";
 import { ctaKeyFor, resolveCta } from "../reportCta";
 import { FreeReport } from "./FreeReport";
 import { FullReport } from "./FullReport";
 import { ReportDocument } from "./ReportDocument";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
 const SCAN = { id: "9bd5ccef-6909-4903-8d44-2b52a5668a06" as string, url: "https://x.test/", evidence_counts: { pages: 3, cookies: 2, trackers: 5, third_party_services: 1, policies: 1, forms: 1 } } as never;
 const META = { consent_mechanism: "cmp", cmp_vendor: "Some CMP", accept_interaction: "clicked", reject_interaction: "clicked", pages_scanned: 3, pages_discovered: 40, page_limit: 5 } as unknown as WebsiteScanMetadata;
 const tracker = (id: string, vendor: string | null, category: string | null, states: string[], src: string) => ({ id, script_src: src, vendor, category, source: "rule", consent_states: states, page_url: "https://x.test/" });
@@ -30,33 +31,33 @@ const EVIDENCE = {
   consent_signals: [{ mechanism_type: "cmp", cmp_vendor: "Some CMP", has_reject_all: true, has_granular_choices: true, evidence: {} }],
 } as unknown as ScanEvidenceResponse;
 const SHOT: ScanScreenshot = { scan_id: "9bd5ccef-6909-4903-8d44-2b52a5668a06", domain: "x.test", status: "ok", available: true, message: null, page_url: "https://x.test/", mime: "image/jpeg", width: 1280, height: 720, captured_at: "2026-10-22T20:08:00Z", data: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/" };
-const model = (o: { score?: keyof typeof F | null; shot?: ScanScreenshot | null; meta?: WebsiteScanMetadata; evidence?: ScanEvidenceResponse | null } = {}) =>
-  buildReportModel(SCAN, [], o.meta ?? META, [], [], o.score === null ? null : buildScoreView(F[o.score ?? "mixed"]), o.evidence === undefined ? EVIDENCE : o.evidence, null, null, o.shot === undefined ? SHOT : o.shot);
+const model = (o: { score?: keyof typeof F | null; shot?: ScanScreenshot | null; meta?: WebsiteScanMetadata; evidence?: ScanEvidenceResponse | null; assessment?: TenAssessment } = {}) =>
+  buildReportModel(SCAN, [], o.meta ?? META, [], [], o.score === null ? null : buildRequirementsView(F[o.score ?? "mixed"]), o.evidence === undefined ? EVIDENCE : o.evidence, null, null, o.shot === undefined ? SHOT : o.shot, undefined, o.assessment ?? (o.score === "insufficient" ? A.noScore : A.mixed));
 
 afterEach(cleanup);
 
 describe("which call to action is shown (scope 8.3)", () => {
-  const key = (score: number | null, coverage: number | null, unassessed = 0, critical = false) => ctaKeyFor({ score, coverage, unassessed, critical });
+  const key = (score: number | null, limitedBasis: boolean, unassessed = 0, critical = false) => ctaKeyFor({ score, limitedBasis, unassessed, critical });
   it("follows the score band", () => {
-    expect(key(20, 80)).toBe("action_plan");
-    expect(key(55, 80)).toBe("improve");
-    expect(key(80, 80)).toBe("close_gaps");
+    expect(key(20, false)).toBe("action_plan");
+    expect(key(55, false)).toBe("improve");
+    expect(key(80, false)).toBe("close_gaps");
   });
-  it("shows monitoring only for a high score with high coverage and nothing left unassessed", () => {
-    expect(key(95, 90)).toBe("monitor");
-    expect(key(95, 30)).toBe("expand");
-    expect(key(95, 90, 2)).toBe("complete");
-    expect(key(100, 30, 5)).toBe("expand");
+  it("shows monitoring only for a high score on a full basis and nothing left unassessed", () => {
+    expect(key(95, false)).toBe("monitor");
+    expect(key(95, true)).toBe("expand");
+    expect(key(95, false, 2)).toBe("complete");
+    expect(key(100, true, 5)).toBe("expand");
   });
   it("puts a confirmed critical finding ahead of any score", () => {
-    expect(key(98, 95, 0, true)).toBe("fix_priority");
-    expect(key(10, 50, 0, true)).toBe("fix_priority");
+    expect(key(98, false, 0, true)).toBe("fix_priority");
+    expect(key(10, true, 0, true)).toBe("fix_priority");
   });
-  it("asks to complete the assessment when the score is withheld", () => { expect(key(null, null)).toBe("complete"); });
+  it("asks to complete the assessment when the score is withheld", () => { expect(key(null, true)).toBe("complete"); });
   it("gives a subscriber the operational action, never the acquisition one, and carries nothing from the scan in the address", () => {
-    const sub = resolveCta({ score: 55, coverage: 80, unassessed: 0, critical: false, subscriber: true });
+    const sub = resolveCta({ score: 55, limitedBasis: false, unassessed: 0, critical: false, subscriber: true });
     expect(sub.label).toBe("Create Remediation Tasks");
-    expect(resolveCta({ score: 55, coverage: 80, unassessed: 0, critical: false }).label).toBe("Improve My Score with Consiva AI");
+    expect(resolveCta({ score: 55, limitedBasis: false, unassessed: 0, critical: false }).label).toBe("Improve My Score with Consiva AI");
     expect(sub.href).not.toMatch(/[?&=]/);
   });
 });
@@ -71,10 +72,12 @@ describe("the page report view", () => {
   it("counts the framework segments from the score and never counts an unknown as met", () => {
     const view = buildPageReport(model(), "free");
     const c = view.framework.counts;
-    const v = buildScoreView(F.mixed);
-    expect(c.met).toBe(v.assessed.filter((r) => r.statusKey === "met").length);
-    expect(c.unverified).toBe(v.unableToVerify.length);
-    expect(c.notApplicable).toBe(v.excluded.length);
+    const k = A.mixed.counts;
+    expect(c.met).toBe(k.passed);
+    expect(c.partly).toBe(k.partial);
+    expect(c.notMet).toBe(k.failed);
+    expect(c.unverified).toBe(k.notAssessed);
+    expect(c.notApplicable).toBe(k.notApplicable);
     expect(view.framework.segments.reduce((n, s) => n + s.count, 0)).toBe(c.met + c.partly + c.notMet + c.unverified + c.notApplicable);
     expect(Math.round(view.framework.segments.reduce((n, s) => n + s.pct, 0))).toBe(100);
   });
@@ -105,7 +108,7 @@ describe("the page report view", () => {
   });
 
   it("states what the scan cannot say: pages, homepage-only consent tests and unassessed checks", () => {
-    const limits = buildPageReport(model(), "free").limits.join(" ");
+    const limits = buildPageReport(model({ assessment: A.policyMissing }), "free").limits.join(" ");
     expect(limits).toMatch(/not an assessment of the whole site/);
     expect(limits).toMatch(/homepage only/);
     expect(limits).toMatch(/not counted as passed/);
@@ -120,14 +123,14 @@ describe("the Free Scan report", () => {
     expect(screen.getByTestId("pg-free-2")).toHaveTextContent("Page 2 of 2");
   });
 
-  it("puts the screenshot, the score with its coverage and the call to action on page 1, and consent behaviour on page 2", () => {
+  it("puts the screenshot, the score with the count of checks assessed and the call to action on page 1, and consent behaviour on page 2", () => {
     render(<FreeReport model={model()} />);
     const p1 = screen.getByTestId("pg-free-1");
     const p2 = screen.getByTestId("pg-free-2");
     expect(within(p1).getByTestId("pg-hero-screenshot")).toBeInTheDocument();
     expect(within(p1).getByTestId("pg-hero")).toHaveTextContent(/Website Privacy\s*Readiness Report/);
     expect(within(p1).getByTestId("pg-score-free")).toHaveTextContent("Privacy Readiness Score");
-    expect(within(p1).getByTestId("pg-score-free")).toHaveTextContent(/Coverage/);
+    expect(within(p1).getByTestId("pg-score-free")).toHaveTextContent(/checks assessed/);
     expect(within(p1).getByTestId("pg-cta")).toBeInTheDocument();
     expect(within(p2).getByTestId("pg-consent")).toHaveTextContent("After Reject");
     expect(within(p2).getByTestId("pg-takeaway")).toBeInTheDocument();
@@ -140,11 +143,10 @@ describe("the Free Scan report", () => {
     expect(screen.queryByTestId("pg-hero-screenshot")).toBeNull();
   });
 
-  it("prints the 10-check Privacy Readiness Score even when the weighted score is withheld, and asks to complete the assessment", () => {
+  it("prints no score when the server withholds it, and asks to complete the assessment", () => {
     const m = model({ score: "insufficient" });
     render(<FreeReport model={m} />);
-    expect(screen.getByTestId("pg-percent-free").textContent).toBe(String(buildTenChecks(m).score));
-    expect(screen.getByTestId("pg-score-free")).toHaveAttribute("data-source", "ten-checks");
+    expect(screen.getByTestId("pg-percent-free").textContent).toBe("No score");
     expect(screen.getByTestId("pg-cta")).toHaveAttribute("data-cta", "complete");
   });
 
@@ -165,11 +167,11 @@ describe("the Full Scan report", () => {
 
   it("carries every section of the benchmark: summary, framework, areas, findings, consent, technologies, domains, chart, elements, checks, fixes, legal context", () => {
     render(<FullReport model={model()} />);
-    for (const title of ["Quick Summary", "Framework Readiness", "Privacy Areas", "Top Findings", "Consent Behaviour", "Tracking Technologies Detected", "Third-party Domains", "Requests over Time", "Privacy Elements on the Site", "Every Check Behind the Score", "Prioritised Fixes", "DPDP Act and Rules", "What's Next"]) {
+    for (const title of ["Quick Summary", "Framework Readiness", "Check Results", "Top Findings", "Consent Behaviour", "Tracking Technologies Detected", "Third-party Domains", "Requests over Time", "Privacy Elements on the Site", "The Ten Checks Behind the Score", "Prioritised Fixes", "DPDP Act and Rules", "What's Next"]) {
       expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
     }
     expect(screen.getByTestId("pg-chart")).toBeInTheDocument();
-    expect(screen.getByTestId("pg-reportinfo")).toHaveTextContent("Scoring methodology");
+    expect(screen.getByTestId("pg-reportinfo")).toHaveTextContent("Ten-check methodology");
   });
 
   it("numbers its sections 1 to 13 in order", () => {
@@ -263,7 +265,7 @@ describe("report figures fixed by the 2026-10-26 audit", () => {
   it("puts a confirmed finding rated High ahead of a high score, since the score never rates a finding Critical", () => {
     for (const key of Object.keys(F) as (keyof typeof F)[]) {
       const m = model({ score: key });
-      const hasHigh = !!m.dpdpScore?.groups.find((g) => g.key === "confirmed")?.entries.some((e) => /high/i.test(e.severity));
+      const hasHigh = !!m.requirements?.groups.find((g) => g.key === "confirmed")?.entries.some((e) => /high/i.test(e.severity));
       expect(buildPageReport(m, "free").cta.key === "fix_priority", String(key)).toBe(hasHigh);
     }
   });

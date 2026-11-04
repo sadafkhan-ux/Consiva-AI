@@ -37,9 +37,10 @@ describe("the five-page readiness review on the dashboard", () => {
     expect(screen.getByText(/Tag Co \(analytics\)/)).toBeInTheDocument();
   });
 
-  it("gives the score, the ranked gaps, the riskiest page and the closing sentence", () => {
+  it("gives what could be assessed, the ranked gaps, the riskiest page and the closing sentence", () => {
     render(<ReadinessReview review={review} />);
-    expect(screen.getByTestId("readiness-score")).toHaveTextContent(`${review.scorePercent} out of 100`);
+    expect(screen.getByTestId("readiness-score")).toHaveTextContent(review.summaryLine);
+    expect(screen.getByTestId("readiness-score").textContent).not.toMatch(/out of 100/);
     expect(within(screen.getByTestId("readiness-top-gaps")).getAllByRole("listitem").length).toBe(review.topGaps.length);
     expect(screen.getByTestId("readiness-riskiest")).toHaveTextContent("Highest-risk page");
     expect(screen.getByTestId("readiness-closing")).toHaveTextContent(READINESS_CLOSING);

@@ -342,12 +342,12 @@ def test_the_children_requirement_is_asked_about_for_an_education_site(monkeypat
     assert "children_data" in seen["user"] and out["sector"] == "education"
 
 
-def test_the_analysis_never_touches_the_score():
-    from app.scoring import dpdp_score
+def test_the_analysis_never_touches_the_requirements_reading():
+    from app.scoring import requirements as dpdp_score
 
     src = open(pa.__file__, encoding="utf-8").read()
     assert "dpdp_score" not in src.replace("never changes the DPDP Compliance Score", "")
-    assert dpdp_score.METHODOLOGY_VERSION    # unchanged by this feature: the score is computed from the scan alone
+    assert dpdp_score.REQUIREMENTS_VERSION    # the policy analysis feeds three requirement statuses, never a number
 
 
 # --- the crawler keeps the whole policy, once ---------------------------------------------------------------------------------------
@@ -533,3 +533,29 @@ async def test_only_the_page_that_was_cut_is_marked_truncated():
     by_url = {d.url: d for d in docs}
     assert by_url["https://x.test/privacy-policy"].truncated is False
     assert by_url["https://x.test/training/dpdp"].truncated is True
+
+
+# ── the same policy, rendered differently, is the same question: an earlier answer is reused, not asked again ──
+
+def test_a_policy_rendered_with_other_whitespace_case_or_quotes_has_the_same_reuse_key():
+    reqs = [r for r in REQUIREMENTS][:4]
+    base = PolicyDocument("https://x.test/privacy", "privacy_policy", "We keep your data for 24 months. It’s “ours” to protect — always.", "crawl")
+    variants = [
+        "We keep   your data for 24 months.\n\nIt's \"ours\" to protect - always.",
+        "we keep your data for 24 months. it’s “ours” to protect — always. ",
+        "  We keep your data for 24 months.  It’s “ours” to protect — always.  ",
+    ]
+    key = pa.reuse_prompt([base], reqs)
+    for v in variants:
+        assert pa.reuse_prompt([PolicyDocument(base.url, base.policy_type, v, "crawl")], reqs) == key
+    assert pa.input_hash("s", key, None, False, "m") == pa.input_hash("s", pa.reuse_prompt([PolicyDocument(base.url, base.policy_type, variants[0], "crawl")], reqs), None, False, "m")
+
+
+def test_a_changed_word_a_changed_page_or_a_changed_requirement_is_a_different_question():
+    reqs = [r for r in REQUIREMENTS][:4]
+    base = PolicyDocument("https://x.test/privacy", "privacy_policy", "We keep your data for 24 months.", "crawl")
+    key = pa.reuse_prompt([base], reqs)
+    assert pa.reuse_prompt([PolicyDocument(base.url, base.policy_type, "We keep your data for 36 months.", "crawl")], reqs) != key
+    assert pa.reuse_prompt([PolicyDocument("https://x.test/other", base.policy_type, base.text, "crawl")], reqs) != key
+    assert pa.reuse_prompt([base], reqs[:3]) != key
+    assert pa.reuse_prompt([base, PolicyDocument("https://x.test/cookies", "cookie_policy", "We set cookies.", "crawl")], reqs) != key

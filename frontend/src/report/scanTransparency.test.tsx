@@ -1,16 +1,17 @@
 import { ringNumber } from "./scoreFormat";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DpdpScoreResponse, ScanEvidenceResponse, StageResponse, WebsiteScanMetadata } from "../api/types";
-import fixtures from "../test/dpdpScoreFixtures.json";
+import type { DpdpRequirementsResponse, ScanEvidenceResponse, StageResponse, WebsiteScanMetadata } from "../api/types";
+import { A } from "../test/assessments";
+import fixtures from "../test/requirementsFixtures.json";
 import { buildReportModel } from "./buildReport";
-import { buildScoreView } from "./dpdpScore";
+import { buildRequirementsView } from "./requirements";
 import { buildPageReport } from "./pageReports";
 import { ReportDocument } from "./print/ReportDocument";
 import { ScanTransparency } from "./print/Transparency";
 import { buildTiming, buildTransparency } from "./scanTransparency";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
 afterEach(cleanup);
 
 const page = (host: string, path: string, via: string, status = 200) => ({ id: `${host}${path}`, url: `https://${host}${path}`, title: path, http_status: status, discovered_via: via });
@@ -30,7 +31,7 @@ const SCAN = (host: string) => ({ id: "11111111-1111-1111-1111-111111111111", ur
 
 function model(host: string, ev: ScanEvidenceResponse, meta: Partial<WebsiteScanMetadata> = {}, score: keyof typeof F | null = "mixed", stages: StageResponse[] = []) {
   const m = { consent_mechanism: "banner", accept_interaction: "clicked", reject_interaction: "clicked", pages_scanned: 1, ...meta } as WebsiteScanMetadata;
-  return buildReportModel(SCAN(host), [], m, [], ev.trackers, score ? buildScoreView(F[score]) : null, ev, null, null, null, buildTiming(stages));
+  return buildReportModel(SCAN(host), [], m, [], ev.trackers, score ? buildRequirementsView(F[score]) : null, ev, null, null, null, buildTiming(stages), score === null ? null : score === "insufficient" ? A.noScore : A.mixed);
 }
 
 const HOSTS = ["shop.example", "clinic.example.org", "news.example.co.uk"];
@@ -67,20 +68,20 @@ describe("pages: discovered, selected and scanned are three different numbers", 
 });
 
 describe("the three coverages are kept apart", () => {
-  it("page, requirement and consent-state coverage are separate figures with their own definitions", () => {
+  it("page, check and consent-state coverage are separate figures with their own definitions", () => {
     const m = model("shop.example", evidence("shop.example"), { pages_discovered: 112, pages_attempted: 5, pages_scanned: 5 });
     const c = m.transparency.coverage;
     expect(c.page.value).toMatch(/of 112 pages/);
-    expect(c.requirement.value).toContain(m.dpdpScore!.coverageHeadline);
+    expect(c.checks.value).toContain(`${A.mixed.counts.passed + A.mixed.counts.partial + A.mixed.counts.failed} of ${A.mixed.checks.length} checks assessed`);
     expect(c.consentStates.value).toBe("3 of 3 states tested");
-    expect(new Set([c.page.definition, c.requirement.definition, c.consentStates.definition]).size).toBe(3);
-    expect(c.requirement.definition).toMatch(/nothing to do with the number of pages/);
+    expect(new Set([c.page.definition, c.checks.definition, c.consentStates.definition]).size).toBe(3);
+    expect(c.checks.definition).toMatch(/nothing to do with the number of pages/);
   });
 
-  it("counts the requirements assessed, not assessed, not applicable and needing review from the score itself", () => {
+  it("counts the checks assessed, not assessed and not applicable from the assessment, and those needing review from the requirements", () => {
     const m = model("shop.example", evidence("shop.example"), {}, "mixed");
-    const v = m.dpdpScore!;
-    expect(m.transparency.coverage.requirements).toMatchObject({ assessed: v.assessed.length, notAssessed: v.unableToVerify.length, notApplicable: v.excluded.length });
+    const k = A.mixed.counts;
+    expect(m.transparency.coverage.counts).toMatchObject({ assessed: k.passed + k.partial + k.failed, notAssessed: k.notAssessed, notApplicable: k.notApplicable });
   });
 });
 
@@ -137,23 +138,24 @@ describe("why the score is zero, unavailable, insufficient or partial", () => {
   });
 
   it("a genuine zero from assessed failures is a result, said as such", () => {
-    const v = { ...buildScoreView(F.mixed), scoreValue: 0, scored: true, caution: null };
-    const t = buildTransparency({ scanPages: null, visual: null, score: v, evidence: null, timing: null });
+    const a = { ...A.someFailed, score: 0, scoreText: "0/100" };
+    const t = buildTransparency({ scanPages: null, visual: null, assessment: a, requirements: null, evidence: null, timing: null });
     expect(t.scoreReason.kind).toBe("zero_from_failures");
-    expect(t.scoreReason.text).toMatch(/Not Met\. This is a result, not a missing score/);
+    expect(t.scoreReason.text).toMatch(/Failed\. This is a result, not a missing score/);
   });
 
-  it("a score that rests on little carries its coverage and the count not assessed", () => {
-    const v = buildScoreView(F.mixed);
-    const t = buildTransparency({ scanPages: null, visual: null, score: { ...v, caution: "Treat this score with caution: it rests on 3 assessed requirements and 40% coverage." }, evidence: null, timing: null });
+  it("a score that rests on little says so, and says when the policy reading was not finished", () => {
+    const t = buildTransparency({ scanPages: null, visual: null, assessment: A.policyMissing, requirements: null, evidence: null, timing: null });
     expect(t.scoreReason.kind).toBe("partial");
-    expect(t.scoreReason.text).toMatch(/not assessed because the evidence was insufficient/);
+    expect(t.scoreReason.text).toMatch(/could not be assessed/);
+    const early = buildTransparency({ scanPages: null, visual: null, assessment: { ...A.mixed, final: false }, requirements: null, evidence: null, timing: null });
+    expect(early.scoreReason.text).toMatch(/could still change/);
   });
 
   it("a normal score says what it rests on", () => {
     const r = reason("mixed");
     expect(["scored", "partial"]).toContain(r.kind);
-    expect(r.text).toMatch(/assessed requirement/);
+    expect(r.text).toMatch(/assessed check/);
   });
 });
 
@@ -189,7 +191,8 @@ describe("a framed wrapper limits only the checks that rest on nothing being see
     }
     expect(rowsOf(m).some((r) => r.status === "Not Found")).toBe(false);
     expect(rowsOf(m).some((r) => r.status === "Passes this technical check" && r.evidenceKind === "Not seen")).toBe(false);
-    expect(m.readiness.scoreLine).toMatch(/Not enough could be verified/);
+    expect(m.readiness.summaryLine).toMatch(/checks the scan could assess/);
+    expect(m.readiness.summaryLine).not.toMatch(/out of 100/);
     expect(m.readiness.notes[0]).toContain(framed);
   });
 
@@ -227,20 +230,19 @@ describe("a framed wrapper limits only the checks that rest on nothing being see
 describe("one score everywhere", () => {
   it.each(HOSTS)("the cover, the Full report, the long report and the transparency section all read the same server score (%s)", (host) => {
     const m = model(host, evidence(host), { pages_discovered: 20, pages_attempted: 5, pages_scanned: 5 }, "mixed");
-    const v = m.dpdpScore!;
     const free = buildPageReport(m, "free");
     const full = buildPageReport(m, "full");
-    expect(free.hero.percent).toBe(v.scoreValue);
-    expect(full.hero.percent).toBe(v.scoreValue);
-    expect(free.coverageLabel).toBe(v.coverageHeadline);
-    expect(m.transparency.coverage.requirement.value).toContain(v.coverageHeadline);
+    expect(free.hero.percent).toBe(m.assessment!.score);
+    expect(full.hero.percent).toBe(m.assessment!.score);
+    expect(free.checksAssessedLabel).toBe(`${A.mixed.counts.passed + A.mixed.counts.partial + A.mixed.counts.failed} of ${A.mixed.checks.length} checks assessed`);
+    expect(m.transparency.coverage.checks.value).toContain(free.checksAssessedLabel);
     render(<ReportDocument model={m} />);
-    expect(screen.getByTestId("hero-percent").textContent).toBe(ringNumber(v.headline));
+    expect(screen.getByTestId("hero-percent").textContent).toBe(ringNumber(m.assessment!.scoreText));
   });
 
   it("an unavailable score is unavailable in every view, never a number", () => {
     const m = model("shop.example", evidence("shop.example"), {}, "insufficient");
-    expect(m.dpdpScore!.scoreValue).toBeNull();
+    expect(m.assessment!.score).toBeNull();
     expect(buildPageReport(m, "free").hero.percent).toBeNull();
     expect(m.transparency.scoreReason.kind).toBe("insufficient");
     render(<ReportDocument model={m} />);

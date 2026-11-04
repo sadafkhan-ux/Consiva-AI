@@ -1,7 +1,8 @@
+import type { TenAssessment } from "./tenChecks";
 import type {
   EvidenceCookieItem, EvidenceTrackerItem, FindingResponse, PolicyAnalysis, ScanEvidenceResponse, ScanScreenshot, ScanStatusResponse, WebsiteScanMetadata,
 } from "../api/types";
-import type { ScoreView } from "./dpdpScore";
+import type { RequirementsView } from "./requirements";
 import { buildInsightSections, type InsightSection } from "./insights";
 import { buildReadinessReview, type ReadinessReview } from "./readiness";
 import { summariseTrackers } from "./trackerSummary";
@@ -30,8 +31,10 @@ export interface ReportModel {
    *  human has actually signed off, and must say so rather than implying sign-off. */
   provisional: boolean;
   headline: string;
-  /** The proposed DPDP Compliance Score, as the dashboard shows it (report/dpdpScore.ts). Null when it was not loaded. */
-  dpdpScore: ScoreView | null;
+  /** The DPDP requirements reading (report/requirements.ts): the status and evidence of each requirement. It carries no score; the Privacy Readiness Score is `assessment`. Null when it was not loaded. */
+  requirements: RequirementsView | null;
+  /** The ten checks and the Privacy Readiness Score from the server: the one score every surface prints. Null when it was not loaded. */
+  assessment: TenAssessment | null;
   /** What was actually tested: pages, and which consent states could be exercised. Printed under the headline. */
   scope: string;
   counts: { label: string; value: string }[];
@@ -80,12 +83,13 @@ export function buildReportModel(
   meta: WebsiteScanMetadata | null,
   cookies: EvidenceCookieItem[] = [],
   trackers: EvidenceTrackerItem[] = [],
-  dpdpScore: ScoreView | null = null,
+  requirements: RequirementsView | null = null,
   evidence: ScanEvidenceResponse | null = null,
   analysisNote: string | null = null,
   policyAnalysis: PolicyAnalysis | null = null,
   screenshot: ScanScreenshot | null = null,
   timing: ScanTiming | null = null,
+  assessment: TenAssessment | null = null,
 ): ReportModel {
   const sorted = [...findings].sort((a, b) => riskRank(a.risk_level) - riskRank(b.risk_level));
   const provisional = findings.some((f) => f.status === "pending");
@@ -200,7 +204,8 @@ export function buildReportModel(
     provisional,
     headline,
     scope,
-    dpdpScore,
+    requirements,
+    assessment,
     counts,
     problems: sorted.slice(0, MAX_PROBLEMS).map((f) => ({ risk: f.risk_level, text: f.finding_text })),
     consentIssues: consentIssues.slice(0, 4),
@@ -209,18 +214,18 @@ export function buildReportModel(
     totalFindings: findings.length,
     shownFindings: Math.min(sorted.length, MAX_PROBLEMS),
     cookies: buildCookieInventory(cookies.length ? cookies : evidence?.cookies ?? [], untestedStates),
-    visual: buildReportVisual(evidence, meta, dpdpScore, untestedStates),
-    scanPages: buildScanPages(evidence?.pages, meta, scan?.url ?? "", dpdpScore?.pageLimit ?? null),
+    visual: buildReportVisual(evidence, meta, requirements, untestedStates),
+    scanPages: buildScanPages(evidence?.pages, meta, scan?.url ?? "", requirements?.pageLimit ?? null),
     scanId: scan?.id ?? null,
     analysisNote,
     transparency: buildTransparency({
-      scanPages: buildScanPages(evidence?.pages, meta, scan?.url ?? "", dpdpScore?.pageLimit ?? null),
-      visual: buildReportVisual(evidence, meta, dpdpScore, untestedStates), score: dpdpScore, evidence, timing,
+      scanPages: buildScanPages(evidence?.pages, meta, scan?.url ?? "", requirements?.pageLimit ?? null),
+      visual: buildReportVisual(evidence, meta, requirements, untestedStates), assessment, requirements, evidence, timing,
     }),
     evidence,
     policyAnalysis: policyAnalysis && policyAnalysis.status !== "not_run" ? policyAnalysis : null,
     screenshot,
-    insights: buildInsightSections({ policy: policyAnalysis, meta, evidence, sector: dpdpScore?.sector ?? null, siteUrl: scan?.url ?? null }),
-    readiness: buildReadinessReview({ siteUrl: scan?.url ?? "", evidence, meta, policy: policyAnalysis, sector: dpdpScore?.sector ?? null }),
+    insights: buildInsightSections({ policy: policyAnalysis, meta, evidence, sector: requirements?.sector ?? null, siteUrl: scan?.url ?? null }),
+    readiness: buildReadinessReview({ siteUrl: scan?.url ?? "", evidence, meta, policy: policyAnalysis, sector: requirements?.sector ?? null }),
   };
 }

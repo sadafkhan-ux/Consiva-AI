@@ -1,11 +1,24 @@
-# Privacy Readiness Score: the ten checks
+# Privacy Readiness Score and the ten checks
 
-One engine, one score. `frontend/src/report/tenChecks.ts` (`buildTenChecks`, `scoreChecks`) is the only place the 10-check result is worked out. The dashboard hero and breakdown, the two-page Summary PDF, and the Free and Full PDF score cards all print its number. Nothing in a PDF component recomputes it. (The weighted "DPDP Compliance Score (proposed methodology)" section on the dashboard and in the long Evidence report is a separate reading and is labelled as one.)
+## One score, one engine (2026-11-04)
+The **Privacy Readiness Score is the ten-check score, worked out once, on the server**: `GET /api/v1/consent/scans/{id}/assessment`, field `score` (a number, one decimal) and `score_text` (the same, written `N/100`, for example `94.4/100`). Passed = 1, Partially Passed = 0.5, Failed = 0; Not Applicable and Not Assessed checks are left out of the denominator; score = marks awarded / marks available x 100, rounded half up. The web page, the email, the dashboard, the Summary PDF, the Free PDF, the Full PDF and the long report all print that one number. There is no scoring code in the browser: the front end only draws what `/assessment` returns, and when it cannot load it shows "No score", never a number it worked out.
 
-## Formula (unchanged)
+The engine is `backend/app/scoring/ten_checks.py` (a pure function of the stored evidence and the policy analysis), its inputs are assembled by `backend/app/scoring/ten_inputs.py` and `backend/app/services/assessment_service.py`. It was ported from the browser engine it replaces and is held to it by recorded results: `tests/test_ten_checks_parity.py` (160 cases) and `tests/test_ten_inputs_parity.py` (102) compare the Python output with the browser engine's recorded output exactly, marks, texts and all.
+
+The response also carries: `final` (true only when the scan is complete and the policy reading has finished or failed; a score read before that can still change), `policy_analysis` (done / running / failed / not_run), `counts`, `incomplete`, `limited_basis` (fewer than half the checks could be assessed), the ten checks with evidence and source, `summary`, `recommendations` and `methodology_version` (`TEN_CHECK_VERSION`, now 1.0.0; raise it whenever a rule that can change a result changes).
+
+The weighted score is **removed**: `GET .../dpdp-score` and `.../dpdp-score/compare` no longer exist (404), and no weight, point total, weighted percentage or coverage percentage is computed or shown anywhere. The 16 DPDP requirement checks remain as a statuses-and-evidence reading with no numbers, at `GET .../requirements` (see `DPDP_REQUIREMENTS_READING.md`). Any other system (the UAT web page, the email) that shows a Privacy Readiness Score must read `/assessment`.
+
+Before this change three scores existed for one scan (for example 80.8 on the web page, 95 in the PDF, 75 on the dashboard): two engines (a server weighted one, a browser ten-check one) and a timing difference (policy reading not finished when the browser scored). One engine on the server removes the first; `final` and the dashboard's "Assessing" state handle the second. The score is not stored: like the weighted score it is worked out on request from the evidence and the policy analysis as they are now, so it always matches them.
+
+Verified: for five stored scans (swaransoft 95, cookieyes 90, wipro 95, bbc 85, icicibank 62.5) the Summary, Free and Full PDFs printed through the real server pipeline each print exactly the `/assessment` score (15 of 15). Not verified: the live UAT site and the email (not ours to run).
+
+## How the ten checks are marked
+
+### Marks
 
 Passed = 1, Partially Passed = 0.5, Failed = 0. Not Applicable and Not Assessed carry no marks and are left out of the maximum.
-Score = marks awarded ÷ applicable marks × 100, rounded half up to one decimal. No applicable check gives "No meaningful score", never 0 or 100.
+The engine also works out marks awarded ÷ applicable marks × 100 (rounded half up, one decimal; "No meaningful score" when nothing applies). That figure is internal: it is not printed on any surface and it is not the Privacy Readiness Score.
 
 ## The five results
 
@@ -46,9 +59,9 @@ Evidence quality is stated beside every result (Specific, General, Limited, None
 
 ## Not done here
 
-- The 10-check engine runs in the browser at render time. There is no API or database copy of the score.
+- The ten-check score is worked out on request and not stored; there is no database copy of it.
 - Evidence per page now stores the final URL after redirects and the content type (migration 0046). Page title and HTTP status were already stored.
-- The weighted DPDP Compliance Score section and the long Evidence report still use the 17-requirement engine.
+- The requirements section on the dashboard and the long Evidence report list requirement statuses and evidence with no numbers; the only score is the ten-check score.
 
 ## Same page, different score: what was fixed (2026-11-04)
 Two runs of one site (digitalanumati.com) gave 95 and 70 from the same five pages. Checks 4 (sharing) and 5 (retention) were found in one run and "not found" in the other, and the second run said "the text was cut at the storage limit" about a policy page of 7,808 characters. Three causes, three fixes:

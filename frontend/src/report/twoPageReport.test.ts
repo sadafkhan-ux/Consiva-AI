@@ -61,20 +61,23 @@ vi.mock("jspdf", () => {
   return { jsPDF: FakeDoc };
 });
 
-import type { DpdpScoreResponse, FindingResponse, PolicyAnalysis, ScanEvidenceResponse } from "../api/types";
-import { DpdpScoreSection } from "../components/DpdpScoreSection";
-import fixtures from "../test/dpdpScoreFixtures.json";
+import type { DpdpRequirementsResponse, FindingResponse, PolicyAnalysis, ScanEvidenceResponse } from "../api/types";
+import { RequirementsSection } from "../components/RequirementsSection";
+import fixtures from "../test/requirementsFixtures.json";
 import { buildReportModel } from "./buildReport";
-import { buildScoreView, isDpdpScore } from "./dpdpScore";
-import { formatRefShort } from "./legalRefs";
+import { buildRequirementsView } from "./requirements";
+import { A } from "../test/assessments";
+import type { TenAssessment } from "./tenChecks";
 import { CONSIVA_LOGO_HEIGHT, CONSIVA_LOGO_WIDTH } from "./consivaLogo";
 import { downloadReport } from "./downloadReport";
 import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER } from "./reportScope";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
 const mixed = F.mixed;
 const confirmed = F.confirmed;
 const insufficient = F.insufficient;
+/** The assessment the server would serve for the scenario a score fixture stands for: the one score every surface prints. */
+const AFOR = (s: DpdpRequirementsResponse | null): TenAssessment | null => (!s ? null : s === insufficient ? A.noScore : s === confirmed ? A.allPassed : s === F.thin ? A.policyMissing : A.mixed);
 
 const SCAN = { url: "https://x.test/", evidence_counts: { pages: 3, cookies: 2, trackers: 5, third_party_services: 0, policies: 1, forms: 0 } } as never;
 const META = {
@@ -94,8 +97,8 @@ const EVIDENCE = {
   consent_signals: [{ mechanism_type: "cmp", cmp_vendor: "Some CMP", has_reject_all: true, has_granular_choices: null, evidence: {} }],
 } as unknown as ScanEvidenceResponse;
 
-async function pdf(score: DpdpScoreResponse | null, findings: FindingResponse[] = [], evidence: ScanEvidenceResponse | null = EVIDENCE, meta = META, policy: PolicyAnalysis | null = null) {
-  await downloadReport(buildReportModel(SCAN, findings, meta, [], [], score ? buildScoreView(score) : null, evidence, null, policy));
+async function pdf(score: DpdpRequirementsResponse | null, findings: FindingResponse[] = [], evidence: ScanEvidenceResponse | null = EVIDENCE, meta = META, policy: PolicyAnalysis | null = null) {
+  await downloadReport(buildReportModel(SCAN, findings, meta, [], [], score ? buildRequirementsView(score) : null, evidence, null, policy, null, undefined, AFOR(score)));
   const join = (from: number, to?: number) => recorded.pages.slice(from, to).map((p) => p.texts.join("")).join("");
   const appendixAt = () => { const i = recorded.pages.findIndex((p) => p.texts.join("").includes("Everything the scan recorded for this site")); return i < 0 ? recorded.pages.length : i; };
   return {
@@ -108,7 +111,7 @@ async function pdf(score: DpdpScoreResponse | null, findings: FindingResponse[] 
     appendix: () => join(appendixAt()),
     appendixAt,
     /** The table of every check, which flows over as many pages as it needs. */
-    checks: () => { const i = recorded.pages.findIndex((p) => p.texts.join("").includes("EVERY CHECK BEHIND THE SCORE")); return join(Math.max(i, 0), appendixAt()); },
+    checks: () => { const i = recorded.pages.findIndex((p) => p.texts.join("").includes("THE TEN CHECKS BEHIND THE SCORE")); return join(Math.max(i, 0), appendixAt()); },
   };
 }
 
@@ -146,7 +149,7 @@ describe("the report is three summary pages, then the evidence appendix", () => 
   });
 
   it("keeps the pages list capped in the summary however much the scan found, and the rest in the appendix", async () => {
-    const big: DpdpScoreResponse = JSON.parse(JSON.stringify(F.review));
+    const big: DpdpRequirementsResponse = JSON.parse(JSON.stringify(F.review));
     const many = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `p${i}`, url: `https://x.test/page-${i}-${"long-path-segment/".repeat(4)}`, title: null, http_status: 200, discovered_via: i === 0 ? "seed" : "sitemap" }));
     const evidence = { ...EVIDENCE, pages: many(40), trackers: Array.from({ length: 200 }, (_, i) => tracker(String(i), i % 3 ? "functional" : "analytics", ["post_accept"])) } as unknown as ScanEvidenceResponse;
     const r = await pdf(big, [], evidence);
@@ -184,11 +187,11 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
   const bigRing = () => bigCircles()[1];
   const border = () => bigCircles()[0];
 
-  it.each([["mixed", 56.5], ["confirmed", 60], ["thin", 100]])("%s: the percentage is inside the ring, centred, and the label sits directly beneath it", async (key, score) => {
+  it.each([["mixed", 75], ["confirmed", 100], ["thin", 75]])("%s: the percentage is inside the ring, centred, and the label sits directly beneath it", async (key, score) => {
     await pdf(F[key]);
     const ring = bigRing();
     const pct = recorded.calls.find((c) => c.page === 0 && c.t === `${score}`)!;
-    const label = recorded.calls.find((c) => c.page === 0 && c.t === "Compliance Score")!;
+    const label = recorded.calls.find((c) => c.page === 0 && c.t === "Privacy Readiness Score")!;
     expect(ring.r).toBeGreaterThan(30);
     expect(pct.align).toBe("center");
     expect(pct.x).toBe(ring.x);   // centred horizontally
@@ -200,7 +203,7 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
     expect(label.y - (border().y + border().r)).toBeLessThan(30);   // directly beneath it
   });
 
-  it.each([["mixed", 56.5], ["confirmed", 60], ["thin", 100]])("%s: the arc ends where the displayed percentage says", async (key, score) => {
+  it.each([["mixed", 75], ["confirmed", 100], ["thin", 75]])("%s: the arc ends where the displayed percentage says", async (key, score) => {
     await pdf(F[key]);
     const ring = bigRing();
     const onRing = recorded.lines.filter((l) => l.page === 0
@@ -216,45 +219,27 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
   });
 
   it("uses one number for the text and the arc, whatever the display string says", () => {
-    const v = buildScoreView(mixed);
-    expect(v.scoreValue).toBe(mixed.readiness.score_percent);
-    expect(v.headline).toBe(`${v.scoreValue}/100`);
+    expect(A.mixed.score).toBe(75);
+    expect(A.mixed.scoreText).toBe(`${A.mixed.score}/100`);
   });
 
   it("shows the percentage only: no formula, working or raw expression on pages 1 and 2", async () => {
     const p = await pdf(mixed);
     const summary = p.page(0) + p.page(1);
     expect(summary).not.toMatch(/÷|×|Score = |Coverage = |This scan:/);
-    expect(summary).toContain("56.5/100");
+    expect(summary).toContain("75/100");
+    expect(summary).not.toContain("56.5");   // the weighted requirements percentage is not a score
     expect(summary).not.toContain("Coverage 62.2%");   // the overall coverage is not shown on the hero or the summary pages
   });
 
   it("shows the same percentage in the ring, the headline sentence and the framework card", async () => {
     const t = (await pdf(mixed)).page(0);
-    expect(t.split("56.5").length - 1).toBeGreaterThanOrEqual(3);
-  });
-
-  it("leaves the ledger and the penalty rules to the dashboard", async () => {
-    const t = (await pdf(mixed)).all();
-    expect(t).not.toContain("Penalty and exclusion rules");
-    expect(t).not.toContain("Assessment appendix");
-    const { container } = render(createElement(DpdpScoreSection, { score: mixed }));
-    expect(container.querySelector('[data-testid="dpdp-ledger-metrics"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="dpdp-penalty-rules"]')).not.toBeNull();
-  });
-
-  it("lists the privacy areas the report covers, and not data-rights handling or security", async () => {
-    const t = (await pdf(mixed)).page(0);
-    const shown = buildScoreView(mixed).categories.filter((c) => isReportCategory(c.name));
-    expect(shown.map((c) => c.name)).toEqual(["Consent", "Notice"]);
-    for (const c of shown) expect(t).toContain(c.name);
-    expect(t).not.toContain("Data principal rights");
-    expect(t).not.toContain("Security and breach");
+    expect(t.split("75/100").length - 1).toBeGreaterThanOrEqual(2);   // the ring number is "75" alone; the framework card and the summary line print "75/100"
   });
 
   it("uses the page limit the server reported", async () => {
     for (const limit of [5, 3, 8]) {
-      const sc: DpdpScoreResponse = JSON.parse(JSON.stringify(mixed));
+      const sc: DpdpRequirementsResponse = JSON.parse(JSON.stringify(mixed));
       sc.assessment.page_limit = limit;
       expect((await pdf(sc)).page(0)).toContain(`(limit ${limit})`);
     }
@@ -263,8 +248,8 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
   it("puts the unavailable label under the ring on two centred lines that stay clear of the text beside it, and prints no coverage in the hero", async () => {
     await pdf(insufficient);
     const ring = recorded.circles.filter((c) => c.page === 0).sort((a, b) => b.r - a.r)[1];
-    const lines = recorded.calls.filter((c) => c.page === 0 && c.align === "center" && /^(Compliance score|unavailable)$/.test(c.t));
-    expect(lines.map((c) => c.t)).toEqual(["Compliance score", "unavailable"]);
+    const lines = recorded.calls.filter((c) => c.page === 0 && c.align === "center" && /^(Privacy Readiness Score|unavailable)$/.test(c.t));
+    expect(lines.map((c) => c.t)).toEqual(["Privacy Readiness Score", "unavailable"]);
     for (const c of lines) expect(c.x).toBe(ring.x);                                          // centred under the ring
     expect(lines[1].y).toBeGreaterThan(lines[0].y);
     const heroTop = ring.y - 62;
@@ -275,26 +260,19 @@ describe("page 1: the score ring, its percentage and label, summary", () => {
   it("shows Insufficient Evidence instead of a number", async () => {
     const t = (await pdf(insufficient)).page(0);
     expect(t).toContain("Insufficient evidence");
-    expect(t).toContain("Compliance score unavailable");
+    expect(t).toContain("Privacy Readiness Score");
+    expect(t).toContain("unavailable");
     expect(t).toContain("No score");
   });
 
   it("uses the page limit the server reported", async () => {
     for (const limit of [5, 3, 8]) {
-      const sc: DpdpScoreResponse = JSON.parse(JSON.stringify(mixed));
+      const sc: DpdpRequirementsResponse = JSON.parse(JSON.stringify(mixed));
       sc.assessment.page_limit = limit;
       expect((await pdf(sc)).page(0)).toContain(`(limit ${limit})`);
     }
   });
 
-  it("lists the privacy areas the report covers, and not data-rights handling or security", async () => {
-    const t = (await pdf(mixed)).page(0);
-    const shown = buildScoreView(mixed).categories.filter((c) => isReportCategory(c.name));
-    expect(shown.map((c) => c.name)).toEqual(["Consent", "Notice"]);
-    for (const c of shown) expect(t).toContain(c.name);
-    expect(t).not.toContain("Data principal rights");
-    expect(t).not.toContain("Security and breach");
-  });
 });
 
 describe("page 2: consent comparison, technologies, privacy elements", () => {
@@ -325,51 +303,20 @@ describe("page 2: consent comparison, technologies, privacy elements", () => {
 });
 
 describe("the compact check table on page 2", () => {
-  it("lists every check the report covers, with its ID, weight, verdict and requirement", async () => {
-    for (const key of Object.keys(F)) {
-      const v = buildScoreView(F[key]);
-      const t = (await pdf(F[key])).checks();
-      expect(t, key).toContain("EVERY CHECK BEHIND THE SCORE");
-      for (const c of v.allChecks.filter((x) => isReportCategory(x.category) && x.statusKey !== "not_applicable")) {
-        expect(t, `${key} ${c.id}`).toContain(c.id.replace("DPDP-", ""));
-        expect(t, `${key} ${c.id} verdict`).toContain(c.verdict);
-        expect(t, `${key} ${c.id} title`).toContain(c.title.slice(0, 30));
-        expect(flat(t), `${key} ${c.id} requirement`).toContain(flat(formatRefShort(c.provisions)));   // the whole reference, not its first characters
-      }
-    }
-  });
-
-  it("sums up the not-applicable checks in one row, with the reason", async () => {
+  it("lists all ten checks of the assessment, each with its number, name, marks and result", async () => {
     const t = (await pdf(mixed)).checks();
-    expect(t).toContain("X4, X8, X10, X13");
-    expect(t).toContain("Not applicable: left out");   // the full line fits in the real PDF; the test's stand-in wraps narrower
-  });
-
-  it("carries the same verdicts and weights as the dashboard table", async () => {
-    const { container, unmount } = render(createElement(DpdpScoreSection, { score: confirmed }));
-    const v = buildScoreView(confirmed);
-    const t = (await pdf(confirmed)).checks();
-    for (const c of v.allChecks.filter((x) => isReportCategory(x.category) && x.statusKey !== "not_applicable")) {
-      const row = container.querySelector(`[data-testid="dpdp-check-row-${c.id}"]`) as HTMLElement;
-      expect(within(row).getByTestId(`dpdp-verdict-${c.id}`)).toHaveTextContent(c.verdict);
-      expect(t).toContain(c.verdict);
+    expect(t).toContain("THE TEN CHECKS BEHIND THE SCORE");
+    for (const c of A.mixed.checks) {
+      expect(flat(t), `check ${c.id}`).toContain(flat(c.name.slice(0, 30)));
+      expect(flat(t), `check ${c.id} result`).toContain(flat(c.result));
     }
-    unmount();
+    expect(flat(t)).toContain(flat(`The marks add up to ${A.mixed.totalText}, which is the score ${A.mixed.scoreText}`));
   });
 
-  it("shows a penalty only where a check lost weight, and never for one that was not scored", async () => {
-    const t = (await pdf(mixed)).checks();
-    const v = buildScoreView(mixed);
-    const lost = v.allChecks.filter((c) => /^\d/.test(c.penalty) && !c.penalty.startsWith("0 of"));
-    for (const c of lost) expect(t, c.id).toContain("penalty");
-    expect(t).not.toMatch(/Not scored · penalty/);
-  });
-
-  it("leaves out data-rights and security checks, and says once that such duties are counted but not listed", async () => {
-    const t = withoutCoverage((await pdf(mixed)).all());
-    for (const id of ["DPDP-R9", "R9 ", "R14A", "R14B", "S6 ", "S7 "]) expect(t, id).not.toContain(id);
+  it("says once that duties which depend on the organisation's own records are not listed", async () => {
+    const t = (await pdf(mixed)).all();
     expect(flat((await pdf(mixed)).checks())).toContain(flat(OMITTED_DUTIES_NOTE));   // the whole note, not an excerpt
-    expect((await pdf(mixed)).page(0)).not.toContain("not listed here");
+    for (const id of ["DPDP-R9", "R14A", "R14B"]) expect(withoutCoverage(t), id).not.toContain(id);
   });
 
   it("does not print the per-check legal records, the ledger or the penalty rules (those are on the dashboard)", async () => {
@@ -411,7 +358,7 @@ describe("the evidence appendix: complete, nothing truncated", () => {
     consent_signals: [{ mechanism_type: "cmp", cmp_vendor: "Consiva Consent SDK", has_reject_all: true, has_granular_choices: true,
       evidence: { confidence: 0.95, detection_source: "script_src", banner_ui_observed: true, accept_interaction: "clicked", reject_click_confirmed: true, interaction_page_url: "https://x.test/", global_vars: [] } }],
   } as unknown as ScanEvidenceResponse;
-  const score = () => ({ ...JSON.parse(JSON.stringify(mixed)), sector: SECTOR }) as DpdpScoreResponse;
+  const score = () => ({ ...JSON.parse(JSON.stringify(mixed)), sector: SECTOR }) as DpdpRequirementsResponse;
   const appendix = async () => (await pdf(score(), [], FULL)).appendix();
 
   it("lists every form with every field, name, type and whether it is required, with no field dropped or cut", async () => {
@@ -489,37 +436,9 @@ describe("the evidence appendix: complete, nothing truncated", () => {
 });
 
 describe("the score card: ledger and check table", () => {
-  it.each(Object.keys(F))("%s: counts and weights add up, and the percentages are the server's", (key) => {
-    const s = F[key];
-    const L = s.ledger;
-    expect(L.assessed_checks + L.unable_checks + L.not_applicable_checks).toBe(L.total_checks);
-    expect(L.assessed_checks).toBe(L.passed_checks + L.partial_checks + L.failed_checks);
-    expect(L.applicable_checks).toBe(L.total_checks - L.not_applicable_checks);
-    expect(L.assessed_weight + L.unable_weight).toBe(L.applicable_weight);
-    expect(L.total_weight - L.not_applicable_weight).toBe(L.applicable_weight);
-    const assessed = s.requirements.filter((r) => r.counts_in_score);
-    expect(assessed.reduce((a, r) => a + r.weight, 0)).toBe(L.assessed_weight);
-    expect(assessed.reduce((a, r) => a + r.points_earned, 0)).toBeCloseTo(L.earned_weight, 6);
-    expect(L.penalty_weight).toBeCloseTo(L.assessed_weight - L.earned_weight, 6);
-    expect(L.metrics.find((m) => m.key === "score")!.percent).toBe(s.readiness.score_percent);
-    expect(L.metrics.find((m) => m.key === "coverage")!.percent).toBe(s.readiness.coverage_percent);
-    expect(L.metrics.find((m) => m.key === "coverage")!.numerator).toBe(L.assessed_weight);
-    expect(L.metrics.find((m) => m.key === "coverage")!.denominator).toBe(L.applicable_weight);
-    for (const r of s.requirements) {
-      if (r.counts_in_score) expect(r.penalty_points).toBeCloseTo(r.weight - r.points_earned, 6);
-      else expect(r.penalty_points).toBeNull();
-    }
-  });
-
-  it.each(Object.keys(F))("%s: the per-check contributions add up to the score", (key) => {
-    const s = F[key];
-    if (s.readiness.status !== "scored") return;
-    const sum = s.requirements.reduce((a, r) => a + (r.score_contribution_percent ?? 0), 0);
-    expect(Math.abs(sum - (s.readiness.score_percent as number))).toBeLessThan(0.8);   // each contribution is rounded to one decimal
-  });
 
   it("renders a row for every check, coloured by verdict, directly under the score card", () => {
-    const { container } = render(createElement(DpdpScoreSection, { score: confirmed }));
+    const { container } = render(createElement(RequirementsSection, { reading: confirmed }));
     const table = container.querySelector('[data-testid="dpdp-check-table"]') as HTMLElement;
     expect(table.querySelectorAll("tbody tr")).toHaveLength(confirmed.requirements.filter((r) => isReportCategory(r.category)).length);
     expect(container.querySelector('[data-testid="dpdp-check-row-DPDP-R9"]')).toBeNull();   // the card follows the report
@@ -535,14 +454,13 @@ describe("the score card: ledger and check table", () => {
     expect(container.querySelector(`[data-testid="dpdp-verdict-${na.id}"]`)).toHaveTextContent("N/A");
     // the check table comes before the findings and the methodology
     const text = container.textContent ?? "";
-    expect(text.indexOf("Every check behind the score")).toBeGreaterThan(-1);
-    expect(text.indexOf("Every check behind the score")).toBeLessThan(text.indexOf("What the scan found"));
-    expect(container.querySelector('[data-testid="dpdp-penalty-rules"]')).not.toBeNull();
-    expect(container.querySelector('[data-testid="dpdp-ledger-metrics"]')).not.toBeNull();
+    expect(text.indexOf("Every requirement checked")).toBeGreaterThan(-1);
+    expect(text.indexOf("Every requirement checked")).toBeLessThan(text.indexOf("What the scan found"));
+    expect(container.querySelector('[data-testid="dpdp-ledger-counts"]')).not.toBeNull();   // plain counts of checks, nothing weighted
   });
 
   it("does not call an untested check a violation, or a not-applicable check a pass", () => {
-    const v = buildScoreView(mixed);
+    const v = buildRequirementsView(mixed);
     for (const c of v.allChecks) {
       if (c.statusKey === "unable_to_verify") expect(c.verdict).toBe("Unable to Verify");
       if (c.statusKey === "not_applicable") expect(c.verdict).toBe("N/A");
@@ -552,21 +470,12 @@ describe("the score card: ledger and check table", () => {
     expect(v.allChecks.filter((c) => c.verdict === "Pass").length).toBe(mixed.ledger.passed_checks);
   });
 
-  it("treats a response with no ledger (an older server) as no score", () => {
-    const old = JSON.parse(JSON.stringify(mixed));
-    delete old.ledger;
-    expect(isDpdpScore(old)).toBe(false);
-  });
-
-  it("says there is no separate security score", () => {
-    expect(buildScoreView(mixed).ledger.securityNote).toContain("no separate security score");
-  });
 });
 
 
 describe("what every generated report says about itself, and what it leaves out", () => {
   it("carries the same short disclaimer as the server, on every page", async () => {
-    const v = buildScoreView(mixed);
+    const v = buildRequirementsView(mixed);
     expect(v.disclaimer).toBe(REPORT_DISCLAIMER);   // the dashboard's text and the PDF's are one text
     await pdf(mixed);
     recorded.pages.forEach((p, i) => expect(p.texts.join(""), `page ${i + 1}`).toContain("for informational purposes only and does not constitute legal advice"));
@@ -594,7 +503,7 @@ describe("what every generated report says about itself, and what it leaves out"
   });
 
   it.each(Object.keys(F))("%s: what was tested and what was not names every applicable check, and each one it did not verify says why", async (key) => {
-    const v = buildScoreView(F[key]);
+    const v = buildRequirementsView(F[key]);
     const t = coverageOf((await pdf(F[key])).all());
     expect(t, key).toContain(COVERAGE_START);
     for (const c of v.allChecks.filter((x) => x.statusKey !== "not_applicable")) expect(flat(t), `${key}: ${c.id}`).toContain(flat(c.title).slice(0, 40));
@@ -607,10 +516,10 @@ describe("what every generated report says about itself, and what it leaves out"
   });
 
   it("leaves the score alone: the same numbers, only fewer rows shown", async () => {
-    const v = buildScoreView(mixed);
+    const v = buildRequirementsView(mixed);
     const t = (await pdf(mixed)).page(0);
-    expect(t).toContain(v.headline);
-    expect(t).not.toContain(`Coverage ${v.coverageHeadline}`);   // kept in the data (v.coverageHeadline), not printed in the hero
+    expect(t).toContain(A.mixed.scoreText);
+    expect(t).not.toMatch(/Coverage \d/);   // no coverage percentage on the hero
     expect(v.ledger.counts.find((c) => c.label === "Unable to verify")!.value).toBe(String(mixed.ledger.unable_checks));   // still every check
   });
 });
@@ -809,7 +718,7 @@ describe("the layout: sequential sections, a true contents, nothing cut, nothing
 
   it("the headings are numbered in order in the PDF, one badge per heading", async () => {
     const r = await pdf(mixed, [], FULL_EVIDENCE_FOR_LAYOUT);
-    const upper = ["SCAN SUMMARY", "FRAMEWORK READINESS", "PRIVACY AREAS", "TOP FINDINGS", "CONSENT BEHAVIOUR", "TRACKING TECHNOLOGIES DETECTED", "PRIVACY ELEMENTS ON THE SITE", "EVERY CHECK BEHIND THE SCORE", "WEBSITE PAGES SCANNED", "SCAN REVIEW"];
+    const upper = ["SCAN SUMMARY", "FRAMEWORK READINESS", "TOP FINDINGS", "CONSENT BEHAVIOUR", "TRACKING TECHNOLOGIES DETECTED", "PRIVACY ELEMENTS ON THE SITE", "THE TEN CHECKS BEHIND THE SCORE", "WEBSITE PAGES SCANNED", "SCAN REVIEW"];
     const at = upper.map((u) => r.all().indexOf(u));
     expect(at.every((i) => i >= 0)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));          // in the order they are listed, which is the reading order
@@ -838,12 +747,13 @@ describe("the layout: sequential sections, a true contents, nothing cut, nothing
     const entries = contentsOf();
     expect(entries.length).toBeGreaterThanOrEqual(4);
     const needle = (label: string) => {
-      const plain = label.replace(/^\d+\s{2}/, "");
+      const plain = label.replace(/^\d+\s+/, "");
       if (label === "Summary") return "SCAN SUMMARY";
-      if (label === "Every check") return "EVERY CHECK";
+      if (label === "The ten checks") return "THE TEN CHECKS";
       if (label === "Pages scanned") return "WEBSITE PAGES SCANNED";
       if (label === "Evidence appendix") return "Evidence appendix";
-      return /^\d+\s{2}/.test(label) || label === "Consent behaviour" ? plain.toUpperCase() : plain;
+      if (/^Appendix [A-Z]\s+/.test(label)) return label.replace(/^Appendix [A-Z]\s+/, "");   // the appendix heading is drawn as the letter and the title
+      return /^\d+\s+/.test(label) || label === "Consent behaviour" ? plain.toUpperCase() : plain;
     };
     for (const e of entries) expect(flat(recorded.pages[e.page - 1].texts.join("")), `${e.label} p.${e.page}`).toContain(flat(needle(e.label)));
     const pages = entries.map((e) => e.page);
@@ -860,13 +770,13 @@ describe("the layout: sequential sections, a true contents, nothing cut, nothing
   });
 
   it("a very long evidence line, requirement list and finding are printed in full, never cut with an ellipsis", async () => {
-    const view = buildScoreView(mixed);
+    const view = buildRequirementsView(mixed);
     const long = "Observed on the homepage and four further pages: " + "a long sentence of evidence about what the scan found and why it matters, ".repeat(6) + "and that is the end.";
     view.allChecks[0].evidenceLine = long;
     const first = view.groups.find((g) => g.entries.length)!.entries[0];
     first.title = "A finding with a very long title that has to wrap across more than one line of the card so that none of it is lost " + first.title;
     first.observed = ["An observation that is far longer than a line of the report and so wraps across several lines " + "with more words ".repeat(12) + "ending here."];
-    await downloadReport(buildReportModel(SCAN, [], META, [], [], view, FULL_EVIDENCE_FOR_LAYOUT));
+    await downloadReport(buildReportModel(SCAN, [], META, [], [], view, FULL_EVIDENCE_FOR_LAYOUT, null, null, null, undefined, A.mixed));
     const all = flat(recorded.pages.map((p) => p.texts.join("")).join(""));
     expect(all).toContain(flat(long));
     expect(all).toContain(flat(first.title.replace(/^DPDP-\w+\s+/, "")));
@@ -881,10 +791,9 @@ describe("the layout: sequential sections, a true contents, nothing cut, nothing
     expect(page1.length).toBeGreaterThan(0);
   });
 
-  it("legal references are spelt in full in the appendix and short in the narrow check table", async () => {
+  it("legal references are spelt in full in the appendix", async () => {
     const r = await pdf(mixed, [], FULL_EVIDENCE_FOR_LAYOUT);
     expect(flat(r.appendix())).toContain(flat("DPDP Act, 2023, Section"));
-    expect(flat(r.checks())).toContain(flat("Act, Section"));
     expect(r.all()).not.toMatch(/DPDP Act, 2023 s\./);
     expect(r.all()).not.toMatch(/DPDP Rules, 2025 r\./);
   });
@@ -913,8 +822,8 @@ describe("the hero: score top left, domain above the homepage picture top right"
     scan_id: "11111111-1111-1111-1111-111111111111", domain: "x.test", status: "ok", available: true, message: null, page_url: "https://x.test/",
     mime: "image/jpeg", width: 1280, height: 720, captured_at: "2026-10-22T16:43:00Z", data: JPEG_B64, ...over,
   });
-  const pdfWith = async (s: ScanScreenshot | null, score: DpdpScoreResponse = mixed, scan = SCAN) => {
-    await downloadReport(buildReportModel(scan, [], META, [], [], buildScoreView(score), EVIDENCE, null, null, s));
+  const pdfWith = async (s: ScanScreenshot | null, score: DpdpRequirementsResponse = mixed, scan = SCAN) => {
+    await downloadReport(buildReportModel(scan, [], META, [], [], buildRequirementsView(score), EVIDENCE, null, null, s, undefined, AFOR(score)));
   };
   const photo = () => recorded.images.filter((i) => i.data.startsWith("data:image/jpeg"));
 
@@ -941,7 +850,7 @@ describe("the hero: score top left, domain above the homepage picture top right"
 
   it("shows the same picture, byte for byte, that the dashboard shows", async () => {
     await pdfWith(shot());
-    const { container, unmount } = render(createElement(ScanHero, { score: buildScoreView(mixed), siteUrl: "https://x.test/", screenshot: shot() }));
+    const { container, unmount } = render(createElement(ScanHero, { assessment: A.mixed, siteUrl: "https://x.test/", screenshot: shot() }));
     const src = (container.querySelector('[data-testid="hero-screenshot"]') as HTMLImageElement).getAttribute("src");
     expect(photo()).toHaveLength(1);
     expect(photo()[0].data).toBe(src);
@@ -1007,14 +916,14 @@ describe("the hero: score top left, domain above the homepage picture top right"
   });
 
   it("refuses a picture that belongs to a different scan, and says no preview is available", async () => {
-    const model = buildReportModel({ ...(SCAN as object), id: "22222222-2222-2222-2222-222222222222" } as never, [], META, [], [], buildScoreView(mixed), EVIDENCE, null, null, shot());
+    const model = buildReportModel({ ...(SCAN as object), id: "22222222-2222-2222-2222-222222222222" } as never, [], META, [], [], buildRequirementsView(mixed), EVIDENCE, null, null, shot(), undefined, A.mixed);
     await downloadReport(model);
     expect(photo()).toHaveLength(0);
     expect(recorded.calls.some((c) => c.page === 0 && c.t === "Homepage preview not available")).toBe(true);
   });
 
   it("shows the picture when it belongs to the scan being reported", async () => {
-    const model = buildReportModel({ ...(SCAN as object), id: "11111111-1111-1111-1111-111111111111" } as never, [], META, [], [], buildScoreView(mixed), EVIDENCE, null, null, shot());
+    const model = buildReportModel({ ...(SCAN as object), id: "11111111-1111-1111-1111-111111111111" } as never, [], META, [], [], buildRequirementsView(mixed), EVIDENCE, null, null, shot(), undefined, A.mixed);
     await downloadReport(model);
     expect(photo()).toHaveLength(1);
   });
@@ -1022,11 +931,11 @@ describe("the hero: score top left, domain above the homepage picture top right"
   it("the ring holds the percentage, centred, with no domain or address inside or under it", async () => {
     await pdfWith(shot());
     const ring = bigRing();
-    const pct = recorded.calls.find((c) => c.page === 0 && c.t === "56.5")!;
+    const pct = recorded.calls.find((c) => c.page === 0 && c.t === "75")!;
     expect(pct.x).toBe(ring.x);
     expect(Math.abs(pct.y - ring.y)).toBeLessThan(ring.r / 3);                       // centred both ways
     const inside = recorded.calls.filter((c) => c.page === 0 && Math.hypot(c.x - ring.x, c.y - ring.y) < ring.r);
-    expect(inside.map((c) => c.t)).toEqual(["56.5", "/100"]);                       // only the score and its "/100" are inside the circle
+    expect(inside.map((c) => c.t)).toEqual(["75", "/100"]);                       // only the score and its "/100" are inside the circle
     expect(recorded.calls.filter((c) => c.page === 0 && c.t.startsWith("https://"))).toHaveLength(0);
   });
 
@@ -1079,21 +988,21 @@ describe("the hero: score top left, domain above the homepage picture top right"
 
 describe("the hero's words and facts, worked out once for the dashboard and the PDF", () => {
   it("reads the score into a band and a headline, with no coverage in either", () => {
-    const h = buildHeroView(buildScoreView(mixed));
+    const h = buildHeroView(A.mixed);
     expect(h.scored).toBe(true);
-    expect(h.percentLabel).toBe("56.5/100");
-    expect(h.scoreLabel).toBe("Compliance Score");
-    expect(h.headline).toContain("we could test scored 56.5/100");
+    expect(h.percentLabel).toBe("75/100");
+    expect(h.scoreLabel).toBe("Privacy Readiness Score");
+    expect(h.headline).toContain("6 of 10 assessed checks passed");
     expect(JSON.stringify(h)).not.toMatch(/coverage/i);
     expect(["good", "warn", "mute"]).toContain(h.tone);
   });
 
   it("says plainly when there is no score, and never shows a number for one", () => {
-    expect(buildHeroView(null)).toMatchObject({ scored: false, percentLabel: "No score", scoreLabel: "Compliance score unavailable", band: "Score not available", tone: "mute" });
-    const withheld = buildHeroView(buildScoreView(insufficient));
+    expect(buildHeroView(null)).toMatchObject({ scored: false, percentLabel: "No score", scoreLabel: "Privacy Readiness Score unavailable", band: "Score not available", tone: "mute" });
+    const withheld = buildHeroView(A.noScore);
     expect(withheld.scored).toBe(false);
     expect(withheld.percent).toBeNull();
-    expect(withheld.headline.startsWith("Compliance score unavailable.")).toBe(true);
+    expect(withheld.headline.startsWith("A Privacy Readiness Score is not shown")).toBe(true);
     expect(JSON.stringify(withheld)).not.toMatch(/coverage/i);
   });
 
@@ -1127,9 +1036,9 @@ import { buildInsightSections } from "./insights";
 import type { WebsiteScanMetadata } from "../api/types";
 
 describe("prioritised fixes, the dedicated sections and the cookie inventory in the PDF", () => {
-  const scoreWithImpact = (): DpdpScoreResponse => {
-    const sc = JSON.parse(JSON.stringify(F.review)) as DpdpScoreResponse;
-    sc.remediation_plan = sc.remediation_plan.map((p, i) => ({ ...p, current_percent: 45.5, percent_if_fixed: 90.9 - i * 30, gain_percent: 45.4 - i * 30, impact: `Impact text ${i + 1}: visitors are affected.` }));
+  const scoreWithImpact = (): DpdpRequirementsResponse => {
+    const sc = JSON.parse(JSON.stringify(F.review)) as DpdpRequirementsResponse;
+    sc.remediation_plan = sc.remediation_plan.map((p, i) => ({ ...p, impact: `Impact text ${i + 1}: visitors are affected.` }));
     return sc;
   };
   const row = (id: string, title: string, group: string, basis: string, status: string, extra: Record<string, unknown> = {}) => ({
@@ -1167,12 +1076,12 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
     cookie("zz_unknown", { category: null, provider: null, vendor: null, purpose: "The purpose could not be identified from the cookie's name.", purpose_source: "unknown", consent_states: ["post_accept"] }),
   ];
   const EVID = { ...(EVIDENCE as object), cookies: COOKIES, forms: [], consent_signals: [] } as unknown as ScanEvidenceResponse;
-  const build = async (opts: { score?: DpdpScoreResponse; policy?: PolicyAnalysis | null; meta?: WebsiteScanMetadata | null; evidence?: ScanEvidenceResponse | null } = {}) => {
+  const build = async (opts: { score?: DpdpRequirementsResponse; policy?: PolicyAnalysis | null; meta?: WebsiteScanMetadata | null; evidence?: ScanEvidenceResponse | null } = {}) => {
     const sc = opts.score ?? scoreWithImpact();
     const meta = (opts.meta === undefined ? META_SIGNALS : opts.meta) as never;
     const evidence = opts.evidence === undefined ? EVID : opts.evidence;
     const policy = opts.policy === undefined ? POLICY : opts.policy;
-    await downloadReport(buildReportModel(SCAN, [], meta, [], [], buildScoreView(sc), evidence, null, policy));
+    await downloadReport(buildReportModel(SCAN, [], meta, [], [], buildRequirementsView(sc), evidence, null, policy, null, undefined, AFOR(sc)));
     const all = (from = 0, to?: number) => recorded.pages.slice(from, to).map((pg) => pg.texts.join("")).join("");
     const appendixAt = recorded.pages.findIndex((pg) => pg.texts.join("").includes("Everything the scan recorded for this site"));
     return { summary: all(0, appendixAt < 0 ? undefined : appendixAt), appendix: appendixAt < 0 ? "" : all(appendixAt), appendixAt };
@@ -1180,7 +1089,7 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
 
   it("adds the fixes and the five sections after the table of every check and before the pages scanned, in a fixed order", async () => {
     const { appendixAt } = await build();
-    const names = ["EVERY CHECK BEHIND THE SCORE", "PRIORITISED FIXES", "GRIEVANCE OFFICER", "DATA PROTECTION OFFICER", "INDIAN-LANGUAGE SUPPORT", "CHILDREN'S DATA AND AGE GATE", "OBSERVABLE SECURITY SIGNALS", "WEBSITE PAGES SCANNED"];
+    const names = ["THE TEN CHECKS BEHIND THE SCORE", "PRIORITISED FIXES", "GRIEVANCE OFFICER", "DATA PROTECTION OFFICER", "INDIAN-LANGUAGE SUPPORT", "CHILDREN'S DATA AND AGE GATE", "OBSERVABLE SECURITY SIGNALS", "WEBSITE PAGES SCANNED"];
     const at = names.map((n) => recorded.calls.findIndex((c) => c.page < appendixAt && c.t.toUpperCase().replace(/\s+/g, " ") === n));   // the heading as drawn, not the same words inside a fix
     expect(names.filter((_, i) => at[i] < 0), "missing headings").toEqual([]);
     expect(at).toEqual([...at].sort((a, b) => a - b));
@@ -1190,15 +1099,15 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
     for (let i = 1; i < sectionNumbers.length; i++) expect(sectionNumbers[i] - sectionNumbers[i - 1], `numbers ${sectionNumbers.join(",")}`).toBe(1);   // consecutive, no gap or repeat
   });
 
-  it("lists the score's fixes in the plan's order, each with its effect on the score, why it matters and how to verify it", async () => {
+  it("lists the requirement fixes in the plan's order, each with why it matters and how to verify it, and no effect on any score", async () => {
     const { summary } = await build();
     const t = flat(summary);
-    expect(t).toContain(flat("Impact on the score: Fixing this alone would raise the readiness score from 45.5% to 90.9% (+45.4 percentage points)."));
+    expect(t).not.toContain(flat("Impact on the score"));
     expect(t).toContain(flat("Why it matters: Impact text 1: visitors are affected."));
     expect(t).toContain(flat("How to verify"));
-    const plan = buildScoreView(scoreWithImpact()).remediationPlan;
-    const sectionStart = t.indexOf(flat("Impact on the score:"));
-    const positions = plan.map((p) => t.indexOf(flat(p.title), sectionStart - 2000 < 0 ? 0 : sectionStart - 2000));
+    const plan = buildRequirementsView(scoreWithImpact()).remediationPlan;
+    const sectionStart = t.indexOf(flat("Fixes to the requirements"));
+    const positions = plan.map((p) => t.indexOf(flat(p.title), sectionStart < 0 ? 0 : sectionStart));
     expect(positions.every((i) => i >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
@@ -1229,7 +1138,7 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
     const { summary } = await build();
     // A note can cross a page; the running header at the top of a page and the footer (the disclaimer and the page number) are not part of the note.
     const t = flat(summary).split(flat("x.testScanned 21 Oct 2026, 06:41 UTC")).join("").split(flat(REPORT_DISCLAIMER)).join("").replace(/Page\d+of\d+/g, "");
-    const sections = buildInsightSections({ policy: POLICY, meta: META_SIGNALS, evidence: EVID, sector: buildScoreView(scoreWithImpact()).sector });
+    const sections = buildInsightSections({ policy: POLICY, meta: META_SIGNALS, evidence: EVID, sector: buildRequirementsView(scoreWithImpact()).sector });
     expect(sections).toHaveLength(5);
     for (const s of sections) {
       expect(t, `${s.title} status`).toContain(flat(s.status));
@@ -1344,7 +1253,7 @@ describe("the five-page readiness review in the PDF", () => {
     ],
   } as unknown as PolicyAnalysis;
   const build = async (evidence: ScanEvidenceResponse | null = EV, policy: PolicyAnalysis | null = POL) => {
-    const model = buildReportModel(SCAN, [], META, [], [], buildScoreView(mixed), evidence, null, policy);
+    const model = buildReportModel(SCAN, [], META, [], [], buildRequirementsView(mixed), evidence, null, policy, null, undefined, A.mixed);
     await downloadReport(model);
     const appendixAt = recorded.pages.findIndex((p) => p.texts.join("").includes("Everything the scan recorded for this site"));
     const summary = recorded.pages.slice(0, appendixAt < 0 ? undefined : appendixAt).map((p) => p.texts.join("")).join("");
@@ -1390,12 +1299,12 @@ describe("the five-page readiness review in the PDF", () => {
     const t = flat(summary);
     const rv = model.readiness;
     for (const k of ["Passes this technical check", "Gap", "Not Found", "Unable to Verify", "Requires document review"] as const) expect(t).toContain(flat(`${rv.counts[k]} ${k}`));
-    expect(t).toContain(flat(`Five-page review score: ${rv.scoreLine}`));
+    expect(t).toContain(flat(`What the five-page review could assess: ${rv.summaryLine}`));
     expect(rv.topGaps.length).toBeGreaterThan(0);
     for (const g of rv.topGaps) { expect(t).toContain(flat(`${g.rank}. ${g.row.check}`)); expect(t).toContain(flat(`${g.row.page}: ${g.row.status}. Fix: ${g.row.fix}`)); }
     expect(t).toContain(flat(`Highest-risk page: ${rv.riskiest!.n}. ${rv.riskiest!.page}. ${rv.riskiest!.why}`));
     expect(t).toContain(flat(READINESS_CLOSING));
-    expect(model.readiness).toEqual(buildReadinessReview({ siteUrl: "https://x.test/", evidence: EV, meta: META, policy: POL, sector: buildScoreView(mixed).sector }));
+    expect(model.readiness).toEqual(buildReadinessReview({ siteUrl: "https://x.test/", evidence: EV, meta: META, policy: POL, sector: buildRequirementsView(mixed).sector }));
   });
 
   it("says why when there is no evidence, and keeps every page numbered", async () => {
@@ -1407,6 +1316,6 @@ describe("the five-page readiness review in the PDF", () => {
 
   it("does not move the score the report shows", async () => {
     await build();
-    expect(recorded.calls.some((c) => c.page === 0 && c.t === "56.5")).toBe(true);
+    expect(recorded.calls.some((c) => c.page === 0 && c.t === "75")).toBe(true);
   });
 });

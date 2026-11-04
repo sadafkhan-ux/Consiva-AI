@@ -1,7 +1,6 @@
 import type { ReportModel } from "../buildReport";
 import { buildPageReport, FREE_PAGES, type PageReportView } from "../pageReports";
-import { buildTenChecks } from "../tenChecks";
-import { AreasBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, TechCards, UpgradeBand } from "./Blocks";
+import { ChecksResultBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, TechCards, UpgradeBand } from "./Blocks";
 import { Icon, PageFrame, SecHead, SheetPageStyle, SHORT_DISCLAIMER } from "./PageParts";
 import "./pages.css";
 
@@ -40,7 +39,7 @@ function FirstPage({ model, view, frame, tag, numbered = true }: { model: Report
         </div>
 
         <div className="pg-row2">
-          <ScoreCard view={view} id="free" ten={buildTenChecks(model)} />
+          <ScoreCard view={view} id="free" />
           <CtaCard view={view} />
         </div>
 
@@ -50,8 +49,8 @@ function FirstPage({ model, view, frame, tag, numbered = true }: { model: Report
         <SecHead n={2} title="Framework Readiness" note="(Website observable indicators)" />
         <FrameworkBlock view={view} />
 
-        <SecHead n={3} title="Privacy Areas" note="(Based on applicable checks)" />
-        <AreasBlock view={view} />
+        <SecHead n={3} title="Check Results" note="(The four checks with the most room to improve)" />
+        <ChecksResultBlock view={view} />
 
         <div className="pg-limits" data-testid="pg-limits">
           <b>Scope and limits</b>
@@ -70,7 +69,7 @@ export function ReportCover({ model }: { model: ReportModel }) {
 
 /**
  * The Free Scan report: two fixed A4 pages, laid out as the scope document's Free Scan benchmark (section 2.1). Page 1: the first view of the scanned
- * site, the score with its coverage beside it, the scan summary, framework readiness and the privacy areas. Page 2: consent behaviour, technologies,
+ * site, the score with the count of checks assessed beside it, the scan summary, framework readiness and the check results. Page 2: consent behaviour, technologies,
  * privacy elements, top findings, the limits of the scan and the footer call to action. Every figure is read from the report model.
  */
 export function FreeReport({ model }: { model: ReportModel }) {

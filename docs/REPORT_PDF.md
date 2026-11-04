@@ -83,7 +83,7 @@ Web report: `/?report=<id>&variant=free|full` (none = the long report). The tool
 
 All three read one `ReportModel`. The fixed pages take every figure from `report/pageReports.ts`, which reads the same visual, score and finding builders the dashboard uses, so no page counts anything itself. The call to action comes from `report/reportCta.ts` (scope 8.3); the Full report is the subscriber report and gets the operational action, never the acquisition one. Report IDs are `FR-`/`FS-` + the scan date + the first four characters of the scan id.
 
-Decisions where the sources disagree: the corrigendum is dated 10 Dec 2025 (G.S.R. 892(E), as in `scoring/dpdp_score.py`), not 11 Dec as the scope document says. The score is named "Privacy Readiness Score" and shows coverage beside it on the new pages, as the scope requires; the long report's hero still shows the compliance score without coverage.
+Decisions where the sources disagree: the corrigendum is dated 10 Dec 2025 (G.S.R. 892(E), as in `scoring/requirements.py`), not 11 Dec as the scope document says. The score is named "Privacy Readiness Score" and shows coverage beside it on the new pages, as the scope requires; the long report's hero still shows the compliance score without coverage.
 
 ## Pre-generated reports and speed (2026-10-26)
 

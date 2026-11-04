@@ -1,6 +1,6 @@
 import type { ScanScreenshot } from "../api/types";
 import { buildHeroView, buildPreviewView } from "../report/hero";
-import type { ScoreView } from "../report/dpdpScore";
+import type { TenAssessment } from "../report/tenChecks";
 import { ringNumber } from "../report/scoreFormat";
 
 /** The ring: the score as an arc round a circle, the number inside it and "/100" beneath, as in the PDF. */
@@ -27,46 +27,36 @@ export function ScoreRing({ percent, label }: { percent: number | null; label: s
 }
 
 /**
- * The top of the results: the compliance score at the left, what it means beside it, and at the right the scanned site's domain above a picture
+ * The top of the results: the Privacy Readiness Score at the left, what it means beside it, and at the right the scanned site's domain above a picture
  * of its homepage as the scanner saw it, so a reader can see at a glance that the right site was scanned. The words come from report/hero.ts,
  * the same module the PDF reads. Without a picture the same space says plainly why, in client-safe words.
  */
-/** The 10-check Privacy Readiness Score (report/tenChecks.ts): the one the summary PDF prints, so the dashboard and the PDF show the same number for the same scan. */
-export interface TenScoreView {
-  score: number | null; totalText: string; scoreText: string; passed: number; applicable: number;
-  /** Checks left out because they could not be assessed. */
-  notAssessed?: number;
-  /** True while the scan or its analysis is still running: the checks that read the policy are not in yet, so any number would be provisional. No score is shown until it is final. */
-  pending?: boolean;
-}
-
-export function ScanHero({ score, siteUrl, screenshot, scanId = null, tenScore = null }: { score: ScoreView | null; siteUrl: string; screenshot: ScanScreenshot | null | undefined; scanId?: string | null; tenScore?: TenScoreView | null }) {
+/**
+ * `assessment` is the server's ten-check assessment (GET /assessment): its score is the Privacy Readiness Score, the same number the web page, the email and every PDF print. `pending` is true while the scan or its policy reading
+ * is still running: the policy-backed requirements are not in yet, so any number would be provisional and could differ from the finished report, and none is shown.
+ */
+export function ScanHero({ assessment, siteUrl, screenshot, scanId = null, pending = false }: { assessment: TenAssessment | null; siteUrl: string; screenshot: ScanScreenshot | null | undefined; scanId?: string | null; pending?: boolean }) {
   if (!siteUrl) return null;
-  const hero = buildHeroView(score);
+  const hero = buildHeroView(assessment);
   const preview = buildPreviewView(screenshot, siteUrl, scanId);
   return (
     <div className="scan-hero-wrap">
     <section className="section scan-hero" data-testid="scan-hero">
       <div className="hero-score" data-testid="hero-score">
-        <ScoreRing percent={tenScore && !tenScore.pending ? tenScore.score : tenScore ? null : hero.percent} label={tenScore ? (tenScore.pending ? "…" : tenScore.score === null ? "" : tenScore.scoreText) : hero.percentLabel} />
+        <ScoreRing percent={pending ? null : hero.percent} label={pending ? "…" : hero.percentLabel} />
         <div className="hero-score-label" data-testid="hero-score-label">
-          {tenScore ? (tenScore.pending ? "Privacy Readiness Score: assessing…" : `Privacy Readiness Score: ${tenScore.scoreText} (${tenScore.totalText} marks)`) : hero.scoreLabel}
+          {pending ? "Privacy Readiness Score: assessing…" : hero.percent === null ? hero.scoreLabel : `${hero.scoreLabel}: ${hero.percentLabel}`}
         </div>
       </div>
       <div className="hero-text">
-        <span className={`badge ${tenScore ? (tenScore.pending || tenScore.passed === 0 ? "neutral" : tenScore.passed === tenScore.applicable ? "ok" : "warn") : hero.tone === "good" ? "ok" : hero.tone === "warn" ? "warn" : "neutral"}`} data-testid="hero-band">
-          {tenScore ? (tenScore.pending ? "Assessing" : tenScore.score === null ? "No meaningful score" : `${tenScore.passed} of ${tenScore.applicable} assessed checks passed`) : hero.band}
+        <span className={`badge ${pending ? "neutral" : hero.tone === "good" ? "ok" : hero.tone === "warn" ? "warn" : "neutral"}`} data-testid="hero-band">
+          {pending ? "Assessing" : hero.band}
         </span>
         <p className="hero-headline" data-testid="hero-headline">
-          {tenScore
-            ? tenScore.pending
-              ? "The score is shown when the scan and the policy analysis have finished, so it is the same number the PDF report prints."
-              : "The 10-check assessment, the same score the summary PDF prints. It is an internal readiness measure, not a certified DPDP compliance score."
-            : hero.headline}
+          {pending ? "The score is shown when the scan and the policy analysis have finished, so it is the same number the PDF report, the web page and the email show." : hero.headline}
         </p>
-        {tenScore && !tenScore.pending && !!tenScore.notAssessed && (
-          <p className="small muted" data-testid="hero-not-assessed">{tenScore.notAssessed} of 10 checks could not be assessed and are left out of the score.</p>
-        )}
+        {!pending && assessment && assessment.score !== null && <p className="small muted" data-testid="hero-basis">{assessment.summary}</p>}
+        {!pending && assessment && assessment.score !== null && !assessment.final && <p className="small muted" data-testid="hero-provisional">The policy reading has not finished or was not run, so these marks could still change.</p>}
       </div>
       <figure className="hero-preview" data-testid="hero-preview">
         <figcaption className="hero-domain" data-testid="hero-domain">{preview.domain}</figcaption>

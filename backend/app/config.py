@@ -190,14 +190,6 @@ class Settings(BaseSettings):
 
         return min(value, MAX_WEB_PAGES)
 
-    @field_validator("dpdp_score_weights")
-    @classmethod
-    def _score_weights_are_valid(cls, value: dict[str, int]) -> dict[str, int]:
-        from app.scoring.dpdp_score import resolve_weights
-
-        resolve_weights(value)           # raises a ValueError (a startup failure) on an unknown id or an out-of-range weight
-        return value
-
     @field_validator("consent_app_max_seconds")
     @classmethod
     def _deadline_is_off_or_sensible(cls, value: int) -> int:
@@ -281,10 +273,6 @@ class Settings(BaseSettings):
     # actual vantage point -- that limitation needs a real India-region proxy/egress,
     # which is a separate infrastructure decision, not something these two settings
     # can substitute for.
-    # DPDP Compliance Score: optional overrides of the documented requirement weights, as JSON, e.g.
-    # DPDP_SCORE_WEIGHTS={"DPDP-C1": 6}. Each weight is a whole number 1..10 for a known requirement id; anything else stops
-    # the app from starting. Empty means the documented defaults. A custom set is declared in every result and report.
-    dpdp_score_weights: dict[str, int] = Field(default_factory=dict)
     scanner_locale: str = "en-IN"
     scanner_accept_language: str = "en-IN,en;q=0.9"
     # When True, a scan is refused unless the target domain has passed DNS-TXT

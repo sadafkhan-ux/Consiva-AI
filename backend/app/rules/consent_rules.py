@@ -254,7 +254,7 @@ def _observed_on(items: list[dict]) -> str:
 
 @dataclass(frozen=True)
 class ConsentContext:
-    """What the consent rules (and the DPDP score, app/scoring/dpdp_score.py) both need to know about one scan's evidence.
+    """What the consent rules (and the requirements reading, app/scoring/requirements.py) both need to know about one scan's evidence.
     Derived in ONE place so a finding and a score requirement can never disagree about, say, whether the banner was shown."""
     cookies: list[dict]
     trackers: list[dict]

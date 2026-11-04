@@ -1,14 +1,14 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DpdpScoreResponse, ScanEvidenceResponse, WebsiteScanMetadata } from "../api/types";
-import fixtures from "../test/dpdpScoreFixtures.json";
+import type { DpdpRequirementsResponse, ScanEvidenceResponse, WebsiteScanMetadata } from "../api/types";
+import fixtures from "../test/requirementsFixtures.json";
 import { buildReportModel } from "./buildReport";
-import { buildScoreView } from "./dpdpScore";
+import { buildRequirementsView } from "./requirements";
 import { FreeReport } from "./print/FreeReport";
 import { FullReport } from "./print/FullReport";
 import { ReportDocument } from "./print/ReportDocument";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
 afterEach(cleanup);
 
 const META = { consent_mechanism: "cmp", pages_scanned: 1, pages_discovered: 1, page_limit: 5 } as unknown as WebsiteScanMetadata;
@@ -16,7 +16,7 @@ const EVIDENCE = { pages: [{ id: "p", url: "https://x.test/", title: "t", http_s
 const SCAN = { id: "11111111-1111-1111-1111-111111111111", url: "https://x.test/", evidence_counts: { pages: 1, cookies: 0, trackers: 0, third_party_services: 0, policies: 0, forms: 0 } } as never;
 /** A score response as an older or a newer server might send it, even carrying a `deductions` block: the report must never show it. */
 const model = (extra: Record<string, unknown> = {}) =>
-  buildReportModel(SCAN, [], META, [], [], buildScoreView({ ...F.mixed, ...extra } as unknown as DpdpScoreResponse), EVIDENCE, null, null, null);
+  buildReportModel(SCAN, [], META, [], [], buildRequirementsView({ ...F.mixed, ...extra } as unknown as DpdpRequirementsResponse), EVIDENCE, null, null, null);
 
 describe("the client-facing report keeps the scoring formula and the deductions out", () => {
   const LEAK = { deductions: { status: "scored", score_percent: 80, steps: [{ requirement_id: "DPDP-C1", title: "t" }], summary: "The score is 80.0%, so 20.0 points were deducted from 100", formula: "Score = points earned ÷ points assessed × 100" } };
@@ -30,7 +30,7 @@ describe("the client-facing report keeps the scoring formula and the deductions 
   });
 
   it("the score view does not carry the deductions", () => {
-    expect(Object.keys(buildScoreView({ ...F.mixed, ...LEAK } as unknown as DpdpScoreResponse))).not.toContain("deductions");
+    expect(Object.keys(buildRequirementsView({ ...F.mixed, ...LEAK } as unknown as DpdpRequirementsResponse))).not.toContain("deductions");
   });
 
   it("the Free and Full sheets show no deductions either", () => {

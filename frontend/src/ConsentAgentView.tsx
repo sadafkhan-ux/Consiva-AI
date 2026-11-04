@@ -7,9 +7,8 @@ import { friendlyError } from "./errors/friendlyError";
 import { evidenceStatus, failedStageName, hasPartialResults, scanEvidenceUnavailable, useConsentScan } from "./hooks/useConsentScan";
 import { ScanStatusSection } from "./components/ScanStatusSection";
 import { ConsentSummarySection } from "./components/ConsentSummarySection";
-import { buildScoreView, isDpdpScore } from "./report/dpdpScore";
-import { DpdpScoreSection } from "./components/DpdpScoreSection";
-import { ScoreComparisonPanel } from "./components/ScoreComparisonPanel";
+import { isRequirements } from "./report/requirements";
+import { RequirementsSection } from "./components/RequirementsSection";
 import { ThreeStateSection } from "./components/ThreeStateSection";
 import { TrackersTable } from "./components/TrackersTable";
 import { CookiesTable } from "./components/CookiesTable";
@@ -24,7 +23,6 @@ import { DpdpReferencesSection, RecommendationsSection } from "./components/Dpdp
 import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnostics";
 import { ANALYSIS_INCOMPLETE_NOTE, untestedConsentStates } from "./report/buildReport";
 import { reportModelFromState } from "./report/modelFromState";
-import { buildTenChecks } from "./report/tenChecks";
 import { TenChecksPanel } from "./components/TenChecksPanel";
 import { CrawlSettings } from "./components/CrawlSettings";
 import { UrlInventoryPanel } from "./components/UrlInventoryPanel";
@@ -39,16 +37,6 @@ import { ApiError } from "./api/types";
 const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
 
 /** The 10-check score for the scan on screen, from the same report model the PDF is drawn from; null when the scan has no evidence to score or the model cannot be built. */
-function tenAssessmentFor(state: Parameters<typeof reportModelFromState>[0]) {
-  if (!state.scan || !state.evidence) return null;
-  try {
-    return buildTenChecks(reportModelFromState(state));
-  } catch {
-    return null;
-  }
-}
-const tenScoreOf = (t: ReturnType<typeof tenAssessmentFor>, pending: boolean) => (t ? { score: t.score, totalText: t.totalText, scoreText: t.scoreText, passed: t.counts.passed, applicable: t.applicableMax, notAssessed: t.counts.notAssessed, pending } : null);
-
 export function ConsentAgentView() {
   const { state, run, open, afterReviewDecision } = useConsentScan();
   const [url, setUrl] = useState("https://example.com");
@@ -239,21 +227,14 @@ export function ConsentAgentView() {
               incomplete: absent evidence here is not a clean result, and nothing below is the outcome of a completed scan.
             </div>
           )}
-          <ScanHero score={isDpdpScore(state.dpdpScore) ? buildScoreView(state.dpdpScore) : null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} tenScore={tenScoreOf(tenAssessmentFor(state), busy)} />
-          <TenChecksPanel ten={tenAssessmentFor(state)} />
+          <ScanHero assessment={state.assessment ?? null} siteUrl={state.scan?.url ?? ""} screenshot={state.screenshot} scanId={state.scanId} pending={busy} />
+          <TenChecksPanel ten={state.assessment ?? null} />
           <UrlInventoryPanel scanId={state.scanId} />
           <ConsentSummarySection meta={state.websiteScanMeta} />
-          {isDpdpScore(state.dpdpScore) && (
-            <p className="muted small" data-testid="score-systems-note" style={{ margin: "4px 0 10px" }}>
-              The score above is the 10-check Privacy Readiness Score, the same one the summary PDF prints. The section below is a separate weighted reading of the DPDP requirements
-              (methodology {state.dpdpScore.methodology_version}); its figures are not the 10-check score.
-            </p>
-          )}
-          <DpdpScoreSection score={state.dpdpScore} analysisNote={analysisNote} />
-          {isDpdpScore(state.dpdpScore) && <ScoreComparisonPanel scanId={state.scanId} />}
+          <RequirementsSection reading={state.requirements} analysisNote={analysisNote} />
           <PolicyAnalysisSection analysis={state.policyAnalysis} />
-          <InsightSections sections={buildInsightSections({ policy: state.policyAnalysis, meta: state.websiteScanMeta, evidence: state.evidence, sector: isDpdpScore(state.dpdpScore) ? state.dpdpScore.sector : null })} />
-          <ReadinessReview review={buildReadinessReview({ siteUrl: state.scan?.url ?? "", evidence: state.evidence, meta: state.websiteScanMeta, policy: state.policyAnalysis, sector: isDpdpScore(state.dpdpScore) ? state.dpdpScore.sector : null })} />
+          <InsightSections sections={buildInsightSections({ policy: state.policyAnalysis, meta: state.websiteScanMeta, evidence: state.evidence, sector: isRequirements(state.requirements) ? state.requirements.sector : null })} />
+          <ReadinessReview review={buildReadinessReview({ siteUrl: state.scan?.url ?? "", evidence: state.evidence, meta: state.websiteScanMeta, policy: state.policyAnalysis, sector: isRequirements(state.requirements) ? state.requirements.sector : null })} />
           <ThreeStateSection meta={state.websiteScanMeta} trackers={state.evidence?.trackers ?? []} cookies={state.evidence?.cookies} />
 
           <section className="section">

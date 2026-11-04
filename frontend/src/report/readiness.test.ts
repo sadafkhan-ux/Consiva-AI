@@ -249,23 +249,22 @@ describe("the privacy notice and the grievance page rest on the policy's own wor
 });
 
 describe("the summary", () => {
-  it("scores the checks the scan could assess, counting Unable to Verify and document review in neither side", () => {
+  it("counts the checks the scan could assess in words, with Unable to Verify and document review in neither side, and gives no score", () => {
     const r = run();
     const scored = r.rows.filter((x) => x.scored && ["Passes this technical check", "Gap", "Not Found"].includes(x.status));
     const ok = scored.filter((x) => x.status === "Passes this technical check").length;
     expect(r.assessed).toBe(scored.length);
-    expect(r.scorePercent).toBe(Math.round((ok / scored.length) * 100));
+    expect(r.summaryLine).toContain(`${ok} of the ${scored.length} checks the scan could assess are met`);
+    expect(JSON.stringify(r)).not.toMatch(/scorePercent|out of 100/);
     expect(r.counts["Passes this technical check"] + r.counts.Gap + r.counts["Not Found"] + r.counts["Unable to Verify"] + r.counts["Requires document review"]).toBe(r.rows.length);
-    expect(r.scoreLine).toContain(`${r.scorePercent} out of 100`);
-    expect(r.scoreLine).toContain("not counted");
+    expect(r.summaryLine).toContain("not counted");
   });
 
-  it("gives no score when nothing could be assessed", () => {
+  it("says so when nothing could be assessed", () => {
     const r = run({ ev: evidence({ forms: [], consent_signals: [] }), meta: null, pol: null });
     expect(r.rows.filter((x) => x.scored && ["Passes this technical check", "Gap", "Not Found"].includes(x.status)).length).toBe(r.assessed);
     const bare = buildReadinessReview({ siteUrl: "x", evidence: evidence({ policies: [], pages: [page("https://x.test/", "seed")], consent_signals: [] }), meta: null, policy: null, sector: null });
-    expect(typeof bare.scorePercent === "number" || bare.scorePercent === null).toBe(true);
-    if (bare.scorePercent === null) expect(bare.scoreLine).toContain("Not enough could be verified");
+    if (bare.assessed === 0) expect(bare.summaryLine).toContain("Not enough could be verified");
   });
 
   it("ranks at most five gaps by risk, highest first, each with its fix, and names the riskiest page", () => {

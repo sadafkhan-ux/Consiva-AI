@@ -2,6 +2,7 @@ import base64
 import uuid
 from dataclasses import asdict
 from datetime import date, datetime
+from types import SimpleNamespace
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -21,14 +22,14 @@ from app.db.repositories import (
 )
 from app.db.session import get_db
 from app.llm.schemas import DpdpReference
-from app.scoring import comparison as score_comparison
-from app.scoring import dpdp_score
+from app.scoring import requirements as requirements_reading
 from app.scoring.sector import SECTORS
 from app.services import (
     analysis_service,
+    assessment_service,
     consent_agent_api_service,
     report_cache_service,
-    report_pdf_service,
+    report_pdf_service,  # noqa: F401  (tests patch it through this module)
     scan_service,
     usage_service,
 )
@@ -212,6 +213,72 @@ class UrlInventoryResponse(BaseModel):
     offset: int
 
 
+class AssessmentCheck(BaseModel):
+    id: int
+    name: str
+    kind: Literal["dpdp", "practice", "technical", "transparency"]
+    result: Literal["Passed", "Partially Passed", "Failed", "Not Assessed", "Not Applicable"]
+    awarded: float | None = None
+    max: float | None = None
+    marks_text: str
+    evidence: str
+    source_url: str | None = None
+    explanation: str
+    legal: str | None = None
+    completed: bool
+    limitation: str | None = None
+    basis: str
+    quality: str
+    coverage: str | None = None
+
+
+class AssessmentCounts(BaseModel):
+    passed: int
+    partial: int
+    failed: int
+    not_assessed: int
+    not_applicable: int
+
+
+class AssessmentRecommendation(BaseModel):
+    id: int
+    text: str
+
+
+class AssessmentPages(BaseModel):
+    discovered: int | None = None
+    scanned: int
+    failed: int
+    skipped: int
+
+
+class AssessmentResponse(BaseModel):
+    """The ten-check assessment and the Privacy Readiness Score of one scan: THE score. The web page, the email, the dashboard and every PDF print this result and nothing else
+    (scoring/ten_checks.py). `score` is marks awarded over applicable marks, 0 to 100 (null when no check applies); `score_text` is how it is written everywhere ("94.4/100").
+    Show a score as final only when `final` is true: it is false while the scan is still running or the policy reading has not finished, because the checks that read the policy are then
+    left out and the number would change."""
+
+    scan_id: uuid.UUID
+    methodology_version: str
+    scan_status: str
+    policy_analysis: Literal["done", "running", "failed", "not_run"]
+    final: bool
+    score: float | None
+    score_text: str
+    total_text: str
+    awarded: float
+    applicable_max: float
+    counts: AssessmentCounts
+    incomplete: int
+    limited_basis: bool
+    summary: str
+    formula: str
+    checks: list[AssessmentCheck]
+    recommendations: list[AssessmentRecommendation]
+    pages: AssessmentPages
+    limitations: list[str]
+
+
 class EvidenceFormItem(BaseModel):
     id: str
     selector: str | None
@@ -304,23 +371,20 @@ class ScanEvidenceResponse(BaseModel):
     consent_signals: list[EvidenceConsentSignalItem]
 
 
-# --- DPDP Compliance Score (proposed methodology; app/scoring/dpdp_score.py, docs/DPDP_COMPLIANCE_SCORE.md) -------------
+# --- DPDP requirements reading (statuses and evidence only; app/scoring/requirements.py). The score is the ten-check assessment above. -------------
 class DpdpRequirementResult(BaseModel):
     id: str
     category: str
     title: str
     provisions: list[str]
-    weight: int
     effective: date
     in_force: bool
     status: str
-    points_earned: float
-    counts_in_score: bool
     observations: list[str]
     evidence_ids: list[str]
     rule_ids: list[str]
     exclusion_reason: str | None = None
-    default_weight: int
+    severity: str
     description: str
     criteria: str
     expected_evidence: str
@@ -336,39 +400,10 @@ class DpdpRequirementResult(BaseModel):
     check_type: str
     applicability: str
     confidence: str
-    scoring_rationale: str
     legal_note: str
-    penalty_points: float | None = None
-    score_contribution_percent: float | None = None
-    coverage_share_percent: float | None = None
     # How the check was (or could be) answered: website_scan, policy_text or organisation_records; and, while it is unverified, the records that would settle it.
     method: str = "website_scan"
     needed_evidence: list[str] = []
-
-
-class DpdpCategoryScore(BaseModel):
-    category: str
-    applicable_weight: int
-    assessed_weight: int
-    points_earned: float
-    score_percent: float | None
-    coverage_percent: float | None
-    status: str
-
-
-class DpdpScoreBlock(BaseModel):
-    basis: str
-    status: str
-    score_percent: float | None
-    points_earned: float
-    points_assessed: int
-    applicable_weight: int
-    assessed_weight: int
-    unable_to_verify_weight: int
-    coverage_percent: float | None
-    insufficient_reason: str | None
-    caution: str | None = None
-    categories: list[DpdpCategoryScore]
 
 
 class DpdpStateCounts(BaseModel):
@@ -398,8 +433,6 @@ class DpdpGapItem(BaseModel):
     timing: str
     applies_from: date
     provisions: list[str]
-    weight: int
-    points: float
     what_the_scan_observed: list[str]
     pages: list[str]
     evidence_ids: list[str]
@@ -413,7 +446,6 @@ class DpdpMissingEvidenceItem(BaseModel):
     requirement_id: str
     title: str
     provisions: list[str]
-    weight: int
     reason: str
     kind: str
 
@@ -486,27 +518,6 @@ class DpdpFindingGroups(BaseModel):
     counts: dict[str, int]
 
 
-class DpdpMethodWeight(BaseModel):
-    id: str
-    title: str
-    category: str
-    check_type: str
-    weight: int
-    default_weight: int
-    rationale: str
-    applicability: str
-    effective: date
-    applies_now: bool
-
-
-class DpdpMethodCategory(BaseModel):
-    name: str
-    rationale: str
-    weight: int
-    share_percent: float | None
-    requirement_ids: list[str]
-
-
 class DpdpMethodDedup(BaseModel):
     group: str
     requirement_ids: list[str]
@@ -541,55 +552,30 @@ class DpdpRemediationStep(BaseModel):
     action: str
     how_to_verify: str
     legal_references: list[str]
-    # What fixing this one gap would do to the readiness score, from the same weights the score uses (None when the score is withheld).
-    current_percent: float | None = None
-    percent_if_fixed: float | None = None
-    gain_percent: float | None = None
     # What the gap means for the organisation, in plain words ("" when there is no stated impact for this check).
     impact: str = ""
 
 
 class DpdpMethodology(BaseModel):
-    version: str
-    weights_source: str
-    weights_note: str
-    score_formula: str
-    coverage_formula: str
-    points_rules: list[str]
-    reliability_rule: str
+    """How the requirements were read, in words. Nothing numeric."""
     duplicate_rule: str
     timing_rule: str
     scope_rule: str
     legal_mapping_version: str
     legal_sources: list[DpdpLegalSource]
-    weights: list[DpdpMethodWeight]
-    categories: list[DpdpMethodCategory]
     dedup: list[DpdpMethodDedup]
-
-
-class DpdpLedgerMetric(BaseModel):
-    key: str
-    name: str
-    numerator: float
-    denominator: float
-    percent: float | None
-    formula: str
-    meaning: str
 
 
 class DpdpStatusRule(BaseModel):
     status: str
     label: str
     rule: str
-    in_numerator: str
-    in_denominator: str
-    on_coverage: str
     count: int
-    weight: int
     check_ids: list[str]
 
 
 class DpdpLedger(BaseModel):
+    """How many checks are in each state. Counts only: the one score is the ten-check assessment."""
     total_checks: int
     applicable_checks: int
     assessed_checks: int
@@ -598,18 +584,7 @@ class DpdpLedger(BaseModel):
     failed_checks: int
     unable_checks: int
     not_applicable_checks: int
-    total_weight: int
-    applicable_weight: int
-    assessed_weight: int
-    earned_weight: float
-    penalty_weight: float
-    unable_weight: int
-    not_applicable_weight: int
-    metrics: list[DpdpLedgerMetric]
-    category_metrics: list[DpdpLedgerMetric]
     status_rules: list[DpdpStatusRule]
-    penalty_note: str
-    security_score_note: str
     not_applicable: list[dict]
 
 
@@ -654,12 +629,12 @@ class SectorAssessmentModel(BaseModel):
     agrees_with_scan: bool | None = None
 
 
-class DpdpScoreResponse(BaseModel):
-    methodology_version: str
+class DpdpRequirementsResponse(BaseModel):
+    """The DPDP requirements reading of one scan: statuses, evidence, findings, review items and the remediation plan. It carries no score, weight, point,
+    percentage or coverage figure. The one score is the ten-check assessment (GET /assessment)."""
+    requirements_version: str
     as_of: date
     requirements: list[DpdpRequirementResult]
-    readiness: DpdpScoreBlock
-    in_force: DpdpScoreBlock
     disclaimer: str
     status_counts: dict[str, int]
     evidence_summary: DpdpEvidenceSummary
@@ -671,7 +646,6 @@ class DpdpScoreResponse(BaseModel):
     remediation_plan: list[DpdpRemediationStep]
     ledger: DpdpLedger
     sector: SectorAssessmentModel | None = None
-    thresholds: dict
     out_of_scope: list[dict]
 
 
@@ -1019,8 +993,39 @@ async def get_scan_url_inventory(
     )
 
 
-@router.get("/{scan_id}/dpdp-score", response_model=DpdpScoreResponse)
-async def get_scan_dpdp_score(
+@router.get("/{scan_id}/assessment", response_model=AssessmentResponse)
+async def get_scan_assessment(
+    scan_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The ten checks and the Privacy Readiness Score for one scan, worked out on request from its stored evidence and policy analysis (nothing new is stored). Same scan, same answer,
+    for every caller: this is the one score. Org-scoped like every scan read."""
+    scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
+    if scan is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    # Plain copies of what is needed, taken before the connection is given back (the rows expire when it is).
+    stages = [
+        SimpleNamespace(stage=st.stage, status=st.status, started_at=st.started_at, completed_at=st.completed_at, stage_metadata=dict(st.stage_metadata or {}))
+        for st in await stage_repository.list_stages(db, scan_id, uuid.UUID(user.org_id))
+    ]
+    shot = await scan_repository.get_screenshot(db, scan_id)
+    screenshot_url = shot.page_url if shot is not None else None
+    scan_status = scan.status
+    await db.rollback()   # give this request's connection back before the evidence is loaded on others (see scan_repository._evidence_slot)
+    evidence = ScanEvidenceResponse(**await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)).model_dump()
+    done = [st for st in stages if st.stage == "policy_analysis" and st.status == "completed" and (st.stage_metadata or {}).get("result")]
+    policy = PolicyAnalysisResponse(**max(done, key=lambda st: st.started_at or st.completed_at).stage_metadata["result"]).model_dump() if done else None
+    result = assessment_service.assess_parts(evidence, policy, assessment_service.website_scan_meta(stages), screenshot_url)
+    state = assessment_service.policy_stage_state(stages)
+    return AssessmentResponse(
+        scan_id=scan_id, methodology_version=assessment_service.TEN_CHECK_VERSION, scan_status=scan_status, policy_analysis=state,
+        final=scan_status == "completed" and state in ("done", "failed"), **result,
+    )
+
+
+@router.get("/{scan_id}/requirements", response_model=DpdpRequirementsResponse)
+async def get_scan_requirements(
     scan_id: uuid.UUID,
     as_of: date | None = None,
     processes_children_data: bool | None = None,
@@ -1031,11 +1036,11 @@ async def get_scan_dpdp_score(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """The proposed DPDP Compliance Score for one scan, computed on demand from its persisted evidence (nothing new is
-    stored). `as_of` defaults to today (UTC) and decides which obligations are already in force. The four boolean
+    """The DPDP requirements reading of one scan (statuses, evidence, findings, remediation), computed on demand from its persisted evidence (nothing new is
+    stored). It has no score: the one score is GET /assessment. `as_of` defaults to today (India) and decides which obligations are already in force. The four boolean
     parameters declare entity-specific applicability; left out, those requirements are excluded, never guessed.
     `business_sector` is the sector the organisation declares for itself (business context the scan cannot see); the scan's own reading
-    is returned beside it. Neither changes the score."""
+    is returned beside it."""
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
     if scan is None:
         raise NotFoundError(f"Scan {scan_id} not found")
@@ -1045,74 +1050,14 @@ async def get_scan_dpdp_score(
     when = scan.completed_at or scan.started_at or scan.created_at
     await db.rollback()
     evidence = await scan_repository.get_scan_evidence_for_score(scan_id)
-    result = dpdp_score.assess(
+    result = requirements_reading.assess(
         evidence, as_of,
-        dpdp_score.Applicability(processes_children_data, significant_data_fiduciary, consent_manager, erasure_class),
-        get_settings().dpdp_score_weights or None,
+        requirements_reading.Applicability(processes_children_data, significant_data_fiduciary, consent_manager, erasure_class),
         scan_url=scan_url,
         scanned_at=when.isoformat() if when else None,
         business_sector=business_sector,
     )
-    # The deductions (scoring/deductions.py) are for the operators of the agent: they go to the server log and the audit table
-    # (services/score_deduction_log_service.py), not to a client.
-    return DpdpScoreResponse(**{k: v for k, v in asdict(result).items() if k != "deductions"})
-
-
-class ScoreComparisonResponse(BaseModel):
-    """Why two scans of one website scored differently, requirement by requirement (scoring/comparison.py). Both are re-assessed now from their own stored
-    evidence with the same methodology; see `methodology_note` for what that does and does not explain."""
-    previous: dict
-    latest: dict
-    score_change: float | None = None
-    summary: str
-    causes: list[str]
-    changes: list[dict]
-    changed_inputs: list[dict]
-    denominators: dict
-    requirements_missing_from_one_scan: list[str]
-    attribution: dict
-    methodology_version: str
-    assessed_on: str
-    methodology_note: str
-
-
-@router.get("/{scan_id}/dpdp-score/compare", response_model=ScoreComparisonResponse)
-async def compare_scan_dpdp_score(
-    scan_id: uuid.UUID,
-    against: uuid.UUID | None = Query(None, description="The earlier scan to compare with. Default: the completed scan of the same website just before this one."),
-    as_of: date | None = None,
-    user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Why this scan's score differs from an earlier scan's: which requirements changed status and on what evidence, whether the weights or denominators moved,
-    what the scans recorded differently (pages, consent states exercised, the banner, a framed wrapper, what fired), and how much each change moved the score.
-    Both scans must belong to the caller's organisation and to the same website. 404 when the earlier scan is absent; 409 when there is none to compare with."""
-    org_id = uuid.UUID(user.org_id)
-    latest = await scan_repository.get_scan(db, scan_id, org_id)
-    if latest is None:
-        raise NotFoundError(f"Scan {scan_id} not found")
-    if against is not None:
-        previous = await scan_repository.get_scan(db, against, org_id)
-        if previous is None or previous.website_id != latest.website_id:
-            raise NotFoundError(f"Scan {against} not found for this website")
-    else:
-        previous = await scan_repository.previous_completed_scan(db, latest)
-        if previous is None:
-            raise ScanNotReadyError(f"There is no earlier completed scan of this website to compare scan {scan_id} with")
-
-    def info(scan) -> dict:
-        when = scan.completed_at or scan.started_at or scan.created_at
-        return {"scan_id": str(scan.id), "url": scan.url, "scanned_at": when.isoformat() if when else None, "status": scan.status}
-
-    previous_info, latest_info, previous_id, latest_id = info(previous), info(latest), previous.id, latest.id
-    await db.rollback()   # the connection goes back before the evidence of both scans is loaded on others (see scan_repository._evidence_slot)
-    evidence_prev = await scan_repository.get_scan_evidence_for_score(previous_id)
-    evidence_latest = await scan_repository.get_scan_evidence_for_score(latest_id)
-    result = score_comparison.compare_scans(
-        evidence_prev, evidence_latest, as_of=as_of or dpdp_score.today_in_india(), previous_info=previous_info, latest_info=latest_info,
-        weights=get_settings().dpdp_score_weights or None,
-    )
-    return ScoreComparisonResponse(**result)
+    return DpdpRequirementsResponse(**asdict(result))
 
 
 class ScreenshotResponse(BaseModel):

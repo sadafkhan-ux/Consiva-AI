@@ -97,5 +97,5 @@ frame is still flagged by rule R-012, because the evidence then describes the wr
 What the scan does keep, as evidence, are the third-party requests and cookies observed **on the scanned main-domain
 pages**. They are shown in the Trackers and Cookies sections as three different things: network requests, requests that match a
 known analytics or advertising service, and cookies. A request does not show that a tracker ran or what it sent, and none of
-them is a violation on its own; the "Logic Required / Human Review" box (see DPDP_COMPLIANCE_SCORE.md) lists what needs business
+them is a violation on its own; the "Logic Required / Human Review" box (see DPDP_REQUIREMENTS_READING.md) lists what needs business
 context or legal interpretation.

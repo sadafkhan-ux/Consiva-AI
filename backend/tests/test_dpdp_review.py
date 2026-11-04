@@ -7,10 +7,10 @@ person has to decide, and check that nothing is reported about other websites or
 from dataclasses import asdict
 from datetime import date
 
-from app.api.v1.routes.consent_scans import DpdpScoreResponse
-from app.scoring import dpdp_score as ds
-from app.scoring.dpdp_score import assess
-from tests.test_dpdp_score import TODAY, evidence, tr
+from app.api.v1.routes.consent_scans import DpdpRequirementsResponse
+from app.scoring import requirements as ds
+from app.scoring.requirements import assess
+from tests.test_requirements_reading import TODAY, evidence, tr
 
 
 def items(score):
@@ -161,7 +161,7 @@ class TestStatementAndScope:
         assert "subdomain" not in blob and "discovered" not in blob and "external website" not in blob
 
     def test_the_whole_result_serialises_through_the_api_model(self):
-        m = DpdpScoreResponse(**asdict(assess(evidence(trackers=[tr(1)]), TODAY)))
+        m = DpdpRequirementsResponse(**asdict(assess(evidence(trackers=[tr(1)]), TODAY)))
         assert m.human_review.items and m.breakdown.readiness_gaps and m.evidence_summary.network_requests == 1
 
     def test_nothing_is_ever_scored_met_without_evidence(self):

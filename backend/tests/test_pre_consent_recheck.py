@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.rules.consent_rules import evaluate_consent_rules
 from app.scanner import crawler
 from app.scanner.schemas import CookieRecord, PageRecord, TrackerRecord
-from app.scoring.dpdp_score import assess
+from app.scoring.requirements import assess
 from app.scoring.review import build_human_review
 from tests.test_metric_consistency import TODAY, cookie, evidence, tracker
 
@@ -209,7 +209,7 @@ def _c1(ev):
 
 def test_without_a_recheck_the_result_is_what_it_always_was():
     c1 = _c1(_scan(None))
-    assert c1.status == "not_met" and c1.points_earned == 0
+    assert c1.status == "not_met"
 
 
 def test_a_reproduced_hit_is_not_met_and_says_so():
@@ -219,7 +219,7 @@ def test_a_reproduced_hit_is_not_met_and_says_so():
 
 def test_a_hit_that_does_not_repeat_needs_review_and_keeps_its_evidence():
     c1 = _c1(_scan({"crawl_hits": 9, "reproduced": False, "complete": True, "pages": [_page(False), _page(False)]}))
-    assert c1.status == "partially_met" and c1.points_earned == 2.5
+    assert c1.status == "partially_met"
     assert "6 analytics/marketing request(s) and 3 analytics/marketing cookie(s)" in c1.observations[0]
     assert "did not fire in most clean loads" in c1.observations[0] and "0 of 2 clean load(s) fired" in c1.observations[0] and len(c1.evidence_ids) == 9
 
@@ -252,6 +252,6 @@ def test_a_review_item_explains_the_one_off_instead_of_calling_it_unclassified()
     assert "pre-consent-not-reproduced" in ids and "unclassified-before-consent" not in ids
 
 
-def test_the_scores_stay_the_same_for_the_same_evidence():
+def test_the_statuses_stay_the_same_for_the_same_evidence():
     ev = _scan({"crawl_hits": 9, "reproduced": False, "complete": True, "pages": [_page(False)]})
-    assert assess(ev, TODAY).readiness.score_percent == assess(ev, TODAY).readiness.score_percent
+    assert [r.status for r in assess(ev, TODAY).requirements] == [r.status for r in assess(ev, TODAY).requirements]

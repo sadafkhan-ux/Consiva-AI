@@ -1,6 +1,6 @@
 # DPDP assessment: current-state audit, plan and validation
 
-Companion to `DPDP_COMPLIANCE_SCORE.md` (the methodology). This records what the Consent Agent had, what was added, how the result was
+Historical record. The weighted score it describes was removed on 2026-11-04 (see `DPDP_REQUIREMENTS_READING.md`); `DPDP_COMPLIANCE_SCORE.md` no longer exists. This records what the Consent Agent had, what was added, how the result was
 validated, and what it cannot claim. Written 21 Oct 2026. Nothing here is committed or deployed.
 
 ## 1. Current-state audit (what existed, reused as it was)

@@ -49,8 +49,8 @@ def test_the_existing_rules_for_scripts_and_query_strings_are_unchanged():
 def test_an_unclassified_beacon_before_consent_is_reported_for_review_not_passed():
     from datetime import UTC, datetime
 
-    from app.scoring.dpdp_score import assess
-    from tests.test_dpdp_score import evidence
+    from app.scoring.requirements import assess
+    from tests.test_requirements_reading import evidence
     t = classify_tracker(tracker("https://t.example.net/pixel.gif"))
     ev = evidence()
     ev["trackers"] = [{"id": "t1", "script_src": t.script_src, "vendor": t.vendor, "category": t.category, "source": "rule", "consent_states": ["pre_consent"], "page_url": "https://x.test/"}]

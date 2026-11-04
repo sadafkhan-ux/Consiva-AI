@@ -2,11 +2,10 @@ import type {
   AgentRunResponse,
   AuditLogResponse,
   FindingResponse,
-  DpdpScoreResponse,
+  DpdpRequirementsResponse,
   ScanEvidenceResponse,
   PolicyAnalysis,
   ScanListItem,
-  ScoreComparison,
   ScanUsage,
   UsageHistoryItem,
   ScanScreenshot,
@@ -19,6 +18,7 @@ import type {
 } from "./types";
 import { getProfile, getToken, logout } from "./auth";
 import { ApiError } from "./types";
+import { fromApiAssessment, type TenAssessment } from "../report/tenChecks";
 
 // Read from Vite env config, not hardcoded -- see .env.example / .env.development.
 // Falls back to the standard local backend address only if no env var is set at all,
@@ -202,6 +202,10 @@ export const api = {
     const res = await request<{ scan_id: string; status: string }>("/api/v1/consent-agent/scans/application", { method: "POST", body: JSON.stringify(body) });
     return { id: res.scan_id, url, status: res.status };
   },
+  /** The ten checks and the Privacy Readiness Score: the one score, worked out on the server (GET .../assessment). */
+  async getAssessment(scanId: string): Promise<TenAssessment> {
+    return fromApiAssessment(await request(`/api/v1/consent/scans/${scanId}/assessment`));
+  },
   getUrlInventory(scanId: string, filters: UrlInventoryFilters = {}, limit = 100, offset = 0): Promise<UrlInventoryResponse> {
     const q = new URLSearchParams();
     if (filters.status) q.set("status", filters.status);
@@ -223,12 +227,8 @@ export const api = {
   getEvidence(scanId: string): Promise<ScanEvidenceResponse> {
     return request(`/api/v1/consent/scans/${scanId}/evidence`);
   },
-  compareDpdpScore(scanId: string, against?: string): Promise<ScoreComparison> {
-    const query = against ? `?against=${encodeURIComponent(against)}` : "";
-    return request(`/api/v1/consent/scans/${scanId}/dpdp-score/compare` + query);
-  },
-  getDpdpScore(scanId: string): Promise<DpdpScoreResponse> {
-    return request(`/api/v1/consent/scans/${scanId}/dpdp-score`);
+  getRequirements(scanId: string): Promise<DpdpRequirementsResponse> {
+    return request(`/api/v1/consent/scans/${scanId}/requirements`);
   },
   analyze(scanId: string): Promise<AgentRunResponse> {
     return request(`/api/v1/consent/scans/${scanId}/analyze`, { method: "POST" });

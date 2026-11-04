@@ -1,0 +1,67 @@
+      Tests  65 failed | 908 passed (973)
+ FAIL  src/components/analysisIncomplete.test.tsx | a scan that completed but whose analysis did not | states on the score card that the score does not depend on the analysis, without changing the score
+ FAIL  src/components/insightSections.test.tsx | the score card's remediation steps | say what fixing each does to the score and why it matters, when the server gave the figures
+ FAIL  src/components/readinessReview.test.tsx | the five-page readiness review on the dashboard | gives the score, the ranked gaps, the riskiest page and the closing sentence
+ FAIL  src/components/scanHero.test.tsx | the page | shows the plain panel for a scan whose preview is missing, and the rest of the page is unchanged
+ FAIL  src/components/sectorSection.test.tsx | the sector and applicability card | does not change the score shown
+ FAIL  src/hooks/openScan.test.tsx | reopening an earlier scan | does not start an analysis for a scan whose analysis never ran, and says so
+ FAIL  src/hooks/openScan.test.tsx | reopening an earlier scan | loads the scan's homepage preview with the rest, and keeps going when the preview cannot be loaded
+ FAIL  src/hooks/openScan.test.tsx | reopening an earlier scan | shows a failed scan as failed with its reason, and still loads what it collected
+ FAIL  src/hooks/openScan.test.tsx | reopening an earlier scan | shows a finished, reviewed-pending scan without asking for the analysis again
+ FAIL  src/hooks/openScan.test.tsx | reopening an earlier scan | still starts the analysis for a scan the user has just started
+ FAIL  src/hooks/openScan.test.tsx | the score is final only when the policy reading has finished (the dashboard showed 66.7 where the PDF showed 94.4) | a policy reading that failed settles the page too, and i
+ FAIL  src/hooks/openScan.test.tsx | the score is final only when the policy reading has finished (the dashboard showed 66.7 where the PDF showed 94.4) | a scan with no policy stage does not wait
+ FAIL  src/hooks/openScan.test.tsx | the score is final only when the policy reading has finished (the dashboard showed 66.7 where the PDF showed 94.4) | loads the weighted score again after the policy reading,
+ FAIL  src/hooks/openScan.test.tsx | the score is final only when the policy reading has finished (the dashboard showed 66.7 where the PDF showed 94.4) | stays in 'analyzing' while the policy reading is still r
+ FAIL  src/report/checkCoverage.test.tsx | What was tested and what was not | a check that was not tested is never shown as Met or as failed
+ FAIL  src/report/checkCoverage.test.tsx | a category the report normally leaves out appears once one of its checks was assessed | appears when a policy-tested check in it was assessed, and the other hidden cat
+ FAIL  src/report/checkCoverage.test.tsx | a category the report normally leaves out appears once one of its checks was assessed | the table of every check then lists the assessed rights check, and the tables a
+ FAIL  src/report/fixes.test.ts | the score's remediation steps say what fixing each does to the score | says nothing about the score when the figures are absent (the score is withheld, or an older server)
+ FAIL  src/report/fixes.test.ts | the score's remediation steps say what fixing each does to the score | states the score now, the score if that one check were fixed, and the gain
+ FAIL  src/report/print/pageReports.test.tsx | report figures fixed by the 2026-10-26 audit | puts a confirmed finding rated High ahead of a high score, since the score never rates a finding Critical
+ FAIL  src/report/print/pageReports.test.tsx | the Free Scan report | puts the screenshot, the score with its coverage and the call to action on page 1, and consent behaviour on page 2
+ FAIL  src/report/print/pageReports.test.tsx | the Full Scan report | carries every section of the benchmark: summary, framework, areas, findings, consent, technologies, domains, chart, elements, checks, fixes,
+ FAIL  src/report/print/pageReports.test.tsx | the page report view | states what the scan cannot say: pages, homepage-only consent tests and unassessed checks
+ FAIL  src/report/print/pageReports.test.tsx | which call to action is shown (scope 8.3) | shows monitoring only for a high score with high coverage and nothing left unassessed
+ FAIL  src/report/print/reportDocument.test.tsx | the printable report and the PDF drawn in the browser read the same values | carries every check, finding row and tile the shared view builds
+ FAIL  src/report/print/reportDocument.test.tsx | the printable report: every section of the PDF, in the PDF's order | numbers the sections 1, 2, 3 ... without a gap, and lists each in the contents
+ FAIL  src/report/print/reportPage.test.tsx | the report page the server prints | opens the scan once, draws the report, and tells the printer it is ready with the header words and the file name
+ FAIL  src/report/print/reportPage.test.tsx | the web report page | shows the report and a Download PDF button that fetches the server's PDF and saves it under the server's file name
+ FAIL  src/report/print/reportPage.test.tsx | the web report page | shows the server's plain error when the PDF cannot be made, and leaves the report on screen
+ FAIL  src/report/readiness.test.ts | the summary | gives no score when nothing could be assessed
+ FAIL  src/report/readiness.test.ts | the summary | scores the checks the scan could assess, counting Unable to Verify and document review in neither side
+ FAIL  src/report/scanTransparency.test.tsx | a framed wrapper limits only the checks that rest on nothing being seen | rows that say nothing was found become Unable to Verify, are not scored, and say why
+ FAIL  src/report/scanTransparency.test.tsx | one score everywhere | the cover, the Full report, the long report and the transparency section all read the same server score (clinic.example.org)
+ FAIL  src/report/scanTransparency.test.tsx | one score everywhere | the cover, the Full report, the long report and the transparency section all read the same server score (news.example.co.uk)
+ FAIL  src/report/scanTransparency.test.tsx | one score everywhere | the cover, the Full report, the long report and the transparency section all read the same server score (shop.example)
+ FAIL  src/report/scanTransparency.test.tsx | the three coverages are kept apart | counts the requirements assessed, not assessed, not applicable and needing review from the score itself
+ FAIL  src/report/scanTransparency.test.tsx | the three coverages are kept apart | page, requirement and consent-state coverage are separate figures with their own definitions
+ FAIL  src/report/scanTransparency.test.tsx | why the score is zero, unavailable, insufficient or partial | a genuine zero from assessed failures is a result, said as such
+ FAIL  src/report/scanTransparency.test.tsx | why the score is zero, unavailable, insufficient or partial | a normal score says what it rests on
+ FAIL  src/report/scanTransparency.test.tsx | why the score is zero, unavailable, insufficient or partial | a score that rests on little carries its coverage and the count not assessed
+ FAIL  src/report/twoPageReport.test.ts | page 1: the score ring, its percentage and label, summary | leaves the ledger and the penalty rules to the dashboard
+ FAIL  src/report/twoPageReport.test.ts | page 1: the score ring, its percentage and label, summary | lists the privacy areas the report covers, and not data-rights handling or security
+ FAIL  src/report/twoPageReport.test.ts | prioritised fixes, the dedicated sections and the cookie inventory in the PDF | adds the fixes and the five sections after the table of every check and before the pages
+ FAIL  src/report/twoPageReport.test.ts | prioritised fixes, the dedicated sections and the cookie inventory in the PDF | lists the score's fixes in the plan's order, each with its effect on the score, why it m
+ FAIL  src/report/twoPageReport.test.ts | the compact check table on page 2 | lists every check the report covers, with its ID, weight, verdict and requirement
+ FAIL  src/report/twoPageReport.test.ts | the compact check table on page 2 | sums up the not-applicable checks in one row, with the reason
+ FAIL  src/report/twoPageReport.test.ts | the five-page readiness review in the PDF | gives the five counts, the score, the ranked gaps, the riskiest page and the closing sentence, as the dashboard does
+ FAIL  src/report/twoPageReport.test.ts | the layout: sequential sections, a true contents, nothing cut, nothing in the footer | legal references are spelt in full in the appendix and short in the narrow check 
+ FAIL  src/report/twoPageReport.test.ts | the layout: sequential sections, a true contents, nothing cut, nothing in the footer | page 1 has a contents of the main parts, and each page number it gives is true
+ FAIL  src/report/twoPageReport.test.ts | the layout: sequential sections, a true contents, nothing cut, nothing in the footer | the headings are numbered in order in the PDF, one badge per heading
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | clean_in_force: counts and weights add up, and the percentages are the server's
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | clean_in_force: the per-check contributions add up to the score
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | confirmed: counts and weights add up, and the percentages are the server's
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | confirmed: the per-check contributions add up to the score
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | insufficient: counts and weights add up, and the percentages are the server's
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | insufficient: the per-check contributions add up to the score
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | mixed: counts and weights add up, and the percentages are the server's
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | mixed: the per-check contributions add up to the score
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | renders a row for every check, coloured by verdict, directly under the score card
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | review: counts and weights add up, and the percentages are the server's
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | review: the per-check contributions add up to the score
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | says there is no separate security score
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | thin: counts and weights add up, and the percentages are the server's
+ FAIL  src/report/twoPageReport.test.ts | the score card: ledger and check table | thin: the per-check contributions add up to the score
+ Test Files  14 failed | 38 passed (52)
+⎯⎯⎯⎯⎯⎯ Failed Tests 65 ⎯⎯⎯⎯⎯⎯⎯

@@ -5,16 +5,16 @@ const BADGE: Record<TenResult, string> = { Passed: "ok", "Partially Passed": "wa
 
 /**
  * How the Privacy Readiness Score was reached, check by check: the result, the marks, the evidence and the page it came from, the finding, how good the evidence is, and what it does not cover.
- * It reads the same 10-check assessment (report/tenChecks.ts) the PDF prints, so the dashboard and the PDF cannot disagree. Collapsed by default; the detail is one click away.
+ * It reads the same 10-check assessment (report/tenChecks.ts) the PDF prints, so the dashboard and the PDF cannot disagree about a check. Collapsed by default; the detail is one click away.
  */
 export function TenChecksPanel({ ten }: { ten: TenAssessment | null }) {
   if (!ten) return null;
   return (
     <section className="section" data-testid="ten-checks-panel">
       <details>
-        <summary style={{ cursor: "pointer", fontWeight: 700 }}>How the Privacy Readiness Score was calculated ({ten.totalText} marks, {ten.scoreText})</summary>
+        <summary style={{ cursor: "pointer", fontWeight: 700 }}>How the ten checks were marked ({ten.totalText} marks)</summary>
         <p className="small muted" data-testid="ten-summary" style={{ margin: "8px 0 4px" }}>{ten.summary}</p>
-        <p className="small muted" data-testid="ten-formula" style={{ margin: "0 0 8px" }}>{ten.formula}</p>
+        <p className="small muted" data-testid="ten-note" style={{ margin: "0 0 8px" }}>These marks are the Privacy Readiness Score, check by check: the score above is these marks added up, as the server worked them out (the same figure the web page, the email and every PDF show).</p>
         <div style={{ overflowX: "auto" }}>
           <table className="data-table">
             <thead><tr><th>#</th><th>Assessment</th><th>Result</th><th>Marks</th><th>Evidence and source</th><th>Finding</th></tr></thead>

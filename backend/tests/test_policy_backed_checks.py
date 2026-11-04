@@ -13,9 +13,9 @@ from datetime import date
 
 import pytest
 
-from app.scoring import dpdp_score as ds
-from app.scoring.dpdp_score import assess
-from tests.test_dpdp_score import evidence
+from app.scoring import requirements as ds
+from app.scoring.requirements import assess
+from tests.test_requirements_reading import evidence
 
 AS_OF = date(2026, 10, 21)
 URL = "https://x.test/privacy"
@@ -50,13 +50,13 @@ PERIOD_OK = row("grievance_timeline", "verified", "We respond to grievances with
 class TestEachCheckFromThePolicy:
     def test_a_verified_contact_is_met_with_the_quotation_as_evidence(self):
         r = res(scored(analysis(DPO_OK)), "DPDP-R9")
-        assert (r.status, r.points_earned, r.method, r.check_type) == ("met", 2.0, "policy_text", "policy")
+        assert (r.status, r.method, r.check_type) == ("met", "policy_text", "policy")
         assert "dpo@x.test" in r.observations[0] and URL in r.observations[0]
         assert r.pages == [URL] and r.sufficient is True and "word for word" in r.sufficiency_reason and r.needed_evidence == []
 
     def test_a_role_without_a_way_to_reach_it_is_partially_met(self):
         r = res(scored(analysis(row("dpo_contact", "partial", "Our Data Protection Officer oversees privacy matters.", detail="The role is mentioned but no email, phone number or form is given next to it."))), "DPDP-R9")
-        assert (r.status, r.points_earned) == ("partially_met", 1.0)
+        assert r.status == "partially_met"
 
     def test_means_of_exercising_rights(self):
         assert res(scored(analysis(RIGHTS_OK)), "DPDP-R14A").status == "met"
@@ -92,14 +92,14 @@ class TestAbsenceIsNeverAFailure:
     @pytest.mark.parametrize("rid", ["DPDP-R9", "DPDP-R14A", "DPDP-R14B", "DPDP-S6", "DPDP-S7"])
     def test_not_found_stays_unable_to_verify_and_says_what_is_needed(self, policy, rid):
         r = res(scored(policy), rid)
-        assert r.status == "unable_to_verify" and r.counts_in_score is False and r.points_earned == 0.0
+        assert r.status == "unable_to_verify"
         assert r.needed_evidence, "an unverified check must say what evidence would settle it"
 
     def test_no_policy_input_is_exactly_the_old_behaviour(self):
         with_none = scored(None)
         for rid in ("DPDP-R9", "DPDP-R14A", "DPDP-R14B", "DPDP-S6", "DPDP-S7"):
             assert "cannot be observed through a public website scan" in res(with_none, rid).observations[0]
-        assert with_none.readiness.assessed_weight == 19      # unchanged: the documented worked example
+        assert with_none.ledger.assessed_checks == 5      # unchanged: the five website checks of the worked example
 
     def test_an_unreadable_policy_is_reported_as_such_not_as_missing(self):
         r = res(scored(analysis(status="unavailable", reason="A policy page was found but its text could not be read.")), "DPDP-R9")
@@ -116,31 +116,29 @@ class TestAPolicyCannotProveWhatItOnlyDescribes:
     @pytest.mark.parametrize("rid,rowid", [("DPDP-S6", "security"), ("DPDP-S7", "breach_response")])
     def test_a_described_practice_is_shown_but_never_settles_the_check(self, rid, rowid):
         r = res(scored(analysis(row(rowid, "verified", "We use industry standard encryption and respond to every breach without delay."))), rid)
-        assert r.status == "unable_to_verify" and r.counts_in_score is False
+        assert r.status == "unable_to_verify"
         assert "encryption" in r.observations[0] and "not evidence" in r.observations[1]
         assert r.method == "organisation_records" and r.needed_evidence
 
 
-class TestTheScoreFollowsTheEvidence:
-    def test_three_verified_checks_raise_coverage_and_leave_a_clean_score_at_100(self):
+class TestTheReadingFollowsTheEvidence:
+    def test_three_verified_checks_move_from_unverified_to_met(self):
         base = scored(None)
         full = scored(analysis(DPO_OK, RIGHTS_OK, GRIEVANCE_OK, PERIOD_OK))
-        assert base.readiness.score_percent == full.readiness.score_percent == 100.0
-        assert full.readiness.assessed_weight == base.readiness.assessed_weight + 2 + 3 + 3
-        assert full.readiness.coverage_percent > base.readiness.coverage_percent
+        assert full.ledger.passed_checks == base.ledger.passed_checks + 3
+        assert full.ledger.unable_checks == base.ledger.unable_checks - 3
 
-    def test_a_partial_policy_statement_lowers_the_score_honestly(self):
+    def test_a_partial_policy_statement_is_partially_met_not_met(self):
         partial = scored(analysis(row("dpo_contact", "partial", "The officer looks after privacy.", detail="no email")))
-        assert partial.readiness.score_percent < 100.0
-        assert any(s.requirement_id == "DPDP-R9" and s.points_lost == 1.0 for s in partial.deductions.steps)
+        assert res(partial, "DPDP-R9").status == "partially_met"
 
-    def test_the_row_order_of_the_policy_never_changes_the_score(self):
+    def test_the_row_order_of_the_policy_never_changes_the_statuses(self):
         pa = analysis(DPO_OK, RIGHTS_OK, GRIEVANCE_OK, PERIOD_OK, row("security", "verified", "We use encryption everywhere in our systems."))
-        base = json.dumps([(r.id, r.status, r.points_earned) for r in scored(pa).requirements])
+        base = json.dumps([(r.id, r.status) for r in scored(pa).requirements])
         for seed in range(40):
             shuffled = copy.deepcopy(pa)
             random.Random(seed).shuffle(shuffled["requirements"])
-            assert json.dumps([(r.id, r.status, r.points_earned) for r in scored(shuffled).requirements]) == base
+            assert json.dumps([(r.id, r.status) for r in scored(shuffled).requirements]) == base
 
     def test_canonical_ordering_leaves_the_policy_result_untouched(self):
         ev = evidence()
@@ -150,8 +148,8 @@ class TestTheScoreFollowsTheEvidence:
 
 class TestTheResponseCarriesHowEachCheckWasAnswered:
     def test_method_and_needed_evidence_reach_the_api_model(self):
-        from app.api.v1.routes.consent_scans import DpdpScoreResponse
-        resp = DpdpScoreResponse(**{k: v for k, v in asdict(scored(analysis(DPO_OK))).items() if k != "deductions"})
+        from app.api.v1.routes.consent_scans import DpdpRequirementsResponse
+        resp = DpdpRequirementsResponse(**asdict(scored(analysis(DPO_OK))))
         by = {r.id: r for r in resp.requirements}
         assert by["DPDP-R9"].method == "policy_text" and by["DPDP-R9"].needed_evidence == []
         assert by["DPDP-S6"].method == "organisation_records" and len(by["DPDP-S6"].needed_evidence) >= 4
@@ -196,10 +194,8 @@ class TestOneLoaderForEveryScorer:
         monkeypatch.setattr(scan_repository, "get_policy_analysis_result", pol)
         assert "policy_analysis" not in asyncio.run(scan_repository.get_scan_evidence_for_score(uuid.uuid4()))
 
-    def test_every_scorer_uses_the_one_loader(self):
+    def test_the_requirements_reading_uses_the_one_loader(self):
         import inspect
 
         from app.api.v1.routes import consent_scans
-        from app.services import score_deduction_log_service
-        for fn in (consent_scans.get_scan_dpdp_score, consent_scans.compare_scan_dpdp_score, score_deduction_log_service.record_scan_deductions):
-            assert "get_scan_evidence_for_score" in inspect.getsource(fn), fn.__name__
+        assert "get_scan_evidence_for_score" in inspect.getsource(consent_scans.get_scan_requirements)

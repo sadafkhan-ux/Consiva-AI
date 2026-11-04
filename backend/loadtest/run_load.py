@@ -69,8 +69,7 @@ def signature(n: int, scan: dict, ev: dict | None, score: dict | None) -> dict:
     e = s.get("evidence") or {}
     sig["signal"] = (s.get("mechanism_type"), s.get("has_reject_all"), s.get("has_granular_choices"), e.get("accept_interaction"), e.get("reject_interaction"), e.get("reject_click_confirmed"))
     if score:
-        r = score["readiness"]
-        sig["score"] = (r["score_percent"], r["status"], r["coverage_percent"], tuple((q["id"], q["status"]) for q in score["requirements"]))
+        sig["score"] = (score["assessment"]["score"], tuple((q["id"], q["status"]) for q in score["requirements"]))
     return sig
 
 
@@ -153,7 +152,9 @@ async def fetch_result(client, token, scan_id, n):
     ev = score = None
     if scan["status"] == "completed":
         ev = (await client.get(f"/api/v1/consent/scans/{scan_id}/evidence", headers=h)).json()
-        score = (await client.get(f"/api/v1/consent/scans/{scan_id}/dpdp-score", headers=h)).json()
+        reading = (await client.get(f"/api/v1/consent/scans/{scan_id}/requirements", headers=h)).json()
+        ten = (await client.get(f"/api/v1/consent/scans/{scan_id}/assessment", headers=h)).json()
+        score = {"assessment": ten, "requirements": reading["requirements"]}   # the one score is the ten-check score; the statuses are the requirements reading
     return scan, ev, score
 
 

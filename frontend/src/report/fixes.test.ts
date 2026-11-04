@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { DpdpScoreResponse, PolicyAnalysis, PolicyRequirementResult } from "../api/types";
-import fixtures from "../test/dpdpScoreFixtures.json";
-import { buildScoreView } from "./dpdpScore";
+import type { DpdpRequirementsResponse, PolicyAnalysis, PolicyRequirementResult } from "../api/types";
+import fixtures from "../test/requirementsFixtures.json";
+import { buildRequirementsView } from "./requirements";
 import { buildPolicyView, POLICY_STATUS_LABEL } from "./policyAnalysis";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
 
 const req = (id: string, status: string, basis: string, group = "Notice"): PolicyRequirementResult => ({
   id, title: `Title ${id}`, group, basis, provisions: ["DPDP Act s.5(1)(i)", "DPDP Rules r.3(b)(i)"], status, quote: "", source_url: null, detail: "d", fix: `Fix ${id}`,
@@ -74,30 +74,27 @@ describe("the policy fixes, in order, with what each does to the completeness", 
 });
 
 describe("the score's remediation steps say what fixing each does to the score", () => {
-  const withImpact = (): DpdpScoreResponse => {
-    const s = JSON.parse(JSON.stringify(F.review)) as DpdpScoreResponse;
-    s.remediation_plan = s.remediation_plan.map((p, i) => ({ ...p, current_percent: 45.5, percent_if_fixed: 90.9 - i * 36.4, gain_percent: 45.4 - i * 36.4, impact: i === 0 ? "Visitors' browsing is shared before they have chosen." : "" }));
+  const withImpact = (): DpdpRequirementsResponse => {
+    const s = JSON.parse(JSON.stringify(F.review)) as DpdpRequirementsResponse;
+    s.remediation_plan = s.remediation_plan.map((p, i) => ({ ...p, impact: i === 0 ? "Visitors' browsing is shared before they have chosen." : "" }));
     return s;
   };
 
-  it("states the score now, the score if that one check were fixed, and the gain", () => {
-    const plan = buildScoreView(withImpact()).remediationPlan;
+  it("carries what the gap means for the organisation, and no effect on any score", () => {
+    const plan = buildRequirementsView(withImpact()).remediationPlan;
     expect(plan.length).toBeGreaterThan(0);
-    expect(plan[0].scoreLine).toBe("Fixing this alone would raise the readiness score from 45.5% to 90.9% (+45.4 percentage points).");
+    expect(JSON.stringify(plan)).not.toMatch(/percent|score/i);
     expect(plan[0].impact).toBe("Visitors' browsing is shared before they have chosen.");
   });
 
-  it("says nothing about the score when the figures are absent (the score is withheld, or an older server)", () => {
-    const plan = buildScoreView(F.review).remediationPlan;
-    expect(plan.every((p) => p.scoreLine === "" && p.impact === "")).toBe(true);
-    const s = withImpact();
-    s.remediation_plan = s.remediation_plan.map((p) => ({ ...p, current_percent: null, percent_if_fixed: null, gain_percent: null }));
-    expect(buildScoreView(s).remediationPlan.every((p) => p.scoreLine === "")).toBe(true);
+  it("says nothing about impact when the server gave none", () => {
+    const plan = buildRequirementsView(F.review).remediationPlan;
+    expect(plan.every((p) => p.impact === "")).toBe(true);
   });
 
   it("keeps the order and everything else the plan already had", () => {
-    const before = buildScoreView(F.review).remediationPlan;
-    const after = buildScoreView(withImpact()).remediationPlan;
+    const before = buildRequirementsView(F.review).remediationPlan;
+    const after = buildRequirementsView(withImpact()).remediationPlan;
     expect(after.map((p) => [p.rank, p.title, p.priority, p.action, p.howToVerify, p.legal])).toEqual(before.map((p) => [p.rank, p.title, p.priority, p.action, p.howToVerify, p.legal]));
   });
 });

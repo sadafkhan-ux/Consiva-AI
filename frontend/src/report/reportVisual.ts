@@ -1,5 +1,5 @@
 import type { EvidenceCookieItem, ScanEvidenceResponse, WebsiteScanMetadata } from "../api/types";
-import type { ScoreView } from "./dpdpScore";
+import type { RequirementsView } from "./requirements";
 import { framedSiteOf } from "./scanTransparency";
 import { countByState, isKnownTracker } from "./stateCounts";
 import { registrableDomain, summariseTrackers } from "./trackerSummary";
@@ -118,7 +118,7 @@ function interaction(outcome: string | undefined): string {
 export function buildReportVisual(
   evidence: ScanEvidenceResponse | null,
   meta: WebsiteScanMetadata | null,
-  v: ScoreView | null,
+  v: RequirementsView | null,
   untestedStates: readonly string[] = [],
 ): ReportVisual | null {
   if (!evidence) return null;
@@ -153,10 +153,10 @@ export function buildReportVisual(
     for (const s of t.consent_states) row.states.add(s);
     byTech.set(name, row);
   }
-  const weight = (type: string) => (type === "Analytics" || type === "Marketing" ? 0 : type === "Unclassified" ? 1 : 2);
+  const kindRank = (type: string) => (type === "Analytics" || type === "Marketing" ? 0 : type === "Unclassified" ? 1 : 2);
   const techRows = [...byTech.entries()]
     .map(([name, r]) => ({ name, type: r.type, requests: r.requests, seen: seenIn(r.states) }))
-    .sort((a, b) => weight(a.type) - weight(b.type) || b.requests - a.requests || a.name.localeCompare(b.name));
+    .sort((a, b) => kindRank(a.type) - kindRank(b.type) || b.requests - a.requests || a.name.localeCompare(b.name));
 
   const policy = (type: string) => policies.find((p) => p.policy_type === type);
   const privacy = policy("privacy_policy");

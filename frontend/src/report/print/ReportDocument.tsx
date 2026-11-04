@@ -2,11 +2,11 @@ import type { ReactNode } from "react";
 import { ScoreRing } from "../../components/ScanHero";
 import type { ReportModel } from "../buildReport";
 import { buildHeroView, buildPreviewView } from "../hero";
-import { formatRef, formatRefShort, formatRefs } from "../legalRefs";
+import { formatRef, formatRefs } from "../legalRefs";
 import { buildPolicyView, POLICY_BASIS_LABEL, POLICY_STATUS_LABEL } from "../policyAnalysis";
 import { READINESS_STATUS_TONE } from "../readiness";
 import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER } from "../reportScope";
-import { checkContribution, CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type RowTone } from "../reportText";
+import { CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type RowTone } from "../reportText";
 import type { ElementStatus } from "../reportVisual";
 import { bannerFactText } from "../consentObservation";
 import { REQUEST_UNIT_NOTE } from "../stateCounts";
@@ -54,7 +54,6 @@ const ELEMENT_PILL: Record<ElementStatus, { label: string; tone: Tone }> = {
   unverified: { label: "Unable to Verify", tone: "mute" },
   not_assessed: { label: "Not assessed", tone: "mute" },
 };
-const verdictTone = (t: string): Tone => (t === "pass" ? "good" : t === "fail" ? "bad" : t === "na" ? "mute" : "warn");
 
 function Para({ children, muted, small, bold, indent }: { children: ReactNode; muted?: boolean; small?: boolean; bold?: boolean; indent?: boolean }) {
   return <p className={`r-p${muted ? " r-muted" : ""}${small ? " r-small" : ""}${bold ? " r-bold" : ""}${indent ? " r-indent" : ""}`}>{children}</p>;
@@ -80,7 +79,7 @@ function Table({ head, rows, wide, className }: { head: { h: string; w?: string;
 
 /** The hero: the score at the left, what it means in the middle, the scanned site's preview at the right. One container, three areas, side by side. */
 function Hero({ model }: { model: ReportModel }) {
-  const hero = buildHeroView(model.dpdpScore);
+  const hero = buildHeroView(model.assessment);
   const preview = buildPreviewView(model.screenshot, model.siteUrl, model.scanId);
   return (
     <div className="r-hero" data-testid="rpt-hero">
@@ -108,15 +107,13 @@ function Hero({ model }: { model: ReportModel }) {
 }
 
 /** Sections the fixed-page reports (Free and Full) already carry in full. In the appendix they are left out; every other section follows the pages. */
-const ON_FIXED_PAGES: ReadonlySet<string> = new Set(["summary", "transparency", "readiness", "areas", "top-findings", "consent", "technologies", "elements"]);
+const ON_FIXED_PAGES: ReadonlySet<string> = new Set(["summary", "transparency", "readiness", "top-findings", "consent", "technologies", "elements"]);
 
 export function ReportDocument({ model, appendixOnly = false, noFront = false }: { model: ReportModel; appendixOnly?: boolean; noFront?: boolean }) {
-  const v = model.dpdpScore;
+  const v = model.requirements;
   const vis = model.visual;
   const ev = model.evidence;
   const policyView = buildPolicyView(model.policyAnalysis);
-  const assessed = v ? v.assessed : [];
-  const countOf = (k: string) => assessed.filter((r) => r.statusKey === k).length;
   const sections: { id: string; title: string; count?: string; appendix?: boolean; node: ReactNode }[] = [];
   const add = (id: string, title: string, node: ReactNode, opts: { count?: string; appendix?: boolean } = {}) => sections.push({ id, title, node, ...opts });
 
@@ -135,7 +132,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
     <div className="r-tiles">{tiles.map((t) => <div className="r-tile" key={t.label}><b>{t.value}</b><span>{t.label}</span></div>)}</div>
   ));
 
-  // Scan transparency: what the scan found, tried, finished and could not verify, the three coverages, the consent states exercised, and why the score is what it is.
+  // Scan transparency: what the scan found, tried, finished and could not verify, the coverages, the consent states exercised, and why the score is what it is.
   add("transparency", "Scan transparency", <ScanTransparency view={model.transparency} />);
 
   // What was tested and what was not: every applicable check, how it was tested, and for those not verified why and what would settle them.
@@ -143,36 +140,13 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
 
   // 2. Framework readiness
   add("readiness", "Framework readiness", (
-    <div className={`r-box r-framework${v && v.scoreValue !== null ? "" : " r-soft"}`}>
-      <div><div className="r-bold">India DPDP Act</div><div className="r-big" data-testid="rpt-framework-score">{v ? v.headline : "Not available"}</div></div>
+    <div className={`r-box r-framework${model.assessment && model.assessment.score !== null ? "" : " r-soft"}`}>
+      <div><div className="r-bold">India DPDP Act</div><div className="r-big" data-testid="rpt-framework-score">{model.assessment && model.assessment.score !== null ? model.assessment.scoreText : "Not available"}</div></div>
       <div className="r-small r-muted">
-        {v ? (<>{countOf("met")} met · {countOf("partially_met")} partly met · {countOf("not_met")} not met<br />{v.unableToVerify.length} could not be verified · {v.excluded.length} not applicable</>) : "The score was not loaded."}
+        {model.assessment ? (<>{model.assessment.counts.passed} passed · {model.assessment.counts.partial} partly passed · {model.assessment.counts.failed} failed<br />{model.assessment.counts.notAssessed} not assessed · {model.assessment.counts.notApplicable} not applicable</>) : "The assessment was not loaded."}
       </div>
     </div>
   ));
-
-  // 3. Privacy areas
-  if (v) {
-    const cats = v.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).slice(0, 4);
-    add("areas", "Privacy areas", (
-      <>
-        <Para muted small>Each bar is the share of the weighted points earned in that area. Coverage is the share of the area's checks that a scan could test.</Para>
-        <div className="r-areas">
-          {cats.map((c) => {
-            const pctValue = c.score === "Not assessed" ? null : parseFloat(c.score);
-            return (
-              <div className="r-area" key={c.name}>
-                <b>{c.name}</b>
-                <div className={pctValue === null ? "r-muted r-bold" : "r-big"}>{pctValue === null ? "Not assessed" : c.score}</div>
-                {pctValue !== null && <div className="r-bar"><i style={{ width: `${Math.max(2, Math.min(100, pctValue))}%` }} /></div>}
-                <span className="r-small r-muted">{pctValue === null ? "Cannot be tested from outside" : c.coverage.replace("coverage", "Coverage")}</span>
-              </div>
-            );
-          })}
-        </div>
-      </>
-    ));
-  }
 
   // 4. Top findings
   const rows = topFindingRows(model);
@@ -233,27 +207,21 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
     add("consent", "Consent behaviour", <Para muted>The scan evidence could not be loaded, so the consent comparison, technologies and privacy elements are not shown.</Para>);
   }
 
-  // 8. Every check behind the score
-  if (v) {
-    const checks = v.allChecks.filter((c) => isReportCategory(c.category, v.assessedCategories));
-    const listed = checks.filter((c) => c.statusKey !== "not_applicable");
-    const notApplicable = checks.filter((c) => c.statusKey === "not_applicable");
-    add("checks", "Every check behind the score", (
+  // 8. The ten checks behind the score
+  if (model.assessment && model.assessment.checks.length) {
+    const a = model.assessment;
+    const resultTone = (r: string): Tone => (r === "Passed" ? "good" : r === "Failed" ? "bad" : r === "Partially Passed" ? "warn" : "mute");
+    add("checks", "The ten checks behind the score", (
       <>
-        <Para muted small>Detailed results for each requirement we could test.</Para>
+        <Para muted small>Each of the ten checks, its result and the marks it earned. The marks add up to {a.totalText}, which is the score {a.scoreText}.</Para>
         <Table
-          head={[{ h: "ID", w: "36px" }, { h: "What is checked, and the evidence" }, { h: "Requirement", w: "130px" }, { h: "Weight", w: "54px", num: true }, { h: "Status", w: "78px" }, { h: "Contribution", w: "92px" }]}
-          rows={[
-            ...listed.map((r) => [
-              <b key="i" className={r.tone === "fail" ? "r-failrow" : undefined}>{r.id.replace("DPDP-", "")}</b>,
-              <div key="t"><b>{r.title}</b><div className="r-small r-muted">{stripRuleCodes(r.evidenceLine)}</div></div>,
-              <span key="r" className="r-small r-muted">{formatRefShort(r.provisions)}</span>,
-              String(r.weight),
-              <Pill key="s" tone={verdictTone(r.tone)}>{r.verdict}</Pill>,
-              <span key="c" className="r-small">{checkContribution(r)}</span>,
-            ]),
-            ...(notApplicable.length ? [["", <span key="n" className="r-small"><b>{notApplicable.map((r) => r.id.replace("DPDP-", "")).join(", ")}</b><span className="r-muted"> · Not applicable: left out unless declared.</span></span>, "", "", <Pill key="s">N/A</Pill>, ""]] : []),
-          ]}
+          head={[{ h: "No.", w: "30px" }, { h: "What is checked, and the evidence" }, { h: "Marks", w: "70px", num: true }, { h: "Result", w: "96px" }]}
+          rows={a.checks.map((c) => [
+            <b key="i" className={c.result === "Failed" ? "r-failrow" : undefined}>{c.id}</b>,
+            <div key="t"><b>{c.name}</b><div className="r-small r-muted">{stripRuleCodes(c.evidence || c.explanation)}</div></div>,
+            c.marksText,
+            <Pill key="s" tone={resultTone(c.result)}>{c.result}</Pill>,
+          ])}
         />
         <Para muted small>{OMITTED_DUTIES_NOTE}</Para>
       </>
@@ -266,17 +234,16 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
     const policyFixes = policyView?.fixes ?? [];
     add("fixes", "Prioritised fixes", (
       <>
-        <Para muted small>In the order to do them. Where a fix changes the score, its impact is the score's own arithmetic: that one check fixed on its own and nothing else changed. Where it changes the policy, it is the policy's own completeness.</Para>
-        {!v && !policyView && <Para>The score and the policy analysis were not available for this report, so no fixes can be listed.</Para>}
+        <Para muted small>In the order to do them. Fixes to the requirements are ordered by the severity of each finding. Where a fix changes the policy, its impact is the policy's own completeness.</Para>
+        {!v && !policyView && <Para>The requirements reading and the policy analysis were not available for this report, so no fixes can be listed.</Para>}
         {v && (
           <>
-            <h3 className="r-h3">Fixes that change the score</h3>
-            {scoreFixes.length === 0 && <Para small indent>No fix is listed for the score: no check failed with enough evidence.</Para>}
+            <h3 className="r-h3">Fixes to the requirements</h3>
+            {scoreFixes.length === 0 && <Para small indent>No fix is listed: no requirement failed with enough evidence.</Para>}
             {scoreFixes.map((f) => (
               <div className="r-item" key={f.rank}>
                 <div className="r-item-head"><b>{f.rank}. {f.title}</b><span><Pill tone={f.timing === "Current" ? "bad" : "warn"}>{f.priority}</Pill> <Pill>{f.outcome}</Pill></span></div>
                 <Para small indent>Action: {f.action}</Para>
-                {f.scoreLine && <Para small bold indent>Impact on the score: {f.scoreLine}</Para>}
                 {f.impact && <Para small indent>Why it matters: {f.impact}</Para>}
                 <Para small indent>How to verify: {f.howToVerify}</Para>
                 <Para small muted indent>{formatRef(f.legal)}</Para>
@@ -299,7 +266,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
             ))}
           </>
         )}
-        <Para muted small>What each rests on: the score fixes rest on what the scan measured. The policy fixes rest on the policy's own text, where a point not found is not a finding that a duty is unmet.</Para>
+        <Para muted small>What each rests on: the requirement fixes rest on what the scan measured. The policy fixes rest on the policy's own text, where a point not found is not a finding that a duty is unmet.</Para>
       </>
     ));
   }
@@ -343,7 +310,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
               rows={rv.rows.map((r) => [<b key="p">{r.page}</b>, r.sections, r.check, <span key="s"><b>{r.status}</b><br />({r.evidenceKind})</span>, r.evidence, r.fix])}
             />
             <h3 className="r-h3">C. Summary</h3>
-            <Para bold>Five-page review score: {rv.scoreLine}</Para>
+            <Para bold>What the five-page review could assess: {rv.summaryLine}</Para>
             <Para bold small>Top gaps, ranked by risk</Para>
             {rv.topGaps.length === 0 && <Para small indent>No gap or missing item was found in the checks the scan could assess.</Para>}
             {rv.topGaps.map((g) => (

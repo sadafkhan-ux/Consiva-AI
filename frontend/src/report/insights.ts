@@ -8,7 +8,7 @@ import { formatRefs } from "./legalRefs";
 //   Confirmed     the scan measured it, or the policy's own words (quoted exactly) say it.
 //   Observed      the scan saw it; seeing it does not prove more than it shows.
 //   Not verified  the scan did not see it; that is not evidence that it does not exist.
-// An absence is never reported as a violation, and nothing here changes the DPDP Compliance Score.
+// An absence is never reported as a violation, and nothing here is a score.
 
 export type Knowledge = "Confirmed" | "Observed" | "Not verified";
 export type Tone = "good" | "warn" | "mute";

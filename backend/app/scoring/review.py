@@ -1,6 +1,6 @@
 """What a scan confirms, what it cannot, and what a person must decide -- the "Logic Required / Human Review" content.
 
-Derived from the SAME evidence context and requirement results as the DPDP score, so the backend, the dashboard and the PDF
+Derived from the SAME evidence context and requirement results as the requirements reading, so the backend, the dashboard and the PDF
 cannot tell different stories. Nothing here decides legal outcomes: a technical signal (a third-party request, a cookie) is
 reported as an observation, and anything that turns on business context or legal interpretation is listed for a person.
 
@@ -77,8 +77,6 @@ class GapItem:
     timing: str                        # "in_force" (a current gap) or "future" (a readiness gap: the duty is not yet in force)
     applies_from: str                  # ISO date the duty starts
     provisions: list[str]
-    weight: int
-    points: float
     what_the_scan_observed: list[str]
     pages: list[str]
     evidence_ids: list[str]
@@ -93,7 +91,6 @@ class MissingEvidenceItem:
     requirement_id: str
     title: str
     provisions: list[str]
-    weight: int
     reason: str
     kind: str                          # "scan_limit" (a scan could observe it but did not) or "organisational" (it never can)
 
@@ -143,7 +140,7 @@ def summarise_evidence(ctx: ConsentContext) -> EvidenceSummary:
 def build_breakdown(results: list, review_items: list[ReviewItem]) -> Breakdown:
     def gap(r) -> GapItem:
         return GapItem(
-            r.id, r.title, r.status, r.timing, r.effective.isoformat(), list(r.provisions), r.weight, r.points_earned,
+            r.id, r.title, r.status, r.timing, r.effective.isoformat(), list(r.provisions),
             list(r.observations), list(r.pages), list(r.evidence_ids), list(r.rule_ids), r.why_it_matters, r.remediation,
             r.verification,
         )
@@ -153,7 +150,7 @@ def build_breakdown(results: list, review_items: list[ReviewItem]) -> Breakdown:
         if r.status == "unable_to_verify":
             organisational = r.id in _ORGANISATIONAL
             missing.append(MissingEvidenceItem(
-                r.id, r.title, list(r.provisions), r.weight,
+                r.id, r.title, list(r.provisions),
                 (r.observations or ["Not observed."])[0], "organisational" if organisational else "scan_limit"))
     return Breakdown(
         verified_gaps=[gap(r) for r in results if r.status == "not_met" and r.in_force],
@@ -164,7 +161,7 @@ def build_breakdown(results: list, review_items: list[ReviewItem]) -> Breakdown:
     )
 
 
-# Requirements a public website scan can never observe (the score registry's scan_assessable=False ones).
+# Requirements a public website scan can never observe (the registry's scan_assessable=False ones).
 _ORGANISATIONAL = frozenset({"DPDP-R9", "DPDP-R14A", "DPDP-R14B", "DPDP-S6", "DPDP-S7", "DPDP-X4", "DPDP-X8", "DPDP-X10", "DPDP-X13"})
 
 
@@ -310,7 +307,7 @@ def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_page
             known=["These could not be established from the website or from what its privacy policy says: " + "; ".join(r.title for r in organisational) + ".",
                    ("This scan makes no statement about whether retention rules, a DPIA, grievance handling, breach response times, "
                    "or a record of processing activities (ROPA) exist or are complete. A ROPA is not required by name under the "
-                   "DPDP Act or Rules; if the organisation keeps one, it is supporting evidence, not a scored check.")],
+                   "DPDP Act or Rules; if the organisation keeps one, it is supporting evidence, not a check of this reading.")],
              missing=sorted({line for r in organisational for line in r.needed_evidence}) or ["Policies, procedures, logs, records and contact details held by the organisation."],
             decision="Provide the evidence for each, or assess it outside this scan.",
             provisions=sorted({p for r in organisational for p in r.provisions}),
@@ -323,14 +320,14 @@ def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_page
             id="entity-applicability", category="uncertain",
             topic="Which entity-specific duties apply to the organisation",
             needs=["business_context", "legal_interpretation"],
-            known=["These were excluded from the score because a website does not show them: " + "; ".join(r.title for r in excluded) + "."],
+            known=["These were excluded because a website does not show them: " + "; ".join(r.title for r in excluded) + "."],
             missing=["Whether the organisation processes children's data, is a notified Significant Data Fiduciary, is a Consent Manager, or falls in a Third Schedule class."],
             decision="Declare which apply, so they are included in the assessment.",
             provisions=sorted({p for r in excluded for p in r.provisions}),
             requirement_ids=[r.id for r in excluded],
         ))
 
-    pending = sorted({r.effective for r in results if r.counts_in_score and r.effective > as_of})
+    pending = sorted({r.effective for r in results if r.status in ("met", "partially_met", "not_met") and r.effective > as_of})
     if pending:
         items.append(ReviewItem(
             id="not-yet-in-force", category="uncertain",

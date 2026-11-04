@@ -34,9 +34,9 @@ vi.mock("jspdf", () => {
   return { jsPDF: FakeDoc };
 });
 
-import type { DpdpScoreResponse, EvidencePageItem, ScanEvidenceResponse, WebsiteScanMetadata } from "../api/types";
-import fixtures from "../test/dpdpScoreFixtures.json";
-import { buildScoreView } from "./dpdpScore";
+import type { DpdpRequirementsResponse, EvidencePageItem, ScanEvidenceResponse, WebsiteScanMetadata } from "../api/types";
+import fixtures from "../test/requirementsFixtures.json";
+import { buildRequirementsView } from "./requirements";
 import { buildReportModel } from "./buildReport";
 import { downloadReport } from "./downloadReport";
 import { buildScanPages, SELECTION_TEXT } from "./scanPages";
@@ -179,9 +179,9 @@ describe("the PDF page", () => {
 
   async function pdf(pages: EvidencePageItem[], meta = META(), serverLimit: number | null = null) {
     // The server's limit reaches the report through the score's assessment.
-    const sc: DpdpScoreResponse | null = serverLimit === null ? null : JSON.parse(JSON.stringify(fixtures.mixed));
+    const sc: DpdpRequirementsResponse | null = serverLimit === null ? null : JSON.parse(JSON.stringify(fixtures.mixed));
     if (sc) sc.assessment.page_limit = serverLimit as number;
-    const score = sc ? buildScoreView(sc) : null;
+    const score = sc ? buildRequirementsView(sc) : null;
     await downloadReport(buildReportModel(SCAN, [], meta, [], [], score, { ...EVIDENCE, pages }));
     return rec.pages.map((p) => p.join(""));
   }

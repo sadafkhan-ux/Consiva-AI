@@ -1,8 +1,7 @@
 import type { ReportModel } from "../buildReport";
 import { buildPageReport, FULL_PAGES, type SeriesPoint } from "../pageReports";
 import { CONSIVA_UPDATES, OMITTED_DUTIES_NOTE } from "../reportScope";
-import { buildTenChecks } from "../tenChecks";
-import { AreasBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, UpgradeBand } from "./Blocks";
+import { ChecksResultBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, UpgradeBand } from "./Blocks";
 import { Icon, PageFrame, Pill, SecHead, SheetPageStyle, type IconName } from "./PageParts";
 import { ScanTransparency } from "./Transparency";
 import { pagesTileValue } from "../scanPages";
@@ -80,7 +79,7 @@ export function FullReport({ model }: { model: ReportModel }) {
             )}
           </figure>
         </div>
-        <ScoreCard view={view} id="full" ten={buildTenChecks(model)} />
+        <ScoreCard view={view} id="full" />
         <SecHead n={1} title="Quick Summary" />
         <SummaryTiles view={view} />
         {model.analysisNote && <p className="pg-callout" data-testid="pg-analysis-note">{model.analysisNote}</p>}
@@ -91,8 +90,8 @@ export function FullReport({ model }: { model: ReportModel }) {
         <SecHead n={2} title="Framework Readiness" />
         <FrameworkBlock view={view} />
         <div className="pg-info"><Icon name="info" size={18} /><p>{CONSIVA_UPDATES.actStatus}</p></div>
-        <SecHead n={3} title="Privacy Areas" note="Each bar is the share of weighted points earned. Coverage shows how much was actually tested." />
-        <AreasBlock view={view} />
+        <SecHead n={3} title="Check Results" note="The four of the ten checks with the most room to improve. Every check is listed on page 6." />
+        <ChecksResultBlock view={view} />
         <SecHead n={4} title="Top Findings" aside={view.findingsMore > 0 ? `+ ${view.findingsMore} more in the Appendix` : undefined} />
         <FindingsList view={view} />
         {view.groupCounts && <p className="pg-muted pg-more" data-testid="pg-group-counts">{view.groupCounts}</p>}
@@ -159,18 +158,18 @@ export function FullReport({ model }: { model: ReportModel }) {
       </PageFrame>
 
       <PageFrame {...frame} n={6}>
-        <SecHead n={10} title="Every Check Behind the Score" note={`All checks, their weight, status and evidence. ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet} of ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet + view.framework.counts.unverified} applicable checks tested from outside.`} />
+        <SecHead n={10} title="The Ten Checks Behind the Score" note={`All ten checks, their result, marks and evidence. ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet} of ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet + view.framework.counts.unverified} applicable checks tested from outside.`} />
         <ul className="pg-legend pg-legend-status">
-          {([["Pass", "good"], ["Partially met", "warn"], ["Not met", "bad"], ["Unable to Verify", "mute"], ["Not applicable", "mute"]] as const).map(([s, t]) => <li key={s}><Pill s={{ label: s, tone: t }} /></li>)}
+          {([["Passed", "good"], ["Partially passed", "warn"], ["Failed", "bad"], ["Not assessed", "mute"], ["Not applicable", "mute"]] as const).map(([s, t]) => <li key={s}><Pill s={{ label: s, tone: t }} /></li>)}
         </ul>
         <table className="pg-table pg-checks" data-testid="pg-checks">
-          <thead><tr><th>ID</th><th>What is checked</th><th>Weight</th><th>Status</th><th>Evidence</th></tr></thead>
+          <thead><tr><th>ID</th><th>What is checked</th><th>Marks</th><th>Status</th><th>Evidence</th></tr></thead>
           <tbody>
-            {view.checks.length === 0 && <tr><td colSpan={5}>The score was not loaded, so no check is listed.</td></tr>}
-            {view.checks.map((c) => <tr key={c.id}><td><b>{c.id}</b></td><td>{c.title}</td><td>{c.weight}</td><td><Pill s={c.status} /></td><td>{c.evidence}</td></tr>)}
+            {view.checks.length === 0 && <tr><td colSpan={5}>The assessment was not loaded, so no check is listed.</td></tr>}
+            {view.checks.map((c) => <tr key={c.id}><td><b>{c.id}</b></td><td>{c.title}</td><td>{c.marks}</td><td><Pill s={c.status} /></td><td>{c.evidence}</td></tr>)}
           </tbody>
         </table>
-        {view.checksMore > 0 && <p className="pg-muted pg-more">+ {view.checksMore} more {view.checksMore === 1 ? "check" : "checks"} in the Appendix (Every check behind the score).</p>}
+        {view.checksMore > 0 && <p className="pg-muted pg-more">+ {view.checksMore} more {view.checksMore === 1 ? "check" : "checks"} in the Appendix.</p>}
         <p className="pg-muted pg-more">{OMITTED_DUTIES_NOTE}</p>
         <p className="pg-muted pg-more">Unknown results (could not verify, test failed, not assessed) are never counted as passed. A zero means a completed test observed zero.</p>
       </PageFrame>
@@ -212,7 +211,7 @@ export function FullReport({ model }: { model: ReportModel }) {
             <dt>Pages scanned</dt><dd>{vis ? `${pagesTileValue(vis.pagesScanned, vis.pagesFound)}${vis.pageLimit ? ` (limit ${vis.pageLimit})` : ""}` : "Not recorded"}</dd>
             <dt>Consent states tested</dt><dd>{vis ? `${vis.statesTested} (Before, ${vis.consent.acceptTested ? "After Accept" : "After Accept not tested"}, ${vis.consent.rejectTested ? "After Reject" : "After Reject not tested"})` : "Not recorded"}</dd>
             <dt>Report ID</dt><dd>{view.reportId}</dd>
-            <dt>Scoring and rule versions</dt><dd>{model.dpdpScore ? model.dpdpScore.versionsLine : "Not recorded"}</dd>
+            <dt>Methodology and legal mapping versions</dt><dd>{model.assessment && model.assessment.methodologyVersion ? `Ten-check methodology v${model.assessment.methodologyVersion}` : "Ten-check methodology not recorded"}{model.requirements ? ` · ${model.requirements.versionsLine}` : ""}</dd>
           </dl>
         </div>
         <p className="pg-disclaimer" data-testid="pg-disclaimer"><b>Important:</b> This report is an automated, point-in-time assessment of publicly accessible website signals within the stated scan scope. It is provided for informational and preliminary readiness purposes only; it is not legal advice, a legal opinion, an audit, a certification, or a guarantee of compliance with the Digital Personal Data Protection Act, 2023, the DPDP Rules, 2025, GDPR/ePrivacy, CCPA/CPRA or any other law. A passing score applies only to checks tested within the stated scope and does not establish full organisational compliance.</p>

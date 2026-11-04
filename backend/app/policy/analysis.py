@@ -482,6 +482,13 @@ def _child_signal(evidence: dict) -> bool:
 ANALYSIS_VERSION = 2
 
 
+def reuse_prompt(docs: list[PolicyDocument], reqs: list[PolicyRequirement]) -> str:
+    """The question as it is identified for reuse: the same prompt with every document's text normalised (whitespace, case, quote and dash styles). Two scans of an
+    unchanged policy then ask the same question even when the page was rendered with a different line break, a non-breaking space or a curly quote, so the earlier,
+    stored answer is reused instead of the model being asked again and possibly answering differently. A change of a word still changes it."""
+    return build_prompt([PolicyDocument(d.url, d.policy_type, normalise(d.text), d.source, d.truncated) for d in docs], reqs)
+
+
 def input_hash(system: str, user: str, sector: str | None, child: bool, model_id: str) -> str:
     """Identifies everything the model's answer depends on: the instructions, the policy text and requirement list it is asked about, the sector and child
     reading that shape the answer, and which model answers. The same hash means the same question put to the same model."""
@@ -544,7 +551,7 @@ async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) 
             from app.llm.client import resolve_reasoning_provider_and_model
 
             provider, model = resolve_reasoning_provider_and_model(get_settings())
-            digest = input_hash(SYSTEM_PROMPT, prompt, sector, child, f"{provider}/{model}")
+            digest = input_hash(SYSTEM_PROMPT, reuse_prompt(docs, reqs), sector, child, f"{provider}/{model}")
             try:
                 reused = await find_reusable(scan_id, website_id, org_id, digest)
             except Exception:

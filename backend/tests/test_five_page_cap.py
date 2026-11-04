@@ -245,22 +245,22 @@ def test_the_page_limit_disclosure_follows_the_constant_not_a_typed_number(monke
     from datetime import date
 
     from app.scoring import findings as fg
-    from tests.test_dpdp_score import evidence
+    from tests.test_requirements_reading import evidence
 
     monkeypatch.setattr(fg, "MAX_WEB_PAGES", 3)
-    unable = [e for e in __import__("app.scoring.dpdp_score", fromlist=["assess"]).assess(evidence(pages=3), date(2026, 10, 22)).finding_groups.unable_to_verify]
+    unable = [e for e in __import__("app.scoring.requirements", fromlist=["assess"]).assess(evidence(pages=3), date(2026, 10, 22)).finding_groups.unable_to_verify]
     entry = next(e for e in unable if e.id == "page-limit")
     assert "first 3" in entry.title and "at most 3 pages" in entry.explanation
 
     monkeypatch.setattr(fg, "MAX_WEB_PAGES", 5)
-    assert "page-limit" not in [e.id for e in __import__("app.scoring.dpdp_score", fromlist=["assess"]).assess(evidence(pages=3), date(2026, 10, 22)).finding_groups.unable_to_verify]
+    assert "page-limit" not in [e.id for e in __import__("app.scoring.requirements", fromlist=["assess"]).assess(evidence(pages=3), date(2026, 10, 22)).finding_groups.unable_to_verify]
 
 
 def test_the_assessment_and_methodology_report_the_constant():
     from datetime import date
 
-    from app.scoring.dpdp_score import assess
-    from tests.test_dpdp_score import evidence
+    from app.scoring.requirements import assess
+    from tests.test_requirements_reading import evidence
 
     s = assess(evidence(pages=2), date(2026, 10, 22))
     assert s.assessment.page_limit == MAX_WEB_PAGES == 5

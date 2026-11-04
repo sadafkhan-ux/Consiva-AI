@@ -17,8 +17,8 @@ from app.core.exceptions import ScanNotReadyError
 from app.scanner import crawler
 from app.scanner.crawler import _crawl_full_site
 from app.scanner.failures import ScanNotPossible
-from app.scoring.dpdp_score import assess
-from tests.test_dpdp_score import TODAY, evidence, tr
+from app.scoring.requirements import assess
+from tests.test_requirements_reading import TODAY, evidence, tr
 from tests.test_navigation_resilience import (  # noqa: F401
     ROOT,
     Clock,
@@ -90,31 +90,23 @@ class TestAFailedScanHasNoReportAndNoScore:
         with pytest.raises(ScanNotReadyError, match="has no report"):
             await route.get_scan_report_pdf(scan.id, MagicMock(headers={}), variant="long", user=user, db=AsyncMock())
 
-    def test_evidence_with_no_scanned_page_gives_no_score_and_zero_coverage(self):
-        block = assess(evidence(pages=0), TODAY).readiness
-        assert block.status == "insufficient_evidence" and block.score_percent is None
-        assert block.coverage_percent == 0.0 and block.points_assessed == 0
+    def test_evidence_with_no_scanned_page_assesses_nothing(self):
+        s = assess(evidence(pages=0), TODAY)
+        assert s.ledger.assessed_checks == 0 and s.ledger.passed_checks == 0
 
 
-class TestTheScreenshotsZeroPercent:
-    """Two requirements Not Met, the untestable ones Unable to Verify, entity-specific ones Not Applicable: 0% is what the formula gives, and it says how little it rests on."""
+class TestTwoGapsAndTheRestUnverified:
+    """Two requirements Not Met, the untestable ones Unable to Verify, entity-specific ones Not Applicable: the reading lists exactly that, and says how little it rests on."""
 
-    def test_zero_percent_is_the_formula_with_unable_to_verify_outside_the_denominator(self):
+    def test_two_gaps_and_the_untested_ones_stay_open(self):
         s = assess(evidence(trackers=[tr(1)], mechanism="none", policies=()), TODAY)
-        b = s.readiness
-        assert b.status == "scored" and b.score_percent == 0.0
-        assert b.points_earned == 0 and b.points_assessed == 9, "only the two assessed (Not Met) requirements are in the denominator"
-        assert b.unable_to_verify_weight == 14 and b.applicable_weight == 23, "the untested weight is reported, not scored"
-        assert b.coverage_percent == 39.1 and b.caution and "caution" in b.caution
+        assert s.ledger.failed_checks == 2 and s.ledger.passed_checks == 0
+        assert s.ledger.unable_checks == 5, "the untested checks are reported, never turned into passes"
 
-    def test_more_unable_to_verify_weight_never_changes_what_was_earned_it_can_only_withhold_the_score(self):
-        """Declaring more entity-specific duties adds Unable-to-Verify weight. The points earned and assessed do not move; coverage falls, and below the minimum the score is withheld
-        rather than shown (missing evidence is never turned into a number)."""
-        from app.scoring.dpdp_score import MIN_COVERAGE_PERCENT, Applicability
+    def test_declaring_more_entity_duties_adds_open_checks_and_never_changes_what_was_assessed(self):
+        from app.scoring.requirements import Applicability
         ev = evidence(trackers=[tr(1)], mechanism="none", policies=())
-        base = assess(ev, TODAY).readiness
-        more = assess(ev, TODAY, Applicability(True, True, True, True)).readiness
-        assert more.unable_to_verify_weight > base.unable_to_verify_weight and more.coverage_percent < base.coverage_percent
-        assert (more.points_earned, more.points_assessed) == (base.points_earned, base.points_assessed)
-        assert more.status == ("scored" if more.coverage_percent >= MIN_COVERAGE_PERCENT else "insufficient_evidence")
-        assert more.score_percent in (None, 0.0)
+        base = assess(ev, TODAY)
+        more = assess(ev, TODAY, Applicability(True, True, True, True))
+        assert more.ledger.unable_checks > base.ledger.unable_checks
+        assert (more.ledger.passed_checks, more.ledger.partial_checks, more.ledger.failed_checks) == (base.ledger.passed_checks, base.ledger.partial_checks, base.ledger.failed_checks)

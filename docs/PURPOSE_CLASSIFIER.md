@@ -416,7 +416,7 @@ How the labels are consumed. In every case the label is a *condition*; none of t
    category is `analytics` or `marketing`. R-001 fires when any such item has `pre_consent` in its states; R-002 when there are such items and no consent
    mechanism; R-003 when such an item is in `post_reject` **and** the Reject click was confirmed; R-007 when there are such items and no cookie policy;
    R-008 for items with `category = NULL`. `functional` and `other` items count in none of these.
-2. **DPDP Compliance Score** (`scoring/dpdp_score.py` l.144–243; `scoring/review.py` l.126–127). The same `non_essential` set decides checks on
+2. **DPDP requirements reading** (`scoring/requirements.py` (was `dpdp_score.py` l.144–243); `scoring/review.py` l.126–127). The same `non_essential` set decides checks on
    analytics/marketing before consent and after Reject; the score uses the label and the state together. Changing a label changes which
    checks see the item, and therefore the score.
 3. **Sector reading** (`scoring/sector.py` l.297) reads analytics/marketing trackers as one signal for inferring a business sector.
@@ -530,7 +530,7 @@ Listed as observations; none was implemented. Ordered roughly by effect on the "
 | Migration (taxonomy, provenance columns, lookup table) | `backend/migrations/0002_lookup_provenance_consent_state.sql` |
 | Human correction | `backend/app/services/review_service.py:146–156` |
 | Prompt | `backend/app/llm/prompts.py:275` |
-| Score and other consumers | `backend/app/scoring/dpdp_score.py:144–243`, `scoring/review.py:126`, `scoring/sector.py:297`, `services/diff_engine.py:31` |
+| Score and other consumers | `backend/app/scoring/requirements.py` (was `dpdp_score.py:144–243`), `scoring/review.py:126`, `scoring/sector.py:297`, `services/diff_engine.py:31` |
 | Purpose agent | `backend/app/agents/purpose/rules/reconciliation.py`, `services/observed_service.py:38` |
 | Unwired ML stub | `backend/app/ml/` |
 | Frontend consumers | `frontend/src/report/stateCounts.ts:38`, `reportVisual.ts`, `cookieInventory.ts` |

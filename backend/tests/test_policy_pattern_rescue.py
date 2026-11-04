@@ -113,8 +113,8 @@ class TestTheScoreFollowsTheStablePolicyReading:
     def test_the_dpdp_check_is_met_whether_the_model_found_the_contact_or_missed_it(self):
         from datetime import date
 
-        from app.scoring.dpdp_score import assess
-        from tests.test_dpdp_score import evidence
+        from app.scoring.requirements import assess
+        from tests.test_requirements_reading import evidence
 
         d = doc(DPO_TEXT)
         quote = "Our Data Protection Officer can be reached at dpo@x.test or on +91 98765 43210 for any question about your data."

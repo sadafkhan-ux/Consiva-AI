@@ -1,11 +1,11 @@
 """Each DPDP check as a documented record: definition, legal reference, evidence record, timing, status counts, remediation
-(app/scoring/dpdp_score.py DETAILS and RequirementResult). The score itself is tested in test_dpdp_score.py."""
+(app/scoring/requirements.py DETAILS and RequirementResult). The statuses are tested in test_requirements_reading.py."""
 
 from datetime import date
 
-from app.scoring import dpdp_score as ds
-from app.scoring.dpdp_score import assess
-from tests.test_dpdp_score import AFTER, TODAY, evidence, tr
+from app.scoring import requirements as ds
+from app.scoring.requirements import assess
+from tests.test_requirements_reading import AFTER, TODAY, evidence, tr
 
 
 def by_id(score, rid):
@@ -53,7 +53,7 @@ class TestFiveStatusesOnly:
     def test_a_duplicate_is_not_applicable_with_a_documented_reason(self):
         r = by_id(assess(evidence(trackers=[tr(1)], mechanism="none"), TODAY), "DPDP-C2")
         assert r.status == "not_applicable" and r.duplicate_of == "DPDP-C1"
-        assert r.exclusion_reason.startswith("Counted under DPDP-C1")
+        assert r.exclusion_reason.startswith("Listed under DPDP-C1")
 
     def test_every_not_applicable_has_a_reason(self):
         for r in assess(evidence(), TODAY).requirements:
@@ -91,10 +91,10 @@ class TestTimingReadinessVersusCurrent:
         s = assess(evidence(trackers=[tr(1)]), date(2027, 5, 12))
         assert s.breakdown.verified_gaps == [] and s.breakdown.readiness_gaps
 
-    def test_the_formula_is_unchanged_by_timing(self):
-        a = assess(evidence(trackers=[tr(1)]), TODAY).readiness
-        b = assess(evidence(trackers=[tr(1)]), AFTER).readiness
-        assert a.score_percent == b.score_percent and a.coverage_percent == b.coverage_percent
+    def test_the_statuses_are_unchanged_by_timing(self):
+        a = assess(evidence(trackers=[tr(1)]), TODAY)
+        b = assess(evidence(trackers=[tr(1)]), AFTER)
+        assert [r.status for r in a.requirements] == [r.status for r in b.requirements]
 
 
 class TestEvidenceRecord:
@@ -177,7 +177,7 @@ class TestWebsiteChecksVersusBusinessChecks:
         for ev in (evidence(), evidence(trackers=[tr(1)]), evidence(pages=0)):
             for r in assess(ev, TODAY, ds.Applicability(True, True, True, True)).requirements:
                 if r.check_type == "business":
-                    assert r.status == "unable_to_verify" and r.points_earned == 0 and r.confidence == "none", r.id
+                    assert r.status == "unable_to_verify" and r.confidence == "none", r.id
 
     def test_retention_dpia_grievance_and_breach_are_business_checks_not_claimed_complete(self):
         s = assess(evidence(), TODAY, ds.Applicability(True, True, True, True))
@@ -214,13 +214,7 @@ class TestApplicabilityConfidenceAndRationale:
         s = assess(evidence(pages=0), TODAY)
         assert {r.confidence for r in s.requirements} == {"none"}
 
-    def test_the_scoring_rationale_shows_the_points_and_the_weight_reason(self):
-        s = assess(evidence(trackers=[tr(1)], pages=3), TODAY)
-        c1, n2 = by_id(s, "DPDP-C1"), by_id(s, "DPDP-N2")
-        assert c1.scoring_rationale.startswith("Not Met earns 0 of 5 points. Weight 5: Core consent obligation")
-        assert n2.scoring_rationale.startswith("Partially Met earns 1 of 2 points.")
-
-    def test_the_rationale_for_unscored_checks_says_why_they_are_not_scored(self):
+    def test_a_result_has_no_scoring_rationale_and_a_duplicate_says_where_its_gap_is_listed(self):
         s = assess(evidence(trackers=[tr(1)], mechanism="none"), TODAY)
-        assert "never treated as met" in by_id(s, "DPDP-S6").scoring_rationale
-        assert by_id(s, "DPDP-C2").scoring_rationale.startswith("Not scored: Counted under DPDP-C1")
+        assert not hasattr(by_id(s, "DPDP-C1"), "scoring_rationale")
+        assert by_id(s, "DPDP-C2").exclusion_reason.startswith("Listed under DPDP-C1")

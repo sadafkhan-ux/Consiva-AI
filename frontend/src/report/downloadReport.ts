@@ -5,10 +5,10 @@ import { pagesCoverageLine, pagesTileValue } from "./scanPages";
 import { bannerFactText } from "./consentObservation";
 import { CONSIVA_LOGO_HEIGHT, CONSIVA_LOGO_PNG, CONSIVA_LOGO_WIDTH } from "./consivaLogo";
 import { buildHeroView, buildPreviewView } from "./hero";
-import { formatRef, formatRefShort, formatRefs } from "./legalRefs";
+import { formatRef, formatRefs } from "./legalRefs";
 import { buildPolicyView, POLICY_BASIS_LABEL, POLICY_STATUS_LABEL } from "./policyAnalysis";
 import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER } from "./reportScope";
-import { checkContribution, CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type FindingRow } from "./reportText";
+import { CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type FindingRow } from "./reportText";
 import { REQUEST_UNIT_NOTE } from "./stateCounts";
 
 // The report reads in order. Numbered sections 1 to 10: the score, scan summary, readiness, privacy areas and top findings (page 1); the consent
@@ -97,7 +97,7 @@ export function gradientAt(t: number): Rgb {
 export async function downloadReport(model: ReportModel): Promise<void> {
   const { jsPDF } = await loadJsPdf();
   const doc = new jsPDF({ unit: "pt", format: "a4", compress: true });
-  const v = model.dpdpScore;
+  const v = model.requirements;
   const vis = model.visual;
 
   const fill = (c: Rgb) => doc.setFillColor(c[0], c[1], c[2]);
@@ -369,8 +369,8 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   };
 
 
-  const assessed = v ? v.assessed : [];
-  const scoreValue = v ? v.scoreValue : null;   // the one authoritative number: the ring, the text and every other page use it
+  const ten = model.assessment;
+  const scoreValue = ten ? ten.score : null;   // the one authoritative number (the server's ten-check score): the ring, the text and every other page use it
 
   // ============================== page 1 ==============================
   pageTop(1);
@@ -378,7 +378,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   text("Evidence from a live scan of the main domain: before consent, after Accept and after Reject.", M, 88, { size: 8.5, color: MUTED });
 
   // --- hero: the score at the top left, what it means beside it, and at the top right the scanned site's domain above its homepage as the scanner saw it ---
-  const hero = buildHeroView(v);
+  const hero = buildHeroView(model.assessment);
   const preview = buildPreviewView(model.screenshot, model.siteUrl, model.scanId);
   const heroY = 100;
   const RING_R = 36;
@@ -401,12 +401,12 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   const addressLines = preview.address ? wrapCell(preview.address, SW, 6.6) : [];
   const rightBottom = imgTop + imgH + 4 + captionLines.length * 8.6 + addressLines.length * 8.2;
 
-  // The middle column: the reading of the score, its coverage, and the call to action.
+  // The middle column: the reading of the score and the call to action.
   const headLines = wrapCell(hero.headline, hw, 10, true);
   const headTop = heroY + 44;
   const buttonTop = headTop + headLines.length * 12.6 + 14;
   const midBottom = buttonTop + 22;
-  // The label under the ring is as wide as the column beside it allows: a longer one ("Compliance score unavailable") takes two lines.
+  // The label under the ring is as wide as the column beside it allows: a longer one ("Privacy Readiness Score unavailable") takes two lines.
   const scoreLabelLines = wrapCell(hero.scoreLabel, 112, 8.5, true);
   const ringBottom = heroY + 62 + RING_R + 4 + 3 + 16 + (scoreLabelLines.length - 1) * 10;
 
@@ -497,48 +497,21 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   // --- readiness: the India DPDP Act result. No other framework is assessed, so none is shown. ---
   y = section("Framework readiness", y);
   const fh = 62;
-  const counts = (k: string) => assessed.filter((r) => r.statusKey === k).length;
-  box(M, y, CW, fh, { bg: v && scoreValue !== null ? WHITE : [247, 248, 252], border: RULE, r: 9 });
+  box(M, y, CW, fh, { bg: ten && scoreValue !== null ? WHITE : [247, 248, 252], border: RULE, r: 9 });
   text("India DPDP Act", M + 12, y + 16, { size: 9, bold: true });
-  // The figure is as large as the room beside the counts allows: "Insufficient Evidence" is much wider than "56.5%".
-  const readinessText = v ? v.headline : "Not available";
+  // The figure is as large as the room beside the counts allows: "Not available" is much wider than "75/100".
+  const readinessText = ten && scoreValue !== null ? ten.scoreText : "Not available";
   let readinessSize = 20;
   doc.setFont("helvetica", "bold");
   doc.setFontSize(readinessSize);
   while (readinessSize > 11 && doc.getTextWidth(readinessText) > 170) { readinessSize -= 1; doc.setFontSize(readinessSize); }
   text(readinessText, M + 12, y + 44, { size: readinessSize, bold: true });
   text(
-    v ? `${counts("met")} met · ${counts("partially_met")} partly met · ${counts("not_met")} not met\n${v.unableToVerify.length} could not be verified · ${v.excluded.length} not applicable` : "The score was not loaded.",
+    ten ? `${ten.counts.passed} passed · ${ten.counts.partial} partly passed · ${ten.counts.failed} failed
+${ten.counts.notAssessed} not assessed · ${ten.counts.notApplicable} not applicable` : "The assessment was not loaded.",
     M + 200, y + 28, { size: 7.4, color: MUTED, width: CW - 215, lead: 10, lines: 2 },
   );
   y += fh + 16;
-
-  // --- privacy areas ---
-  if (v) {
-    y = section("Privacy areas", y);
-    y = text("Each bar is the share of the weighted points earned in that area. Coverage is the share of the area's checks that a scan could test.", M, y + 1, { size: 6.8, color: MUTED, width: CW, lead: 8.2 }) + 3;
-    const cats = v.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).slice(0, 4);
-    const aw = (CW - gap * (cats.length - 1)) / Math.max(1, cats.length);
-    const ah = 66;
-    cats.forEach((c, i) => {
-      const x = M + i * (aw + gap);
-      const pctValue = c.score === "Not assessed" ? null : parseFloat(c.score);
-      box(x, y, aw, ah, { border: RULE, r: 9 });
-      text(c.name, x + 9, y + 14, { size: 8, bold: true, width: aw - 14, lines: 1 });
-      text(pctValue === null ? "Not assessed" : c.score, x + 9, y + 35, { size: pctValue === null ? 10 : 17, bold: true, color: pctValue === null ? MUTED : INK });
-      if (pctValue !== null) {
-        fill([233, 235, 247]);
-        doc.roundedRect(x + 9, y + 42, aw - 18, 4.5, 2.2, 2.2, "F");
-        const bar = Math.max(4, ((aw - 18) * pctValue) / 100);
-        for (let k = 0; k < 24; k++) {
-          fill(gradientAt(k / 23));
-          doc.rect(x + 9 + (bar * k) / 24, y + 42, bar / 24 + 0.4, 4.5, "F");
-        }
-      }
-      text(pctValue === null ? "Cannot be tested from outside" : c.coverage.replace("coverage", "Coverage"), x + 9, y + 58, { size: 6.8, color: MUTED, width: aw - 14, lines: 1 });
-    });
-    y += ah + 16;
-  }
 
   // --- top findings ---
   y = section("Top findings", y);
@@ -676,51 +649,45 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     y += 40;
   }
 
-  // --- every check behind the score, compactly. The full record of each check (legal basis, limits, evidence expected) is on the dashboard. ---
-  if (v) {
-    const checks = v.allChecks.filter((c) => isReportCategory(c.category, v.assessedCategories));
-    const listed = checks.filter((c) => c.statusKey !== "not_applicable");
-    const notApplicable = checks.filter((c) => c.statusKey === "not_applicable");
-    const contributionOf = checkContribution;
+  // --- the ten checks behind the score, compactly. The full record of each requirement (legal basis, limits, evidence expected) is on the dashboard. ---
+  if (ten && ten.checks.length) {
     if (y + 80 > FOOTER_Y - 14) {
       footer(doc.getNumberOfPages());
       doc.addPage("a4", "portrait");
       pageTop(doc.getNumberOfPages());
       y = 74;
     }
-    y = section("Every check behind the score", y + 8);
-    const cols = [30, 196, 118, 34, 68, 77];
+    y = section("The ten checks behind the score", y + 8);
+    y = text(`Each check, its result and the marks it earned. The marks add up to ${ten.totalText}, which is the score ${ten.scoreText}.`, M, y + 1, { size: 6.8, color: MUTED, width: CW, lead: 8.2 }) + 3;
+    const cols = [30, 330, 60, 95];
     const headRow = () => {
       fill(TINT);
       doc.rect(M, y, CW, 16, "F");
       let hx = M;
-      ["ID", "What is checked, and the evidence", "Requirement", "Weight", "Status", "Contribution"].forEach((h, i) => {
-        text(h.toUpperCase(), i === 3 ? hx + cols[i] - 6 : hx + 6, y + 11, { size: 5.9, bold: true, color: MUTED, align: i === 3 ? "right" : "left" });
+      ["No.", "What is checked, and the evidence", "Marks", "Result"].forEach((h, i) => {
+        text(h.toUpperCase(), i === 2 ? hx + cols[i] - 6 : hx + 6, y + 11, { size: 5.9, bold: true, color: MUTED, align: i === 2 ? "right" : "left" });
         hx += cols[i];
       });
       y += 16;
     };
-    /** Starts a new page when the next block does not fit. The table's header is repeated only where more table rows follow. */
-    const checkRoom = (h: number, repeatHeader = true) => {
+    /** Starts a new page when the next block does not fit, repeating the table header. */
+    const checkRoom = (h: number) => {
       if (y + h <= FOOTER_Y - 14) return;
       footer(doc.getNumberOfPages());
       doc.addPage("a4", "portrait");
       pageTop(doc.getNumberOfPages());
       y = 74;
-      if (repeatHeader) headRow();
+      headRow();
     };
     headRow();
-    const tone = (t: string): Tone => (t === "pass" ? "good" : t === "fail" ? "bad" : t === "na" ? "mute" : "warn");
+    const toneOf = (r: string): Tone => (r === "Passed" ? "good" : r === "Failed" ? "bad" : r === "Partially Passed" ? "warn" : "mute");
     let band = 0;
-    for (const r of listed) {
-      // Every line of the check, its evidence, its legal basis and its contribution is printed: the row grows to fit its text.
-      const titleL = wrapCell(r.title, cols[1] - 10, 7, true);
-      const evL = wrapCell(stripRuleCodes(r.evidenceLine), cols[1] - 10, 6.1);
-      const refL = wrapCell(formatRefShort(r.provisions), cols[2] - 10, 6.1);
-      const conL = wrapCell(contributionOf(r), cols[5] - 8, 6.4);
-      const rowH = Math.max(21, 6 + titleL.length * 8.2 + evL.length * 7.2 + 4, refL.length * 7.2 + 10, conL.length * 7.4 + 10);
+    for (const c of ten.checks) {
+      const titleL = wrapCell(c.name, cols[1] - 10, 7, true);
+      const evL = wrapCell(stripRuleCodes(c.evidence || c.explanation), cols[1] - 10, 6.1);
+      const rowH = Math.max(21, 6 + titleL.length * 8.2 + evL.length * 7.2 + 4);
       checkRoom(rowH);
-      if (r.tone === "fail") {
+      if (c.result === "Failed") {
         fill([253, 236, 238]);
         doc.rect(M, y, CW, rowH, "F");
       } else if (band % 2 === 1) {
@@ -729,44 +696,34 @@ export async function downloadReport(model: ReportModel): Promise<void> {
       }
       band += 1;
       let x = M;
-      text(r.id.replace("DPDP-", ""), x + 6, y + 13, { size: 7, bold: true });
+      text(String(c.id), x + 6, y + 13, { size: 7, bold: true });
       x += cols[0];
       titleL.forEach((ln, k) => text(ln, x + 6, y + 9 + k * 8.2, { size: 7, bold: true }));
       evL.forEach((ln, k) => text(ln, x + 6, y + 9 + titleL.length * 8.2 + k * 7.2, { size: 6.1, color: MUTED }));
       x += cols[1];
-      refL.forEach((ln, k) => text(ln, x + 6, y + 9 + k * 7.2, { size: 6.1, color: MUTED }));
+      text(c.marksText, x + cols[2] - 6, y + 13, { size: 7, align: "right" });
       x += cols[2];
-      text(String(r.weight), x + cols[3] - 6, y + 13, { size: 7, align: "right" });
-      x += cols[3];
-      pill(r.verdict, x + 4, y + 5, tone(r.tone), 6.2);
-      x += cols[4];
-      conL.forEach((ln, k) => text(ln, x + 6, y + 9 + k * 7.4, { size: 6.4 }));
+      pill(c.result, x + 4, y + 5, toneOf(c.result), 6.2);
       stroke(RULE);
       doc.setLineWidth(0.4);
       doc.line(M, y + rowH, M + CW, y + rowH);
       y += rowH;
     }
-    if (notApplicable.length) {
-      checkRoom(21);
-      const idsL = wrapCell(notApplicable.map((r) => r.id.replace("DPDP-", "")).join(", "), cols[0] + cols[1] - 10, 7, true);
-      const rowH = Math.max(21, idsL.length * 8.2 + 10);
-      idsL.forEach((ln, k) => text(ln, M + 6, y + 13 + k * 8.2, { size: 7, bold: true }));
-      text("Not applicable: left out unless declared.", M + cols[0] + cols[1] + 6, y + 13, { size: 6.1, color: MUTED, width: cols[2] + cols[3] - 12 });
-      pill("N/A", M + cols[0] + cols[1] + cols[2] + cols[3] + 4, y + 5, "mute", 6.2);
-      y += rowH;
-      stroke(RULE);
-      doc.line(M, y, M + CW, y);
-    }
     y += 4;
     for (const ln of wrapCell(OMITTED_DUTIES_NOTE, CW, 6.8)) {
-      checkRoom(9, false);
+      if (y + 9 > FOOTER_Y - 14) {
+        footer(doc.getNumberOfPages());
+        doc.addPage("a4", "portrait");
+        pageTop(doc.getNumberOfPages());
+        y = 74;
+      }
       text(ln, M, y + 6, { size: 6.8, color: MUTED });
       y += 8.2;
     }
   }
   // ============================== what to fix first, and the dedicated sections ==============================
   // Flows on from the table of every check, onto as many pages as it needs. The wording of each section is worked out once (report/fixes via
-  // dpdpScore and policyAnalysis, report/insights) and is the same as the dashboard's.
+  // requirements and policyAnalysis, report/insights) and is the same as the dashboard's.
   {
     const MW = makeWriter(y);
     const cur2 = MW.w;
@@ -797,19 +754,18 @@ export async function downloadReport(model: ReportModel): Promise<void> {
     const policyView = buildPolicyView(model.policyAnalysis);
     const scoreFixes = v ? v.remediationPlan : [];
     const policyFixes = policyView?.fixes ?? [];
-    MW.para("In the order to do them. Where a fix changes the score, its impact is the score's own arithmetic: that one check fixed on its own and nothing else changed. Where it changes the policy, the impact is the policy's completeness. Each fix says why it matters and where the law says so.", { size: 7.6, color: MUTED });
+    MW.para("In the order to do them. Fixes to the requirements are ordered by the severity of each finding. Where a fix changes the policy, the impact is the policy's completeness. Each fix says why it matters and where the law says so.", { size: 7.6, color: MUTED });
     if (!v && !policyView) {
-      MW.para("The score and the policy analysis were not available for this report, so no fixes can be listed.", { size: 8.5 });
+      MW.para("The requirements reading and the policy analysis were not available for this report, so no fixes can be listed.", { size: 8.5 });
     }
     if (v) {
       cur2.y += 4;
-      MW.para("Fixes that change the score", { size: 9.2, bold: true, color: DEEP });
-      if (scoreFixes.length === 0) MW.para("No fix is listed for the score: no check failed with enough evidence.", { size: 8, indent: 6 });
+      MW.para("Fixes to the requirements", { size: 9.2, bold: true, color: DEEP });
+      if (scoreFixes.length === 0) MW.para("No fix is listed: no requirement failed with enough evidence.", { size: 8, indent: 6 });
       for (const f of scoreFixes) {
         MW.room(60);
         MW.entry(`${f.rank}. ${f.title}`, [{ label: f.priority, tone: f.timing === "Current" ? "bad" : "warn" }, { label: f.outcome, tone: "mute" }], { indent: 6, size: 8.2 });
         MW.para(`Action: ${f.action}`, { size: 7.6, indent: 12 });
-        if (f.scoreLine) MW.para(`Impact on the score: ${f.scoreLine}`, { size: 7.6, bold: true, indent: 12 });
         if (f.impact) MW.para(`Why it matters: ${f.impact}`, { size: 7.6, indent: 12 });
         MW.para(`How to verify: ${f.howToVerify}`, { size: 7.4, indent: 12 });
         MW.para(formatRef(f.legal), { size: 7, color: MUTED, indent: 12 });
@@ -830,7 +786,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
         cur2.y += 4;
       }
     }
-    MW.para("What each rests on: the score fixes rest on what the scan measured. The policy fixes rest on the policy's own text, where a point not found is not a finding that a duty is unmet.", { size: 7, color: MUTED });
+    MW.para("What each rests on: the requirement fixes rest on what the scan measured. The policy fixes rest on the policy's own text, where a point not found is not a finding that a duty is unmet.", { size: 7, color: MUTED });
 
     // --- the dedicated sections: grievance officer, DPO, Indian-language support, children's data and age gate, security signals ---
     for (const s of model.insights) {
@@ -872,7 +828,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
           rv.rows.map((r) => [r.page, r.sections, r.check, [r.status, `(${r.evidenceKind})`], r.evidence, r.fix]), 6.4,
         );
         MW.para("C. Summary", { size: 9.2, bold: true, color: DEEP });
-        MW.para(`Five-page review score: ${rv.scoreLine}`, { size: 8, bold: true });
+        MW.para(`What the five-page review could assess: ${rv.summaryLine}`, { size: 8, bold: true });
         MW.para("Top gaps, ranked by risk", { size: 8.2, bold: true });
         if (rv.topGaps.length === 0) MW.para("No gap or missing item was found in the checks the scan could assess.", { size: 7.8, indent: 6 });
         for (const g of rv.topGaps) {
@@ -1297,7 +1253,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
       // Too little room for the full list: one line of the main parts and where they start. The appendix has its own full index.
       const find = (starts: string) => outline.find((o) => o.label.replace(/^\d+\s{2}/, "").startsWith(starts));
       const wanted: [string, { label: string; page: number } | undefined][] = [
-        ["Summary", find("Scan summary")], ["Consent behaviour", find("Consent behaviour")], ["Every check", find("Every check")],
+        ["Summary", find("Scan summary")], ["Consent behaviour", find("Consent behaviour")], ["The ten checks", find("The ten checks")],
         ["Fixes", find("Prioritised fixes")], ["Pages scanned", find("Website Pages")], ["Evidence appendix", outline.find((o) => o.label.startsWith("Appendix A"))],
       ];
       const parts = wanted.flatMap(([name, e]) => (e ? [[name, e] as const] : []));
@@ -1315,7 +1271,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
       let size = 7.4;
       for (const smaller of [7.4, 7, 6.6, 6.2]) { size = smaller; if (widthAt(shown, smaller) <= room) break; }
       // Still too wide at the smallest size: drop the parts the reader can find fastest by scrolling, never the first or the appendix.
-      for (const drop of ["Every check", "Consent behaviour", "Pages scanned"]) {
+      for (const drop of ["The ten checks", "Consent behaviour", "Pages scanned"]) {
         if (widthAt(shown, size) <= room) break;
         shown = shown.filter(([name]) => name !== drop);
       }

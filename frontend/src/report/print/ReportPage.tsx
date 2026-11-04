@@ -26,7 +26,7 @@ const SETTLE_MS = 8_000;
 
 /** The header line of the printed page: "Scanned 21 Oct 2026, 06:41 UTC · 5 of 520 pages scanned". The same words as the PDF drawn in the browser. */
 export function reportHeaderMeta(model: ReportModel): { domain: string; scanned: string; filename: string } {
-  const v = model.dpdpScore;
+  const v = model.requirements;
   const vis = model.visual;
   const domain = model.siteUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const pages = model.scanPages ? model.scanPages.coverageLine : vis ? pagesCoverageLine(vis.pagesScanned, vis.pagesFound) : "";
@@ -76,7 +76,7 @@ export function ReportPage({ scanId, print, variant, part }: { scanId: string; p
 
   const terminal = ["completed", "degraded", "failed", "awaiting_review"].includes(state.phase) && state.scan?.id === scanId;
   const complete = terminal && state.scan?.status === "completed";
-  const loaded = !!state.evidence && !!state.dpdpScore && state.policyAnalysis !== null && state.screenshot !== null;
+  const loaded = !!state.evidence && !!state.assessment && !!state.requirements && state.policyAnalysis !== null && state.screenshot !== null;
 
   // What the page still waits for after the scan itself: the evidence, the score, the policy analysis and the picture load alongside it. A part that
   // cannot be loaded is shown as unavailable, so waiting stops after a short while rather than holding the report back for ever.

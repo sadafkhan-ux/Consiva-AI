@@ -14,13 +14,10 @@ import { bannerNotDisplayed, observedBannerFact, scriptFailureNote } from "./con
 //   Unable to Verify             the scan cannot see it (behind a login, not captured, not tested). Never counted as met.
 //   Requires document review  cannot be judged from a website at all.
 //
-// A readiness check, not a finding of violation: most of Sections 3 to 17 apply from 13 May 2027. It never changes the DPDP Compliance Score.
+// A readiness check, not a finding of violation: most of Sections 3 to 17 apply from 13 May 2027. It carries no score and does not change the ten-check Privacy Readiness Score.
 
 export type ReadinessStatus = "Passes this technical check" | "Gap" | "Not Found" | "Unable to Verify" | "Requires document review";
 export type EvidenceKind = "Quoted" | "Observed" | "Not seen" | "Not captured";
-
-/** The fewest assessed checks that make a score: the same floor the compliance score uses (backend scoring/dpdp_score.py MIN_ASSESSED_REQUIREMENTS). */
-export const MIN_ASSESSED_CHECKS = 2;
 
 export const READINESS_CLOSING = "This is a compliance readiness review, not legal advice.";
 export const READINESS_TIMING = "Most of Sections 3 to 17 of the Act and Rules 3 and 5 to 16 apply from 13 May 2027 (Section 6(9) and Rule 4, on Consent Managers, from 13 November 2026), so these are readiness findings, not violations.";
@@ -48,7 +45,7 @@ export interface ReadinessRow {
   fix: string;
   /** 1 (low) to 5 (high): how much it matters if the check fails. Used only to rank the gaps. */
   risk: number;
-  /** Whether the row counts in the readiness score. A page that does not exist is a finding, not a failed check. */
+  /** Whether the row counts among the checks the review could assess. A page that does not exist is a finding, not a failed check. */
   scored: boolean;
 }
 
@@ -61,9 +58,8 @@ export interface ReadinessReview {
   rows: ReadinessRow[];
   counts: Record<ReadinessStatus, number>;
   assessed: number;
-  /** Passes this technical check checks over those that could be assessed (Passes this technical check, Gap, Not Found), as a whole number out of 100; null when none could be. */
-  scorePercent: number | null;
-  scoreLine: string;
+  /** In words, how many of the checks the review could assess are met, and what was left out. No score. */
+  summaryLine: string;
   topGaps: GapSummary[];
   riskiest: { n: number; page: string; why: string } | null;
   notes: string[];
@@ -153,7 +149,7 @@ export function buildReadinessReview(args: {
   const { evidence, meta, policy, sector } = args;
   const empty: ReadinessReview = {
     available: false, reason: null, pages: [], rows: [], counts: { "Passes this technical check": 0, Gap: 0, "Not Found": 0, "Unable to Verify": 0, "Requires document review": 0 }, assessed: 0,
-    scorePercent: null, scoreLine: "", topGaps: [], riskiest: null, notes: [], timing: READINESS_TIMING, closing: READINESS_CLOSING,
+    summaryLine: "", topGaps: [], riskiest: null, notes: [], timing: READINESS_TIMING, closing: READINESS_CLOSING,
   };
   const scannedPages = (evidence?.pages ?? []).filter(loaded);
   if (!evidence || scannedPages.length === 0) {
@@ -446,8 +442,7 @@ export function buildReadinessReview(args: {
   // ── a framed wrapper (rule R-012) ──────────────────────────────────────────────────────────────────────────────────────────
   // The scanned address only displays another site, so what the scan saw is the wrapper page. What it SAW stands (a tracker that fired, a form, a quoted
   // policy sentence). A row that rests on NOTHING being seen (no banner, no page, no policy link, a clean "nothing fired") says nothing about the framed site, so
-  // it becomes Unable to Verify, is not scored, and says why. This is the same rule the compliance score applies, requirement by requirement
-  // (backend scoring/dpdp_score.py `_framed_limit`).
+  // it becomes Unable to Verify, is not counted, and says why.
   const framed = framedSiteOf(evidence);
   if (framed) {
     const note = `The scanned address only displays another site (${framed}) in a frame, so this describes the wrapper page, not the site visitors see (rule R-012).`;
@@ -466,8 +461,6 @@ export function buildReadinessReview(args: {
   const scored = rows.filter((r) => r.scored && (r.status === "Passes this technical check" || r.status === "Gap" || r.status === "Not Found"));
   const assessed = scored.length;
   const ok = scored.filter((r) => r.status === "Passes this technical check").length;
-  // The compliance score is withheld below two assessed requirements (backend MIN_ASSESSED_REQUIREMENTS); a one-check "100 out of 100" would be the same misleading number.
-  const scorePercent = assessed >= MIN_ASSESSED_CHECKS ? Math.round((ok / assessed) * 100) : null;
   const gapsOf = rows.filter((r) => r.scored && (r.status === "Gap" || r.status === "Not Found")).map((r, i) => ({ r, i }))
     .sort((a, b) => b.r.risk - a.r.risk || a.r.pageN - b.r.pageN || a.i - b.i);
   const topGaps: GapSummary[] = gapsOf.slice(0, 5).map(({ r }, i) => ({ rank: i + 1, row: r, riskLabel: r.risk >= 4 ? "High" : r.risk === 3 ? "Medium" : "Low" }));
@@ -478,19 +471,19 @@ export function buildReadinessReview(args: {
     ? (() => {
         const mine = gapsOf.filter(({ r }) => r.pageN === topPage[0]).map(({ r }) => r);
         const page = pages[topPage[0] - 1];
-        return { n: topPage[0], page: shortName(page.role), why: `${mine.length} gap${mine.length === 1 ? "" : "s"} here carry the most weight, led by: ${mine.slice(0, 2).map((r) => r.check.replace(/\.$/, "")).join("; ")}.` };
+        return { n: topPage[0], page: shortName(page.role), why: `${mine.length} gap${mine.length === 1 ? "" : "s"} here are the most serious, led by: ${mine.slice(0, 2).map((r) => r.check.replace(/\.$/, "")).join("; ")}.` };
       })()
     : null;
 
   return {
-    ...empty, available: true, pages, rows, counts, assessed, scorePercent,
-    scoreLine: scorePercent === null
-      ? "Not enough could be verified from the website to give a five-page review score."
-      : `${scorePercent} out of 100: ${ok} of the ${assessed} checks the scan could assess are met (${counts.Gap} gap${counts.Gap === 1 ? "" : "s"}, ${counts["Not Found"]} not found). The ${counts["Unable to Verify"]} it could not verify and the ${counts["Requires document review"]} that need document review are not counted.`,
+    ...empty, available: true, pages, rows, counts, assessed,
+    summaryLine: assessed === 0
+      ? "Not enough could be verified from the website to assess any of the five-page checks."
+      : `${ok} of the ${assessed} checks the scan could assess are met (${counts.Gap} gap${counts.Gap === 1 ? "" : "s"}, ${counts["Not Found"]} not found). The ${counts["Unable to Verify"]} it could not verify and the ${counts["Requires document review"]} that need document review are not counted.`,
     topGaps, riskiest,
     notes: [
-      ...(framed ? [`The scanned address is a wrapper that displays ${framed}. Checks that rest on something not being seen are Unable to Verify and are not scored, as in the compliance score; scan ${framed} directly to assess that site.`] : []),
-      "This is a separate five-page reading, not the DPDP Compliance Score. It does not change that score, which weighs every check by its own weight and is the report's headline.",
+      ...(framed ? [`The scanned address is a wrapper that displays ${framed}. Checks that rest on something not being seen are Unable to Verify and are not counted; scan ${framed} directly to assess that site.`] : []),
+      "This is a separate five-page reading with no score of its own. The report's one score is the Privacy Readiness Score, from the ten checks.",
       "Each check counts equally. A page that does not exist is a finding, not a failed check, except the privacy notice. Only what the scan saw or the policy's own words say is marked Passes this technical check; what could not be seen is marked Unable to Verify, never Passes this technical check.",
       "Plain language, the wording beside a form, and a footer's text are not kept by the scan, so they are marked Unable to Verify rather than judged.",
     ],

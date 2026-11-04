@@ -1,14 +1,15 @@
 import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DpdpScoreResponse, ScanScreenshot } from "../api/types";
+import type { DpdpRequirementsResponse, ScanScreenshot } from "../api/types";
+import { A, withScore } from "../test/assessments";
+import { ringNumber } from "../report/scoreFormat";
 import type { ConsentScanState } from "../hooks/useConsentScan";
-import fixtures from "../test/dpdpScoreFixtures.json";
+import fixtures from "../test/requirementsFixtures.json";
 import { buildHeroView } from "../report/hero";
-import { buildScoreView } from "../report/dpdpScore";
 import { ScanHero } from "./ScanHero";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
-const score = buildScoreView(F.mixed);
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
+const score = A.mixed;
 const B64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/";
 const shot = (over: Partial<ScanScreenshot> = {}): ScanScreenshot => ({
   scan_id: "11111111-1111-1111-1111-111111111111", domain: "swaransoft.com", status: "ok", available: true, message: null, page_url: "https://swaransoft.com/",
@@ -18,7 +19,7 @@ const none = (message: string, status = "blocked"): ScanScreenshot => shot({ sta
 
 describe("the hero on the dashboard", () => {
   it("shows the domain directly above the homepage picture, and the picture itself", () => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
     const figure = screen.getByTestId("hero-preview");
     const children = Array.from(figure.children).map((c) => c.getAttribute("data-testid"));
     expect(children.indexOf("hero-domain")).toBeLessThan(children.indexOf("hero-screenshot"));           // the domain comes first, above the picture
@@ -31,17 +32,17 @@ describe("the hero on the dashboard", () => {
   });
 
   it("puts the score ring first, in the same row as the picture", () => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
     const hero = screen.getByTestId("scan-hero");
     const order = Array.from(hero.children).map((c) => c.getAttribute("data-testid") ?? c.className);
     expect(order[0]).toBe("hero-score");                                  // the score is the first thing: top left
     expect(order[order.length - 1]).toBe("hero-preview");                  // the picture is the last: top right
-    expect(screen.getByTestId("hero-percent")).toHaveTextContent("56.5");
-    expect(within(screen.getByTestId("hero-score")).getByText("Compliance Score")).toBeInTheDocument();
+    expect(screen.getByTestId("hero-percent")).toHaveTextContent("75");
+    expect(within(screen.getByTestId("hero-score")).getByText(/Privacy Readiness Score: 75\/100/)).toBeInTheDocument();
   });
 
   it("reads exactly the words the PDF reads: band and headline, and shows no coverage", () => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
     const h = buildHeroView(score);
     expect(screen.getByTestId("hero-band")).toHaveTextContent(h.band);
     expect(screen.getByTestId("hero-headline")).toHaveTextContent(h.headline);
@@ -50,13 +51,13 @@ describe("the hero on the dashboard", () => {
   });
 
   it("names the domain once, and never repeats the address of a homepage", () => {
-    const { container } = render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
+    const { container } = render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
     expect((container.textContent ?? "").split("swaransoft.com").length - 1).toBe(1);
     expect(screen.queryByTestId("hero-address")).not.toBeInTheDocument();
   });
 
   it("shows the address once, under the picture, when the scan was of a deeper page", () => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/pricing?plan=pro" screenshot={shot()} />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/pricing?plan=pro" screenshot={shot()} />);
     expect(screen.getByTestId("hero-address")).toHaveTextContent("https://swaransoft.com/pricing?plan=pro");
   });
 
@@ -65,58 +66,58 @@ describe("the hero on the dashboard", () => {
     ["timeout", "The homepage preview could not be taken in time."],
     ["not_captured", "No homepage preview was taken for this scan: it was scanned before previews were added."],
   ])("%s: says so in a clean panel, with no picture, and still names the domain", (status, message) => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={none(message, status)} />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={none(message, status)} />);
     expect(screen.queryByTestId("hero-screenshot")).not.toBeInTheDocument();
     expect(screen.getByTestId("hero-preview-missing")).toHaveTextContent("Homepage preview not available");
     expect(screen.getByTestId("hero-preview-missing")).toHaveTextContent(message);
     expect(screen.getByTestId("hero-domain")).toHaveTextContent("swaransoft.com");
-    expect(screen.getByTestId("hero-percent")).toHaveTextContent("56.5");        // the score is untouched
+    expect(screen.getByTestId("hero-percent")).toHaveTextContent("75");        // the score is untouched
   });
 
   it("uses a plain default when the preview could not be loaded at all", () => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={null} />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={null} />);
     expect(screen.getByTestId("hero-preview-missing")).toHaveTextContent("A homepage preview is not available for this scan.");
   });
 
   it("says there is no score, and shows no number, when the score is withheld or missing", () => {
-    const { unmount } = render(<ScanHero score={null} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
+    const { unmount } = render(<ScanHero assessment={null} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
     expect(screen.getByTestId("hero-percent")).toHaveTextContent("No score");
     expect(screen.queryByTestId("hero-ring-arc")).not.toBeInTheDocument();
     unmount();
-    render(<ScanHero score={buildScoreView(F.insufficient)} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
+    render(<ScanHero assessment={A.noScore} siteUrl="https://swaransoft.com/" screenshot={shot()} />);
     expect(screen.getByTestId("hero-percent")).not.toHaveTextContent("%");
   });
 
   it("draws the arc to the score: the full ring at 100%", () => {
-    render(<ScanHero score={buildScoreView(F.thin)} siteUrl="https://x.test/" screenshot={null} />);
+    render(<ScanHero assessment={A.allPassed} siteUrl="https://x.test/" screenshot={null} />);
     const arc = screen.getByTestId("hero-ring-arc");
     const [filled, total] = (arc.getAttribute("stroke-dasharray") ?? "").split(" ").map(Number);
     expect(filled / total).toBeCloseTo(1, 2);
   });
 
   it("refuses a picture that belongs to a different scan, and says no preview is available", () => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={shot()} scanId="22222222-2222-2222-2222-222222222222" />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={shot()} scanId="22222222-2222-2222-2222-222222222222" />);
     expect(screen.queryByTestId("hero-screenshot")).not.toBeInTheDocument();
     expect(screen.getByTestId("hero-preview-missing")).toBeInTheDocument();
   });
 
   it("shows the picture when it belongs to the scan being shown", () => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={shot()} scanId="11111111-1111-1111-1111-111111111111" />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={shot()} scanId="11111111-1111-1111-1111-111111111111" />);
     expect(screen.getByTestId("hero-screenshot")).toBeInTheDocument();
   });
 
   it("spells the domain as the scan was entered, www included", () => {
-    render(<ScanHero score={score} siteUrl="https://www.swaransoft.com/" screenshot={shot()} />);
+    render(<ScanHero assessment={score} siteUrl="https://www.swaransoft.com/" screenshot={shot()} />);
     expect(screen.getByTestId("hero-domain")).toHaveTextContent("www.swaransoft.com");
   });
 
   it("is absent before there is a scanned address", () => {
-    const { container } = render(<ScanHero score={score} siteUrl="" screenshot={shot()} />);
+    const { container } = render(<ScanHero assessment={score} siteUrl="" screenshot={shot()} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it("never prints a path, an error or a code in the hero", () => {
-    render(<ScanHero score={score} siteUrl="https://swaransoft.com/" screenshot={none("A preview of the homepage could not be taken for this scan.", "failed")} />);
+    render(<ScanHero assessment={score} siteUrl="https://swaransoft.com/" screenshot={none("A preview of the homepage could not be taken for this scan.", "failed")} />);
     expect(screen.getByTestId("scan-hero").textContent).not.toMatch(/Traceback|Exception|C:\\|\/home\/|capture_|playwright/i);
   });
 });
@@ -125,7 +126,7 @@ describe("the hero on the dashboard", () => {
 let current: Partial<ConsentScanState> = {};
 vi.mock("../hooks/useConsentScan", async (orig) => {
   const real = await orig<typeof import("../hooks/useConsentScan")>();
-  const base = { phase: "idle", scanId: null, scan: null, stages: [], websiteScanMeta: null, findings: [], audit: [], evidence: null, dpdpScore: null, policyAnalysis: null,
+  const base = { phase: "idle", scanId: null, scan: null, stages: [], websiteScanMeta: null, findings: [], audit: [], evidence: null, requirements: null, policyAnalysis: null,
     screenshot: null, error: null, failedStage: null, startedAt: null, completedAt: null, durationMs: null };
   return { ...real, useConsentScan: () => ({ state: { ...base, ...current }, run: vi.fn(), open: vi.fn(), afterReviewDecision: vi.fn() }) };
 });
@@ -135,7 +136,7 @@ import { ConsentAgentView } from "../ConsentAgentView";
 
 describe("the page", () => {
   const done = (over: Partial<ConsentScanState> = {}) => ({
-    phase: "completed", scanId: "s1", findings: [], startedAt: 1, completedAt: 2, dpdpScore: F.mixed,
+    phase: "completed", scanId: "s1", findings: [], startedAt: 1, completedAt: 2, requirements: F.mixed, assessment: A.mixed,
     scan: { id: "s1", url: "https://swaransoft.com/", domain: "swaransoft.com", status: "completed", error: null, evidence_counts: { pages: 5, cookies: 0, trackers: 0, third_party_services: 0, policies: 0, forms: 0 } },
     ...over,
   }) as Partial<ConsentScanState>;
@@ -159,7 +160,7 @@ describe("the page", () => {
     current = done({ screenshot: none("A preview of the homepage could not be taken for this scan.", "failed") });
     render(<ConsentAgentView />);
     expect(screen.getByTestId("hero-preview-missing")).toBeInTheDocument();
-    expect(screen.getByTestId("dpdp-score")).toBeInTheDocument();
+    expect(screen.getByTestId("dpdp-requirements")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Download Report \(PDF\)/ })).toBeEnabled();
   });
 
@@ -170,15 +171,10 @@ describe("the page", () => {
 });
 
 describe("the figure inside the ring", () => {
-  const withPercent = (percent: number) => {
-    const s = JSON.parse(JSON.stringify(F.mixed)) as DpdpScoreResponse;
-    s.readiness.score_percent = percent;
-    return buildScoreView(s);
-  };
   const text = () => screen.getByTestId("hero-percent");
 
   it.each([[100, "100", 32], [64, "64", 32], [45.5, "45.5", 32], [76.2, "76.2", 32], [33.33, "33.33", 26]])("%s shows %s at size %i, the figure the server sent (the ring prints /100 beneath it)", (value, label, size) => {
-    render(<ScanHero score={withPercent(value)} siteUrl="https://x.test/" screenshot={undefined} />);
+    render(<ScanHero assessment={withScore(value)} siteUrl="https://x.test/" screenshot={undefined} />);
     expect(text().textContent).toBe(label);
     expect(text().getAttribute("font-size")).toBe(String(size));
     expect(text().getAttribute("text-anchor")).toBe("middle");
@@ -187,7 +183,7 @@ describe("the figure inside the ring", () => {
 
   it("puts the figure just above the centre and a small /100 beneath it, so the pair is centred in the ring, as in the PDF", () => {
     for (const value of [100, 45.5]) {
-      const { unmount } = render(<ScanHero score={withPercent(value)} siteUrl="https://x.test/" screenshot={undefined} />);
+      const { unmount } = render(<ScanHero assessment={withScore(value)} siteUrl="https://x.test/" screenshot={undefined} />);
       expect(Number(text().getAttribute("y"))).toBe(58);
       const ring = screen.getByTestId("hero-ring");
       const outOf = [...ring.querySelectorAll("text")].find((t) => t.textContent === "/100");
@@ -198,16 +194,8 @@ describe("the figure inside the ring", () => {
     }
   });
 
-  it("keeps the widest figure inside the coloured ring with room to spare", () => {
-    // Measured in Chromium: "45.5%" in the bold face is 3.09 times its font size wide (67.9 ring units at size 22, which touched the ring's edge).
-    // The ring's inner diameter is 2 x (44 - 4.5) = 79 units. At size 18 the same figure is about 55.6 units wide: more than 10 units clear on each side.
-    const widest = 3.09 * 18;
-    expect(widest).toBeLessThan(79 - 20);
-  });
-
-  it("says No score in the same ring, centred, when the score is withheld", () => {
-    const s = JSON.parse(JSON.stringify(F.insufficient)) as DpdpScoreResponse;
-    render(<ScanHero score={buildScoreView(s)} siteUrl="https://x.test/" screenshot={undefined} />);
+  it("says No score in the same ring, centred, when no check could be assessed", () => {
+    render(<ScanHero assessment={A.noScore} siteUrl="https://x.test/" screenshot={undefined} />);
     expect(text().textContent).toBe("No score");
     expect(text().getAttribute("font-size")).toBe("13");
     expect(Number(text().getAttribute("y"))).toBeCloseTo(55 + 13 * 0.36, 5);
@@ -215,51 +203,44 @@ describe("the figure inside the ring", () => {
   });
 });
 
-describe("the hero shows the compliance score only, never coverage", () => {
-  const cases = Object.entries(F).map(([name, s]) => [name, s] as const);
-
-  it.each(cases)("%s: no coverage word or figure in the hero, and the percentage is the score the backend sent", (_name, s) => {
-    const { container } = render(<ScanHero score={buildScoreView(s)} siteUrl="https://x.test/" screenshot={undefined} />);
+describe("the hero shows the server's score, whatever the assessment", () => {
+  it.each(Object.entries(A))("%s: the number in the ring is the one the server sent, written the same way", (_name, a) => {
+    const { container } = render(<ScanHero assessment={a} siteUrl="https://x.test/" screenshot={undefined} />);
     const hero = screen.getByTestId("scan-hero");
-    expect(hero.textContent ?? "").not.toMatch(/coverage/i);
-    expect(screen.queryByTestId("hero-coverage")).not.toBeInTheDocument();
     const label = screen.getByTestId("hero-percent").textContent;
-    if (s.readiness.status === "scored") {
-      expect(label).toBe(`${s.readiness.score_percent}`);                                      // the backend's own score, not coverage
-      expect(label).not.toBe(`${s.readiness.coverage_percent}%`);
+    if (a.score !== null) {
+      expect(label).toBe(ringNumber(a.scoreText));
+      expect(screen.getByTestId("hero-score-label")).toHaveTextContent(`Privacy Readiness Score: ${a.scoreText}`);
+      expect(a.scoreText).toMatch(/^\d+(\.\d+)?\/100$/);
     } else {
       expect(label).toBe("No score");
-      expect(hero.textContent).toContain("Compliance score unavailable");
-      expect(hero.textContent ?? "").not.toMatch(/\d+(\.\d+)?%/);                               // no number at all when the score is withheld
+      expect(hero.textContent).toContain("Privacy Readiness Score unavailable");
     }
-    expect(container.querySelector("[data-testid=hero-ring-arc]") !== null).toBe(s.readiness.status === "scored" && (s.readiness.score_percent ?? 0) > 0);
+    expect(container.querySelector("[data-testid=hero-ring-arc]") !== null).toBe(a.score !== null && a.score > 0);
   });
 
-  it("says a withheld score is unavailable in the same few words however few checks could be assessed", () => {
-    const zero = JSON.parse(JSON.stringify(F.insufficient)) as DpdpScoreResponse;
-    zero.readiness.insufficient_reason = "Only 0 requirement(s) could be assessed; at least 2 are needed.";
-    const low = JSON.parse(JSON.stringify(F.insufficient)) as DpdpScoreResponse;
-    low.readiness.insufficient_reason = "Assessment coverage is 28.2%, below the 30% needed for a score.";
-    expect(buildHeroView(buildScoreView(zero)).headline).toBe(buildHeroView(buildScoreView(low)).headline);
-    expect(buildHeroView(buildScoreView(low)).headline).not.toMatch(/coverage|28\.2/i);
+  it("says why when checks were left out, and that a score not yet final could still change", () => {
+    render(<ScanHero assessment={{ ...A.policyMissing, final: false, policyAnalysis: "running" }} siteUrl="https://x.test/" screenshot={null} />);
+    expect(screen.getByTestId("hero-basis")).toHaveTextContent(/could not be assessed and are left out/);
+    expect(screen.getByTestId("hero-provisional")).toHaveTextContent(/could still change/);
   });
 
-  it("keeps the coverage in the score data the backend sent and the score card still reads it", () => {
-    const v = buildScoreView(F.mixed);
-    expect(v.coverageValue).toBe(F.mixed.readiness.coverage_percent);
-    expect(v.coverageLine).toContain("Assessment coverage");
+  it("does not call a final score provisional", () => {
+    render(<ScanHero assessment={A.typical} siteUrl="https://x.test/" screenshot={null} />);
+    expect(screen.queryByTestId("hero-provisional")).toBeNull();
   });
 
-  it("shows the 10-check Privacy Readiness Score, the one the summary PDF prints, when it is given", () => {
-    render(<ScanHero score={score} siteUrl="https://x.test/" screenshot={null} tenScore={{ score: 75, totalText: "7.5 / 10", scoreText: "75/100", passed: 7, applicable: 10 }} />);
-    expect(screen.getByTestId("hero-score-label")).toHaveTextContent("Privacy Readiness Score: 75/100 (7.5 / 10 marks)");
-    expect(screen.getByTestId("hero-band")).toHaveTextContent("7 of 10 assessed checks passed");
-    expect(screen.getByTestId("hero-headline")).toHaveTextContent(/not a certified DPDP compliance score/);
-  });
-
-  it("with no applicable check it shows no score, not 0 or 100", () => {
-    render(<ScanHero score={score} siteUrl="https://x.test/" screenshot={null} tenScore={{ score: null, totalText: "No applicable check", scoreText: "No meaningful score", passed: 0, applicable: 0 }} />);
-    expect(screen.getByTestId("hero-band")).toHaveTextContent("No meaningful score");
-    expect(screen.getByTestId("hero-ring")).toHaveAttribute("aria-label", "No score");
+  it("shows the server's score N/100 with its summary, and no score while pending", () => {
+    const { unmount } = render(<ScanHero assessment={score} siteUrl="https://x.test/" screenshot={null} />);
+    expect(screen.getByTestId("hero-score-label")).toHaveTextContent(`Privacy Readiness Score: ${score.scoreText}`);
+    expect(screen.getByTestId("hero-basis")).toHaveTextContent(score.summary);
+    unmount();
+    render(<ScanHero assessment={score} siteUrl="https://x.test/" screenshot={null} pending />);
+    expect(screen.getByTestId("hero-score-label")).toHaveTextContent("assessing");
+    expect(screen.getByTestId("hero-band")).toHaveTextContent("Assessing");
+    expect(screen.getByTestId("hero-percent")).toHaveTextContent("…");
+    expect(document.body.textContent).not.toContain(score.scoreText);
+    expect(screen.queryByTestId("hero-ring-arc")).toBeNull();
+    expect(screen.queryByTestId("hero-basis")).toBeNull();
   });
 });

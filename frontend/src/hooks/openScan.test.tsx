@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   listScans: vi.fn(), createScan: vi.fn(), getScan: vi.fn(), getStages: vi.fn(), getEvidence: vi.fn(),
-  getDpdpScore: vi.fn(), analyze: vi.fn(), getFindings: vi.fn(), getAudit: vi.fn(), getPolicyAnalysis: vi.fn(), getScreenshot: vi.fn(),
+  getRequirements: vi.fn(), analyze: vi.fn(), getFindings: vi.fn(), getAudit: vi.fn(), getPolicyAnalysis: vi.fn(), getScreenshot: vi.fn(), getAssessment: vi.fn(),
 }));
 vi.mock("../api/client", () => ({ api }));
 
@@ -21,8 +21,9 @@ beforeEach(() => {
   api.getFindings.mockResolvedValue([]);
   api.getAudit.mockResolvedValue([]);
   api.getEvidence.mockResolvedValue(null);
-  api.getDpdpScore.mockResolvedValue(null);
+  api.getRequirements.mockResolvedValue(null);
   api.getPolicyAnalysis.mockResolvedValue(null);
+  api.getAssessment.mockResolvedValue(null);
   api.getScreenshot.mockResolvedValue(null);
 });
 
@@ -129,5 +130,59 @@ describe("the recent scans list", () => {
     rerender(<RecentScans busy={false} refreshKey="2" currentScanId={null} onOpen={() => {}} />);
     await waitFor(() => expect(api.listScans).toHaveBeenCalledTimes(2));
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("the score is final only when the policy reading has finished (the dashboard showed 66.7 where the PDF showed 94.4)", () => {
+  const POLICY = { status: "analysed", reason: null, sector: null, documents: [], notes: [], summary: null, requirements: [], limitations: [], model: null };
+
+  it("stays in 'analyzing' while the policy reading is still running, then loads it and finishes", async () => {
+    api.getScan.mockResolvedValue(SCAN("completed"));
+    // the analysis stages are done (the findings are ready) but the policy reading is still running on the first looks, and finished on the third
+    let looks = 0;
+    api.getStages.mockImplementation(async () => {
+      looks += 1;
+      return [...ANALYSED, stage("policy_analysis", looks < 4 ? "running" : "completed")];
+    });
+    api.getPolicyAnalysis.mockImplementation(async () => (looks < 4 ? { ...POLICY, status: "not_run" } : POLICY));
+    const { result } = renderHook(() => useConsentScan());
+    let opened: Promise<void>;
+    await act(async () => { opened = result.current.open("s1"); await Promise.resolve(); });
+    await act(async () => { await opened; });
+    expect(result.current.state.phase).toBe("awaiting_review");
+    expect(result.current.state.policyAnalysis?.status).toBe("analysed");              // the finished reading, not the "not_run" read at the moment the findings landed
+    expect(looks).toBeGreaterThanOrEqual(4);
+  });
+
+  it("loads the requirements reading and the assessment again after the policy reading, because both read that result", async () => {
+    api.getScan.mockResolvedValue(SCAN("completed"));
+    let done = false;
+    api.getStages.mockImplementation(async () => [...ANALYSED, stage("policy_analysis", done ? "completed" : "running")]);
+    api.getPolicyAnalysis.mockImplementation(async () => (done ? POLICY : { ...POLICY, status: "not_run" }));
+    api.getRequirements.mockImplementation(async () => ({ marker: done ? "after" : "before" }));
+    // the stage settles on the second poll
+    let polls = 0;
+    api.getStages.mockImplementation(async () => { polls += 1; done = polls >= 3; return [...ANALYSED, stage("policy_analysis", done ? "completed" : "running")]; });
+    const { result } = renderHook(() => useConsentScan());
+    await act(async () => { await result.current.open("s1"); });
+    expect((result.current.state.requirements as unknown as { marker: string }).marker).toBe("after");
+    expect(api.getAssessment.mock.calls.length).toBeGreaterThanOrEqual(2);   // the one score is read again too
+  });
+
+  it("a scan with no policy stage does not wait", async () => {
+    api.getScan.mockResolvedValue(SCAN("completed"));
+    api.getStages.mockResolvedValue(ANALYSED);
+    const { result } = renderHook(() => useConsentScan());
+    await act(async () => { await result.current.open("s1"); });
+    expect(result.current.state.phase).toBe("awaiting_review");
+  });
+
+  it("a policy reading that failed settles the page too, and its score says the policy checks could not be assessed", async () => {
+    api.getScan.mockResolvedValue(SCAN("completed"));
+    api.getStages.mockResolvedValue([...ANALYSED, stage("policy_analysis", "failed")]);
+    const { result } = renderHook(() => useConsentScan());
+    await act(async () => { await result.current.open("s1"); });
+    expect(["awaiting_review", "degraded"]).toContain(result.current.state.phase);       // never "failed": the scan has a result
+    expect(result.current.state.phase).not.toBe("failed");
   });
 });

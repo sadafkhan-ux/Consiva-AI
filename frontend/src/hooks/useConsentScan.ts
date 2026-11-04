@@ -1,3 +1,4 @@
+import type { TenAssessment } from "../report/tenChecks";
 import { useCallback, useRef, useState } from "react";
 import { api } from "../api/client";
 import { ApiError, type CrawlConfig } from "../api/types";
@@ -6,7 +7,7 @@ import type {
   PolicyAnalysis,
   ScanScreenshot,
   FindingResponse,
-  DpdpScoreResponse,
+  DpdpRequirementsResponse,
   ScanEvidenceResponse,
   ScanStatusResponse,
   StageResponse,
@@ -99,6 +100,8 @@ export async function pollUntil<T>(
  *  in one of them costs the write-up, not the scan: the evidence, the checks and the score exist without it. */
 export const ANALYSIS_STAGES: ReadonlySet<string> = new Set([
   "rag_retrieval", "llm_analysis", "output_validation", "findings_generated", "rule_findings_generated",
+  // The policy reading is fail-soft on the server (it never fails an analysis): if it fails, the checks that read the policy say they could not be assessed and the run still has a result.
+  "policy_analysis",
 ]);
 
 /** The phase a scan ends in when a pipeline stage failed after the scan itself completed. */
@@ -142,6 +145,9 @@ export function failedStageName(stages: StageResponse[]): string | null {
  *  A failed `llm_analysis` or `rag_retrieval` is NOT an end: the graph routes either to the rule-derived
  *  findings, which are written a moment later. Stopping at the failure would show "failed" and miss them. A
  *  failure in any other stage is terminal. */
+/** The longest the page waits for the policy reading to finish before it shows what it has. */
+export const POLICY_SETTLE_MS = 300_000;
+
 export function analysisStagesAreDone(stages: StageResponse[]): boolean {
   const byName = Object.fromEntries(stages.map((s) => [s.stage, s]));
   return (
@@ -150,7 +156,7 @@ export function analysisStagesAreDone(stages: StageResponse[]): boolean {
     byName.findings_generated?.status === "completed" ||
     // The fallback's own terminal stage.
     byName.rule_findings_generated?.status === "completed" ||
-    stages.some((s) => s.status === "failed" && s.stage !== "llm_analysis" && s.stage !== "rag_retrieval")
+    stages.some((s) => s.status === "failed" && s.stage !== "llm_analysis" && s.stage !== "rag_retrieval" && s.stage !== "policy_analysis")
   );
 }
 
@@ -178,13 +184,14 @@ export interface ConsentScanState {
   evidence: ScanEvidenceResponse | null;
   /** True when the evidence could not be read (the request failed). Together with `evidence` it tells "still loading" from "could not be loaded"; optional so state built before it existed keeps working. */
   evidenceFailed?: boolean;
-  /** The proposed DPDP Compliance Score. Null until loaded, and left null if it could not be (the page shows nothing rather
-   *  than a made-up number). Optional so state built before it existed keeps working. */
-  dpdpScore?: DpdpScoreResponse | null;
+  /** The DPDP requirements reading (statuses and evidence; no score). Null until loaded. */
+  requirements?: DpdpRequirementsResponse | null;
   /** What the site's policies say (null until loaded, or when it could not be). */
   policyAnalysis?: PolicyAnalysis | null;
   /** The scanned homepage's preview (null until loaded, or when it could not be). */
   screenshot?: ScanScreenshot | null;
+  /** The ten checks and the Privacy Readiness Score from the server: the one score. Null until loaded, and when it could not be (nothing is worked out here instead). */
+  assessment?: TenAssessment | null;
   error: string | null;
   /** Which pipeline stage failed, when one did. The status panel showed "—" for
    *  "Current Stage" while the failing stage was known and displayed further down
@@ -204,9 +211,10 @@ const INITIAL_STATE: ConsentScanState = {
   findings: [],
   audit: [],
   evidence: null,
-  dpdpScore: null,
+  requirements: null,
   policyAnalysis: null,
   screenshot: null,
+  assessment: null,
   error: null,
   failedStage: null,
   startedAt: null,
@@ -225,13 +233,14 @@ export function useConsentScan() {
     // Each settles on its own. Previously `Promise.all` with only the evidence call
     // guarded meant one failing request discarded the other two results as well --
     // so a 500 on findings also blanked the evidence that had loaded fine.
-    const [findings, audit, evidence, dpdpScore, policyAnalysis, screenshot] = await Promise.all([
+    const [findings, audit, evidence, requirements, policyAnalysis, screenshot, assessment] = await Promise.all([
       api.getFindings(scanId).catch(() => null),
       api.getAudit(scanId).catch(() => null),
       api.getEvidence(scanId).catch(() => null),
-      api.getDpdpScore(scanId).catch(() => null),
+      api.getRequirements(scanId).catch(() => null),
       api.getPolicyAnalysis(scanId).catch(() => null),
       api.getScreenshot(scanId).catch(() => null),
+      api.getAssessment(scanId).catch(() => null),
     ]);
     if (runIdRef.current !== myRunId) return;
     setState((s) => ({
@@ -240,9 +249,10 @@ export function useConsentScan() {
       audit: audit ?? s.audit,
       evidence: evidence ?? s.evidence,
       evidenceFailed: !(evidence ?? s.evidence),
-      dpdpScore: dpdpScore ?? s.dpdpScore ?? null,
+      requirements: requirements ?? s.requirements ?? null,
       policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null,
       screenshot: screenshot ?? s.screenshot ?? null,
+      assessment: assessment ?? s.assessment ?? null,
     }));
   }, []);
 
@@ -254,18 +264,50 @@ export function useConsentScan() {
    *  worse than one that renders nothing at all -- it is a confident false negative
    *  in a product whose whole job is to find what a site is doing. */
   const loadEvidenceRegardless = useCallback(async (scanId: string, myRunId: number) => {
-    const [evidence, dpdpScore, policyAnalysis, screenshot] = await Promise.all([
+    const [evidence, requirements, policyAnalysis, screenshot, assessment] = await Promise.all([
       api.getEvidence(scanId).catch(() => null),
-      api.getDpdpScore(scanId).catch(() => null),
+      api.getRequirements(scanId).catch(() => null),
       api.getPolicyAnalysis(scanId).catch(() => null),
       api.getScreenshot(scanId).catch(() => null),
+      api.getAssessment(scanId).catch(() => null),
     ]);
     if (runIdRef.current !== myRunId) return;
     if (!evidence) {
       setState((s) => ({ ...s, evidenceFailed: !s.evidence }));
       return;
     }
-    setState((s) => ({ ...s, evidence, evidenceFailed: false, dpdpScore: dpdpScore ?? s.dpdpScore ?? null, policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null, screenshot: screenshot ?? s.screenshot ?? null }));
+    setState((s) => ({ ...s, evidence, evidenceFailed: false, requirements: requirements ?? s.requirements ?? null, policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null, screenshot: screenshot ?? s.screenshot ?? null, assessment: assessment ?? s.assessment ?? null }));
+  }, []);
+
+  /**
+   * Waits until the policy reading has finished, then loads it (and the requirements reading, which reads it) again.
+   *
+   * The policy reading runs beside the compliance analysis, not before it, and the findings can be ready, and the review waiting for a person, while it is still going. The page used to
+   * load the policy result once, at that moment, and score the ten checks from what it had: a scan whose policy reading finished a few seconds later showed 66.7 here and 94.4 in
+   * the PDF, which is built later from the finished result. The score is the same function of the same stored data on both; what differed was when the data was read. Now no score
+   * is shown as final (the page stays in "analyzing") until this has settled. Bounded: if the reading never finishes the page shows what it has, with those checks marked not assessed.
+   */
+  const settlePolicyAnalysis = useCallback(async (scanId: string, myRunId: number) => {
+    const settled = (stages: StageResponse[]) => {
+      const p = stages.find((x) => x.stage === "policy_analysis");
+      return !p || p.status === "completed" || p.status === "failed";
+    };
+    try {
+      await pollUntil(
+        async () => {
+          const stages = await api.getStages(scanId);
+          if (runIdRef.current === myRunId) setState((st) => ({ ...st, stages }));
+          return stages;
+        },
+        settled, POLICY_SETTLE_MS, 1_500,
+      );
+    } catch {
+      /* bounded: the page shows what is there, and the checks that read the policy say they could not be assessed */
+    }
+    if (runIdRef.current !== myRunId) return;
+    const [policyAnalysis, requirements, assessment] = await Promise.all([api.getPolicyAnalysis(scanId).catch(() => null), api.getRequirements(scanId).catch(() => null), api.getAssessment(scanId).catch(() => null)]);
+    if (runIdRef.current !== myRunId) return;
+    setState((st) => ({ ...st, policyAnalysis: policyAnalysis ?? st.policyAnalysis ?? null, requirements: requirements ?? st.requirements ?? null, assessment: assessment ?? st.assessment ?? null }));
   }, []);
 
   const pollStagesUntilAuditOrPending = useCallback(
@@ -372,6 +414,8 @@ export function useConsentScan() {
       // "Failed" and showing nothing.
       await refreshFindingsAuditEvidence(scanId, myRunId);
       if (runIdRef.current !== myRunId) return;
+      await settlePolicyAnalysis(scanId, myRunId);
+      if (runIdRef.current !== myRunId) return;
       const reason = `Analysis failed at stage "${failedStage.stage}": ${failedStage.error}`;
       setState((s) => ({
         ...s,
@@ -389,6 +433,8 @@ export function useConsentScan() {
 
     await refreshFindingsAuditEvidence(scanId, myRunId);
     if (runIdRef.current !== myRunId) return;
+    await settlePolicyAnalysis(scanId, myRunId);
+    if (runIdRef.current !== myRunId) return;
 
     const stillAwaiting = byName.audit_saved?.status !== "completed" && byName.audit_saved?.status !== "failed";
     setState((s) => ({
@@ -398,7 +444,7 @@ export function useConsentScan() {
       durationMs: s.startedAt ? Date.now() - s.startedAt : null,
     }));
     },
-    [pollStagesUntilAuditOrPending, refreshFindingsAuditEvidence, loadEvidenceRegardless]
+    [pollStagesUntilAuditOrPending, refreshFindingsAuditEvidence, loadEvidenceRegardless, settlePolicyAnalysis]
   );
 
   const run = useCallback(

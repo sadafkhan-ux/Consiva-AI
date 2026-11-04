@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.rules.consent_observation import cmp_script_failure, script_failure_note
 from app.rules.consent_rules import build_consent_context, evaluate_consent_rules
 from app.scanner import crawler
-from app.scoring.dpdp_score import assess
+from app.scoring.requirements import assess
 from tests._browser import run_with_browser
 from tests.test_consent_consistency import TODAY, evidence, results, script
 from tests.test_report_pdf_api import needs_chromium

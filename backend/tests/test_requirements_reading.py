@@ -1,11 +1,11 @@
-"""DPDP Compliance Score (app/scoring/dpdp_score.py, docs/DPDP_COMPLIANCE_SCORE.md): formula, status rules, coverage, exclusions,
-duplicate suppression, effective dates, and the worked examples the documentation prints. Pure functions, no database."""
+"""The DPDP requirements reading (app/scoring/requirements.py): status rules, exclusions, duplicate suppression, effective dates and traceability. There is no score
+here: the one score is the ten-check assessment (tests/test_ten_checks_parity.py). Pure functions, no database."""
 
 from datetime import date
 
 from app.rules.consent_rules import evaluate_consent_rules
-from app.scoring import dpdp_score as ds
-from app.scoring.dpdp_score import Applicability, assess
+from app.scoring import requirements as ds
+from app.scoring.requirements import Applicability, assess
 
 TODAY = date(2026, 10, 21)           # before the 18-month date: consent and notice duties are not yet in force
 AFTER = date(2027, 5, 13)            # the day they come into force
@@ -41,69 +41,36 @@ def by_id(score, rid):
     return next(r for r in score.requirements if r.id == rid)
 
 
-class TestFormula:
+class TestStatuses:
     def test_worked_example_clean_site(self):
-        """Banner with reject and granular choices, a privacy policy, no tracking. C1 5 + C3 4 + C4 4 + C5 2 + N1 4 = 19 earned
-        of 19 assessed = 100.0%. Applicable = 19 + 14 (five requirements a scan cannot see) = 33, so coverage = 19/33 = 57.6%."""
-        s = assess(evidence(), TODAY).readiness
-        assert (s.points_earned, s.points_assessed) == (19, 19)
-        assert s.score_percent == 100.0
-        assert (s.assessed_weight, s.applicable_weight, s.unable_to_verify_weight) == (19, 33, 14)
-        assert s.coverage_percent == 57.6
-        assert s.status == "scored"
+        s = assess(evidence(), TODAY)
+        assert [by_id(s, r).status for r in ("DPDP-C1", "DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-C5", "DPDP-N1", "DPDP-N2")] == [
+            "met", "not_applicable", "met", "met", "met", "met", "not_applicable"]
+        assert {r.id for r in s.requirements if r.status == "unable_to_verify"} == {"DPDP-R9", "DPDP-R14A", "DPDP-R14B", "DPDP-S6", "DPDP-S7"}
 
     def test_worked_example_mixed_site(self):
-        """Tracker fires before consent; reject-all and granular choices are both missing; privacy policy found, no cookie policy.
-        C1 Not Met 0/5, C2 Met 4/4, C3 Met 4/4, C4 Not Met 0/4, C5 suppressed (same gap as C4), N1 Met 4/4, N2 Partially Met 1/2.
-        Earned 13, assessed 23 -> 56.5%. Applicable 37 -> coverage 62.2%."""
         s = assess(evidence(trackers=[tr(1)], reject=False, granular=False), TODAY)
         assert [by_id(s, r).status for r in ("DPDP-C1", "DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-C5", "DPDP-N1", "DPDP-N2")] == [
             "not_met", "met", "met", "not_met", "not_applicable", "met", "partially_met"]
-        assert (s.readiness.points_earned, s.readiness.points_assessed) == (13, 23)
-        assert s.readiness.score_percent == 56.5
-        assert s.readiness.applicable_weight == 37
-        assert s.readiness.coverage_percent == 62.2
 
-    def test_partially_met_is_exactly_half_of_the_weight(self):
+    def test_the_result_carries_no_number_about_a_score(self):
         s = assess(evidence(trackers=[tr(1)]), TODAY)
-        n2 = by_id(s, "DPDP-N2")
-        assert n2.status == "partially_met" and n2.weight == 2 and n2.points_earned == 1.0
-
-    def test_not_met_earns_nothing_and_counts_in_the_denominator(self):
-        s = assess(evidence(trackers=[tr(1)]), TODAY)
-        c1 = by_id(s, "DPDP-C1")
-        assert c1.status == "not_met" and c1.points_earned == 0 and c1.counts_in_score
-
-    def test_rounding_is_half_up_to_one_decimal(self):
-        assert ds._pct(1, 8) == 12.5
-        assert ds._pct(1, 3) == 33.3
-        assert ds._pct(2, 3) == 66.7
-        assert ds._pct(5, 8000) == 0.1          # 0.0625 rounds up
-        assert ds._pct(0, 5) == 0.0
-
-    def test_exact_fractions_not_floats(self):
-        # 2.5 points of 7 is 35.714...% -> 35.7, with no float drift
-        assert ds._pct(__import__("fractions").Fraction(5, 2), 7) == 35.7
-
-    def test_score_never_exceeds_100_or_goes_below_0(self):
-        for kw in (dict(), dict(trackers=[tr(1)], mechanism="none", policies=()), dict(trackers=[tr(1)], reject=False)):
-            s = assess(evidence(**kw), TODAY).readiness
-            if s.score_percent is not None:
-                assert 0.0 <= s.score_percent <= 100.0
+        banned = ("weight", "points", "percent", "coverage", "score", "counts_in_score", "penalty")
+        for r in s.requirements:
+            assert not [k for k in vars(r) if any(b in k for b in banned)], r.id
+        assert not [k for k in vars(s) if any(b in k for b in ("readiness", "in_force_block", "thresholds", "deductions", "score"))]
 
 
 class TestUnableToVerify:
-    def test_excluded_from_denominator_and_reported_separately(self):
+    def test_unable_to_verify_is_reported_separately(self):
         s = assess(evidence(), TODAY)
         utv = [r for r in s.requirements if r.status == "unable_to_verify"]
         assert {r.id for r in utv} == {"DPDP-R9", "DPDP-R14A", "DPDP-R14B", "DPDP-S6", "DPDP-S7"}
-        assert all(not r.counts_in_score for r in utv)
-        assert s.readiness.unable_to_verify_weight == sum(r.weight for r in utv) == 14
+        assert s.ledger.unable_checks == len(utv)
 
     def test_untested_reject_is_never_met(self):
         s = assess(evidence(reject_outcome="cmp_not_automatable"), TODAY)
-        c3 = by_id(s, "DPDP-C3")
-        assert c3.status == "unable_to_verify" and c3.points_earned == 0
+        assert by_id(s, "DPDP-C3").status == "unable_to_verify"
 
     def test_unconfirmed_reject_click_is_unable_to_verify(self):
         assert by_id(assess(evidence(confirmed=False), TODAY), "DPDP-C3").status == "unable_to_verify"
@@ -127,7 +94,7 @@ class TestUnableToVerify:
         for rid in ("DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-N1", "DPDP-N2"):
             assert by_id(s, rid).status in ("unable_to_verify", "not_applicable"), rid
         assert by_id(s, "DPDP-N1").status == "unable_to_verify" and "frame" in by_id(s, "DPDP-N1").observations[0]
-        assert s.readiness.status == "insufficient_evidence"          # one assessed requirement is not enough for a number
+        assert sum(1 for r in s.requirements if r.status in ("met", "partially_met", "not_met")) == 1   # one assessed requirement
 
     def test_a_clean_framed_wrapper_is_never_a_pass(self):
         s = assess(evidence(framed=["https://real.test"], trackers=[], policies=(), mechanism="none"), TODAY)
@@ -148,31 +115,13 @@ class TestUnableToVerify:
         """With no pages scanned nothing is Met, nothing is scored."""
         s = assess(evidence(pages=0), TODAY)
         assert not any(r.status == "met" for r in s.requirements)
-        assert s.readiness.score_percent is None and s.readiness.status == "insufficient_evidence"
 
 
-class TestInsufficientEvidence:
-    def test_no_pages(self):
-        s = assess(evidence(pages=0), TODAY).readiness
-        assert s.status == "insufficient_evidence" and s.score_percent is None
-        assert "could be assessed" in s.insufficient_reason
-
-    def test_below_minimum_coverage(self):
-        # banner not displayed: only C1 (5) and N1 (4) can be assessed -> 9 of 37 = 24.3% < 30%
-        s = assess(evidence(mechanism="cmp", displayed=False, accept_outcome="cmp_not_automatable",
-                            reject_outcome="cmp_not_automatable", trackers=[tr(1, states=())]), TODAY).readiness
-        assert s.coverage_percent is not None and s.coverage_percent < ds.MIN_COVERAGE_PERCENT
-        assert s.status == "insufficient_evidence" and s.score_percent is None
-        assert "coverage" in s.insufficient_reason
-
-    def test_coverage_is_still_reported_when_the_score_is_withheld(self):
-        s = assess(evidence(pages=0), TODAY).readiness
-        assert s.coverage_percent == 0.0 and s.assessed_weight == 0 and s.applicable_weight == 33 - 0
-
-    def test_a_clearly_failing_site_is_scored_not_withheld(self):
-        # no banner, tracking before consent, no policy: C1 and N1 Not Met; C2 and N2 are suppressed duplicates
-        s = assess(evidence(trackers=[tr(1)], mechanism="none", policies=()), TODAY)
-        assert s.readiness.status == "scored" and s.readiness.score_percent == 0.0
+class TestNothingAssessed:
+    def test_no_pages_assesses_nothing_as_met(self):
+        s = assess(evidence(pages=0), TODAY)
+        assert not any(r.status == "met" for r in s.requirements)
+        assert s.ledger.passed_checks == 0
 
 
 class TestApplicabilityAndExclusions:
@@ -180,16 +129,14 @@ class TestApplicabilityAndExclusions:
         s = assess(evidence(), TODAY)
         for rid in ("DPDP-X4", "DPDP-X8", "DPDP-X10", "DPDP-X13"):
             r = by_id(s, rid)
-            assert r.status == "not_applicable" and not r.counts_in_score and r.exclusion_reason
-        assert s.readiness.applicable_weight == 33
+            assert r.status == "not_applicable" and r.exclusion_reason
 
     def test_declaring_applicability_adds_them_as_unable_to_verify_and_lowers_coverage(self):
-        base = assess(evidence(), TODAY).readiness
+        base = assess(evidence(), TODAY)
         s = assess(evidence(), TODAY, Applicability(processes_children_data=True, significant_data_fiduciary=True))
         assert by_id(s, "DPDP-X10").status == "unable_to_verify" and by_id(s, "DPDP-X13").status == "unable_to_verify"
-        assert s.readiness.applicable_weight == base.applicable_weight + 6
-        assert s.readiness.score_percent == base.score_percent            # never moves the score
-        assert s.readiness.coverage_percent < base.coverage_percent
+        assert s.ledger.applicable_checks == base.ledger.applicable_checks + 2
+        assert s.ledger.unable_checks == base.ledger.unable_checks + 2
 
     def test_declared_not_applicable_is_distinguished_from_undeclared(self):
         s = assess(evidence(), TODAY, Applicability(processes_children_data=False))
@@ -202,19 +149,18 @@ class TestApplicabilityAndExclusions:
 
     def test_no_tracking_is_not_applicable_only_when_accept_could_have_shown_it(self):
         """A consent tool is present and Accept was clicked: nothing fired after consent either, so tracking is not used. Accept NOT clicked: nothing after consent was ever seen,
-        so the absence is untested and the two checks are Unable to Verify, not Not Applicable (uat.consiva.ai: one failed Accept click moved coverage from 76.9% to 72.7%)."""
+        so the absence is untested and the two checks are Unable to Verify, not Not Applicable (uat.consiva.ai: one failed Accept click changed which checks applied)."""
         tested = assess(evidence(accept_outcome="clicked"), TODAY)
         assert by_id(tested, "DPDP-C2").status == "not_applicable" and by_id(tested, "DPDP-N2").status == "not_applicable"
         for outcome in ("cmp_not_automatable", "click_failed"):
             s = assess(evidence(accept_outcome=outcome), TODAY)
             for rid in ("DPDP-C2", "DPDP-N2"):
                 r = by_id(s, rid)
-                assert r.status == "unable_to_verify" and not r.counts_in_score, (outcome, rid)
+                assert r.status == "unable_to_verify", (outcome, rid)
                 assert "Accept choice could not be tested" in " ".join(r.observations)
-        # the same two checks never count as passed or failed while Accept is untested, and coverage falls rather than the score moving
-        a, b = assess(evidence(accept_outcome="clicked"), TODAY).readiness, assess(evidence(accept_outcome="cmp_not_automatable"), TODAY).readiness
-        assert a.score_percent == b.score_percent == 100.0
-        assert b.applicable_weight > a.applicable_weight and b.coverage_percent < a.coverage_percent
+        # the same two checks are never passed or failed while Accept is untested: they stay open
+        a, b = assess(evidence(accept_outcome="clicked"), TODAY), assess(evidence(accept_outcome="cmp_not_automatable"), TODAY)
+        assert b.ledger.unable_checks == a.ledger.unable_checks + 2
 
     def test_without_a_consent_tool_or_on_an_older_scan_an_absence_is_still_not_applicable(self):
         for kw in ({"mechanism": "none", "accept_outcome": "cmp_not_found"}, {"three_pass": False}):
@@ -236,12 +182,7 @@ class TestDuplicatePenalties:
         s = assess(evidence(trackers=[tr(1)], mechanism="none"), TODAY)
         c1, c2 = by_id(s, "DPDP-C1"), by_id(s, "DPDP-C2")
         assert c1.status == "not_met" and c2.status == "not_applicable"
-        assert not c2.counts_in_score and c2.duplicate_of == "DPDP-C1" and "Counted under DPDP-C1" in c2.exclusion_reason
-
-    def test_suppressed_requirement_leaves_numerator_and_denominator(self):
-        s = assess(evidence(trackers=[tr(1)], mechanism="none"), TODAY).readiness
-        # C1 (5, Not Met) + N2 (2, Partially Met 1) + N1 (4, Met 4) = 5 + 4 + 2 assessed; C2 suppressed
-        assert s.points_assessed == 11 and s.points_earned == 5
+        assert c2.duplicate_of == "DPDP-C1" and "Listed under DPDP-C1" in c2.exclusion_reason
 
     def test_banner_without_reject_or_granular_choices_is_one_gap(self):
         s = assess(evidence(reject=False, granular=False), TODAY)
@@ -251,9 +192,9 @@ class TestDuplicatePenalties:
         s = assess(evidence(trackers=[tr(1, states=())], policies=()), TODAY)
         assert by_id(s, "DPDP-N1").status == "not_met" and by_id(s, "DPDP-N2").status == "not_applicable"
 
-    def test_heaviest_keeps_the_penalty(self):
+    def test_the_first_listed_keeps_the_gap(self):
         s = assess(evidence(trackers=[tr(1)], mechanism="none"), TODAY)
-        assert by_id(s, "DPDP-C1").weight > by_id(s, "DPDP-C2").weight
+        assert by_id(s, "DPDP-C1").duplicate_of is None and by_id(s, "DPDP-C2").duplicate_of == "DPDP-C1"
 
     def test_a_single_failure_in_a_group_is_not_suppressed(self):
         s = assess(evidence(reject=False, granular=True), TODAY)
@@ -264,17 +205,10 @@ class TestEffectiveDates:
     def test_consent_and_notice_duties_are_not_yet_in_force_in_october_2026(self):
         s = assess(evidence(), TODAY)
         assert not any(r.in_force for r in s.requirements if r.id.startswith(("DPDP-C", "DPDP-N")))
-        assert s.in_force.status == "insufficient_evidence"
-        assert s.in_force.applicable_weight == 0 and s.in_force.score_percent is None
-        assert "in force" in s.in_force.insufficient_reason
-
-    def test_readiness_score_is_available_before_they_apply(self):
-        assert assess(evidence(), TODAY).readiness.status == "scored"
 
     def test_in_force_on_the_eighteen_month_date(self):
         s = assess(evidence(), AFTER)
         assert all(r.in_force for r in s.requirements)
-        assert s.in_force.status == "scored" and s.in_force.score_percent == s.readiness.score_percent == 100.0
 
     def test_the_day_before_is_not_in_force(self):
         assert not by_id(assess(evidence(), date(2027, 5, 12)), "DPDP-C1").in_force
@@ -285,27 +219,11 @@ class TestEffectiveDates:
         assert by_id(assess(evidence(), date(2026, 11, 13), Applicability(consent_manager=True)), "DPDP-X4").in_force
 
 
-class TestCategories:
-    def test_category_scores_use_the_same_formula(self):
-        s = assess(evidence(trackers=[tr(1)], reject=False, granular=False), TODAY).readiness
-        cats = {c["category"]: c for c in s.categories}
-        assert cats["Consent"]["points_earned"] == 8 and cats["Consent"]["assessed_weight"] == 17
-        assert cats["Consent"]["score_percent"] == 47.1
-        assert cats["Notice"]["score_percent"] == 83.3
-        assert cats["Data principal rights"]["status"] == "not_assessed" and cats["Data principal rights"]["score_percent"] is None
-
-    def test_category_weights_add_up_to_the_overall(self):
-        s = assess(evidence(trackers=[tr(1)]), TODAY).readiness
-        assert sum(c["assessed_weight"] for c in s.categories) == s.assessed_weight
-        assert sum(c["applicable_weight"] for c in s.categories) == s.applicable_weight
-        assert sum(c["points_earned"] for c in s.categories) == s.points_earned
-
-
 class TestTraceability:
-    def test_every_requirement_cites_a_provision_and_a_weight_rationale(self):
+    def test_every_requirement_cites_a_provision_and_a_severity(self):
         for req in ds.REQUIREMENTS:
             assert req.provisions and all(p.startswith(("DPDP Act, 2023 s.", "DPDP Rules, 2025 r.")) for p in req.provisions), req.id
-            assert req.weight_rationale and req.weight > 0
+            assert req.severity in ("High", "Medium", "Low")
 
     def test_results_carry_evidence_ids_and_the_rule_that_flags_the_same_thing(self):
         s = assess(evidence(trackers=[tr(1), tr(2)]), TODAY)
@@ -332,14 +250,13 @@ class TestTraceability:
         assert "R-003" in {f.rule_id for f in evaluate_consent_rules(ev)}
         assert by_id(assess(ev, TODAY), "DPDP-C3").status == "not_met"
 
-    def test_registry_ids_are_unique_and_weights_documented(self):
+    def test_registry_ids_are_unique(self):
         ids = [r.id for r in ds.REQUIREMENTS]
-        assert len(ids) == len(set(ids))
-        assert sum(r.weight for r in ds.REQUIREMENTS if r.applies_if is None) == 39    # every universal requirement applicable
+        assert len(ids) == len(set(ids)) == 16
 
-    def test_methodology_is_versioned_and_labelled_as_proposed(self):
+    def test_the_reading_is_versioned_and_carries_the_disclaimer(self):
         s = assess(evidence(), TODAY)
-        assert s.methodology_version == ds.METHODOLOGY_VERSION == "1.6.1"
+        assert s.requirements_version == ds.REQUIREMENTS_VERSION
         assert "for informational purposes only" in s.disclaimer and "does not constitute legal advice" in s.disclaimer
 
 

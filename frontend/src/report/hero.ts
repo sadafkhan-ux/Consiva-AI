@@ -1,5 +1,5 @@
 import type { ScanScreenshot } from "../api/types";
-import type { ScoreView } from "./dpdpScore";
+import type { TenAssessment } from "./tenChecks";
 
 // The words and facts of the hero at the top of the report (the score, what it means, and the preview of the scanned homepage), worked out once.
 // The dashboard and the PDF both read this, so they cannot say different things about the same scan. Pure: it only arranges what the server returned.
@@ -20,31 +20,30 @@ export interface HeroView {
   percent: number | null;
   /** "56.5%", or "No score". */
   percentLabel: string;
-  /** "Compliance Score", or "Compliance score unavailable". */
+  /** "Privacy Readiness Score", or "Privacy Readiness Score unavailable": the one name of the one score (the server's ten-check score, from /assessment). */
   scoreLabel: string;
   band: string;
   tone: HeroTone;
   headline: string;
 }
 
-export function buildHeroView(v: ScoreView | null): HeroView {
-  const scoreValue = v ? v.scoreValue : null;
-  const coverageValue = v ? v.coverageValue : null;
-  const assessed = v ? v.assessed : [];
-  const limited = !!v?.caution || (coverageValue !== null && coverageValue < 50);
-  // A good reading on little evidence is not a strong one: the band says so when the score rests on a small share of the checks (the coverage beside it says how small).
-  const band = !v ? "Score not available" : scoreValue === null ? "Insufficient evidence" : limited && scoreValue >= 60 ? `${scoreBand(scoreValue)}, on limited evidence` : scoreBand(scoreValue);
+/** The words of the hero, from the server's ten-check assessment (the one score). Pure: it only arranges what the server returned. */
+export function buildHeroView(a: TenAssessment | null): HeroView {
+  const scoreValue = a ? a.score : null;
+  // A good reading on little evidence is not a strong one: the band says so when fewer than half the checks could be assessed.
+  const limited = !!a?.limitedBasis;
+  const band = !a ? "Score not available" : scoreValue === null ? "Insufficient evidence" : limited && scoreValue >= 60 ? `${scoreBand(scoreValue)}, on limited evidence` : scoreBand(scoreValue);
   const tone: HeroTone = scoreValue === null ? "mute" : limited || scoreValue < 80 ? "warn" : "good";
-  const headline = !v
+  const headline = !a
     ? "The score could not be loaded for this report."
     : scoreValue === null
-      ? "Compliance score unavailable. Too few of the checks that apply could be tested from outside to give a reliable score."
-      : `${assessed.length === 1 ? "The 1 check" : `The ${assessed.length} checks`} we could test scored ${v.headline}. ${v.unableToVerify.length ? `${v.unableToVerify.length} more could not be tested from outside.` : ""}`.trim();
+      ? "A Privacy Readiness Score is not shown: no check could be assessed on the evidence available."
+      : `${a.counts.passed} of ${a.applicableMax} assessed checks passed (${a.totalText} marks).${a.counts.notAssessed ? ` ${a.counts.notAssessed} could not be assessed and ${a.counts.notAssessed === 1 ? "is" : "are"} left out.` : ""}`;
   return {
-    scored: !!v && v.scored,
+    scored: !!a && scoreValue !== null,
     percent: scoreValue,
-    percentLabel: v && v.scored ? v.headline : "No score",
-    scoreLabel: v && v.scored ? "Compliance Score" : "Compliance score unavailable",
+    percentLabel: a && scoreValue !== null ? a.scoreText : "No score",
+    scoreLabel: a && scoreValue !== null ? "Privacy Readiness Score" : "Privacy Readiness Score unavailable",
     band, tone, headline,
   };
 }

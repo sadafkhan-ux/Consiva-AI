@@ -1,15 +1,15 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { DpdpScoreResponse, PolicyAnalysis, ScanEvidenceResponse, ScanScreenshot, WebsiteScanMetadata } from "../../api/types";
-import fixtures from "../../test/dpdpScoreFixtures.json";
+import type { DpdpRequirementsResponse, PolicyAnalysis, ScanEvidenceResponse, ScanScreenshot, WebsiteScanMetadata } from "../../api/types";
+import { A } from "../../test/assessments";
+import fixtures from "../../test/requirementsFixtures.json";
 import { buildReportModel } from "../buildReport";
-import { buildScoreView } from "../dpdpScore";
+import { buildRequirementsView } from "../requirements";
 import { REPORT_DISCLAIMER } from "../reportScope";
-import { checkContribution, stripId, topFindingRows } from "../reportText";
+import { stripId, topFindingRows } from "../reportText";
 import { ReportDocument } from "./ReportDocument";
-import { isReportCategory } from "../reportScope";
 
-const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
+const F = fixtures as unknown as Record<string, DpdpRequirementsResponse>;
 const SCAN = { id: "11111111-1111-1111-1111-111111111111", url: "https://x.test/", evidence_counts: { pages: 3, cookies: 2, trackers: 5, third_party_services: 1, policies: 1, forms: 1 } } as never;
 const META = { consent_mechanism: "cmp", cmp_vendor: "Some CMP", accept_interaction: "clicked", reject_interaction: "clicked", pages_scanned: 3 } as unknown as WebsiteScanMetadata;
 const LONG_URL = "https://tracker.example/collect?v=1&tid=UA-1234567-1&cid=" + "a".repeat(180);
@@ -33,8 +33,8 @@ const POLICY = {
 } as unknown as PolicyAnalysis;
 const SHOT: ScanScreenshot = { scan_id: "11111111-1111-1111-1111-111111111111", domain: "x.test", status: "ok", available: true, message: null, page_url: "https://x.test/", mime: "image/jpeg", width: 1280, height: 720, captured_at: "2026-10-22T16:43:00Z", data: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/" };
 
-const model = (over: { score?: DpdpScoreResponse | null; evidence?: ScanEvidenceResponse | null; policy?: PolicyAnalysis | null; shot?: ScanScreenshot | null; meta?: WebsiteScanMetadata } = {}) =>
-  buildReportModel(SCAN, [], over.meta ?? META, [], [], over.score === null ? null : buildScoreView(over.score ?? F.mixed), over.evidence === undefined ? EVIDENCE : over.evidence, null, over.policy === undefined ? POLICY : over.policy, over.shot === undefined ? SHOT : over.shot);
+const model = (over: { score?: DpdpRequirementsResponse | null; evidence?: ScanEvidenceResponse | null; policy?: PolicyAnalysis | null; shot?: ScanScreenshot | null; meta?: WebsiteScanMetadata } = {}) =>
+  buildReportModel(SCAN, [], over.meta ?? META, [], [], over.score === null ? null : buildRequirementsView(over.score ?? F.mixed), over.evidence === undefined ? EVIDENCE : over.evidence, null, over.policy === undefined ? POLICY : over.policy, over.shot === undefined ? SHOT : over.shot, undefined, over.score === null ? null : over.score === F.insufficient ? A.noScore : A.mixed);
 
 const text = () => document.body.textContent ?? "";
 const flat = (x: string) => x.replace(/\s+/g, "");
@@ -56,16 +56,16 @@ describe("the printable report: the hero", () => {
 
   it("shows the backend's compliance score in the ring and no coverage anywhere in the hero", () => {
     render(<ReportDocument model={model()} />);
-    expect(screen.getByTestId("hero-percent").textContent).toBe("56.5");
+    expect(screen.getByTestId("hero-percent").textContent).toBe("75");
     expect(screen.getByTestId("rpt-hero").textContent ?? "").not.toMatch(/coverage/i);
-    expect(screen.getByTestId("rpt-hero-headline")).toHaveTextContent("we could test scored 56.5/100");
+    expect(screen.getByTestId("rpt-hero-headline")).toHaveTextContent("6 of 10 assessed checks passed");
   });
 
   it("says the score is unavailable, with no number and no coverage, when too few requirements could be assessed", () => {
     render(<ReportDocument model={model({ score: F.insufficient })} />);
     const hero = screen.getByTestId("rpt-hero");
     expect(screen.getByTestId("hero-percent").textContent).toBe("No score");
-    expect(hero.textContent).toContain("Compliance score unavailable");
+    expect(hero.textContent).toContain("Privacy Readiness Score unavailable");
     expect(hero.textContent ?? "").not.toMatch(/\d+(\.\d+)?%|coverage/i);
   });
 
@@ -78,8 +78,8 @@ describe("the printable report: the hero", () => {
 
 describe("the printable report: every section of the PDF, in the PDF's order", () => {
   const TITLES = [
-    "Scan summary", "Framework readiness", "Privacy areas", "Top findings", "Consent behaviour", "Tracking technologies detected", "Privacy elements on the site",
-    "Every check behind the score", "Prioritised fixes", "Grievance officer", "Data Protection Officer", "Indian-language support", "Children's data and age gate",
+    "Scan summary", "Framework readiness", "Top findings", "Consent behaviour", "Tracking technologies detected", "Privacy elements on the site",
+    "The ten checks behind the score", "Prioritised fixes", "Grievance officer", "Data Protection Officer", "Indian-language support", "Children's data and age gate",
     "Observable security signals", "Five-page DPDP readiness review", "Website Pages Scanned", "Sector and applicability",
     "Privacy policy content analysis", "Consent banner", "Forms found", "Cookie inventory", "Third-party requests and scripts", "Policies found", "Third-party services",
     "Compliance findings in full",
@@ -128,17 +128,17 @@ describe("the printable report and the PDF drawn in the browser read the same va
     const m = model();
     render(<ReportDocument model={m} />);
     const t = flat(text());
-    for (const r of m.dpdpScore!.allChecks.filter((c) => c.statusKey !== "not_applicable" && isReportCategory(c.category))) {
-      expect(t, r.id).toContain(flat(r.title));
-      expect(t, `${r.id} contribution`).toContain(flat(checkContribution(r)));
-      expect(t, `${r.id} verdict`).toContain(flat(r.verdict));
+    for (const c of m.assessment!.checks) {
+      expect(t, `check ${c.id}`).toContain(flat(c.name));
+      expect(t, `check ${c.id} marks`).toContain(flat(c.marksText));
+      expect(t, `check ${c.id} result`).toContain(flat(c.result));
     }
     for (const f of topFindingRows(m).slice(0, 3)) expect(t).toContain(flat(stripId(f.title)));
     for (const tile of ["Third-party requests", "Cookies set", "Consent states tested"]) expect(t).toContain(flat(tile));
-    expect(t).toContain(flat(m.dpdpScore!.headline));
+    expect(t).toContain(flat(m.assessment!.scoreText));
     for (const s of m.insights) { expect(t).toContain(flat(s.status)); expect(t).toContain(flat(s.summary)); }
-    expect(t).toContain(flat(m.readiness.scoreLine));
-    for (const step of m.dpdpScore!.remediationPlan) expect(t).toContain(flat(step.title));
+    expect(t).toContain(flat(m.readiness.summaryLine));
+    for (const step of m.requirements!.remediationPlan) expect(t).toContain(flat(step.title));
   });
 });
 
@@ -147,7 +147,7 @@ describe("missing optional data", () => {
     render(<ReportDocument model={model({ evidence: null, policy: null, score: null, shot: null })} />);
     expect(screen.getByTestId("hero-percent").textContent).toBe("No score");
     expect(text()).toContain("The scan evidence could not be loaded");
-    expect(text()).toContain("The score was not loaded");
+    expect(text()).toContain("The assessment was not loaded");
     expect(screen.queryByTestId("rpt-sec-cookies")).not.toBeInTheDocument();                    // no evidence appendix, and no "none detected" over evidence that was not read
     expect(screen.getByTestId("rpt-about")).toBeInTheDocument();
   });

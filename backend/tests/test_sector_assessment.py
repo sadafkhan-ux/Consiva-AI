@@ -6,8 +6,8 @@ import dataclasses
 
 import pytest
 
-from app.scoring import dpdp_score
-from app.scoring.dpdp_score import Applicability
+from app.scoring import requirements as dpdp_score
+from app.scoring.requirements import Applicability
 from app.scoring.sector import SECTORS, assess_sector
 
 
@@ -214,10 +214,10 @@ def test_an_unknown_or_general_declaration_is_ignored():
         assert result.sector == "healthcare" and result.declared is False
 
 
-# --- the score is never affected ----------------------------------------------------------------------------------------------
+# --- the statuses are never affected ----------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("key", TEN)
-def test_the_sector_never_changes_the_score(key, monkeypatch):
+def test_the_sector_never_changes_the_statuses(key, monkeypatch):
     evidence = CASES[key]
     with_sector = dpdp_score.assess(evidence)
     assert with_sector.sector.sector == key
@@ -226,7 +226,7 @@ def test_the_sector_never_changes_the_score(key, monkeypatch):
     monkeypatch.setattr(dpdp_score.sector_analysis, "assess_sector", lambda *a, **k: None)
     without = dpdp_score.assess(evidence)
     assert without.sector is None
-    for field in ("readiness", "in_force", "status_counts", "ledger"):
+    for field in ("status_counts", "ledger"):
         a, b, c = (dataclasses.asdict(x)[field] for x in (with_sector, without, declared))
         assert a == b == c, field
     assert [(r.id, r.status) for r in with_sector.requirements] == [(r.id, r.status) for r in without.requirements]

@@ -1,7 +1,8 @@
 import type { ScanEvidenceResponse, StageResponse } from "../api/types";
 import { serverSpanMs, summariseStages, unaccountedMs } from "../components/stageTiming";
 import { scriptFailureNote } from "./consentObservation";
-import type { ScoreView } from "./dpdpScore";
+import type { RequirementsView } from "./requirements";
+import type { TenAssessment } from "./tenChecks";
 import type { ScanPagesView } from "./scanPages";
 import type { ReportVisual } from "./reportVisual";
 
@@ -10,7 +11,7 @@ import type { ReportVisual } from "./reportVisual";
 //
 // Three different "coverages" are kept apart on purpose and never added together:
 //   page coverage         pages scanned out of the pages of the domain the scan FOUND (a statement about the crawl);
-//   requirement coverage  the share of the applicable requirements' weight the scan could assess (the score's own figure, scoring/dpdp_score.py);
+//   check coverage        how many of the ten checks the scan could assess (the assessment's own counts, report/tenChecks.ts);
 //   consent-state coverage which of Before Consent, After Accept and After Reject were actually exercised.
 
 export interface ScanTiming {
@@ -52,9 +53,9 @@ export interface TransparencyView {
   } | null;
   coverage: {
     page: { value: string; definition: string };
-    requirement: { value: string; definition: string };
+    checks: { value: string; definition: string };
     consentStates: { value: string; definition: string };
-    requirements: { assessed: number; notAssessed: number; notApplicable: number; needsReview: number; documentReview: number } | null;
+    counts: { assessed: number; notAssessed: number; notApplicable: number; needsReview: number; documentReview: number } | null;
   };
   consent: { banner: string; rows: ConsentStateRow[] };
   scoreReason: { kind: ScoreReasonKind; text: string };
@@ -111,11 +112,13 @@ export function framedSiteOf(evidence: ScanEvidenceResponse | null | undefined):
 export function buildTransparency(input: {
   scanPages: ScanPagesView | null;
   visual: ReportVisual | null;
-  score: ScoreView | null;
+  assessment: TenAssessment | null;
+  /** The requirements reading, for the non-numeric counts (needs review, document review). */
+  requirements: RequirementsView | null;
   evidence: ScanEvidenceResponse | null;
   timing: ScanTiming | null;
 }): TransparencyView {
-  const { scanPages: sp, visual: vis, score: v, evidence: ev, timing } = input;
+  const { scanPages: sp, visual: vis, assessment: a, requirements: v, evidence: ev, timing } = input;
   const signal = ev?.consent_signals?.[0] ?? null;
   const e = (signal?.evidence ?? {}) as Record<string, unknown>;
   const framed = framedSiteOf(ev);
@@ -168,13 +171,12 @@ export function buildTransparency(input: {
   const tested = rows.filter((r) => r.status === "tested").length;
 
   // Coverage.
-  const assessed = v ? v.assessed.length : null;
-  const unable = v ? v.unableToVerify.length : null;
+  const assessed = a ? a.counts.passed + a.counts.partial + a.counts.failed : null;
   const group = (k: string) => v?.groups.find((g) => g.key === k)?.entries.length ?? 0;
-  const requirements = v
+  const counts = a
     ? {
-        assessed: assessed ?? 0, notAssessed: unable ?? 0, notApplicable: v.excluded.length, needsReview: group("needs_review"),
-        documentReview: v.unableToVerify.filter((r) => r.checkType === "Business check").length,
+        assessed: assessed ?? 0, notAssessed: a.counts.notAssessed, notApplicable: a.counts.notApplicable, needsReview: group("needs_review"),
+        documentReview: v ? v.unableToVerify.filter((r) => r.checkType === "Business check").length : 0,
       }
     : null;
   const pageValue = !sp ? "Not recorded"
@@ -182,26 +184,26 @@ export function buildTransparency(input: {
       : `${sp.scannedCount} of ${sp.discovered} pages found (${(Math.round((sp.scannedCount / Math.max(1, sp.discovered)) * 1000) / 10).toFixed(1)}%)`;
   const coverage = {
     page: { value: pageValue, definition: "Pages scanned out of the pages of the entered domain the scan found. It says how much of the site was visited, not how much of the law was checked." },
-    requirement: {
-      value: v && v.coverageValue !== null ? `${v.coverageHeadline}${requirements ? ` (${requirements.assessed} assessed, ${requirements.notAssessed} not assessable from outside)` : ""}` : "Not available",
-      definition: "The share of the applicable requirements' weight that the scan could assess. It is the score's own coverage figure and has nothing to do with the number of pages.",
+    checks: {
+      value: a ? `${assessed} of ${a.checks.length} checks assessed${counts ? ` (${counts.notAssessed} not assessable from outside, ${counts.notApplicable} not applicable)` : ""}` : "Not available",
+      definition: "How many of the ten checks the scan could assess. It is the assessment's own count and has nothing to do with the number of pages.",
     },
     consentStates: { value: `${tested} of 3 states tested`, definition: "Which of Before Consent, After Accept and After Reject were actually exercised and observed." },
-    requirements,
+    counts,
   };
 
   // Why the score is what it is.
   let scoreReason: TransparencyView["scoreReason"];
-  if (!v) {
+  if (!a) {
     scoreReason = { kind: "unavailable", text: "The score could not be loaded for this report, so none is shown. This is not a score of zero." };
-  } else if (!v.scored) {
-    scoreReason = { kind: "insufficient", text: `No score is shown: ${v.withheldReason ?? "too few requirements could be assessed from outside"} This is not a score of zero, and it does not mean the site passed.${framed ? ` The scanned address only displays another site (${framed}).` : ""}` };
-  } else if (v.scoreValue === 0) {
-    scoreReason = { kind: "zero_from_failures", text: `The score is 0% because all ${assessed} assessed requirement${assessed === 1 ? " was" : "s were"} Not Met. This is a result, not a missing score.` };
-  } else if (v.caution) {
-    scoreReason = { kind: "partial", text: `${v.caution}${requirements ? ` ${requirements.notAssessed} requirement${requirements.notAssessed === 1 ? " was" : "s were"} not assessed because the evidence was insufficient.` : ""}` };
+  } else if (a.score === null) {
+    scoreReason = { kind: "insufficient", text: `No score is shown: no check could be assessed on the evidence available. This is not a score of zero, and it does not mean the site passed.${framed ? ` The scanned address only displays another site (${framed}).` : ""}` };
+  } else if (a.score === 0) {
+    scoreReason = { kind: "zero_from_failures", text: `The score is 0/100 because all ${assessed} assessed check${assessed === 1 ? " was" : "s were"} Failed. This is a result, not a missing score.` };
+  } else if (a.limitedBasis || !a.final) {
+    scoreReason = { kind: "partial", text: `${a.summary}${a.final ? "" : " The policy reading had not finished or was not run, so these marks could still change."}` };
   } else {
-    scoreReason = { kind: "scored", text: `The score rests on ${assessed} assessed requirement${assessed === 1 ? "" : "s"}${v.coverageValue !== null ? ` and ${v.coverageHeadline} requirement coverage` : ""}.` };
+    scoreReason = { kind: "scored", text: `The score rests on ${assessed} assessed check${assessed === 1 ? "" : "s"} of ${a.checks.length} (${a.totalText} marks).` };
   }
 
   const timingView = timing

@@ -1,4 +1,4 @@
-"""The assessment record (scope, timestamp, versions), the prioritised remediation plan, the caution on thin scores, the legal mapping
+"""The assessment record (scope, timestamp, versions), the prioritised remediation plan, the legal mapping
 as a versioned table, consent states, incomplete scans, reproducibility, and hand-reviewed golden examples."""
 
 from dataclasses import asdict
@@ -7,10 +7,10 @@ from typing import ClassVar
 
 import pytest
 
-from app.api.v1.routes.consent_scans import DpdpScoreResponse
-from app.scoring import dpdp_score as ds
-from app.scoring.dpdp_score import assess
-from tests.test_dpdp_score import AFTER, TODAY, evidence, tr
+from app.api.v1.routes.consent_scans import DpdpRequirementsResponse
+from app.scoring import requirements as ds
+from app.scoring.requirements import assess
+from tests.test_requirements_reading import AFTER, TODAY, evidence, tr
 
 
 def t(i, page="https://x.test/p", **kw):
@@ -36,21 +36,20 @@ class TestAssessmentRecord:
         a = assess(evidence(), TODAY).assessment
         assert a.main_domain is None and a.scanned_at is None
 
-    def test_describing_the_scan_never_changes_a_score(self):
+    def test_describing_the_scan_never_changes_a_status(self):
         plain = assess(evidence(trackers=[t(1)], pages=3), TODAY)
         described = assess(evidence(trackers=[t(1)], pages=3), TODAY, scan_url="https://x.test", scanned_at="2026-01-01T00:00:00+00:00")
-        assert asdict(plain.readiness) == asdict(described.readiness)
         assert [r.status for r in plain.requirements] == [r.status for r in described.requirements]
 
     def test_it_says_it_is_website_readiness_not_full_legal_compliance(self):
         note = assess(evidence(), TODAY).assessment.nature_note
         assert "website readiness" in note and "not a guarantee" in note and "full legal compliance" in note
 
-    def test_the_methodology_and_legal_mapping_versions_are_separate(self):
+    def test_the_requirements_and_legal_mapping_versions_are_separate(self):
         s = assess(evidence(), TODAY)
-        assert s.methodology.version == ds.METHODOLOGY_VERSION == "1.6.1"
+        assert s.requirements_version == ds.REQUIREMENTS_VERSION == "2.0.0"
         assert s.methodology.legal_mapping_version == ds.LEGAL_MAPPING_VERSION == "2026.10.1"
-        assert s.methodology.version != s.methodology.legal_mapping_version
+        assert s.requirements_version != s.methodology.legal_mapping_version
 
     def test_the_legal_sources_name_the_gazette_notifications(self):
         text = " ".join(f"{x['name']} {x['reference']}" for x in assess(evidence(), TODAY).methodology.legal_sources)
@@ -147,10 +146,10 @@ class TestPrioritisedRemediation:
         p = assess(evidence(trackers=[t(1)], pages=3, policies=POL), TODAY).remediation_plan[0]
         assert p.priority == "Prepare before 2027-05-13" and p.timing == "Future readiness"
 
-    def test_not_met_comes_before_partially_met_and_heavier_before_lighter(self):
+    def test_not_met_comes_before_partially_met_and_the_registry_order_breaks_ties(self):
         plan = assess(evidence(trackers=[t(1)], reject=False, granular=False, policies=("privacy_policy",), pages=3), AFTER).remediation_plan
         assert [p.outcome for p in plan] == ["Not Met", "Not Met", "Partially Met"]
-        assert plan[0].requirement_id == "DPDP-C1"          # weight 5 before weight 4
+        assert [p.requirement_id for p in plan] == ["DPDP-C1", "DPDP-C4", "DPDP-N2"]          # registry order within the same outcome
 
     def test_unverified_not_applicable_and_duplicate_checks_have_no_remediation_step(self):
         s = assess(evidence(trackers=[t(1)], mechanism="none", policies=(), pages=3), TODAY)
@@ -165,41 +164,15 @@ class TestPrioritisedRemediation:
         b = assess(evidence(trackers=[t(1)], reject=False, pages=3), TODAY).remediation_plan
         assert a == b
 
-    def test_configured_weights_do_not_reorder_by_themselves(self):
-        a = [p.requirement_id for p in assess(evidence(trackers=[t(1)], reject=False, pages=3), TODAY).remediation_plan]
-        b = [p.requirement_id for p in assess(evidence(trackers=[t(1)], reject=False, pages=3), TODAY, weights={"DPDP-C4": 10}).remediation_plan]
-        assert a == b
-
-
-class TestCautionOnThinScores:
-    def test_a_score_resting_on_two_requirements_carries_a_caution(self):
-        r = assess(evidence(pages=3, mechanism="none"), TODAY).readiness
-        assert r.status == "scored" and "Treat this score with caution" in r.caution and "2 assessed requirements" in r.caution
-
-    def test_low_coverage_carries_a_caution(self):
-        r = assess(evidence(pages=3), TODAY).readiness            # 57.6% coverage, 5 requirements: no caution
-        assert r.caution is None
-        low = assess(evidence(pages=3), TODAY, ds.Applicability(True, True, True, True)).readiness     # coverage falls below 50%
-        assert low.coverage_percent < 50 and "caution" in low.caution
-
-    def test_a_withheld_score_has_no_caution_only_a_reason(self):
-        r = assess(evidence(pages=0), TODAY).readiness
-        assert r.caution is None and r.insufficient_reason
-
-    def test_the_caution_never_changes_the_score(self):
-        base = assess(evidence(pages=3, mechanism="none"), TODAY).readiness
-        assert base.score_percent == 100.0 and base.caution
-
-
 class TestIncompleteScans:
-    def test_a_scan_with_no_pages_has_no_score_no_gaps_and_a_scope_that_says_nothing_was_tested(self):
+    def test_a_scan_with_no_pages_has_no_gaps_and_a_scope_that_says_nothing_was_tested(self):
         s = assess(evidence(pages=0), AFTER, scan_url="https://x.test")
-        assert s.readiness.score_percent is None and s.finding_groups.confirmed == [] and s.remediation_plan == []
+        assert s.finding_groups.confirmed == [] and s.remediation_plan == []
         assert s.assessment.states_tested == [] and s.assessment.pages_scanned == []
 
-    def test_a_framed_wrapper_is_not_scored_and_says_why(self):
+    def test_a_framed_wrapper_is_not_assessed_and_says_why(self):
         s = assess(evidence(framed=["https://real.test"], trackers=[], policies=(), pages=1, mechanism="none"), AFTER)
-        assert s.readiness.status == "insufficient_evidence" and s.remediation_plan == []
+        assert not any(r.status == "met" for r in s.requirements) and s.remediation_plan == []
 
     def test_a_banner_not_shown_to_the_scanner_leaves_the_banner_checks_unverified(self):
         s = assess(evidence(mechanism="cmp", displayed=False, accept_outcome="cmp_not_automatable",
@@ -214,57 +187,52 @@ class TestReproducible:
             assess(ev, TODAY, scan_url="https://x.test", scanned_at="2026-10-21T00:00:00+00:00"))
 
     def test_the_result_serialises_through_the_api_model(self):
-        m = DpdpScoreResponse(**asdict(assess(evidence(trackers=[t(1)], pages=3), TODAY, scan_url="https://x.test",
+        m = DpdpRequirementsResponse(**asdict(assess(evidence(trackers=[t(1)], pages=3), TODAY, scan_url="https://x.test",
                                               scanned_at="2026-10-21T00:00:00+00:00")))
         assert m.assessment.main_domain == "x.test" and m.remediation_plan and m.methodology.legal_mapping_version
 
 
 class TestHandReviewedGoldenExamples:
-    """Scenarios reviewed by hand against the real sites they are modelled on. Each expected number is worked out on paper below,
-    independently of the code, from the weights: C1 5, C2 4, C3 4, C4 4, C5 2, N1 4, N2 2; business checks R9 2, R14A 3, R14B 3, S6 3, S7 3."""
+    """Scenarios reviewed by hand against the real sites they are modelled on. Each expected status is worked out on paper, independently of the code."""
+
+    CORE = ("DPDP-C1", "DPDP-C2", "DPDP-C3", "DPDP-C4", "DPDP-C5", "DPDP-N1", "DPDP-N2")
+
+    def statuses(self, s):
+        return [by_id(s, r).status for r in self.CORE]
 
     def test_a_site_with_no_tracking_and_no_banner_but_a_privacy_policy(self):
-        # agentmira.ai: C1 Met 5, N1 Met 4; C2..C5 and N2 Not Applicable. Earned 9 of 9 = 100.0%.
-        # Applicable = 9 + 14 business = 23; coverage = 9 / 23 = 39.1%. Two requirements only: a caution.
+        # agentmira.ai: C1 Met, N1 Met; C2..C5 and N2 Not Applicable.
         s = assess(evidence(pages=3, mechanism="none", policies=("privacy_policy",)), TODAY)
-        assert (s.readiness.points_earned, s.readiness.points_assessed, s.readiness.score_percent) == (9, 9, 100.0)
-        assert (s.readiness.applicable_weight, s.readiness.coverage_percent) == (23, 39.1) and s.readiness.caution
+        assert self.statuses(s) == ["met", "not_applicable", "not_applicable", "not_applicable", "not_applicable", "met", "not_applicable"]
 
     def test_a_tracking_site_with_no_banner_and_no_policy(self):
-        # digitalglobal.ai: C1 Not Met 0/5; N1 Not Met 0/4; C2 and N2 are duplicates of those. Earned 0 of 9 = 0.0%; coverage 39.1%.
+        # digitalglobal.ai: C1 Not Met; N1 Not Met; C2 and N2 are duplicates of those.
         s = assess(evidence(trackers=[t(i) for i in range(1, 7)], pages=1, mechanism="none", policies=()), TODAY)
-        assert (s.readiness.points_earned, s.readiness.points_assessed, s.readiness.score_percent) == (0, 9, 0.0)
-        assert s.readiness.coverage_percent == 39.1
+        assert by_id(s, "DPDP-C1").status == "not_met" and by_id(s, "DPDP-N1").status == "not_met"
         assert by_id(s, "DPDP-C2").duplicate_of == "DPDP-C1" and by_id(s, "DPDP-N2").duplicate_of == "DPDP-N1"
 
     def test_a_clean_site_with_a_working_consent_tool(self):
-        # swaransoft.com: C1 5, C2 4, C3 4, C4 4, C5 2, N1 4, N2 2 all Met = 25 of 25 = 100.0%. Applicable = 25 + 14 = 39; coverage 64.1%.
+        # swaransoft.com: every one of the seven website checks Met.
         s = assess(evidence(trackers=[t(1, states=("post_accept",))], pages=2, policies=POL), TODAY)
-        assert (s.readiness.points_earned, s.readiness.points_assessed, s.readiness.score_percent) == (25, 25, 100.0)
-        assert (s.readiness.applicable_weight, s.readiness.coverage_percent) == (39, 64.1)
+        assert self.statuses(s) == ["met"] * 7
 
     def test_a_site_that_tracks_before_consent_and_whose_reject_could_not_be_tested(self):
-        # consiva.ai: C1 Not Met 0/5; C2 Met 4; C3 Unable to Verify (Reject not automatable); C4 Met 4; C5 Met 2; N1 Met 4; N2 Met 2.
-        # Earned 16 of 21 = 76.2%. Applicable = 21 + 4 (C3 unverified) + 14 = 39; coverage = 21 / 39 = 53.8%.
+        # consiva.ai: C1 Not Met; C2 Met; C3 Unable to Verify (Reject not automatable); C4 Met; C5 Met; N1 Met; N2 Met.
         s = assess(evidence(trackers=[t(1)], pages=3, policies=POL, reject_outcome="cmp_not_automatable", confirmed=False), TODAY)
-        assert (s.readiness.points_earned, s.readiness.points_assessed, s.readiness.score_percent) == (16, 21, 76.2)
-        assert (s.readiness.applicable_weight, s.readiness.coverage_percent) == (39, 53.8)
-        assert by_id(s, "DPDP-C3").status == "unable_to_verify"
+        assert self.statuses(s) == ["not_met", "met", "unable_to_verify", "met", "met", "met", "met"]
 
-    def test_a_framed_wrapper_is_not_scored_whatever_it_shows(self):
+    def test_a_framed_wrapper_is_not_assessed_whatever_it_shows(self):
         # A frameset wrapper whose own requests were not classified as analytics or marketing: every observable check is Unable to Verify.
-        # Nothing assessed: Insufficient Evidence, coverage 0%.
         s = assess(evidence(framed=["https://corp.gignaati.com"], trackers=[t(i, category=None) for i in range(1, 5)], policies=(), pages=1, mechanism="none"), TODAY)
-        assert s.readiness.score_percent is None and s.readiness.coverage_percent == 0.0
+        assert s.ledger.assessed_checks == 0
 
-    def test_a_lone_observed_failure_on_a_wrapper_never_becomes_a_number(self):
+    def test_a_lone_observed_failure_on_a_wrapper_is_the_only_assessed_check(self):
         s = assess(evidence(framed=["https://corp.gignaati.com"], trackers=[t(i) for i in range(1, 5)], policies=(), pages=1, mechanism="none"), TODAY)
-        assert by_id(s, "DPDP-C1").status == "not_met"
-        assert s.readiness.score_percent is None and s.readiness.status == "insufficient_evidence"   # one assessed requirement: no score, not 0%
+        assert by_id(s, "DPDP-C1").status == "not_met" and s.ledger.assessed_checks == 1
 
-    @pytest.mark.parametrize("kw,expected", [
-        ({"pages": 3, "mechanism": "none", "policies": ("privacy_policy",)}, 100.0),
-        ({"trackers": [tr(1)], "pages": 3, "mechanism": "none", "policies": ()}, 0.0),
+    @pytest.mark.parametrize("kw", [
+        {"pages": 3, "mechanism": "none", "policies": ("privacy_policy",)},
+        {"trackers": [tr(1)], "pages": 3, "mechanism": "none", "policies": ()},
     ])
-    def test_scores_are_stable_across_reruns(self, kw, expected):
-        assert assess(evidence(**kw), TODAY).readiness.score_percent == expected == assess(evidence(**kw), AFTER).readiness.score_percent
+    def test_statuses_are_stable_across_reruns_and_dates(self, kw):
+        assert self.statuses(assess(evidence(**kw), TODAY)) == self.statuses(assess(evidence(**kw), AFTER))

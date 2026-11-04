@@ -187,61 +187,6 @@ export interface UsageHistoryItem {
   reused_analysis?: boolean;
 }
 
-// ── Why two scans of one website scored differently (GET /api/v1/consent/scans/{id}/dpdp-score/compare; backend app/scoring/comparison.py).
-export interface ScoreComparisonSide {
-  scan_id: string;
-  url?: string;
-  scanned_at: string | null;
-  score_percent: number | null;
-  status: "scored" | "insufficient_evidence" | string;
-  coverage_percent: number | null;
-  applicable_weight: number;
-  assessed_weight: number;
-  insufficient_reason: string | null;
-}
-
-export interface ScoreComparisonRequirement {
-  status: string;
-  status_label: string;
-  points_earned: number;
-  weight: number;
-  counts_in_score: boolean;
-  evidence: string[];
-  evidence_ids: string[];
-}
-
-export interface ScoreComparisonChange {
-  id: string;
-  title: string;
-  category: string;
-  previous: ScoreComparisonRequirement | null;
-  latest: ScoreComparisonRequirement | null;
-  /** "scan_coverage", "website_behaviour", "scoring_configuration" or "unexplained". */
-  cause: string;
-  explanation: string;
-  score_before: number | null;
-  score_after: number | null;
-  score_change: number | null;
-  score_becomes_available: boolean;
-  score_becomes_withheld: boolean;
-}
-
-export interface ScoreComparison {
-  previous: ScoreComparisonSide;
-  latest: ScoreComparisonSide;
-  score_change: number | null;
-  summary: string;
-  causes: string[];
-  changes: ScoreComparisonChange[];
-  changed_inputs: { group: string; name: string; previous: unknown; latest: unknown }[];
-  denominators: { previous: { applicable_weight: number; assessed_weight: number }; latest: { applicable_weight: number; assessed_weight: number }; changed: boolean };
-  requirements_missing_from_one_scan: string[];
-  attribution: { method: string; sums_to_total: boolean };
-  methodology_version: string;
-  assessed_on: string;
-  methodology_note: string;
-}
-
 /** Why a scan could not be completed, in one vocabulary for every site (backend scanner/failure_catalog.py). Derived by the server, so older scans carry it too. */
 export interface ScanFailure {
   category: string;
@@ -523,7 +468,7 @@ export interface ScanScreenshot {
   data: string | null;
 }
 
-/** What the scan's privacy and cookie policies say (GET .../policy-analysis; backend app/policy). Informational: it never changes the score. */
+/** What the scan's privacy and cookie policies say (GET .../policy-analysis; backend app/policy). Informational only. */
 export interface PolicyRequirementResult {
   id: string;
   title: string;
@@ -553,7 +498,7 @@ export interface PolicyAnalysis {
   model: Record<string, unknown> | null;
 }
 
-/** The proposed DPDP Compliance Score for one scan (backend app/scoring/dpdp_score.py; docs/DPDP_COMPLIANCE_SCORE.md). */
+/** The DPDP requirements reading of one scan (GET /api/v1/consent/scans/{id}/requirements): the status of each requirement, with its evidence. It carries no score; the only score is the ten-check assessment (report/tenChecks.ts). */
 export type DpdpStatus = "met" | "partially_met" | "not_met" | "unable_to_verify" | "not_applicable";
 
 export interface DpdpRequirementResult {
@@ -561,17 +506,13 @@ export interface DpdpRequirementResult {
   category: string;
   title: string;
   provisions: string[];
-  weight: number;
   effective: string;
   in_force: boolean;
   status: DpdpStatus;
-  points_earned: number;
-  counts_in_score: boolean;
   observations: string[];
   evidence_ids: string[];
   rule_ids: string[];
   exclusion_reason: string | null;
-  default_weight: number;
   description: string;
   criteria: string;
   expected_evidence: string;
@@ -587,39 +528,22 @@ export interface DpdpRequirementResult {
   check_type: "website" | "business" | "policy";
   applicability: string;
   confidence: "high" | "medium" | "none";
-  scoring_rationale: string;
   legal_note: string;
-  penalty_points: number | null;
-  score_contribution_percent: number | null;
-  coverage_share_percent: number | null;
-  /** How the check was (or could be) answered; absent on a score from an older server. */
+  /** How the check was (or could be) answered; absent on an older server. */
   method?: "website_scan" | "policy_text" | "organisation_records" | string;
-  /** The records that would settle a check left unverified; absent on a score from an older server. */
+  /** The records that would settle a check left unverified; absent on an older server. */
   needed_evidence?: string[];
-}
-
-export interface DpdpLedgerMetric {
-  key: string;
-  name: string;
-  numerator: number;
-  denominator: number;
-  percent: number | null;
-  formula: string;
-  meaning: string;
 }
 
 export interface DpdpStatusRule {
   status: DpdpStatus;
   label: string;
   rule: string;
-  in_numerator: string;
-  in_denominator: string;
-  on_coverage: string;
   count: number;
-  weight: number;
   check_ids: string[];
 }
 
+/** Plain counts of checks by status. */
 export interface DpdpLedger {
   total_checks: number;
   applicable_checks: number;
@@ -629,44 +553,8 @@ export interface DpdpLedger {
   failed_checks: number;
   unable_checks: number;
   not_applicable_checks: number;
-  total_weight: number;
-  applicable_weight: number;
-  assessed_weight: number;
-  earned_weight: number;
-  penalty_weight: number;
-  unable_weight: number;
-  not_applicable_weight: number;
-  metrics: DpdpLedgerMetric[];
-  category_metrics: DpdpLedgerMetric[];
   status_rules: DpdpStatusRule[];
-  penalty_note: string;
-  security_score_note: string;
   not_applicable: { id: string; reason: string; duplicate_of: string | null }[];
-}
-
-export interface DpdpCategoryScore {
-  category: string;
-  applicable_weight: number;
-  assessed_weight: number;
-  points_earned: number;
-  score_percent: number | null;
-  coverage_percent: number | null;
-  status: "scored" | "not_assessed";
-}
-
-export interface DpdpScoreBlock {
-  basis: "readiness" | "in_force";
-  status: "scored" | "insufficient_evidence";
-  score_percent: number | null;
-  points_earned: number;
-  points_assessed: number;
-  applicable_weight: number;
-  assessed_weight: number;
-  unable_to_verify_weight: number;
-  coverage_percent: number | null;
-  insufficient_reason: string | null;
-  caution: string | null;
-  categories: DpdpCategoryScore[];
 }
 
 export interface DpdpStateCounts {
@@ -697,8 +585,6 @@ export interface DpdpGapItem {
   timing: "in_force" | "future";
   applies_from: string;
   provisions: string[];
-  weight: number;
-  points: number;
   what_the_scan_observed: string[];
   pages: string[];
   evidence_ids: string[];
@@ -712,7 +598,6 @@ export interface DpdpMissingEvidenceItem {
   requirement_id: string;
   title: string;
   provisions: string[];
-  weight: number;
   reason: string;
   kind: "scan_limit" | "organisational";
 }
@@ -786,27 +671,6 @@ export interface DpdpFindingGroups {
   counts: Record<DpdpGroupKey, number>;
 }
 
-export interface DpdpMethodWeight {
-  id: string;
-  title: string;
-  category: string;
-  check_type: "website" | "business" | "policy";
-  weight: number;
-  default_weight: number;
-  rationale: string;
-  applicability: string;
-  effective: string;
-  applies_now: boolean;
-}
-
-export interface DpdpMethodCategory {
-  name: string;
-  rationale: string;
-  weight: number;
-  share_percent: number | null;
-  requirement_ids: string[];
-}
-
 export interface DpdpAssessment {
   scan_url: string | null;
   main_domain: string | null;
@@ -830,33 +694,22 @@ export interface DpdpRemediationStep {
   action: string;
   how_to_verify: string;
   legal_references: string[];
-  /** What fixing this one gap does to the readiness score, from the score's own weights (null when the score is withheld), and what the gap means in plain words. */
-  current_percent?: number | null;
-  percent_if_fixed?: number | null;
-  gain_percent?: number | null;
+  /** What the gap means for the organisation, in plain words. */
   impact?: string;
 }
 
+/** The non-numeric rules and legal sources of the requirements reading. */
 export interface DpdpMethodology {
-  version: string;
-  weights_source: "default" | "custom";
-  weights_note: string;
-  score_formula: string;
-  coverage_formula: string;
-  points_rules: string[];
-  reliability_rule: string;
-  duplicate_rule: string;
+  duplicate_rule?: string;
   timing_rule: string;
   scope_rule: string;
   legal_mapping_version: string;
   legal_sources: { name: string; reference: string }[];
-  weights: DpdpMethodWeight[];
-  categories: DpdpMethodCategory[];
   dedup: { group: string; requirement_ids: string[]; explanation: string }[];
 }
 
-/** Which kind of website this looks like and which provisions depend on it (backend app/scoring/sector.py). Informational: it never changes the score. */
-export interface SectorSignal { sector: string; source: string; match: string; seen_in: string; points: number }
+/** Which kind of website this looks like and which provisions depend on it (backend app/scoring/sector.py). Informational only. */
+export interface SectorSignal { sector: string; source: string; match: string; seen_in: string }
 export interface SectorNote { id: string; title: string; provisions: string[]; text: string; observed: string[]; action: string }
 export interface SectorDeclaration { flag: string; requirement_id: string; label: string; why: string; declared: boolean | null }
 export interface SectorAssessment {
@@ -869,19 +722,15 @@ export interface SectorAssessment {
   notes: SectorNote[];
   declarations: SectorDeclaration[];
   limitations: string[];
-  sector_scores?: Record<string, number>;
   /** True when the organisation declared its own sector; `detected_sector` is then what the scan alone made of the site. */
   declared?: boolean;
   detected_sector?: string | null;
   agrees_with_scan?: boolean | null;
 }
 
-export interface DpdpScoreResponse {
-  methodology_version: string;
+export interface DpdpRequirementsResponse {
   as_of: string;
   requirements: DpdpRequirementResult[];
-  readiness: DpdpScoreBlock;
-  in_force: DpdpScoreBlock;
   disclaimer: string;
   status_counts: Record<DpdpStatus, number>;
   evidence_summary: DpdpEvidenceSummary;
@@ -892,9 +741,7 @@ export interface DpdpScoreResponse {
   assessment: DpdpAssessment;
   remediation_plan: DpdpRemediationStep[];
   ledger: DpdpLedger;
-  /** Absent on a score from an older server. */
   sector?: SectorAssessment | null;
-  thresholds: { min_coverage_percent: number; min_assessed_requirements: number };
   out_of_scope: { provision: string; reason: string }[];
 }
 

@@ -11,7 +11,7 @@ const STATUS_CLASS: Record<string, string> = { tested: "tp-good", "partly tested
  */
 export function ScanTransparency({ view, compact = false }: { view: TransparencyView; compact?: boolean }) {
   const { pages, timing, coverage, consent, scoreReason } = view;
-  const req = coverage.requirements;
+  const req = coverage.counts;
   return (
     <div className="tp" data-testid="scan-transparency">
       <p className={`tp-reason ${KIND_CLASS[scoreReason.kind]}`} data-testid="tp-score-reason" data-kind={scoreReason.kind}>{scoreReason.text}</p>
@@ -47,19 +47,19 @@ export function ScanTransparency({ view, compact = false }: { view: Transparency
           <h4>Coverage, three different things</h4>
           <dl>
             <dt>Page coverage</dt><dd>{coverage.page.value}</dd>
-            <dt>Requirement coverage</dt><dd>{coverage.requirement.value}</dd>
+            <dt>Checks assessed</dt><dd>{coverage.checks.value}</dd>
             <dt>Consent-state coverage</dt><dd>{coverage.consentStates.value}</dd>
           </dl>
           {req && (
             <p className="tp-note" data-testid="tp-requirements">
-              {req.assessed} requirement{req.assessed === 1 ? "" : "s"} assessed · {req.notAssessed} not assessed (insufficient evidence) · {req.notApplicable} not applicable ·
+              {req.assessed} check{req.assessed === 1 ? "" : "s"} assessed · {req.notAssessed} not assessed (insufficient evidence) · {req.notApplicable} not applicable ·
               {" "}{req.needsReview} need human review · {req.documentReview} need document review.
             </p>
           )}
           {!compact && (
             <ul className="tp-list">
               <li><b>Page:</b> {coverage.page.definition}</li>
-              <li><b>Requirement:</b> {coverage.requirement.definition}</li>
+              <li><b>Checks:</b> {coverage.checks.definition}</li>
               <li><b>Consent states:</b> {coverage.consentStates.definition}</li>
             </ul>
           )}

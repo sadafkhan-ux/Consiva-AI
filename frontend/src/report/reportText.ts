@@ -25,7 +25,7 @@ export interface FindingRow { title: string; detail: string; label: string; tone
 /** Every finding the summary can show, in the order it shows them: confirmed, future readiness, needs review, could not verify. The report
  *  takes the first three and counts the rest. One function for the PDF drawn in the browser and the report the server prints. */
 export function topFindingRows(model: ReportModel): FindingRow[] {
-  const v = model.dpdpScore;
+  const v = model.requirements;
   const rows: FindingRow[] = [];
   if (!v) {
     for (const p of model.problems) rows.push({ title: p.text, detail: "", label: p.risk, tone: "warn" });
@@ -40,11 +40,4 @@ export function topFindingRows(model: ReportModel): FindingRow[] {
   const business = new Set(v.unableToVerify.filter((r) => r.checkType === "Business check").map((r) => r.id));
   for (const e of group("unable_to_verify").filter((x) => !business.has(x.id))) rows.push({ title: stripId(e.title), detail: detailOf(e, true), label: "Could not verify", tone: "mute" });
   return rows;
-}
-
-/** What a check contributed, in the words of the table of every check: "4 of 4 points", "0 of 5 points · penalty 5", or "Not scored". */
-export function checkContribution(r: { statusKey: string; points: string; penalty: string }): string {
-  if (r.statusKey === "unable_to_verify") return "Not scored";
-  const lost = /^([\d.]+) of [\d.]+ points lost/.exec(r.penalty);
-  return `${r.points}${lost && parseFloat(lost[1]) > 0 ? ` · penalty ${lost[1]}` : ""}`;
 }

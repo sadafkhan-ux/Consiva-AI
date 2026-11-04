@@ -2,9 +2,8 @@ import type { ScanEvidenceResponse } from "../api/types";
 import type { ReportModel } from "./buildReport";
 import { buildHeroView, buildPreviewView, type HeroView, type PreviewView } from "./hero";
 import { resolveCta, type Cta } from "./reportCta";
-import { isReportCategory } from "./reportScope";
 import { pagesCoverageLine, pagesTileValue } from "./scanPages";
-import { checkContribution, stripRuleCodes, topFindingRows, type FindingRow, type RowTone } from "./reportText";
+import { stripRuleCodes, topFindingRows, type FindingRow, type RowTone } from "./reportText";
 import type { ConsentComparison, ElementView, TechnologyRow } from "./reportVisual";
 import { registrableDomain } from "./trackerSummary";
 
@@ -18,17 +17,17 @@ export const FREE_PAGES = 2;
 export const FULL_PAGES = 8;
 
 export interface StatusPillView { label: string; tone: RowTone }
-export interface AreaView { name: string; scoreLabel: string; pct: number | null; coverageLabel: string }
 export interface FrameworkView {
   name: string;
-  /** "94.7%", or "Not available". */
+  /** "94.4/100" (the ten-check score), or "Not available". */
   scoreLabel: string;
   counts: { met: number; partly: number; notMet: number; unverified: number; notApplicable: number };
   /** The five segments of the bar, in order, as a share of 100 (all zero when nothing is counted). */
   segments: { key: string; label: string; count: number; pct: number }[];
 }
 export interface TechCard { name: string; type: string; requests: number; seen: string; category: string }
-export interface CheckRow { id: string; title: string; evidence: string; weight: number; status: StatusPillView; contribution: string }
+/** One of the ten checks, as the assessment marked it: its result and its marks ("1 / 1", "0.5 / 1", "Not assessed"). */
+export interface CheckRow { id: string; title: string; evidence: string; status: StatusPillView; marks: string }
 export interface FixRow { rank: number; title: string; priority: string; tone: RowTone; action: string; related: string }
 export interface SeriesPoint { state: string; tested: boolean; analytics: number; functional: number; other: number }
 
@@ -43,12 +42,11 @@ export interface PageReportView {
   headerPages: string;
   hero: HeroView;
   preview: PreviewView;
-  coverageLabel: string;
-  coveragePct: number | null;
+  /** "7 of 10 checks assessed", from the assessment's own counts. */
+  checksAssessedLabel: string;
   testedLine: string;
   tiles: { value: string; label: string }[];
   framework: FrameworkView;
-  areas: AreaView[];
   consent: ConsentComparison | null;
   techCards: TechCard[];
   techMore: number;
@@ -130,31 +128,24 @@ function seriesFrom(ev: ScanEvidenceResponse | null, consent: ConsentComparison 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function buildPageReport(model: ReportModel, variant: ReportVariant): PageReportView {
-  const v = model.dpdpScore;
+  const v = model.requirements;
   const vis = model.visual;
   const ev = model.evidence;
-  const hero = buildHeroView(v);
+  const hero = buildHeroView(model.assessment);
   const preview = buildPreviewView(model.screenshot, model.siteUrl, model.scanId);
   const scannedAt = v ? v.scanTime : model.generatedAt;
-  const assessed = v ? v.assessed : [];
-  const unable = v ? v.unableToVerify : [];
-  const count = (k: string) => assessed.filter((r) => r.statusKey === k).length;
-  const counts = { met: count("met"), partly: count("partially_met"), notMet: count("not_met"), unverified: unable.length, notApplicable: v ? v.excluded.length : 0 };
+  // Every count and the score come from the ten-check assessment: the one engine.
+  const a = model.assessment;
+  const nAssessed = a ? a.counts.passed + a.counts.partial + a.counts.failed : 0;
+  const counts = { met: a?.counts.passed ?? 0, partly: a?.counts.partial ?? 0, notMet: a?.counts.failed ?? 0, unverified: a?.counts.notAssessed ?? 0, notApplicable: a?.counts.notApplicable ?? 0 };
   const total = counts.met + counts.partly + counts.notMet + counts.unverified + counts.notApplicable;
   const seg = (key: string, label: string, n: number) => ({ key, label, count: n, pct: total ? (n / total) * 100 : 0 });
   const framework: FrameworkView = {
     name: "India DPDP Act, 2023 and Rules, 2025",
-    scoreLabel: v && v.scoreValue !== null ? v.headline : "Not available",
+    scoreLabel: a && a.score !== null ? a.scoreText : "Not available",
     counts,
     segments: [seg("met", "met", counts.met), seg("partly", "partly met", counts.partly), seg("notMet", "not met", counts.notMet), seg("unverified", "could not be verified", counts.unverified), seg("na", "not applicable", counts.notApplicable)],
   };
-
-  const areas: AreaView[] = v
-    ? v.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).slice(0, 4).map((c) => {
-        const pct = c.score === "Not assessed" ? null : parseFloat(c.score);
-        return { name: c.name, scoreLabel: pct === null ? "Not assessed" : c.score, pct, coverageLabel: pct === null ? "Cannot be tested from outside" : c.coverage.replace("coverage", "Coverage") };
-      })
-    : [];
 
   // One category per service, found through the registrable domain of its requests: the service catalogue's own word, never a guess.
   const serviceCategory = new Map<string, string>();
@@ -172,10 +163,13 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
   const rows = topFindingRows(model);
   const findings = rows.slice(0, 3);
 
-  const listedChecks = v ? v.allChecks.filter((c) => isReportCategory(c.category, v.assessedCategories) && c.statusKey !== "not_applicable") : [];
-  const CHECK_ROWS = 9;
-  const checks: CheckRow[] = listedChecks.slice(0, CHECK_ROWS).map((r) => ({
-    id: r.id.replace("DPDP-", ""), title: r.title, evidence: stripRuleCodes(r.evidenceLine), weight: r.weight, status: verdictPill(r.verdict), contribution: checkContribution(r),
+  const resultPill = (r: string): StatusPillView =>
+    r === "Passed" ? { label: "Passed", tone: "good" } : r === "Partially Passed" ? { label: "Partially passed", tone: "warn" } : r === "Failed" ? { label: "Failed", tone: "bad" }
+      : r === "Not Applicable" ? { label: "Not applicable", tone: "mute" } : { label: "Not assessed", tone: "mute" };
+  const listedChecks = a ? a.checks : [];
+  const CHECK_ROWS = 10;
+  const checks: CheckRow[] = listedChecks.slice(0, CHECK_ROWS).map((c) => ({
+    id: String(c.id), title: c.name, evidence: stripRuleCodes(c.evidence || c.explanation), status: resultPill(c.result), marks: c.marksText,
   }));
 
   const fixes: FixRow[] = v
@@ -187,7 +181,7 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
 
   // The score rates a finding High, Medium or Low (scoring/findings.py); it has no "Critical". A confirmed finding rated High is the one that outranks a high score.
   const critical = !!v?.groups.find((g) => g.key === "confirmed")?.entries.some((e) => /critical|high/i.test(e.severity));
-  const cta = resolveCta({ score: v ? v.scoreValue : null, coverage: v ? v.coverageValue : null, unassessed: unable.length, critical, subscriber: variant === "full" });
+  const cta = resolveCta({ score: a ? a.score : null, limitedBasis: a ? a.limitedBasis : true, unassessed: a ? a.counts.notAssessed : 0, critical, subscriber: variant === "full" });
 
   const pagesLine = vis ? pagesTileValue(vis.pagesScanned, vis.pagesFound) : "Not recorded";
   const tiles: { value: string; label: string }[] = vis
@@ -207,14 +201,14 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
     limits.push(`Accept and Reject were tested once, on the homepage only${vis.consent.acceptTested && vis.consent.rejectTested ? "" : "; at least one of them could not be tested"}.`);
   }
   limits.push("A request shows the browser contacted a service. It does not show that personal data was sent or that a rule was broken.");
-  if (v && unable.length) limits.push(`${unable.length} applicable ${unable.length === 1 ? "check" : "checks"} could not be tested from outside and ${unable.length === 1 ? "is" : "are"} not counted as passed.`);
+  if (a && a.counts.notAssessed) limits.push(`${a.counts.notAssessed} ${a.counts.notAssessed === 1 ? "check" : "checks"} could not be assessed from outside and ${a.counts.notAssessed === 1 ? "is" : "are"} left out, not counted as passed.`);
 
   return {
     variant, domain: preview.domain, scanId: model.scanId, reportId: reportIdFor(variant, model.scanId, scannedAt), scannedAt,
     headerPages: model.scanPages ? model.scanPages.coverageLine : vis ? pagesCoverageLine(vis.pagesScanned, vis.pagesFound) : "", hero, preview,
-    coverageLabel: v ? v.coverageHeadline : "n/a", coveragePct: v ? v.coverageValue : null,
-    testedLine: v ? `${assessed.length} of ${assessed.length + unable.length} applicable checks tested from outside.` : "",
-    tiles, framework, areas, consent, techCards: allTech.slice(0, 5), techMore: techMore + Math.max(0, allTech.length - 5), techRowsMore: techMore, techRows: allTech,
+    checksAssessedLabel: a ? `${nAssessed} of ${a.checks.length} checks assessed` : "n/a",
+    testedLine: a ? `${nAssessed} of ${a.checks.length - a.counts.notApplicable} applicable checks assessed from outside.` : "",
+    tiles, framework, consent, techCards: allTech.slice(0, 5), techMore: techMore + Math.max(0, allTech.length - 5), techRowsMore: techMore, techRows: allTech,
     domains: { shown: hosts.slice(0, SHOWN_DOMAINS), others: Math.max(0, hosts.length - SHOWN_DOMAINS) },
     series: seriesFrom(ev, consent), elements: vis ? vis.elements : [],
     findings, findingsMore: Math.max(0, rows.length - findings.length),

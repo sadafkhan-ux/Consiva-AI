@@ -1,6 +1,6 @@
 """The four finding groups: Confirmed Findings, Needs Human Review, Unable to Verify, Future Readiness.
 
-Derived from the SAME requirement results, evidence context and review items as the DPDP score, so the dashboard and the PDF
+Derived from the SAME requirement results, evidence context and review items as the requirements reading, so the dashboard and the PDF
 (which render this one structure) cannot classify the same result differently. Nothing here re-scores anything.
 
 Classification (each result lands in exactly one group, except that a review item may point at a requirement that is also listed
@@ -14,7 +14,7 @@ as a gap, because "what was observed" and "what a person must decide" are differ
 A network request or a cookie is evidence that something was observed. It is never, by itself, proof of a legal violation.
 
 Severity is shown only where it is justified: a Confirmed Finding on a duty in force, resting on a direct observation (high
-confidence). Its level follows the requirement's documented weight (5 high, 4 medium, otherwise low). A partly met requirement is
+confidence). Its level is the fixed severity of the requirement (see the registry in scoring/requirements.py). A partly met requirement is
 never rated, because its confidence is at most medium. Everywhere else the finding is "not rated" and says why. It is not derived from the old risk levels.
 """
 
@@ -22,8 +22,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal
-from fractions import Fraction
 
 from app.rules.consent_observation import cmp_script_failure
 from app.rules.consent_rules import ConsentContext
@@ -113,33 +111,18 @@ class RemediationStep:
     action: str
     how_to_verify: str
     legal_references: list[str]
-    current_percent: float | None = None
-    percent_if_fixed: float | None = None
-    gain_percent: float | None = None
     impact: str = ""
 
 
-def _pct(numerator: float, denominator: float) -> float:
-    """numerator / denominator x 100 rounded half-up to one decimal, exactly as the score does (scoring/dpdp_score.py `_pct`). Python's round() rounds half
-    to even and works on a binary float, so 5 / 16 came out 31.2 here while the score showed 31.3 for the same fraction."""
-    q = Fraction(numerator).limit_denominator(2) / Fraction(denominator) * 100
-    return float((Decimal(q.numerator) / Decimal(q.denominator)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
-
-
-def build_remediation_plan(results: list, readiness=None) -> list[RemediationStep]:
+def build_remediation_plan(results: list) -> list[RemediationStep]:
     """The remediation actions of every failed check, in the order to do them, by a fixed rule that can be read off the result:
-    duties already in force first; within that, Not Met before Partially Met; then the heavier documented weight; then by id.
+    duties already in force first; within that, Not Met before Partially Met; then the order of the registry.
     The same rule gives the same order for the same evidence."""
+    order = {r.id: i for i, r in enumerate(results)}   # the results come in the order of the registry
     gaps = [r for r in results if r.status in ("not_met", "partially_met") and r.sufficient]
-    gaps.sort(key=lambda r: (0 if r.in_force else 1, 0 if r.status == "not_met" else 1, -r.default_weight, r.id))
+    gaps.sort(key=lambda r: (0 if r.in_force else 1, 0 if r.status == "not_met" else 1, order.get(r.id, len(order)), r.id))
     plan: list[RemediationStep] = []
-    # The effect of fixing each gap ON ITS OWN, from the weights the score itself uses: a Not Met check regains its whole weight, a Partially Met
-    # one the half it had not earned. No estimate and no invented metric: the same arithmetic as the score, run once more with one check fixed.
-    scored = readiness is not None and getattr(readiness, "status", None) == "scored" and getattr(readiness, "assessed_weight", 0)
     for rank, r in enumerate(gaps, start=1):
-        current = _pct(readiness.points_earned, readiness.assessed_weight) if scored else None
-        regained = r.weight * (1.0 if r.status == "not_met" else 0.5)
-        after = min(100.0, _pct(readiness.points_earned + regained, readiness.assessed_weight)) if scored else None
         if r.in_force:
             priority = "Fix now" if r.status == "not_met" else "Improve"
             timing = "Current"
@@ -150,10 +133,8 @@ def build_remediation_plan(results: list, readiness=None) -> list[RemediationSte
             rank=rank, requirement_id=r.id, title=r.title, outcome="Not Met" if r.status == "not_met" else "Partially Met",
             timing=timing, priority=priority,
             priority_reason=(f"{'The duty is in force' if r.in_force else f'The duty applies from {r.effective.isoformat()}'}; "
-                             f"{'a gap' if r.status == 'not_met' else 'partly met'}; documented weight {r.default_weight}; "
-                             f"{r.confidence} confidence."),
+                             f"{'a gap' if r.status == 'not_met' else 'partly met'}; {r.confidence} confidence."),
             action=r.remediation, how_to_verify=r.verification, legal_references=list(r.provisions),
-            current_percent=current, percent_if_fixed=after, gain_percent=round(after - current, 1) if scored else None,
             impact=BUSINESS_IMPACT.get(r.id, ""),
         ))
     return plan
@@ -169,9 +150,7 @@ def severity_for(res) -> tuple[str | None, str]:
         return None, ("Not rated: the evidence is partial, or rests on something not being found, so a severity is not justified."
                        if res.status == "not_met" else
                        "Not rated: the evidence supports only part of the requirement, so a severity is not justified.")
-    level = 2 if res.default_weight >= 5 else 1 if res.default_weight == 4 else 0
-    return ("Low", "Medium", "High")[level], (
-        f"Rated from the requirement's documented weight ({res.default_weight}) and a direct observation.")
+    return res.severity, f"Rated from the fixed severity of this requirement ({res.severity}) and a direct observation."
 
 
 def _how_to_verify_missing(res, ctx: ConsentContext) -> str:
@@ -302,8 +281,8 @@ def build_finding_groups(results: list, review_items: list[ReviewItem], ctx: Con
             "confirmed": ("Only duties that are in force today can be confirmed findings. A severity is shown only when the evidence "
                           "justifies it."),
             "needs_review": "These need business context or legal interpretation. The scan does not conclude that any is a violation.",
-            "unable_to_verify": ("The scan did not have the evidence. These are neither passes nor failures, and they lower the "
-                                 "assessment coverage. This scan makes no statement about whether retention rules, a DPIA, grievance "
+            "unable_to_verify": ("The scan did not have the evidence. These are neither passes nor failures, and "
+                                 "and they stay open until evidence is provided. This scan makes no statement about whether retention rules, a DPIA, grievance "
                                  "handling, breach response times or a ROPA exist or are complete."),
             "future_readiness": ("These duties are not yet in force. The gaps are for preparation and are not current violations."),
         },

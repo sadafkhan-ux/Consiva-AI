@@ -41,7 +41,7 @@ from pypdf import PdfReader, PdfWriter
 
 from app.config import Settings
 from app.core.exceptions import ReportGenerationError
-from app.scoring.dpdp_score import DISCLAIMER
+from app.scoring.requirements import DISCLAIMER
 
 logger = logging.getLogger(__name__)
 

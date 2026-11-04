@@ -1,13 +1,11 @@
 import type { ReportModel } from "./buildReport";
 import type { CookieRow } from "./cookieInventory";
-import type { ScoreRequirementView } from "./dpdpScore";
 import { buildPageReport, findingPill, type PageReportView, type StatusPillView } from "./pageReports";
-import { stripRuleCodes, topFindingRows } from "./reportText";
+import { topFindingRows } from "./reportText";
 import type { ElementStatus } from "./reportVisual";
 
-// The two-page report: page 1 is the summary (the site, the score and its coverage, the weightage of each assessed check, the pages the scan chose),
-// page 2 the findings, the cookies and the evidence. Every figure is read from what the scan and the score recorded: a check's weightage is the weight
-// it carries in the score and the part of it the check earned, so the total of the table is the score's own numerator and denominator.
+// The two-page report's data: the site, the pages the scan chose, the findings, the cookies and the evidence. Every figure is read from what the scan recorded. The score and
+// the ten checks come from the assessment (report/tenChecks.ts) and are drawn by print/SnapshotReport.tsx; nothing here works out a score.
 // Nothing is filled in. A thing the scan did not observe is said to be "Not Tested" or "Unable to Verify", never given a plausible value.
 
 export const SUMMARY_PAGES = 2;
@@ -22,23 +20,6 @@ export const TECH_SHOWN = 4;
 
 /** The words a result is given: nothing else is printed as a status. */
 export type StatusWord = "Passed" | "Requires Review" | "Unable to Verify" | "Not Tested" | "Not applicable";
-
-export interface CheckRow {
-  n: number;
-  id: string;
-  title: string;
-  category: string;
-  /** The Act and the Rules the check rests on, as the score names them. */
-  provisions: string;
-  status: { label: StatusWord; tone: StatusPillView["tone"] };
-  /** True for a check that was tested and so is part of the score. */
-  scored: boolean;
-  /** Weightage earned and the weightage the check carries; both null for a check that was not assessed. */
-  awarded: number | null;
-  max: number | null;
-  /** One line of what the scan saw (assessed) or why it could not tell / why it does not apply. */
-  note: string;
-}
 
 export interface PageSelectionRow {
   n: number;
@@ -61,17 +42,8 @@ export interface CookieLine {
 
 export interface SummaryView {
   page: PageReportView;
-  /** Framework readiness, counted over the checkpoints this report covers (the same ones the table lists), so the legend and the table agree. */
+  /** Framework readiness, counted from the ten-check assessment. */
   framework: PageReportView["framework"];
-  /** Page 1: the checks that were tested, numbered from 1, with their weightage. */
-  scoredRows: CheckRow[];
-  totalAwarded: number;
-  totalMax: number;
-  /** Page 2: every applicable check in two groups, then the checks that do not apply. */
-  assessedRows: CheckRow[];
-  unassessedRows: CheckRow[];
-  notApplicableRows: CheckRow[];
-  applicableCount: number;
   scoreChip: string;
   pagesScanned: number | null;
   limited: boolean;
@@ -101,23 +73,6 @@ export interface SummaryView {
 }
 
 // ─── wording ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-const STATUS: Record<string, { label: StatusWord; tone: StatusPillView["tone"] }> = {
-  met: { label: "Passed", tone: "good" },
-  partially_met: { label: "Requires Review", tone: "warn" },
-  not_met: { label: "Requires Review", tone: "warn" },
-  unable_to_verify: { label: "Unable to Verify", tone: "mute" },
-  not_applicable: { label: "Not applicable", tone: "mute" },
-};
-
-/** "4 of 5 points" -> 4. Null for "not scored" or text that is not that sentence. */
-export function pointsEarned(points: string): number | null {
-  const m = /^([\d.]+) of [\d.]+ points/.exec(points);
-  return m ? parseFloat(m[1]) : null;
-}
-
-/** 25 -> "25", 4.5 -> "4.5": no trailing zeros, so a whole figure reads as a whole figure. */
-export const weightage = (n: number): string => String(Math.round(n * 100) / 100);
 
 const MAX_NOTE = 110;
 
@@ -152,27 +107,6 @@ export function provisionLines(provisions: string): { label: string; text: strin
   if (rules.length) lines.push({ label: "Rules", text: `Rule ${rules.join(", ")}` });
   if (other.length) lines.push({ label: "", text: other.join("; ") });
   return lines;
-}
-
-/**
- * The status word of a checkpoint. A check the scan could have tested from the website and did not (the banner was not shown, so Reject could not be tried) is "Not Tested";
- * a check that rests on something the scan cannot reach (the privacy policy's wording, the organisation's own records) and could not be settled is "Unable to Verify". Neither
- * is ever "Passed".
- */
-function statusOf(r: ScoreRequirementView): { label: StatusWord; tone: StatusPillView["tone"] } {
-  if (r.statusKey === "unable_to_verify") return r.methodKey === "website_scan" ? { label: "Not Tested", tone: "mute" } : { label: "Unable to Verify", tone: "mute" };
-  return STATUS[r.statusKey] ?? STATUS.unable_to_verify;
-}
-
-function toRow(r: ScoreRequirementView, n: number): CheckRow {
-  const scored = r.statusKey === "met" || r.statusKey === "partially_met" || r.statusKey === "not_met";
-  // The evidence is given whole: a reader must be able to see what the status rests on.
-  const note = scored ? stripRuleCodes(r.evidenceLine) : stripRuleCodes(r.reason || r.evidenceLine);
-  return {
-    n, id: r.id.replace("DPDP-", ""), title: r.title, category: r.category, provisions: r.provisions,
-    status: statusOf(r), scored,
-    awarded: scored ? pointsEarned(r.points) : null, max: scored ? r.weight : null, note: note.replace(/\s+/g, " ").trim(),
-  };
 }
 
 /** The disclaimer printed at the foot of page 2. */
@@ -245,18 +179,7 @@ const isAbsence = (value: string): boolean => /^(not found|not assessed|no .* fo
 
 export function buildSummaryReport(model: ReportModel): SummaryView {
   const page = buildPageReport(model, "free");
-  const v = model.dpdpScore;
   const vis = model.visual;
-  // The report covers the checkpoints a website scan can test: the website itself and the privacy policy's wording. A checkpoint that rests only on the organisation's own records
-  // (security safeguards, breach handling) is not something the agent can check, so it is not part of this report and is not asked of the website. The score is not touched by this.
-  const applicable = v ? v.allChecks.filter((c) => c.statusKey !== "not_applicable" && c.methodKey !== "organisation_records") : [];
-  const rows = applicable.map((c, i) => toRow(c, i + 1));
-  const assessedRows = rows.filter((r) => r.scored).map((r, i) => ({ ...r, n: i + 1 }));
-  const unassessedRows = rows.filter((r) => !r.scored).map((r, i) => ({ ...r, n: assessedRows.length + i + 1 }));
-  const notApplicableRows = (v ? v.allChecks.filter((c) => c.statusKey === "not_applicable") : []).map((c, i) => toRow(c, i + 1));
-  const totalAwarded = assessedRows.reduce((s, r) => s + (r.awarded ?? 0), 0);
-  const totalMax = assessedRows.reduce((s, r) => s + (r.max ?? 0), 0);
-  const allPassed = assessedRows.length > 0 && assessedRows.every((r) => r.status.label === "Passed");
 
   const inv = model.cookies;
   const acceptTested = !!vis?.consent.acceptTested;
@@ -305,19 +228,9 @@ export function buildSummaryReport(model: ReportModel): SummaryView {
   if (c && (!c.acceptTested || !c.rejectTested)) nextSteps.push("Make the consent banner reachable by the scanner, or test Accept and Reject by hand: they could not be tested in this scan.");
   if (page.limits.some((l) => /not an assessment of the whole site/.test(l))) nextSteps.push("Run a full scan to cover the pages this scan did not reach.");
 
-  const kindCount = (k: string) => applicable.filter((c) => c.statusKey === k).length;
-  const counts = { met: kindCount("met"), partly: kindCount("partially_met"), notMet: kindCount("not_met"), unverified: kindCount("unable_to_verify"), notApplicable: notApplicableRows.length };
-  const total = counts.met + counts.partly + counts.notMet + counts.unverified + counts.notApplicable;
-  const seg = (key: string, label: string, n: number) => ({ key, label, count: n, pct: total ? (n / total) * 100 : 0 });
-  const framework: PageReportView["framework"] = {
-    ...page.framework, counts,
-    segments: [seg("met", "met", counts.met), seg("partly", "partly met", counts.partly), seg("notMet", "not met", counts.notMet), seg("unverified", "could not be verified", counts.unverified), seg("na", "not applicable", counts.notApplicable)],
-  };
-
   return {
-    page, framework, scoredRows: assessedRows, totalAwarded, totalMax, assessedRows, unassessedRows, notApplicableRows,
-    applicableCount: applicable.length,
-    scoreChip: allPassed ? "All assessed checks passed." : page.hero.headline,
+    page, framework: page.framework,
+    scoreChip: page.hero.headline,
     pagesScanned: vis ? vis.pagesScanned : null, limited: !!vis?.pageLimit, pagesLine: pagesGlance(page.pagesLine),
     tiles: page.tiles.map((t, i) => (i === 0 ? { ...t, value: pagesGlance(t.value) } : t)),
     selection: selection.rows, selectionNotes: selection.notes,

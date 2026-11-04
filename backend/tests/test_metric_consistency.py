@@ -7,7 +7,7 @@ import random
 from datetime import date
 
 from app.rules.consent_rules import build_consent_context, count_phrase, evaluate_consent_rules
-from app.scoring.dpdp_score import assess
+from app.scoring.requirements import assess
 
 TODAY = date(2026, 10, 27)
 
@@ -79,17 +79,16 @@ def test_a_site_with_no_pre_consent_activity_is_met():
     assert next(r for r in assess(quiet, TODAY).requirements if r.id == "DPDP-C1").status == "met"
 
 
-def test_score_is_deterministic_and_independent_of_record_order():
+def test_statuses_are_deterministic_and_independent_of_record_order():
     first = assess(D200, TODAY)
     for seed in range(5):
         shuffled = {**D200, "trackers": random.Random(seed).sample(D200["trackers"], len(D200["trackers"])), "cookies": list(reversed(D200["cookies"]))}
         again = assess(shuffled, TODAY)
-        assert again.readiness.score_percent == first.readiness.score_percent
-        assert [(r.id, r.status, r.points_earned) for r in again.requirements] == [(r.id, r.status, r.points_earned) for r in first.requirements]
+        assert [(r.id, r.status) for r in again.requirements] == [(r.id, r.status) for r in first.requirements]
 
 
-def test_score_moves_only_by_the_checkpoint_that_changed():
-    """D200 -> 1DB8: C1 Not Met -> Met is the whole difference. 28 of 33 becomes 33 of 33; no weight changed."""
+def test_statuses_move_only_for_the_checkpoint_that_changed():
+    """D200 -> 1DB8: C1 Not Met -> Met is the whole difference."""
     before = assess(D200, TODAY)
     quiet = evidence(
         [tracker(i, states=("post_accept",)) for i in range(6)] + [tracker(10 + i, category=None, states=("post_accept",)) for i in range(3)]
@@ -97,7 +96,5 @@ def test_score_moves_only_by_the_checkpoint_that_changed():
         [cookie(i, states=("post_accept",)) for i in range(3)],
     )
     after = assess(quiet, TODAY)
-    changed = {a.id for a, b in zip(after.requirements, before.requirements, strict=True) if (a.status, a.points_earned) != (b.status, b.points_earned)}
+    changed = {a.id for a, b in zip(after.requirements, before.requirements, strict=True) if a.status != b.status}
     assert changed == {"DPDP-C1"}
-    assert {r.id: r.weight for r in before.requirements} == {r.id: r.weight for r in after.requirements}
-    assert after.readiness.points_earned - before.readiness.points_earned == 5

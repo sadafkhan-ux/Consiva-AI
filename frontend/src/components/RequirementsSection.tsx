@@ -1,10 +1,10 @@
-import type { DpdpScoreResponse, SectorAssessment } from "../api/types";
-import { buildScoreView, isDpdpScore, type FindingGroupView, type FindingView, type LedgerView, type ScoreRequirementView } from "../report/dpdpScore";
+import type { DpdpRequirementsResponse, SectorAssessment } from "../api/types";
 import { formatRefs } from "../report/legalRefs";
 import { CheckCoverage } from "../report/print/CheckCoverage";
-import { isReportCategory, isReportMetric, OMITTED_DUTIES_NOTE } from "../report/reportScope";
+import { buildRequirementsView, isRequirements, type FindingGroupView, type FindingView, type LedgerView, type RequirementView } from "../report/requirements";
+import { isReportCategory, OMITTED_DUTIES_NOTE } from "../report/reportScope";
 
-function Row({ r }: { r: ScoreRequirementView }) {
+function Row({ r }: { r: RequirementView }) {
   return (
     <div className="finding-card" data-testid={`dpdp-req-${r.id}`}>
       <div className="finding-head">
@@ -14,7 +14,7 @@ function Row({ r }: { r: ScoreRequirementView }) {
         </span>
       </div>
       <div className="muted small">
-        {r.provisions} · weight {r.weight} · {r.points} · {r.inForce}
+        {r.provisions} · {r.inForce}
       </div>
       {r.timingNote && <p className="small" style={{ margin: "4px 0" }}><span className="badge warn">{r.timingNote}</span></p>}
       {r.observations.map((o) => <p key={o} className="small" style={{ margin: "4px 0" }}>{o}</p>)}
@@ -29,7 +29,6 @@ function Row({ r }: { r: ScoreRequirementView }) {
         {r.sufficiency && <p className="small" style={{ margin: "4px 0" }}><b>{r.sufficiency.split(":")[0]}:</b>{r.sufficiency.slice(r.sufficiency.indexOf(":") + 1)}</p>}
         {r.limitation && <p className="muted small" style={{ margin: "4px 0" }}>{r.limitation}</p>}
         <p className="small" style={{ margin: "4px 0" }}><b>Confidence:</b> {r.confidence}</p>
-        <p className="small" style={{ margin: "4px 0" }}><b>Scoring rationale:</b> {r.scoringRationale}</p>
       </details>
       {(r.evidenceIds.length > 0 || r.rules.length > 0) && (
         <p className="muted small mono" style={{ margin: "4px 0" }}>
@@ -41,50 +40,28 @@ function Row({ r }: { r: ScoreRequirementView }) {
   );
 }
 
-/** Every number on the score card: what it counts, its numerator and denominator, the formula and the result. */
-function ScoreLedger({ l, assessed }: { l: LedgerView; assessed: ReadonlySet<string> }) {
-  const categoryMetrics = l.categoryMetrics.filter((m) => isReportMetric(m.name, assessed));
-  const metricTable = (rows: LedgerView["metrics"], testId: string) => (
-    <div className="check-table-wrap">
-      <table className="check-table" data-testid={testId}>
-        <thead><tr><th>Metric</th><th>Numerator</th><th>Denominator</th><th>Result</th><th>What it measures</th></tr></thead>
-        <tbody>
-          {rows.map((m) => (
-            <tr key={m.name}><td><b>{m.name}</b></td><td className="num">{m.numerator}</td><td className="num">{m.denominator}</td>
-              <td className="num"><b>{m.result}</b></td><td className="small">{m.meaning}</td></tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+/** How many checks there are of each kind: counts only. */
+function CheckCounts({ l, hiddenIds }: { l: LedgerView; hiddenIds: ReadonlySet<string> }) {
   return (
     <div data-testid="dpdp-ledger">
-      <h3>Where each number comes from</h3>
-      <p className="muted small">Counts of checks and weights are different things. A check count says how many checks; a weight says how much each is worth.</p>
-      <div className="small"><b>Checks (counts)</b></div>
+      <h3>Check counts</h3>
       <div className="ledger-grid" data-testid="dpdp-ledger-counts">
         {l.counts.map((c) => <div className="ledger-item" key={c.label}><span>{c.label}</span><b>{c.value}</b><p>{c.note}</p></div>)}
       </div>
-      <div className="small"><b>Weights (points)</b></div>
-      <div className="ledger-grid" data-testid="dpdp-ledger-weights">
-        {l.weights.map((c) => <div className="ledger-item" key={c.label}><span>{c.label}</span><b>{c.value}</b><p>{c.note}</p></div>)}
-      </div>
-      <div className="small"><b>Percentages</b></div>
-      {metricTable(l.metrics, "dpdp-ledger-metrics")}
-      <details data-testid="dpdp-ledger-categories">
-        <summary className="small">Percentages by category</summary>
-        {metricTable(categoryMetrics, "dpdp-ledger-category-metrics")}
-      </details>
-      <p className="muted small">{l.checkNote}</p>
+      {l.notApplicable.filter((n) => !hiddenIds.has(n.id)).length > 0 && (
+        <ul className="small" data-testid="dpdp-na-reasons">
+          {l.notApplicable.filter((n) => !hiddenIds.has(n.id)).map((n) => <li key={n.id}><b>{n.id}:</b> {n.reason}</li>)}
+        </ul>
+      )}
     </div>
   );
 }
 
-/** One row per check, all of them, directly under the score card: area, what is checked, requirement, weight, status, evidence, contribution. */
-function CheckTable({ checks }: { checks: ScoreRequirementView[] }) {
+/** One row per check, all of them: area, what is checked, requirement, status and evidence. */
+function CheckTable({ checks }: { checks: RequirementView[] }) {
   return (
     <div data-testid="dpdp-check-table-block">
-      <h3>Every check behind the score ({checks.length})</h3>
+      <h3>Every requirement checked ({checks.length})</h3>
       <p className="muted small">
         Green is a pass, red a fail, amber a check a scan could not verify (not a confirmed violation), grey a check that does not apply.
         Amber outline is a partly met check.
@@ -92,8 +69,7 @@ function CheckTable({ checks }: { checks: ScoreRequirementView[] }) {
       <div className="check-table-wrap">
         <table className="check-table" data-testid="dpdp-check-table">
           <thead>
-            <tr><th>Check ID</th><th>Compliance area</th><th>What is being checked</th><th>Applicable requirement</th><th className="num">Weight</th>
-              <th>Status</th><th>Evidence / observation</th><th>Score contribution</th></tr>
+            <tr><th>Check ID</th><th>Compliance area</th><th>What is being checked</th><th>Applicable requirement</th><th>Status</th><th>Evidence / observation</th></tr>
           </thead>
           <tbody>
             {checks.map((r) => (
@@ -114,45 +90,17 @@ function CheckTable({ checks }: { checks: ScoreRequirementView[] }) {
                     <p style={{ margin: "4px 0" }}><b>Confidence:</b> {r.confidence}</p>
                   </details>
                 </td>
-                <td className="num">{r.weight}</td>
                 <td><span className={`verdict ${r.tone}`} data-testid={`dpdp-verdict-${r.id}`}>{r.verdict}</span></td>
                 <td className="small">
                   {r.evidenceLine}
                   {r.reason && r.reason !== r.evidenceLine && <div className="muted">Reason: {r.reason}</div>}
                   {r.pages.length > 0 && <div className="mono muted">{r.pages.slice(0, 2).join(", ")}{r.pages.length > 2 ? ` and ${r.pages.length - 2} more` : ""}</div>}
                 </td>
-                <td className="small" data-testid={`dpdp-contribution-${r.id}`}>{r.contribution}<div className="muted">Penalty: {r.penalty}</div></td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-    </div>
-  );
-}
-
-/** How each status is treated by the score, and which checks of this scan carry it. */
-function PenaltyRules({ l, hiddenIds }: { l: LedgerView; hiddenIds: ReadonlySet<string> }) {
-  return (
-    <div data-testid="dpdp-penalty-rules">
-      <h3>Penalty and exclusion rules</h3>
-      <p className="small">{l.penaltyNote}</p>
-      <div className="check-table-wrap">
-        <table className="check-table">
-          <thead><tr><th>Status</th><th>Rule</th><th>Score numerator</th><th>Score denominator</th><th>Coverage</th><th className="num">Checks</th><th className="num">Weight</th><th>Which checks</th></tr></thead>
-          <tbody>
-            {l.statusRules.map((r) => (
-              <tr key={r.label}><td><b>{r.label}</b></td><td className="small">{r.rule}</td><td className="small">{r.numerator}</td><td className="small">{r.denominator}</td>
-                <td className="small">{r.coverage}</td><td className="num">{r.count}</td><td className="num">{r.weight}</td><td className="mono small">{r.checks.split(", ").filter((id) => !hiddenIds.has(id)).join(", ") || "none"}</td></tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {l.notApplicable.length > 0 && (
-        <ul className="small" data-testid="dpdp-na-reasons">
-          {l.notApplicable.map((n) => <li key={n.id}><b>{n.id}:</b> {n.reason}</li>)}
-        </ul>
-      )}
     </div>
   );
 }
@@ -206,7 +154,7 @@ function GroupBlock({ g }: { g: FindingGroupView }) {
   );
 }
 
-/** Which kind of website this looks like and which provisions depend on it. Informational: the score is not changed by it. */
+/** Which kind of website this looks like and which provisions depend on it. Informational only. */
 export function SectorSection({ sector }: { sector: SectorAssessment | null | undefined }) {
   if (!sector) return null;
   return (
@@ -232,7 +180,7 @@ export function SectorSection({ sector }: { sector: SectorAssessment | null | un
       ))}
       {sector.declarations.length > 0 && (
         <div className="small" data-testid="sector-declarations" style={{ marginTop: 8 }}>
-          <b>Worth declaring</b> (these requirements stay excluded from the score until declared):
+          <b>Worth declaring</b> (these requirements stay excluded until declared):
           <ul style={{ margin: "4px 0" }}>
             {sector.declarations.map((d) => (
               <li key={d.flag}>
@@ -248,14 +196,13 @@ export function SectorSection({ sector }: { sector: SectorAssessment | null | un
 }
 
 /**
- * The proposed DPDP Compliance Score. It renders a view built once (report/dpdpScore.ts) that the PDF also uses, from numbers
- * computed once on the server. When the score is withheld it says "Insufficient Evidence" and why, never a number.
+ * The DPDP requirements reading: the status of each requirement, the findings, the remediation steps and the human-review box. It renders a view built once
+ * (report/requirements.ts) that the PDF also uses. It shows no score: the only score is the ten-check assessment above.
  */
-export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpScoreResponse | null | undefined; analysisNote?: string | null }) {
-  if (!isDpdpScore(score)) return null;
-  const v = buildScoreView(score);
-  // The score card follows the report: data-rights and security duties are not shown (a website scan cannot observe them). They stay in
-  // the score and the counts as not tested, and a note under the check table says so.
+export function RequirementsSection({ reading, analysisNote = null }: { reading: DpdpRequirementsResponse | null | undefined; analysisNote?: string | null }) {
+  if (!isRequirements(reading)) return null;
+  const v = buildRequirementsView(reading);
+  // The card follows the report: data-rights and security duties are not shown (a website scan cannot observe them) and a note under the table says so.
   const hiddenIds = new Set(v.allChecks.filter((c) => !isReportCategory(c.category, v.assessedCategories)).map((c) => c.id));
   const shownChecks = v.allChecks.filter((c) => !hiddenIds.has(c.id));
   const groups = v.groups.map((g) => {
@@ -270,7 +217,7 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
     return `: ${kept.length} ${kept.length === 1 ? "duty starts" : "duties start"} (${kept.join(", ")})`;
   }));
   return (
-    <section className="section" data-testid="dpdp-score">
+    <section className="section" data-testid="dpdp-requirements">
       <h2>{v.title}</h2>
       <div className="muted small" data-testid="dpdp-scope">
         {v.scopeLines.map((l) => <p key={l} style={{ margin: "2px 0" }}>{l}</p>)}
@@ -281,21 +228,9 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
       <SectorSection sector={v.sector} />
       <div className="score-layout">
       <div className="score-main">
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 34, fontWeight: 700 }} data-testid="dpdp-headline">{v.headline}</span>
-        <span className="muted small">DPDP Compliance Score</span>
-        <span style={{ fontSize: 24, fontWeight: 600, marginLeft: 12 }} data-testid="dpdp-coverage-figure">{v.coverageHeadline}</span>
-        <span className="muted small">Assessment coverage (separate from the score)</span>
-      </div>
+      <p className="muted small">The status of each DPDP requirement, with its evidence. This section carries no score: the Privacy Readiness Score is the ten-check score shown at the top of the page.</p>
       {analysisNote && <p className="hint" data-testid="dpdp-analysis-note">{analysisNote}</p>}
-      {v.caution && <p className="hint" data-testid="dpdp-caution">{v.caution}</p>}
-      {v.withheldReason && (
-        <p className="hint" data-testid="dpdp-withheld">
-          A score is not shown because the evidence is not sufficient: {v.withheldReason} Missing or untested evidence is never counted as compliance.
-        </p>
-      )}
       <p className="muted small" data-testid="dpdp-basis">{v.basisLine}</p>
-      <p className="muted small" data-testid="dpdp-inforce">{v.inForceLine}</p>
       {v.unableLine && <p className="small" data-testid="dpdp-unable">{v.unableLine}</p>}
 
       <CheckTable checks={shownChecks} />
@@ -304,11 +239,9 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
         <CheckCoverage checks={v.allChecks} />
       </section>
       <p className="muted small" data-testid="dpdp-omitted-note">{OMITTED_DUTIES_NOTE}</p>
-      {/* The score card shows the final percentages only. The arithmetic behind them is one click away, for anyone auditing it. */}
       <details data-testid="dpdp-calculation-details">
-        <summary><b>Calculation details</b> <span className="muted small">counts, weights and penalty rules, for audit</span></summary>
-        <ScoreLedger l={v.ledger} assessed={v.assessedCategories} />
-        <PenaltyRules l={v.ledger} hiddenIds={hiddenIds} />
+        <summary><b>Check counts</b> <span className="muted small">how many requirements fall in each status</span></summary>
+        <CheckCounts l={v.ledger} hiddenIds={hiddenIds} />
       </details>
 
       <h3>What the scan found</h3>
@@ -324,28 +257,18 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
         <p className="muted small">{v.evidenceNote}</p>
       </div>
 
-      <h3>By category</h3>
-      <table className="table" data-testid="dpdp-categories">
-        <thead><tr><th>Category</th><th>Score</th><th>Coverage</th><th>Assessed</th></tr></thead>
-        <tbody>
-          {v.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).map((c) => (
-            <tr key={c.name}><td>{c.name}</td><td>{c.score}</td><td>{c.coverage}</td><td>{c.weights}</td></tr>
-          ))}
-        </tbody>
-      </table>
-
       <h3>Assessed requirements ({v.assessed.length})</h3>
       {v.assessed.map((r) => <Row key={r.id} r={r} />)}
 
       {shownUnable.length > 0 && (
         <details data-testid="dpdp-unable-list">
-          <summary>Unable to verify ({shownUnable.length}): not in the score</summary>
+          <summary>Unable to verify ({shownUnable.length}): never counted as met</summary>
           {shownUnable.map((r) => <Row key={r.id} r={r} />)}
         </details>
       )}
       {v.excluded.length > 0 && (
         <details data-testid="dpdp-excluded-list">
-          <summary>Excluded from the score ({v.excluded.length}): not applicable or counted elsewhere</summary>
+          <summary>Excluded ({v.excluded.length}): not applicable or counted elsewhere</summary>
           {v.excluded.map((r) => <Row key={r.id} r={r} />)}
         </details>
       )}
@@ -357,7 +280,6 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
             <div className="finding-head"><strong>{p.rank}.</strong> <span>{p.title}</span> <span className="badge neutral">{p.priority}</span></div>
             <p className="muted small" style={{ margin: "2px 0" }}>{p.outcome} · {p.timing} · {p.priorityReason}</p>
             <p className="small" style={{ margin: "4px 0" }}><b>Action:</b> {p.action}</p>
-            {p.scoreLine && <p className="small" style={{ margin: "4px 0" }} data-testid={`dpdp-step-${p.rank}-impact`}><b>Impact on the score:</b> {p.scoreLine}</p>}
             {p.impact && <p className="small" style={{ margin: "4px 0" }}><b>Why it matters:</b> {p.impact}</p>}
             <p className="small" style={{ margin: "4px 0" }}><b>How to verify:</b> {p.howToVerify}</p>
             <p className="muted small" style={{ margin: "2px 0" }}>{p.legal}</p>
@@ -366,32 +288,13 @@ export function DpdpScoreSection({ score, analysisNote = null }: { score: DpdpSc
       </div>
 
       <details data-testid="dpdp-methodology">
-        <summary><b>{v.methodology.title}</b> <span className="muted small" data-testid="dpdp-version">{v.methodology.versionLine}</span></summary>
-        <p className={v.methodology.custom ? "hint" : "muted small"} data-testid="dpdp-weights-note">{v.methodology.weightsNote}</p>
+        <summary><b>{v.methodology.title}</b> <span className="muted small" data-testid="dpdp-version">{v.versionsLine}</span></summary>
         <ul className="small" data-testid="dpdp-rules">{v.methodology.rules.map((l) => <li key={l}>{l}</li>)}</ul>
-        <div className="small"><b>Category weights</b></div>
-        <table className="table" data-testid="dpdp-category-weights">
-          <thead><tr><th>Category</th><th>Weight</th><th>Share</th><th>Why</th></tr></thead>
-          <tbody>{v.methodology.categories.filter((c) => isReportCategory(c.name, v.assessedCategories)).map((c) => (
-            <tr key={c.name}><td>{c.name}</td><td>{c.weight}</td><td>{c.share}</td><td className="small">{c.rationale}</td></tr>
-          ))}</tbody>
-        </table>
-        <div className="small"><b>Requirement weights</b></div>
-        <table className="table" data-testid="dpdp-requirement-weights">
-          <thead><tr><th>ID</th><th>Requirement</th><th>Type</th><th>Weight</th><th>Why this weight</th><th>Applies when</th></tr></thead>
-          <tbody>{v.methodology.weights.filter((w) => !hiddenIds.has(w.id)).map((w) => (
-            <tr key={w.id} data-testid={`dpdp-weight-${w.id}`}>
-              <td>{w.id}</td><td>{w.title}<div className="muted small">{w.applies}</div></td><td>{w.type}</td><td>{w.weight}</td>
-              <td className="small">{w.rationale}</td><td className="small">{w.applicability}</td>
-            </tr>
-          ))}</tbody>
-        </table>
         <div className="small"><b>Legal mapping</b> <span data-testid="dpdp-legal-version">{v.versionsLine}</span></div>
         <ul className="small" data-testid="dpdp-legal-sources">{v.legalSources.map((l) => <li key={l}>{l}</li>)}</ul>
         <div className="small"><b>Duplicate rules</b></div>
         <ul className="small" data-testid="dpdp-dedup">{v.methodology.dedup.map((l) => <li key={l}>{l}</li>)}</ul>
       </details>
-      <p className="muted small">{v.methodologyLine}</p>
       <p className="muted small" data-testid="dpdp-disclaimer">{v.disclaimer}</p>
       </div>
       <aside className="review-box" data-testid="dpdp-review-box" aria-label={v.reviewTitle}>

@@ -1,1 +1,1 @@
-"""DPDP compliance score -- a proposed, versioned methodology (docs/DPDP_COMPLIANCE_SCORE.md)."""
+"""The scoring package. The one score is the ten-check Privacy Readiness Score (ten_checks.py). requirements.py is a statuses-and-evidence reading with no numbers (docs/DPDP_REQUIREMENTS_READING.md)."""

@@ -26,7 +26,7 @@ from app.config import get_settings
 from app.core.exceptions import ReportGenerationError
 from app.db.repositories import scan_repository
 from app.main import app
-from app.scoring.dpdp_score import DISCLAIMER
+from app.scoring.requirements import DISCLAIMER
 from app.services import report_cache_service
 from app.services import report_pdf_service as svc
 
