@@ -1,0 +1,92 @@
+/* The two-page report, enterprise layout (applies to sheets marked .sn-v2; it overrides the earlier snapshot.css rules, which still style the shared parts: tables, pills, the fit steps).
+   Page 1: identity and result. Page 2: evidence. A sheet that is still too tall after the fit steps is scaled down by --sn-squeeze, so the report is always exactly two pages. */
+
+.pg.sn.sn-v2 { --b: #1d4ed8; --navy: #0b1a4a; --ink: #0f1a3a; --mut: #56608a; --line: #e1e7f5; --soft: #f5f8ff; --ok: #0f8a4e; --ok-bg: #e6f6ee; --ok-line: #bfe6d0; --bad: #c62828; --bad-bg: #fdeaea; --bad-line: #f3c4c4; --na-bg: #f1f3fa; --na-line: #dde2f0; }
+
+/* ── page 1 ── */
+.pg.sn.sn-v2.sn-p1 { background: linear-gradient(180deg, #0a1f6b 0%, #1a3fb8 100%); }
+.pg.sn.sn-v2 .sn-head { padding: 9px 24px; background: linear-gradient(100deg, #02050d 0%, #02050d 16%, #081650 56%, #10286f 100%); }
+.pg.sn.sn-v2 .sn-logo { height: 36px; }
+.pg.sn.sn-v2 .sn-pill { font-size: 11.5px; padding: 2px 14px; border-width: 1px; letter-spacing: .02em; }
+.pg.sn.sn-v2.sn-p1 .sn-panel { margin: 10px; padding: 16px 18px 14px; gap: 10px; border-radius: 16px; justify-content: flex-start; box-shadow: 0 2px 12px rgba(4, 12, 60, .3); zoom: var(--sn-squeeze, 1); }
+.pg.sn.sn-v2 .sn-card { border-radius: 12px; border-color: var(--line); box-shadow: 0 1px 2px rgba(15, 30, 100, .05); }
+
+.pg.sn.sn-v2 .sn-titlebar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: end; }
+.pg.sn.sn-v2 .sn-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pg.sn.sn-v2 .sn-title h1 { order: -1; margin: 0; font-size: 9.2px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--b); }
+.pg.sn.sn-v2 .sn-domain { font-size: 26px; line-height: 1.05; color: var(--navy); overflow-wrap: anywhere; }
+.pg.sn.sn-v2 .sn-meta { display: grid; grid-template-columns: repeat(3, auto); padding: 6px 2px; border-radius: 12px; border-color: var(--line); background: var(--soft); }
+.pg.sn.sn-v2 .sn-meta > span { padding: 0 12px; grid-template-columns: 20px auto; }
+.pg.sn.sn-v2 .sn-meta small { font-size: 8px; letter-spacing: .04em; text-transform: uppercase; } .pg.sn.sn-v2 .sn-meta b { font-size: 9.6px; }
+
+.pg.sn.sn-v2 .sn-hero { display: grid; grid-template-columns: 158px minmax(0, 1fr) minmax(0, 1.3fr); gap: 10px; align-items: stretch; }
+.pg.sn.sn-v2 .sn-score { flex-direction: column; justify-content: center; align-items: center; gap: 4px; padding: 10px 8px; text-align: center; background: linear-gradient(180deg, #f3f7ff, #fff); }
+.pg.sn.sn-v2 .sn-score .pg-ring { width: 84px; height: 84px; }
+.pg.sn.sn-v2 .sn-band { display: inline-block; font-size: 9px; font-weight: 800; color: var(--b); background: #eaf0ff; border: 1px solid #cfdcff; border-radius: 999px; padding: 2px 10px; line-height: 1.3; }
+.pg.sn.sn-v2 .sn-banner { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin: 0; background: linear-gradient(180deg, #f3fbf7, #fff); border-color: #cfeedd; }
+.pg.sn.sn-v2 .sn-banner .sn-card-head { margin: 0; }
+.pg.sn.sn-v2 .sn-status { padding: 5px 8px; font-size: 13px; }
+.pg.sn.sn-v2 .sn-facts { margin: 0; font-size: 8.8px; gap: 1px; } .pg.sn.sn-v2 .sn-facts > div { padding: 1.5px 0; } .pg.sn.sn-v2 .sn-facts dd { text-align: right; }
+.pg.sn.sn-v2 .sn-opts { margin-top: auto; gap: 6px; } .pg.sn.sn-v2 .sn-opts > span { padding: 2px 8px; }
+.pg.sn.sn-v2 .sn-shot { padding: 7px; gap: 6px; align-self: stretch; justify-content: flex-start; }
+.pg.sn.sn-v2 .sn-shot-img { height: 168px; max-height: none; object-fit: cover; object-position: top center; border-radius: 6px; }
+
+.pg.sn.sn-v2 .sn-cats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.pg.sn.sn-v2 .sn-cat { border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px 9px; background: #fff; box-shadow: 0 1px 2px rgba(15, 30, 100, .05); display: flex; flex-direction: column; gap: 6px; }
+.pg.sn.sn-v2 .sn-cat-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.pg.sn.sn-v2 .sn-cat-top b { font-size: 10.6px; font-weight: 800; color: var(--navy); } .pg.sn.sn-v2 .sn-cat-top span { font-size: 9px; color: var(--mut); white-space: nowrap; } .pg.sn.sn-v2 .sn-cat-top strong { font-size: 14px; color: var(--navy); }
+.pg.sn.sn-v2 .sn-meter { height: 6px; border-radius: 99px; background: #e8edfb; overflow: hidden; } .pg.sn.sn-v2 .sn-meter i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #2f5be8, #4f86ff); }
+
+.pg.sn.sn-v2 .sn-contacts { gap: 8px; }
+.pg.sn.sn-v2 .sn-contacts > div, .pg.sn.sn-v2 .sn-contacts > div:nth-child(2) { background: #fff; border: 1px solid var(--line); border-left: 3px solid var(--b); border-radius: 10px; padding: 7px 12px; font-size: 9.4px; }
+.pg.sn.sn-v2 .sn-contacts b { font-size: 10.4px; }
+.pg.sn.sn-v2 .sn-contact-icon, .pg.sn.sn-v2 .sn-contacts > div:nth-child(2) .sn-contact-icon { color: var(--b); }
+
+/* Website Privacy Elements: six equal cards; a green check when found, a red cross when not found, a grey dash when it could not be tested. The words say it too. */
+.pg.sn.sn-v2 .sn-elements { padding: 9px 12px 10px; }
+.pg.sn.sn-v2 .sn-els { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.pg.sn.sn-v2 .sn-el { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 4px; padding: 11px 4px 8px; border-radius: 12px; border: 1px solid var(--na-line); background: var(--na-bg); text-align: center; }
+.pg.sn.sn-v2 .sn-el b { min-height: 22px; font-size: 9.2px; line-height: 1.2; color: var(--navy); display: flex; align-items: center; }
+.pg.sn.sn-v2 .sn-el-icon { color: #5b6a9b; }
+.pg.sn.sn-v2 .sn-el-word { font-size: 8.6px; font-weight: 800; color: #5b6a9b; letter-spacing: .02em; }
+.pg.sn.sn-v2 .sn-el-st { position: absolute; top: -7px; right: -5px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: #8a94b8; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(15, 30, 100, .25); }
+.pg.sn.sn-v2 .sn-el[data-state="found"] { background: var(--ok-bg); border-color: var(--ok-line); } .pg.sn.sn-v2 .sn-el[data-state="found"] .sn-el-st { background: var(--ok); } .pg.sn.sn-v2 .sn-el[data-state="found"] .sn-el-word, .pg.sn.sn-v2 .sn-el[data-state="found"] .sn-el-icon { color: var(--ok); }
+.pg.sn.sn-v2 .sn-el[data-state="missing"] { background: var(--bad-bg); border-color: var(--bad-line); } .pg.sn.sn-v2 .sn-el[data-state="missing"] .sn-el-st { background: var(--bad); } .pg.sn.sn-v2 .sn-el[data-state="missing"] .sn-el-word, .pg.sn.sn-v2 .sn-el[data-state="missing"] .sn-el-icon { color: var(--bad); }
+
+.pg.sn.sn-v2 .sn-metrics { gap: 8px; }
+.pg.sn.sn-v2 .sn-tile { padding: 8px 12px; border-radius: 12px; background: var(--soft); border-color: var(--line); } .pg.sn.sn-v2 .sn-tile b { font-size: 19px; color: var(--navy); } .pg.sn.sn-v2 .sn-tile span { font-size: 8.8px; }
+.pg.sn.sn-v2.sn-p1 .sn-h { margin-top: 2px; }
+.pg.sn.sn-v2 .sn-readme { padding: 7px 12px; border-radius: 10px; font-size: 9.4px; line-height: 1.45; border-left-color: var(--b); }
+
+/* ── page 2 ── */
+.pg.sn.sn-v2.sn-p2 .sn-panel { padding: 16px 24px 12px; gap: 8px; zoom: var(--sn-squeeze, 1); }
+.pg.sn.sn-v2 .sn-h { font-size: 12px; margin-top: 2px; } .pg.sn.sn-v2 .sn-h i { width: 22px; height: 22px; border-radius: 6px; }
+.pg.sn.sn-v2 .sn-table { border-color: var(--line); border-radius: 10px; }
+.pg.sn.sn-v2 .sn-table th { background: var(--soft); color: var(--navy); font-size: 8.2px; letter-spacing: .05em; text-transform: uppercase; padding: 4px 7px; }
+.pg.sn.sn-v2 .sn-table td { padding: 3px 7px; }
+.pg.sn.sn-v2 .sn-checks tbody tr, .pg.sn.sn-v2 .sn-checks tbody tr[data-kind] { box-shadow: none; }
+.pg.sn.sn-v2 .sn-checks td { vertical-align: top; } .pg.sn.sn-v2 .sn-checks td:not(.sn-cp) { vertical-align: middle; }
+.pg.sn.sn-v2 .sn-grp td { background: #eaf0ff; padding: 3px 8px; border-bottom: 1px solid var(--line); }
+.pg.sn.sn-v2 .sn-grp b { font-size: 8.8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--navy); }
+.pg.sn.sn-v2 .sn-grp em { float: right; font-style: normal; font-size: 8.8px; font-weight: 800; color: var(--b); }
+.pg.sn.sn-v2 .sn-cp > b { display: block; font-size: 9.8px; color: var(--navy); }
+.pg.sn.sn-v2 .sn-prov { display: block; margin: 0; font-size: 7.9px; color: var(--mut); white-space: normal; }
+.pg.sn.sn-v2 .sn-ev { font-size: 8.4px; color: #3a4573; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.pg.sn.sn-v2 .sn-why { font-size: 8.4px; }
+.pg.sn.sn-v2 .sn-checks th:nth-child(3), .pg.sn.sn-v2 .sn-checks td:nth-child(3) { width: 92px; } .pg.sn.sn-v2 .sn-checks th:nth-child(4), .pg.sn.sn-v2 .sn-checks td:nth-child(4) { width: 82px; }
+.pg.sn.sn-v2 .sn-total td { background: var(--soft); }
+
+.pg.sn.sn-v2 .sn-cta { display: flex; align-items: center; gap: 14px; border-radius: 12px; padding: 10px 18px; background: linear-gradient(105deg, #0a1f6b, #1a3fb8 60%, #2f6bff); box-shadow: 0 2px 8px rgba(10, 31, 107, .25); }
+.pg.sn.sn-v2 .sn-cta > svg { flex: 0 0 auto; color: #9fc0ff; }
+.pg.sn.sn-v2 .sn-cta b { font-size: 13px; } .pg.sn.sn-v2 .sn-cta span { font-size: 9.2px; color: #d9e4ff; margin-top: 1px; }
+.pg.sn.sn-v2 a[data-testid="sn-signup"] { background: #fff; color: #0a1f6b; font-size: 10.5px; font-weight: 800; padding: 7px 18px; border-radius: 999px; white-space: nowrap; }
+.pg.sn.sn-v2 .sn-disc { border-radius: 10px; }
+
+/* the fit steps shrink the page-1 pictures first, then spacing; after the last step the sheet is scaled (--sn-squeeze) */
+.pg.sn.sn-v2.sn-fit-1 .sn-shot-img { height: 150px; } .pg.sn.sn-v2.sn-fit-2 .sn-shot-img { height: 130px; } .pg.sn.sn-v2.sn-fit-3 .sn-shot-img { height: 110px; } .pg.sn.sn-v2.sn-fit-4 .sn-shot-img { height: 96px; }
+.pg.sn.sn-v2.sn-fit-3 .sn-panel { gap: 6px; } .pg.sn.sn-v2.sn-fit-4 .sn-panel { gap: 5px; }
+.pg.sn.sn-v2.sn-fit-4 .sn-ev { -webkit-line-clamp: 1; }
+
+.pg.sn.sn-v2 .sn-dpdp { padding: 5px 12px; border-radius: 10px; background: var(--soft); border-color: var(--line); gap: 5px; } .pg.sn.sn-v2 .sn-dpdp > b { font-size: 10px; flex: 1 1 140px; color: var(--navy); }
+.pg.sn.sn-v2 .sn-chip { font-size: 8.4px; padding: 2px 9px; }
+.pg.sn.sn-v2 .sn-quality { display: block; margin-top: 1px; font-size: 7.9px; color: var(--mut); white-space: nowrap; }

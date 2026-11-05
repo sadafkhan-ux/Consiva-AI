@@ -81,12 +81,21 @@ from app.scanner.form_detector import detect_forms
 from app.scanner.image_blocking import ImageSkipper
 from app.scanner.page_parser import ParsedScript, parse_page
 from app.scanner.page_signals import (
+    banner_on_page,
+    child_directed_signal,
     indic_script_counts,
+    links_to_privacy_notice,
+    merge_child_surface,
     merge_language,
+    merge_mixed_content,
+    merge_notice_links,
     merge_security,
+    merge_storage_keys,
     response_headers,
 )
 from app.scanner.policy_detector import detect_policies
+from app.scanner.purposes import run_purpose_test
+from app.scanner.reject_and_compare import run_button_comparison, run_reject_persistence
 from app.scanner.robots import RobotsRules, parse_robots
 from app.scanner.scan_profiles import APPLICATION, MAX_WEB_PAGES, ScanProfile, resolve_profile
 from app.scanner.schemas import (
@@ -110,7 +119,9 @@ from app.scanner.url_inventory import (
     incomplete_extraction,
 )
 from app.scanner.url_normalize import (
+    category_of,
     effective_rank,
+    is_policy_page,
     normalize_url,
     path_without_query,
     query_variant_of,
@@ -118,6 +129,7 @@ from app.scanner.url_normalize import (
     tie_break_key,
 )
 from app.scanner.url_safety import assert_safe_url
+from app.scanner.withdrawal import run_withdrawal_test
 
 logger = logging.getLogger(__name__)
 
@@ -786,6 +798,42 @@ async def _collect_iframe_signal_evidence(page: Page) -> tuple[list[ParsedScript
     return scripts, " ".join(text_parts), " ".join(control_parts)
 
 
+#: The names of the keys in browser storage (never the values: they routinely hold personal data).
+_STORAGE_KEYS_JS = """() => { try { return { local: Object.keys(localStorage).slice(0, 60), session: Object.keys(sessionStorage).slice(0, 60) }; } catch (e) { return null; } }"""
+
+#: For each form, whether each shown control starts ticked, in the order page_parser lists them (hidden inputs and buttons left out): the live `checked` property for a checkbox or radio
+#: button, null for anything else. A form built by a script has no `checked` attribute in the markup, so the property is the only way to see a pre-ticked consent box.
+_FORM_CHECKED_JS = """() => Array.from(document.querySelectorAll('form')).map(f =>
+  Array.from(f.querySelectorAll('input, textarea, select'))
+    .filter(e => !['hidden', 'submit', 'button'].includes(e.getAttribute('type')))
+    .map(e => (e.tagName === 'INPUT' && ['checkbox', 'radio'].includes(e.getAttribute('type'))) ? !!e.checked : null))"""
+
+
+#: A policy page built by a script can still be adding text when the fixed settle window ends: swaransoft.com/privacy was read as 24,449 characters on one scan and 9,177 on another, and the shorter read
+#: missed the sentence on withdrawing consent, which was then scored as a gap in the site's notice. The text of a policy page is read again until it stops growing: a few short rereads, bounded, never
+#: "wait until the page is quiet" (Functional Scope PF-09), and only for pages named like a policy so no other page pays for it.
+_TEXT_REREADS = 5
+_TEXT_REREAD_WAIT_MS = 900
+_TEXT_GROWTH = 1.02
+_TEXT_STABLE_READS = 2
+
+
+async def _settled_text(page: Page, url: str) -> str:
+    """The page's rendered text (_SHADOW_DOM_TEXT_JS). For a policy page, the longest of a few readings, taken until the length has not grown for two readings in a row (at most five rereads)."""
+    best = await page.evaluate(_SHADOW_DOM_TEXT_JS)
+    if not is_policy_page(url):
+        return best
+    stable = 0
+    for _ in range(_TEXT_REREADS):
+        await page.wait_for_timeout(_TEXT_REREAD_WAIT_MS)
+        again = await page.evaluate(_SHADOW_DOM_TEXT_JS)
+        stable = 0 if len(again) > len(best) * _TEXT_GROWTH else stable + 1
+        best = again if len(again) > len(best) else best
+        if stable >= _TEXT_STABLE_READS:
+            break
+    return best
+
+
 async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, settings: Settings) -> dict:
     """Fetches and parses exactly one page. ALWAYS returns a dict describing the
     outcome -- a secondary page that fails to load (after bounded retries) is recorded
@@ -840,13 +888,22 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         scroll_steps = await _progressive_scroll(browser_page, request_count=lambda: len(request_records))
         http_status = response.status if response else None
         html = await browser_page.content()
+        try:
+            checked_states = await browser_page.evaluate(_FORM_CHECKED_JS)
+        except PlaywrightError as exc:
+            logger.debug("Could not read which form controls start ticked on %s: %s", url, exc)
+            checked_states = None
+        try:
+            storage_keys = await browser_page.evaluate(_STORAGE_KEYS_JS)
+        except PlaywrightError:
+            storage_keys = None
         global_vars_present = await browser_page.evaluate(
             """(candidates) => candidates.filter(name => typeof window[name] !== 'undefined')""",
             _CMP_GLOBAL_VAR_CANDIDATES,
         )
         iframe_scripts, iframe_text, iframe_control_text = await _collect_iframe_signal_evidence(browser_page)
         try:
-            rendered_text = await browser_page.evaluate(_SHADOW_DOM_TEXT_JS)
+            rendered_text = await _settled_text(browser_page, url)
             rendered_control_text = await browser_page.evaluate(_SHADOW_DOM_CONTROL_TEXT_JS)
         except PlaywrightError as exc:
             logger.debug("Could not collect shadow-DOM text for %s: %s", url, exc)
@@ -864,7 +921,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         if not browser_page.is_closed():
             await _close_quietly(browser_page, "a crawled page")
 
-    parsed = parse_page(html, url)
+    parsed = parse_page(html, url, checked_states)
     # Read-only observations for the language and security sections of the report (scanner/page_signals.py); they change nothing about the scan.
     page_signals = {
         "indic": indic_script_counts(rendered_text or parsed.visible_text),
@@ -874,6 +931,9 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
     }
     return {
         "page_signals": page_signals,
+        # Names only, never values (QS-18, GR-16); and what loaded over plain http on a page served over https.
+        "storage_keys": storage_keys if isinstance(storage_keys, dict) else None,
+        "insecure_requests": [u for u, _t in request_records if u.lower().startswith("http://")][:10] if (final_url or url).lower().startswith("https://") else [],
         "url": url, "status": "success", "attempts": attempts, "http_status": http_status, "title": parsed.title,
         "request_records": request_records, "parsed": parsed, "global_vars": set(global_vars_present), "cmp_script_failures": cmp_script_failures,
         "scroll_steps": scroll_steps, "iframe_scripts": iframe_scripts, "iframe_text": iframe_text,
@@ -1111,6 +1171,19 @@ async def _crawl_full_site(
             discovered_via=via, final_url=result.get("final_url"), content_type=result.get("content_type"),
         ))
         forms.extend(detect_forms(page_local_id, parsed.forms))
+        # What the pages show about the notice, children and forms (read-only observations, scanner/page_signals.py): they feed Scanner Score A5, D1, D2 and G1.
+        diagnostics.setdefault("banner_by_page", [])
+        if len(diagnostics["banner_by_page"]) < 60:
+            diagnostics["banner_by_page"].append({"url": url[:300], "banner": banner_on_page(
+                scripts=[*parsed.scripts, *result["iframe_scripts"]], visible_text=result["rendered_text"] or parsed.visible_text, global_vars=sorted(result["global_vars"]),
+                control_text=result.get("rendered_control_text") if result.get("rendered_control_text") is not None else parsed.control_text)})
+        merge_storage_keys(diagnostics.setdefault("storage_signals", {}), result.get("storage_keys"))
+        merge_mixed_content(diagnostics.setdefault("mixed_content", {}), page_url=url, has_form=bool(parsed.forms), insecure=result.get("insecure_requests") or [])
+        merge_notice_links(diagnostics.setdefault("notice_link_signals", {}), page_url=url, has_link=links_to_privacy_notice(parsed.links))
+        merge_child_surface(diagnostics.setdefault("child_surfaces", []), page_url=url, signal=child_directed_signal(url, result["title"], result["rendered_text"] or parsed.visible_text))
+        for form_record, parsed_form in zip(forms[-len(parsed.forms):] if parsed.forms else [], parsed.forms):
+            if len(diagnostics.setdefault("form_signals", [])) < 60:
+                diagnostics["form_signals"].append({"page_url": url[:300], "selector": form_record.selector, "notice_link": parsed_form.notice_link})
         scripts_by_page[page_local_id] = parsed.scripts + result["iframe_scripts"]
         network_requests_by_page[page_local_id] = result["request_records"]
         all_links.extend(parsed.links)
@@ -1169,6 +1242,12 @@ async def _crawl_full_site(
                 and diagnostics["pages_attempted"] - dead_not_counted + len(in_flight) < attempt_ceiling)
 
     launched_paths: set[str] = set()
+    # A public (capped) scan reads one page of each kind (Functional Scope QS-11): privacy, cookie policy, terms, contact, a page with a form, and the most prominent remaining page. A second page
+    # of a kind already read or in flight waits; it is read only if the first of that kind failed to load, which frees the kind. An uncapped (application) scan reads every page and is unchanged.
+    one_per_category = budget is not None
+    covered_categories: set[str] = {"seed"}
+    category_of_url: dict[str, str] = {}
+    waiting: dict[str, list[tuple]] = {}
 
     async def _launch_page(url: str) -> dict:
         # An application scan spaces its navigation starts (requests per second against the domain); a web scan has no limiter and starts at once, as before.
@@ -1185,6 +1264,18 @@ async def _crawl_full_site(
             if guard is not None and guard.over_budget():
                 break       # memory is over the scan's budget: launch nothing until a page in flight finishes and frees some (recorded in guard.events)
             _rank, _n, url, via = heapq.heappop(queue)
+            if one_per_category and via != "seed":
+                kind = category_of(url)
+                # Only the five named kinds are limited to one page. "Remaining" pages are not a kind of evidence: they fill what is left, most prominent first, so a site with few policy pages still
+                # uses its budget (a scan of hdfcbank.com once scanned one page of five).
+                if kind == "remaining":
+                    category_of_url[url] = kind
+                elif kind in covered_categories:
+                    waiting.setdefault(kind, []).append((_rank, _n, url, via))
+                    continue
+                else:
+                    covered_categories.add(kind)
+                    category_of_url[url] = kind
             variant_of = query_variant_of(url) if via != "seed" else None
             if variant_of is not None and variant_of in launched_paths:
                 # /blog?page=2 after /blog: the same page with another query string. It would spend one of the pages on content already seen.
@@ -1247,6 +1338,12 @@ async def _crawl_full_site(
 
         for url, via, result in results:
             _record_result(url, via, result)
+            if one_per_category and result["status"] != "success" and url in category_of_url:
+                # The page of this kind did not load: the kind is free again, and the next page of that kind (if one was waiting) may be read.
+                freed = category_of_url.pop(url)
+                covered_categories.discard(freed)
+                for entry in waiting.pop(freed, []):
+                    heapq.heappush(queue, entry)
 
         if stop_launching is None:
             stop_launching = await _check_stop()
@@ -1263,6 +1360,11 @@ async def _crawl_full_site(
     diagnostics["framed_sites"] = sorted(framed_sites)
     diagnostics["stop_reason"] = stop_reason
     _not_reached = {"page_limit": "page_limit", "deadline": "time_limit", "cancelled": "scan_cancelled", "slow_site": "slow_site", "resource_limit": "resource_limit"}.get(stop_reason, "not_reached")
+    for kind, held in waiting.items():
+        for _rank, _n, held_url, _via in held:
+            # A page of a kind already read: not read, with that reason (the report shows it, never a bare "not reached").
+            tracker.exclude(held_url, "category_already_covered")
+            _skip(held_url, "category_already_covered")
     for _rank, _n, queued_url, _via in sorted(queue):
         _skip(queued_url, _not_reached)
     # Discovered is not scanned: what the crawl never started stays PENDING, with the reason it was not reached.
@@ -1683,6 +1785,81 @@ def _reconcile_reject_presence(signal: ConsentSignalRecord, reject_status: str, 
         signal.evidence = {**signal.evidence, "reject_control_seen_via": "interaction_pass"}
 
 
+async def _run_withdrawal(browser, root_url: str, settings: Settings, disallowed_prefixes: RobotsRules | set[str], pages: list[PageRecord]) -> dict:
+    """The withdrawal test in its own fresh browser session, with the same address guard as every other pass. Never raises: a test that cannot be run is recorded as not tested."""
+    root_key = normalize_url(root_url)
+    further = [p.url for p in pages if p.discovered_via in ("seed", "link", "sitemap") and normalize_url(p.url) != root_key and not _is_robots_disallowed(p.url, disallowed_prefixes)]
+
+    async def goto(page: Page, url: str) -> bool:
+        _, status, _exc, _attempts = await _navigate_with_retry(page, url, settings.scanner_timeout_seconds * 1000)
+        return status == "success"
+
+    try:
+        context = await browser.new_context(**_new_context_kwargs(settings))
+        await context.route("**/*", _guard_navigation)
+        try:
+            return await run_withdrawal_test(context, root_url, further, goto=goto)
+        finally:
+            await _close_quietly(context, "the withdrawal context")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("The withdrawal test for %s could not be started: %s", root_url, exc)
+        return {"tested": False, "reason": "error", "requests_only": True}
+
+
+def _session_tools(browser, settings: Settings):
+    """(make_context, goto) for a fresh guarded browser session, the same as every other pass uses."""
+
+    async def make_context():
+        context = await browser.new_context(**_new_context_kwargs(settings))
+        await context.route("**/*", _guard_navigation)
+        return context
+
+    async def goto(page: Page, url: str) -> bool:
+        _, status, _exc, _attempts = await _navigate_with_retry(page, url, settings.scanner_timeout_seconds * 1000)
+        return status == "success"
+
+    return make_context, goto
+
+
+async def _run_button_comparison(browser, root_url: str, settings: Settings) -> dict | None:
+    make_context, goto = _session_tools(browser, settings)
+    try:
+        return await run_button_comparison(make_context, root_url, goto=goto)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("The Accept and Reject comparison for %s could not be started: %s", root_url, exc)
+        return None
+
+
+async def _run_reject_persistence(browser, root_url: str, settings: Settings, disallowed_prefixes: RobotsRules | set[str], pages: list[PageRecord]) -> dict:
+    make_context, goto = _session_tools(browser, settings)
+    root_key = normalize_url(root_url)
+    further = [p.url for p in pages if p.discovered_via in ("seed", "link", "sitemap") and normalize_url(p.url) != root_key and not _is_robots_disallowed(p.url, disallowed_prefixes)]
+    try:
+        return await run_reject_persistence(make_context, root_url, further, goto=goto)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("The test of Reject on further pages for %s could not be started: %s", root_url, exc)
+        return {"tested": False, "reason": "error", "non_essential_after_reject": [], "further_pages": [], "requests_only": True}
+
+
+async def _run_purposes(browser, root_url: str, settings: Settings) -> dict:
+    """The test of choices by purpose, each purpose in its own fresh browser session with the same address guard as every other pass. Never raises: a test that cannot be run is recorded as not tested."""
+
+    async def make_context():
+        context = await browser.new_context(**_new_context_kwargs(settings))
+        await context.route("**/*", _guard_navigation)
+        return context
+
+    async def goto(page: Page, url: str) -> bool:
+        _, status, _exc, _attempts = await _navigate_with_retry(page, url, settings.scanner_timeout_seconds * 1000)
+        return status == "success"
+
+    try:
+        return await run_purpose_test(make_context, root_url, goto=goto)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("The test of choices by purpose for %s could not be started: %s", root_url, exc)
+        return {"tested": False, "reason": "error", "purposes": [], "requests_only": True}
+
+
 async def run_scan(
     root_url: str, settings: Settings | None = None, profile: ScanProfile | None = None,
     should_stop: Callable[[], Awaitable[bool]] | None = None,
@@ -1744,6 +1921,12 @@ async def run_scan(
             ) = await (passes_task if passes_task is not None else consent_passes())
             # After everything else has finished, so the re-check really is one page view with nothing else running.
             recheck = await _recheck_pre_consent(browser, pages, cookies, trackers, root_url, settings, disallowed_prefixes)
+            # The Deep Scan also tests taking consent back, and whether that holds on two further pages (Scanner Score B5, B6). A Quick Scan does not.
+            withdrawal = await _run_withdrawal(browser, root_url, settings, disallowed_prefixes, pages) if profile is not None and profile.name == APPLICATION else None
+            purposes = await _run_purposes(browser, root_url, settings) if profile is not None and profile.name == APPLICATION else None
+            # Accept and Reject measured side by side on every scan; Reject on further pages on a Deep Scan (scanner/reject_and_compare.py).
+            button_comparison = await _run_button_comparison(browser, root_url, settings)
+            reject_persistence = await _run_reject_persistence(browser, root_url, settings, disallowed_prefixes, pages) if profile is not None and profile.name == APPLICATION else None
         finally:
             await _close_quietly(browser, "the browser")
 
@@ -1767,6 +1950,12 @@ async def run_scan(
         **({"pre_consent_recheck": recheck} if recheck else {}),
         # Set only when the scanned page is a frameset that shows another site: see rule R-012.
         **({"framed_sites": pre_consent_diagnostics["framed_sites"]} if pre_consent_diagnostics.get("framed_sites") else {}),
+        # Whether consent can be taken back and whether that is honoured (Deep Scan only; scanner/withdrawal.py).
+        **({"withdrawal": withdrawal} if withdrawal else {}),
+        # Whether each choice by purpose does only what it says (Deep Scan only; scanner/purposes.py).
+        **({"purposes": purposes} if purposes else {}),
+        **({"button_comparison": button_comparison} if button_comparison else {}),
+        **({"reject_persistence": reject_persistence} if reject_persistence else {}),
         # What the scanner answered before the consent choice could be shown (an age gate), per pass.
         # Absent when no gate was on the page.
         **({"consent_gate": {"post_accept": accept_gate, "post_reject": reject_gate}} if (accept_gate or reject_gate) else {}),

@@ -54,7 +54,7 @@ def test_the_label_survives_detection_and_persistence_shape():
     forms = parse_page('<form><input type="email" name="email"><label><input type="checkbox" name="_r_1_" required> I agree</label></form>', URL).forms
     rec = detect_forms("p1", forms)[0]
     dumped = [f.model_dump() for f in rec.fields]        # what scan_repository stores in the JSON column
-    assert {"name": "_r_1_", "field_type": "checkbox", "required": True, "label": "I agree"} in dumped
+    assert {"name": "_r_1_", "field_type": "checkbox", "required": True, "label": "I agree", "checked": False} in dumped
 
 
 def test_a_stored_form_from_before_labels_existed_still_loads():

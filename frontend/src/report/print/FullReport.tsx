@@ -90,7 +90,7 @@ export function FullReport({ model }: { model: ReportModel }) {
         <SecHead n={2} title="Framework Readiness" />
         <FrameworkBlock view={view} />
         <div className="pg-info"><Icon name="info" size={18} /><p>{CONSIVA_UPDATES.actStatus}</p></div>
-        <SecHead n={3} title="Check Results" note="The four of the ten checks with the most room to improve. Every check is listed on page 6." />
+        <SecHead n={3} title="Check Results" note="The four checks with the most room to improve. Every check is listed on page 6." />
         <ChecksResultBlock view={view} />
         <SecHead n={4} title="Top Findings" aside={view.findingsMore > 0 ? `+ ${view.findingsMore} more in the Appendix` : undefined} />
         <FindingsList view={view} />
@@ -158,7 +158,7 @@ export function FullReport({ model }: { model: ReportModel }) {
       </PageFrame>
 
       <PageFrame {...frame} n={6}>
-        <SecHead n={10} title="The Ten Checks Behind the Score" note={`All ten checks, their result, marks and evidence. ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet} of ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet + view.framework.counts.unverified} applicable checks tested from outside.`} />
+        <SecHead n={10} title="The Checks Behind the Score" note={`Every check, its result, marks and evidence. ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet} of ${view.framework.counts.met + view.framework.counts.partly + view.framework.counts.notMet + view.framework.counts.unverified} applicable checks tested from outside.`} />
         <ul className="pg-legend pg-legend-status">
           {([["Passed", "good"], ["Partially passed", "warn"], ["Failed", "bad"], ["Not assessed", "mute"], ["Not applicable", "mute"]] as const).map(([s, t]) => <li key={s}><Pill s={{ label: s, tone: t }} /></li>)}
         </ul>

@@ -79,7 +79,7 @@ describe("the printable report: the hero", () => {
 describe("the printable report: every section of the PDF, in the PDF's order", () => {
   const TITLES = [
     "Scan summary", "Framework readiness", "Top findings", "Consent behaviour", "Tracking technologies detected", "Privacy elements on the site",
-    "The ten checks behind the score", "Prioritised fixes", "Grievance officer", "Data Protection Officer", "Indian-language support", "Children's data and age gate",
+    "The checks behind the score", "Prioritised fixes", "Grievance officer", "Data Protection Officer", "Indian-language support", "Children's data and age gate",
     "Observable security signals", "Five-page DPDP readiness review", "Website Pages Scanned", "Sector and applicability",
     "Privacy policy content analysis", "Consent banner", "Forms found", "Cookie inventory", "Third-party requests and scripts", "Policies found", "Third-party services",
     "Compliance findings in full",

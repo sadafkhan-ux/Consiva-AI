@@ -1,4 +1,5 @@
 import { ringNumber } from "./scoreFormat";
+import { scoreContext } from "./tenChecks";
 import type { ReportModel } from "./buildReport";
 import type { ElementStatus } from "./reportVisual";
 import { pagesCoverageLine, pagesTileValue } from "./scanPages";
@@ -508,7 +509,7 @@ export async function downloadReport(model: ReportModel): Promise<void> {
   text(readinessText, M + 12, y + 44, { size: readinessSize, bold: true });
   text(
     ten ? `${ten.counts.passed} passed · ${ten.counts.partial} partly passed · ${ten.counts.failed} failed
-${ten.counts.notAssessed} not assessed · ${ten.counts.notApplicable} not applicable` : "The assessment was not loaded.",
+${scoreContext(ten)?.text ?? `${ten.counts.notAssessed} not assessed · ${ten.counts.notApplicable} not applicable`}` : "The assessment was not loaded.",
     M + 200, y + 28, { size: 7.4, color: MUTED, width: CW - 215, lead: 10, lines: 2 },
   );
   y += fh + 16;
@@ -649,7 +650,7 @@ ${ten.counts.notAssessed} not assessed · ${ten.counts.notApplicable} not applic
     y += 40;
   }
 
-  // --- the ten checks behind the score, compactly. The full record of each requirement (legal basis, limits, evidence expected) is on the dashboard. ---
+  // --- the checks behind the score, compactly. The full record of each requirement (legal basis, limits, evidence expected) is on the dashboard. ---
   if (ten && ten.checks.length) {
     if (y + 80 > FOOTER_Y - 14) {
       footer(doc.getNumberOfPages());
@@ -657,8 +658,8 @@ ${ten.counts.notAssessed} not assessed · ${ten.counts.notApplicable} not applic
       pageTop(doc.getNumberOfPages());
       y = 74;
     }
-    y = section("The ten checks behind the score", y + 8);
-    y = text(`Each check, its result and the marks it earned. The marks add up to ${ten.totalText}, which is the score ${ten.scoreText}.`, M, y + 1, { size: 6.8, color: MUTED, width: CW, lead: 8.2 }) + 3;
+    y = section("The checks behind the score", y + 8);
+    y = text(ten.scanner ? `Each parameter, its result and the points it earned. The score is the share of the assessable points earned, out of 100: ${ten.scoreText}.` : `Each check, its result and the marks it earned. The marks add up to ${ten.totalText}, which is the score ${ten.scoreText}.`, M, y + 1, { size: 6.8, color: MUTED, width: CW, lead: 8.2 }) + 3;
     const cols = [30, 330, 60, 95];
     const headRow = () => {
       fill(TINT);
@@ -1253,7 +1254,7 @@ ${ten.counts.notAssessed} not assessed · ${ten.counts.notApplicable} not applic
       // Too little room for the full list: one line of the main parts and where they start. The appendix has its own full index.
       const find = (starts: string) => outline.find((o) => o.label.replace(/^\d+\s{2}/, "").startsWith(starts));
       const wanted: [string, { label: string; page: number } | undefined][] = [
-        ["Summary", find("Scan summary")], ["Consent behaviour", find("Consent behaviour")], ["The ten checks", find("The ten checks")],
+        ["Summary", find("Scan summary")], ["Consent behaviour", find("Consent behaviour")], ["The checks", find("The checks")],
         ["Fixes", find("Prioritised fixes")], ["Pages scanned", find("Website Pages")], ["Evidence appendix", outline.find((o) => o.label.startsWith("Appendix A"))],
       ];
       const parts = wanted.flatMap(([name, e]) => (e ? [[name, e] as const] : []));
@@ -1271,7 +1272,7 @@ ${ten.counts.notAssessed} not assessed · ${ten.counts.notApplicable} not applic
       let size = 7.4;
       for (const smaller of [7.4, 7, 6.6, 6.2]) { size = smaller; if (widthAt(shown, smaller) <= room) break; }
       // Still too wide at the smallest size: drop the parts the reader can find fastest by scrolling, never the first or the appendix.
-      for (const drop of ["The ten checks", "Consent behaviour", "Pages scanned"]) {
+      for (const drop of ["The checks", "Consent behaviour", "Pages scanned"]) {
         if (widthAt(shown, size) <= room) break;
         shown = shown.filter(([name]) => name !== drop);
       }

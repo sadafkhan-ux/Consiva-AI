@@ -167,7 +167,7 @@ describe("the Full Scan report", () => {
 
   it("carries every section of the benchmark: summary, framework, areas, findings, consent, technologies, domains, chart, elements, checks, fixes, legal context", () => {
     render(<FullReport model={model()} />);
-    for (const title of ["Quick Summary", "Framework Readiness", "Check Results", "Top Findings", "Consent Behaviour", "Tracking Technologies Detected", "Third-party Domains", "Requests over Time", "Privacy Elements on the Site", "The Ten Checks Behind the Score", "Prioritised Fixes", "DPDP Act and Rules", "What's Next"]) {
+    for (const title of ["Quick Summary", "Framework Readiness", "Check Results", "Top Findings", "Consent Behaviour", "Tracking Technologies Detected", "Third-party Domains", "Requests over Time", "Privacy Elements on the Site", "The Checks Behind the Score", "Prioritised Fixes", "DPDP Act and Rules", "What's Next"]) {
       expect(screen.getByRole("heading", { name: title })).toBeInTheDocument();
     }
     expect(screen.getByTestId("pg-chart")).toBeInTheDocument();

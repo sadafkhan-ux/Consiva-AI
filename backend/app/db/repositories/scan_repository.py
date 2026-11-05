@@ -404,6 +404,7 @@ def _serialize_evidence(
     *, include_cookie_detail: bool = False,
 ) -> dict:
     page_url_by_id = {p.id: p.url for p in pages}
+    form_page_ids = {f.page_id for f in forms}
     return {
         # http_status and discovered_via say whether a page loaded and how it was found ("seed", "link", "sitemap"), or that the
         # attempt did not succeed ("failed", "timeout"): the scan report lists the pages from these.
@@ -412,7 +413,7 @@ def _serialize_evidence(
              "final_url": p.final_url, "content_type": p.content_type,
              # Why the page was chosen, worked out from its address and how it was found (url_normalize.selection_reason): a read of what is stored, never a stored claim.
              # Only in the API's detailed view, so the agent's own evidence is unchanged.
-             **({"selection_reason": selection_reason(p.url, p.discovered_via)} if include_cookie_detail else {})}
+             **({"selection_reason": selection_reason(p.url, p.discovered_via, p.id in form_page_ids)} if include_cookie_detail else {})}
             for p in (sorted(pages, key=lambda p: display_order_key(p.url, p.discovered_via)) if include_cookie_detail else pages)
         ],
         "forms": [

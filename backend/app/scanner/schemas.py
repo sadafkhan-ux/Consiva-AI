@@ -31,6 +31,8 @@ class FormField(BaseModel):
     name: str
     field_type: str
     required: bool = False
+    # Whether a checkbox or radio button is ticked as the page loads (the browser's live state); None for any other control. See page_parser.ParsedFormField.checked.
+    checked: bool | None = None
     # The wording beside a checkbox or radio button (see page_parser.field_label); None when the control has none, and on scans made before it was recorded.
     label: str | None = None
 

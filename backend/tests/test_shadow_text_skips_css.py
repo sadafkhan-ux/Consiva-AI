@@ -45,3 +45,28 @@ def test_the_widgets_stylesheet_and_scripts_are_not_page_text():
     assert "Manage cookie preferences" in text                                                # a visible shadow-root label is still read
     assert "opacity" not in text and "da-user-consent-root" not in text and "var x" not in text and "hidden template" not in text
     assert len(text) < 500
+
+
+# ── a policy page that is still adding text when it is first read ──
+LATE_HTML = """<html><body><h1>Privacy Policy</h1><p>We collect your name.</p><div id="more"></div>
+<script>setTimeout(() => { document.getElementById('more').innerHTML = '<p>' + 'You may withdraw consent at any time. '.repeat(20) + '</p>'; }, 1300);</script></body></html>"""
+
+
+async def _late_text(url: str) -> str:
+    from app.scanner.crawler import _settled_text
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content(LATE_HTML)
+        out = await _settled_text(page, url)
+        await browser.close()
+        return out
+
+
+def test_a_policy_page_is_read_again_until_its_text_stops_growing():
+    assert "withdraw consent" in _run(_late_text("https://x.test/privacy"))
+
+
+def test_an_ordinary_page_is_read_once():
+    assert "withdraw consent" not in _run(_late_text("https://x.test/products"))

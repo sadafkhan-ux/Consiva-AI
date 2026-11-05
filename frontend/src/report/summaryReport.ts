@@ -163,7 +163,7 @@ function buildSelection(model: ReportModel): { rows: PageSelectionRow[]; notes: 
   });
   const notes: string[] = [];
   const found = sp.discovered;
-  notes.push(`${sp.scannedCount} scanned${found !== null ? ` of ${found} found` : ""}${sp.pageLimit ? `, limit ${sp.pageLimit}` : ""}.${sp.stopReason ? ` ${sp.stopReason}` : ""}`);
+  notes.push(`${sp.scannedCount} scanned${found !== null ? ` of ${found} found` : ""}`);
   if (sp.skipped.length) notes.push(`Found but not scanned: ${sp.skipped.map((s) => `${s.count} ${s.reason}`).join("; ")}.`);
   return { rows, notes };
 }

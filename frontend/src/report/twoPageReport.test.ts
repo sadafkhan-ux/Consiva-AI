@@ -111,7 +111,7 @@ async function pdf(score: DpdpRequirementsResponse | null, findings: FindingResp
     appendix: () => join(appendixAt()),
     appendixAt,
     /** The table of every check, which flows over as many pages as it needs. */
-    checks: () => { const i = recorded.pages.findIndex((p) => p.texts.join("").includes("THE TEN CHECKS BEHIND THE SCORE")); return join(Math.max(i, 0), appendixAt()); },
+    checks: () => { const i = recorded.pages.findIndex((p) => p.texts.join("").includes("THE CHECKS BEHIND THE SCORE")); return join(Math.max(i, 0), appendixAt()); },
   };
 }
 
@@ -305,7 +305,7 @@ describe("page 2: consent comparison, technologies, privacy elements", () => {
 describe("the compact check table on page 2", () => {
   it("lists all ten checks of the assessment, each with its number, name, marks and result", async () => {
     const t = (await pdf(mixed)).checks();
-    expect(t).toContain("THE TEN CHECKS BEHIND THE SCORE");
+    expect(t).toContain("THE CHECKS BEHIND THE SCORE");
     for (const c of A.mixed.checks) {
       expect(flat(t), `check ${c.id}`).toContain(flat(c.name.slice(0, 30)));
       expect(flat(t), `check ${c.id} result`).toContain(flat(c.result));
@@ -718,7 +718,7 @@ describe("the layout: sequential sections, a true contents, nothing cut, nothing
 
   it("the headings are numbered in order in the PDF, one badge per heading", async () => {
     const r = await pdf(mixed, [], FULL_EVIDENCE_FOR_LAYOUT);
-    const upper = ["SCAN SUMMARY", "FRAMEWORK READINESS", "TOP FINDINGS", "CONSENT BEHAVIOUR", "TRACKING TECHNOLOGIES DETECTED", "PRIVACY ELEMENTS ON THE SITE", "THE TEN CHECKS BEHIND THE SCORE", "WEBSITE PAGES SCANNED", "SCAN REVIEW"];
+    const upper = ["SCAN SUMMARY", "FRAMEWORK READINESS", "TOP FINDINGS", "CONSENT BEHAVIOUR", "TRACKING TECHNOLOGIES DETECTED", "PRIVACY ELEMENTS ON THE SITE", "THE CHECKS BEHIND THE SCORE", "WEBSITE PAGES SCANNED", "SCAN REVIEW"];
     const at = upper.map((u) => r.all().indexOf(u));
     expect(at.every((i) => i >= 0)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));          // in the order they are listed, which is the reading order
@@ -1089,7 +1089,7 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
 
   it("adds the fixes and the five sections after the table of every check and before the pages scanned, in a fixed order", async () => {
     const { appendixAt } = await build();
-    const names = ["THE TEN CHECKS BEHIND THE SCORE", "PRIORITISED FIXES", "GRIEVANCE OFFICER", "DATA PROTECTION OFFICER", "INDIAN-LANGUAGE SUPPORT", "CHILDREN'S DATA AND AGE GATE", "OBSERVABLE SECURITY SIGNALS", "WEBSITE PAGES SCANNED"];
+    const names = ["THE CHECKS BEHIND THE SCORE", "PRIORITISED FIXES", "GRIEVANCE OFFICER", "DATA PROTECTION OFFICER", "INDIAN-LANGUAGE SUPPORT", "CHILDREN'S DATA AND AGE GATE", "OBSERVABLE SECURITY SIGNALS", "WEBSITE PAGES SCANNED"];
     const at = names.map((n) => recorded.calls.findIndex((c) => c.page < appendixAt && c.t.toUpperCase().replace(/\s+/g, " ") === n));   // the heading as drawn, not the same words inside a fix
     expect(names.filter((_, i) => at[i] < 0), "missing headings").toEqual([]);
     expect(at).toEqual([...at].sort((a, b) => a - b));

@@ -82,7 +82,7 @@ async def fingerprint(db: AsyncSession, scan: ConsentScan, settings: Settings | 
         RENDER_VERSION, str(scan.id), scan.status, scan.completed_at,
         [(str(r[0]), r[1], r[2]) for r in runs], [(str(f[0]), f[1]) for f in findings],
         [(s[0], s[1], s[2], str(s[3])) for s in stages], tuple(shot) if shot else None,
-        requirements.today_in_india().isoformat(), requirements.REQUIREMENTS_VERSION, assessment_service.TEN_CHECK_VERSION,
+        requirements.today_in_india().isoformat(), requirements.REQUIREMENTS_VERSION, assessment_service.active_version(),
         await frontend_signature(settings),
     ])
 

@@ -1,9 +1,10 @@
 import base64
+import logging
 import uuid
 from dataclasses import asdict
 from datetime import date, datetime
 from types import SimpleNamespace
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -12,7 +13,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.exceptions import NotFoundError, ScanNotReadyError
+from app.core.exceptions import ConsivaError, NotFoundError, ScanNotReadyError
 from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import (
     audit_repository,
@@ -22,6 +23,7 @@ from app.db.repositories import (
 )
 from app.db.session import get_db
 from app.llm.schemas import DpdpReference
+from app.scoring import domain_score
 from app.scoring import requirements as requirements_reading
 from app.scoring.sector import SECTORS
 from app.services import (
@@ -215,11 +217,13 @@ class UrlInventoryResponse(BaseModel):
 
 class AssessmentCheck(BaseModel):
     id: int
+    ref: str | None = None
+    category: str | None = None          # the scorecard's category (Cookie Consent, Privacy Notice, Forms & Security); None for the other engines
     name: str
     kind: Literal["dpdp", "practice", "technical", "transparency"]
     result: Literal["Passed", "Partially Passed", "Failed", "Not Assessed", "Not Applicable"]
-    awarded: float | None = None
-    max: float | None = None
+    awarded: int | float | None = None     # whole numbers from the Scanner Score; halves only under the ten-check rollback
+    max: int | float | None = None
     marks_text: str
     evidence: str
     source_url: str | None = None
@@ -238,6 +242,8 @@ class AssessmentCounts(BaseModel):
     failed: int
     not_assessed: int
     not_applicable: int
+    # Parameters a Quick Scan cannot reach: listed, never scored, and not counted as "could not be assessed" (they are the scan type's limit, said once).
+    beyond_scan_type: int = 0
 
 
 class AssessmentRecommendation(BaseModel):
@@ -253,8 +259,9 @@ class AssessmentPages(BaseModel):
 
 
 class AssessmentResponse(BaseModel):
-    """The ten-check assessment and the Privacy Readiness Score of one scan: THE score. The web page, the email, the dashboard and every PDF print this result and nothing else
-    (scoring/ten_checks.py). `score` is marks awarded over applicable marks, 0 to 100 (null when no check applies); `score_text` is how it is written everywhere ("94.4/100").
+    """The assessment of one scan and its score: THE score. The web page, the email, the dashboard and every PDF print this result and nothing else. It is the Scanner Score
+    (scoring/domain_score.py: seven domains, 100 points, every result out of 100) unless SCORING_ENGINE=ten_check is set for rollback. `score` is a whole number 0 to 100 (null when
+    nothing could be assessed); `score_text` is how it is written everywhere ("20/100"); `scanner` carries the band, coverage and evidence confidence that must be shown with it.
     Show a score as final only when `final` is true: it is false while the scan is still running or the policy reading has not finished, because the checks that read the policy are then
     left out and the number would change."""
 
@@ -263,11 +270,11 @@ class AssessmentResponse(BaseModel):
     scan_status: str
     policy_analysis: Literal["done", "running", "failed", "not_run"]
     final: bool
-    score: float | None
+    score: int | float | None
     score_text: str
     total_text: str
-    awarded: float
-    applicable_max: float
+    awarded: int | float
+    applicable_max: int | float
     counts: AssessmentCounts
     incomplete: int
     limited_basis: bool
@@ -277,6 +284,10 @@ class AssessmentResponse(BaseModel):
     recommendations: list[AssessmentRecommendation]
     pages: AssessmentPages
     limitations: list[str]
+    # Which engine produced this ("scanner", or "ten_check" after a rollback) and, for the Scanner Score, the whole result: band, coverage, evidence confidence,
+    # every parameter with its state and evidence, findings, removals and what a Quick Scan cannot reach. None under the ten-check engine.
+    engine: Literal["scorecard", "scanner", "ten_check"] = "ten_check"
+    scanner: dict[str, Any] | None = None
 
 
 class EvidenceFormItem(BaseModel):
@@ -1012,14 +1023,21 @@ async def get_scan_assessment(
     shot = await scan_repository.get_screenshot(db, scan_id)
     screenshot_url = shot.page_url if shot is not None else None
     scan_status = scan.status
+    mode = assessment_service.scan_mode(scan.scan_options)
+    scanned_at = (scan.completed_at or scan.started_at or scan.created_at).isoformat() if (scan.completed_at or scan.started_at or scan.created_at) else None
     await db.rollback()   # give this request's connection back before the evidence is loaded on others (see scan_repository._evidence_slot)
     evidence = ScanEvidenceResponse(**await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)).model_dump()
     done = [st for st in stages if st.stage == "policy_analysis" and st.status == "completed" and (st.stage_metadata or {}).get("result")]
     policy = PolicyAnalysisResponse(**max(done, key=lambda st: st.started_at or st.completed_at).stage_metadata["result"]).model_dump() if done else None
-    result = assessment_service.assess_parts(evidence, policy, assessment_service.website_scan_meta(stages), screenshot_url)
+    try:
+        result = assessment_service.assess_parts(evidence, policy, assessment_service.website_scan_meta(stages), screenshot_url, mode=mode, scanned_at=scanned_at)
+    except domain_score.ResultRefused:
+        # EX-10: a result that would assert what the scan cannot back is never served in a weaker form; the failure is loud in the log and the caller gets a plain error with a reference.
+        logging.getLogger(__name__).exception("assessment refused for scan %s", scan_id)
+        raise ConsivaError(f"The assessment for this scan could not be produced. Please quote the scan reference {scan_id} to support.") from None
     state = assessment_service.policy_stage_state(stages)
     return AssessmentResponse(
-        scan_id=scan_id, methodology_version=assessment_service.TEN_CHECK_VERSION, scan_status=scan_status, policy_analysis=state,
+        scan_id=scan_id, methodology_version=assessment_service.active_version(), scan_status=scan_status, policy_analysis=state,
         final=scan_status == "completed" and state in ("done", "failed"), **result,
     )
 

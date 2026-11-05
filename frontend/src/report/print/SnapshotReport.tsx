@@ -1,12 +1,13 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ReportModel } from "../buildReport";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
-import { buildSummaryReport, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, type SummaryView } from "../summaryReport";
-import { KIND_LABEL, NO_ASSESSMENT, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
+import { buildSummaryReport, SIGNUP_URL, type SummaryView } from "../summaryReport";
+import { NO_ASSESSMENT, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
 import { ringNumber } from "../scoreFormat";
 import { BigRing, Icon, Pill, SheetPageStyle, type IconName } from "./PageParts";
 import "./pages.css";
 import "./snapshot.css";
+import "./snapshot-v2.css";
 
 /** The two-page "Website Privacy Readiness Report" (variant "summary"), laid out as the approved reference: page 1 is the website overview, page 2 the detailed findings. */
 export const SNAPSHOT_COOKIES = 5;
@@ -49,6 +50,9 @@ function formsAndConsent(model: ReportModel, s: SummaryView): Item[] {
   const ev = model.evidence;
   const home = s.page.preview.address ?? null;
   const per = s.elements.find((e) => e.title === "Per-purpose choices");
+  // The page the consent choices were examined on: the scan records it with the consent signal (the one page Accept and Reject are tried on); failing that, the entered address's own page.
+  const signalEvidence = (ev?.consent_signals?.[0]?.evidence ?? {}) as Record<string, unknown>;
+  const consentPage = (typeof signalEvidence.interaction_page_url === "string" && signalEvidence.interaction_page_url) || ev?.pages?.find((p) => p.discovered_via === "seed")?.url || home;
   if (!ev) return [
     { label: "Contact / Enquiry form", found: null, source: null },
     { label: "Explicit consent (e.g. checkbox)", found: null, source: null },
@@ -66,7 +70,7 @@ function formsAndConsent(model: ReportModel, s: SummaryView): Item[] {
   return [
     { label: "Contact / Enquiry form", found: forms.length > 0, source: forms.length > 0 ? forms[0].page_url ?? null : null },
     { label: "Explicit consent (e.g. checkbox)", found: consentForm ? true : boxForm ? "checkbox" : false, source: boxForm?.page_url ?? null, wording: worded?.label ?? null },
-    { label: "Consent purpose (choices per purpose)", found: per ? per.label === "Found" : null, source: per?.label === "Found" ? home : null },
+    { label: "Consent purpose (choices per purpose)", found: per ? per.label === "Found" : null, source: per?.label === "Found" ? consentPage : null },
   ];
 }
 
@@ -104,31 +108,33 @@ function officers(s: SummaryView) {
   ];
 }
 
-/** What the headline score is and is not: the ten checks below it are marked and totalled, and the score is that total over the maximum. One engine, so there is nothing else to explain. */
-function scoreStory(ten: TenAssessment): string {
-  const lead = ten.score === null ? "No Privacy Readiness Score is shown." : `The Privacy Readiness Score is ${ten.scoreText}.`;
-  const provisional = ten.score !== null && !ten.final ? " The policy reading had not finished or was not run, so these marks could still change." : "";
-  return `${lead} ${ten.summary}${provisional}`.replace(/\s+/g, " ").trim();
-}
-
 const TONE: Record<TenResult, "good" | "warn" | "bad" | "mute"> = { Passed: "good", "Partially Passed": "warn", Failed: "bad", "Not Assessed": "mute", "Not Applicable": "mute" };
 
-function Sheet({ n, fit, testId, children }: { n: 1 | 2; fit: number; testId: string; children: ReactNode }) {
+/** The smallest a page is scaled to when tightening is not enough. */
+const SQUEEZE_MIN = 0.8;
+
+function Sheet({ n, fit, squeeze = 1, testId, children }: { n: 1 | 2; fit: number; squeeze?: number; testId: string; children: ReactNode }) {
   const steps = Array.from({ length: Math.max(0, Math.min(fit, SNAPSHOT_MAX_FIT)) }, (_, i) => ` sn-fit-${i + 1}`).join("");
-  return <section className={`pg sn sn-p${n}${steps}`} data-testid={testId} data-page={n} data-fit={fit}>{children}</section>;
+  return <section className={`pg sn sn-v2 sn-p${n}${steps}`} data-testid={testId} data-page={n} data-fit={fit} data-squeeze={squeeze} style={squeeze < 1 ? ({ "--sn-squeeze": squeeze } as React.CSSProperties) : undefined}>{children}</section>;
 }
 
 const Title = ({ icon, children, note }: { icon: IconName; children: ReactNode; note?: ReactNode }) => (
   <h2 className="sn-h"><i><Icon name={icon} size={15} /></i><span>{children}</span>{note && <em>{note}</em>}</h2>
 );
 
-function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; model: ReportModel; fit: number }) {
+/** How an element reads: found (green check), not found (red cross) or not tested (grey dash). A colour is never the only signal: every card also says it in words. */
+type ElState = "found" | "missing" | "untested";
+const elState = (label: string | undefined): ElState => (label === "Found" ? "found" : label === "Not found" ? "missing" : "untested");
+const EL_WORD: Record<ElState, string> = { found: "Found", missing: "Not found", untested: "Not tested" };
+
+function Page1({ s, ten, model, fit, squeeze }: { s: SummaryView; ten: TenAssessment; model: ReportModel; fit: number; squeeze: number }) {
   const { page } = s;
   const { preview } = page;
   // This report has no "Unable to Verify" result: an element the scan could not see (for example the buttons of a banner that was never shown to it) is "Not tested".
   const el = (key: string) => { const e = s.elements.find((x) => x.title === key); return e ? { ...e, label: e.label === "Unable to Verify" ? "Not tested" : e.label } : undefined; };
   const foundCount = ELEMENT_ORDER.filter((e) => el(e.key)?.label === "Found").length;
   const address = preview.address ?? `https://${preview.domain}`;
+  const cats = ten.scanner?.categories ?? [];
   // The four key metrics, each only when the scan recorded it.
   const metrics = [
     s.requests !== null && { value: String(s.requests), label: "Third-party requests" },
@@ -137,7 +143,7 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
     { value: String(s.cookieCounts.found), label: "Cookies set" },
   ].filter((m): m is { value: string; label: string } => !!m);
   return (
-    <Sheet n={1} fit={fit} testId="sn-page-1">
+    <Sheet n={1} fit={fit} squeeze={squeeze} testId="sn-page-1">
       <header className="sn-head" data-testid="sn-head">
         <img className="sn-logo" src={CONSIVA_LOGO_PNG} alt="Consiva.ai" data-testid="sn-logo" />
         <div className="sn-head-r">
@@ -146,34 +152,35 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
         </div>
       </header>
       <div className="sn-panel">
-        <div className="sn-title">
-          <div className="sn-domain" data-testid="sn-domain">{preview.domain}<Icon name="arrow" size={16} className="sn-ext" /></div>
-          <h1>Privacy Policy Assessment</h1>
-        </div>
-        <div className="sn-meta" data-testid="sn-meta">
-          <span><Icon name="calendar" size={20} /><small>Scan Date</small><b>{page.scannedAt}</b></span>
-          <span><Icon name="doc" size={20} /><small>Pages Scanned</small><b>{s.pagesLine}</b></span>
-          <span><Icon name="page" size={20} /><small>Report ID</small><b>{page.reportId}</b></span>
+        <div className="sn-titlebar">
+          <div className="sn-title">
+            <h1>Privacy Policy Assessment</h1>
+            <div className="sn-domain" data-testid="sn-domain">{preview.domain}<Icon name="arrow" size={16} className="sn-ext" /></div>
+          </div>
+          <div className="sn-meta" data-testid="sn-meta">
+            <span><Icon name="calendar" size={18} /><small>Scan Date</small><b>{page.scannedAt}</b></span>
+            <span><Icon name="doc" size={18} /><small>Pages Scanned</small><b>{s.pagesLine}</b></span>
+            <span><Icon name="page" size={18} /><small>Report ID</small><b>{page.reportId}</b></span>
+          </div>
         </div>
 
-        <div className="sn-row sn-hero">
-          <div className="sn-left">
-            <div className="sn-card sn-score" data-testid="sn-score">
-              <b className="sn-card-t">Privacy Readiness Score</b>
-              <div className="pg-score-ring"><BigRing percent={ten.score} label={ten.score === null ? "" : ringNumber(ten.scoreText)} id="snapshot" /></div>
-            </div>
-            <div className="sn-card sn-banner" data-testid="sn-banner">
-              <div className="sn-card-head"><b><Icon name="shield" size={17} />Consent Banner</b></div>
-              {el("Consent banner") && <div className="sn-status" data-tone={el("Consent banner")!.tone} data-testid="sn-banner-status">{el("Consent banner")!.label === "Found" ? "Detected" : el("Consent banner")!.label}</div>}
-              {bannerFacts(model).length > 0 && (
-                <dl className="sn-facts" data-testid="sn-banner-facts">
-                  {bannerFacts(model).map((f) => <div key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}
-                </dl>
-              )}
-              {bannerFacts(model).length === 0 && !el("Consent banner") && <p className="sn-muted" data-testid="sn-banner-none">No consent banner evidence was recorded for this scan.</p>}
-              <div className="sn-opts">
-                {["Accept option", "Reject option"].map((k) => el(k) && <span key={k}><b>{k}</b><Pill s={{ label: el(k)!.label, tone: el(k)!.tone }} /></span>)}
-              </div>
+        <div className="sn-hero">
+          <div className="sn-card sn-score" data-testid="sn-score">
+            <b className="sn-card-t">Privacy Readiness Score</b>
+            <div className="pg-score-ring"><BigRing percent={ten.score} label={ten.score === null ? "" : ringNumber(ten.scoreText)} id="snapshot" /></div>
+            {ten.scanner && <span className="sn-band" data-testid="sn-band">{ten.scanner.band}</span>}
+          </div>
+          <div className="sn-card sn-banner" data-testid="sn-banner">
+            <div className="sn-card-head"><b><Icon name="shield" size={17} />Consent Banner</b></div>
+            {el("Consent banner") && <div className="sn-status" data-tone={el("Consent banner")!.tone} data-testid="sn-banner-status">{el("Consent banner")!.label === "Found" ? "Detected" : el("Consent banner")!.label}</div>}
+            {bannerFacts(model).length > 0 && (
+              <dl className="sn-facts" data-testid="sn-banner-facts">
+                {bannerFacts(model).map((f) => <div key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}
+              </dl>
+            )}
+            {bannerFacts(model).length === 0 && !el("Consent banner") && <p className="sn-muted" data-testid="sn-banner-none">No consent banner evidence was recorded for this scan.</p>}
+            <div className="sn-opts">
+              {["Accept option", "Reject option"].map((k) => el(k) && <span key={k}><b>{k}</b><Pill s={{ label: el(k)!.label, tone: el(k)!.tone }} /></span>)}
             </div>
           </div>
           <figure className="sn-card sn-shot" data-testid="pg-hero-preview">
@@ -188,6 +195,20 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
           </figure>
         </div>
 
+        {cats.length > 0 && (
+          <div className="sn-cats" data-testid="sn-categories">
+            {cats.map((c) => {
+              const pct = c.assessable > 0 ? Math.round((100 * c.awarded) / c.assessable) : 0;
+              return (
+                <div key={c.category} className="sn-cat" data-testid="sn-category">
+                  <div className="sn-cat-top"><b>{c.category}</b><span>{c.assessable > 0 ? <><strong>{c.awarded}</strong> of {c.assessable} marks</> : "Not assessed"}</span></div>
+                  <div className="sn-meter" role="img" aria-label={`${c.category}: ${pct} percent of the assessable marks`}><i style={{ width: `${pct}%` }} /></div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="sn-contacts" data-testid="sn-contacts">
           {officers(s).map((o) => (
             <div key={o.title} data-testid="sn-contact" data-found={o.c ? "yes" : "no"}>
@@ -201,21 +222,20 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
           ))}
         </div>
 
-        <div className="sn-row sn-one">
-          <div className="sn-card sn-elements" data-testid="sn-elements">
-            <div className="sn-card-head"><b><Icon name="doc" size={17} />Website Privacy Elements</b><em>{foundCount} of {ELEMENT_ORDER.length} found</em></div>
-            <div className="sn-els">
-              {ELEMENT_ORDER.map((d) => {
-                const e = el(d.key);
-                return (
-                  <div key={d.key} className="sn-el">
-                    <Icon name={d.icon} size={20} className="sn-el-icon" />
-                    <b>{d.label}</b>
-                    <Pill s={e ? { label: e.label, tone: e.tone } : { label: "Not Tested", tone: "mute" }} />
-                  </div>
-                );
-              })}
-            </div>
+        <div className="sn-card sn-elements" data-testid="sn-elements">
+          <div className="sn-card-head"><b><Icon name="doc" size={17} />Website Privacy Elements</b><em>{foundCount} of {ELEMENT_ORDER.length} found</em></div>
+          <div className="sn-els">
+            {ELEMENT_ORDER.map((d) => {
+              const state = elState(el(d.key)?.label);
+              return (
+                <div key={d.key} className="sn-el" data-state={state} data-testid="sn-element">
+                  <span className="sn-el-st" aria-hidden="true"><Icon name={state === "found" ? "check" : state === "missing" ? "cross" : "info"} size={13} /></span>
+                  <Icon name={d.icon} size={20} className="sn-el-icon" />
+                  <b>{d.label}</b>
+                  <span className="sn-el-word">{EL_WORD[state]}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -223,18 +243,28 @@ function Page1({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
           <b>{s.framework.name}</b>
           <span className="sn-chip sn-mute" data-testid="sn-scope-pages">{ten.pages.scanned} of {ten.pages.discovered ?? "not recorded"} pages scanned</span>
           <span className="sn-chip sn-mute" data-testid="sn-scope-consent">Consent tested on the homepage only</span>
-          <span className="sn-chip sn-mute" data-testid="sn-scope-checks">{ten.applicableMax} of {ten.checks.length} checks assessed</span>
+          <span className="sn-chip sn-mute" data-testid="sn-scope-checks">{ten.counts.passed + ten.counts.partial + ten.counts.failed} of {ten.checks.length} checks assessed</span>
         </div>
 
-        <Title icon="bars" note="at a glance">Key Metrics</Title>
         <div className="sn-metrics" data-testid="sn-metrics">
-          {metrics.map((t, i) => <div key={t.label} className="sn-tile"><Icon name={TILE_ICON[i] ?? "doc"} size={26} className="sn-tile-icon" /><div><b>{t.value}</b><span>{t.label}</span></div></div>)}
+          {metrics.map((t, i) => <div key={t.label} className="sn-tile"><Icon name={TILE_ICON[i] ?? "doc"} size={24} className="sn-tile-icon" /><div><b>{t.value}</b><span>{t.label}</span></div></div>)}
         </div>
 
-        <div className="sn-readme" data-testid="sn-summary">
-          <Icon name="info" size={18} />
-          <div><b>How to read this score</b><p data-testid="sn-summary-text">{scoreStory(ten)}</p></div>
-        </div>
+        <Title icon="cycle">Consent States Compared</Title>
+        {s.consentRows.length === 0 ? <p className="sn-muted">The scan evidence was not loaded, so the consent comparison is not shown.</p> : (
+          <table className="sn-table sn-consent" data-testid="sn-consent">
+            <thead><tr><th>Metric</th><th>Before Consent</th><th>After Accept</th><th>After Reject</th></tr></thead>
+            <tbody>{s.consentRows.map((r) => <tr key={r.label}><td>{r.label}</td>{r.cells.map((x, i) => <td key={i} className={x === "Not Tested" ? "sn-nt" : undefined}>{x}</td>)}</tr>)}</tbody>
+          </table>
+        )}
+        <Title icon="page" note={s.selectionNotes[0]}>Page URLs (Scanned)</Title>
+        {s.selection.length === 0 ? <p className="sn-muted">The page list was not loaded for this scan.</p> : (
+          <table className="sn-table sn-pages" data-testid="sn-pages">
+            <thead><tr><th>#</th><th>Page URL</th><th>Why it was chosen</th><th>Result</th></tr></thead>
+            <tbody>{s.selection.map((r) => <tr key={r.url}><td className="sn-n">{r.n}</td><td className="sn-url" title={r.url}>{short(r.url, 90)}</td><td>{r.reason}</td><td className="sn-nowrap">{r.status}</td></tr>)}</tbody>
+          </table>
+        )}
+
       </div>
     </Sheet>
   );
@@ -247,43 +277,77 @@ function Source({ url, id }: { url: string | null; id: number }) {
   return id === 10 ? null : <span className="sn-nosrc" data-testid="sn-nosource">[no source URL available]</span>;
 }
 
-function CheckTable({ checks, ten }: { checks: TenCheck[]; ten: TenAssessment }) {
+/** The parameters a Quick Scan cannot reach are itemised in one compact row (Scoring Mechanism SC-13): every one named, none scored, and the two fixed pages kept to two. */
+const isBeyond = (c: TenCheck): boolean => c.marksText === "Deep Scan only";
+/** Short names for the one compact row; the full names are in the dashboard and the long reports. */
+const SHORT_NAME: Record<string, string> = {
+  A5: "Notice site-wide, other language", B5: "Withdrawal", B6: "Withdrawal persists", C4: "Nomination right", D1: "No tracking of children", D2: "Parental consent route",
+  E1: "Third parties disclosed", E2: "Cross-border", E3: "No undisclosed third party", F2: "Secure form destination", G2: "No pre-ticked consent",
+};
+
+function CheckTable({ checks: all, ten }: { checks: TenCheck[]; ten: TenAssessment }) {
+  const checks = all.filter((c) => !isBeyond(c));
+  const beyond = all.filter(isBeyond);
+  const totals = new Map((ten.scanner?.categories ?? []).map((c) => [c.category, c]));
   return (
     <table className="sn-table sn-checks" data-testid="sn-checkpoints">
       <thead><tr><th>#</th><th>Assessment, evidence and finding</th><th>Result</th><th className="sn-num">Marks (Awarded / Max)</th></tr></thead>
       <tbody>
-        {checks.map((c) => (
-          <tr key={c.id} data-testid="sn-checkpoint" data-status={c.result} data-kind={c.kind}>
-            <td className="sn-n">{c.id}</td>
-            <td className="sn-cp">
-              <b>{c.name}</b>
-              {c.legal && <span className="sn-prov">{c.legal}</span>}<span className="sn-kind" data-testid="sn-kind" data-kind={c.kind}>{KIND_LABEL[c.kind]}</span>
-              {c.evidence && <span className="sn-ev" data-testid="sn-evidence"><i>Evidence:</i> {c.id >= 2 && c.id <= 7 ? <>&ldquo;{c.evidence}&rdquo;</> : c.evidence} <Source url={c.sourceUrl} id={c.id} /></span>}
-              {(c.result !== "Passed" || c.coverage || c.limitation) && <span className="sn-why" data-testid="sn-why"><i>{c.result === "Passed" ? "Scope:" : "Finding:"}</i> {c.result === "Passed" ? (c.limitation ?? c.coverage) : c.explanation}{!c.evidence && c.sourceUrl && c.completed && <> <Source url={c.sourceUrl} id={c.id} /></>}</span>}
-            </td>
-            <td><Pill s={{ label: c.result, tone: TONE[c.result] }} />{c.result !== "Passed" && c.result !== "Not Applicable" && <span className="sn-basis" data-testid="sn-basis">{c.basis}</span>}{c.result !== "Not Applicable" && c.result !== "Not Assessed" && <span className="sn-quality" data-testid="sn-quality" data-quality={c.quality}>Evidence: {c.quality}</span>}</td>
-            <td className="sn-num" data-testid="sn-marks">{c.marksText}</td>
-          </tr>
+        {checks.map((c, i) => (
+          <Fragment key={c.id}>
+            {c.category && c.category !== checks[i - 1]?.category && (
+              <tr className="sn-grp" data-testid="sn-group"><td colSpan={4}><b>{c.category}</b>{totals.get(c.category) && <em>{totals.get(c.category)!.awarded} of {totals.get(c.category)!.assessable} marks</em>}</td></tr>
+            )}
+            <tr data-testid="sn-checkpoint" data-status={c.result} data-kind={c.kind}>
+              <td className="sn-n">{c.id}</td>
+              <td className="sn-cp">
+                <b>{c.name}</b>
+                {c.legal && <span className="sn-prov">{c.legal}</span>}
+                {c.evidence && <span className="sn-ev" data-testid="sn-evidence"><i>Evidence:</i> {c.evidence} <Source url={c.sourceUrl} id={c.id} /></span>}
+                {(c.result !== "Passed" || c.limitation || (c.coverage && !c.category)) && <span className="sn-why" data-testid="sn-why"><i>{c.result === "Passed" ? "Scope:" : "Finding:"}</i> {c.result === "Passed" ? (c.limitation ?? c.coverage) : c.explanation}{!c.evidence && c.sourceUrl && c.completed && <> <Source url={c.sourceUrl} id={c.id} /></>}</span>}
+              </td>
+              <td><Pill s={{ label: c.result, tone: TONE[c.result] }} />{c.result !== "Passed" && c.result !== "Not Applicable" && <span className="sn-basis" data-testid="sn-basis">{c.basis}</span>}{c.result !== "Not Applicable" && c.result !== "Not Assessed" && <span className="sn-quality" data-testid="sn-quality" data-quality={c.quality}>Evidence: {c.quality}</span>}</td>
+              <td className="sn-num" data-testid="sn-marks">{c.marksText}</td>
+            </tr>
+          </Fragment>
         ))}
+        {beyond.length > 0 && (
+          <tr data-testid="sn-beyond" data-status="Not Assessed">
+            <td className="sn-n">&ndash;</td>
+            <td className="sn-cp" colSpan={3}>
+              <b>Deep Scan only: {beyond.length} more parameters, left out of this score</b>
+              <span className="sn-ev" data-testid="sn-beyond-list">{beyond.map((c) => (c.ref && SHORT_NAME[c.ref] ? `${c.ref} ${SHORT_NAME[c.ref]}` : c.name)).join(" · ")}</span>
+            </td>
+          </tr>
+        )}
       </tbody>
       <tfoot>
         <tr className="sn-total" data-testid="sn-total-row">
-          <td colSpan={3}>Total Weightage Awarded (applicable checks) &middot; Privacy Readiness Score {ten.scoreText}{ten.counts.notAssessed > 0 && <> &middot; {ten.counts.notAssessed} not assessed, left out</>}</td>
-          <td className="sn-num" data-testid="sn-total-marks">{ten.totalText}</td>
+          <td colSpan={3}>{ten.scanner ? "Privacy Readiness Score, out of 100" : <>Total Weightage Awarded (applicable checks) &middot; Privacy Readiness Score {ten.scoreText}</>}{ten.counts.notAssessed > 0 && <> &middot; {ten.counts.notAssessed} not assessed, left out</>}</td>
+          <td className="sn-num" data-testid="sn-total-marks">{ten.scanner ? ten.scoreText : ten.totalText}</td>
         </tr>
       </tfoot>
     </table>
   );
 }
 
-function Page2({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; model: ReportModel; fit: number }) {
+/** The bottom call to action: what to do about what the scan found. It follows the result: with gaps it offers fixes and remediation, without them it offers keeping watch. Both go to the same address. */
+export function remediationCta(ten: TenAssessment): { gaps: number; title: string; sub: string; button: string } {
+  const gaps = ten.checks.filter((c) => c.result === "Failed" || c.result === "Partially Passed").length;
+  return gaps > 0
+    ? { gaps, title: `${gaps} ${gaps === 1 ? "check needs" : "checks need"} fixes`, sub: "Apply remediations with Consiva: set up your consent banner, update your notice, and verify every fix with a re-scan.", button: "Apply Remediations" }
+    : { gaps, title: "No gaps found in this scan", sub: "Keep it that way: schedule re-scans and get an alert when something on your site changes.", button: "Schedule Re-scans" };
+}
+
+function Page2({ s, ten, model, fit, squeeze }: { s: SummaryView; ten: TenAssessment; model: ReportModel; fit: number; squeeze: number }) {
   const cc = s.cookieCounts;
   const lines = s.cookieLines.slice(0, SNAPSHOT_COOKIES);
   const forms = formsAndConsent(model, s);
   const ps = pageSummary(model, s);
   const unit = (n: number | null, one: string) => (n === null ? "Not recorded" : String(n) + (one ? ` ${one}` : ""));
+  const cta = remediationCta(ten);
   return (
-    <Sheet n={2} fit={fit} testId="sn-page-2">
+    <Sheet n={2} fit={fit} squeeze={squeeze} testId="sn-page-2">
       <div className="sn-panel sn-panel2">
         <div className="sn-row sn-cookie-row">
           <div className="sn-block" data-testid="sn-cookie-block">
@@ -310,24 +374,8 @@ function Page2({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
           </div>
         </div>
 
-        <Title icon="cycle">Consent States Compared</Title>
-        {s.consentRows.length === 0 ? <p className="sn-muted">The scan evidence was not loaded, so the consent comparison is not shown.</p> : (
-          <table className="sn-table sn-consent" data-testid="sn-consent">
-            <thead><tr><th>Metric</th><th>Before Consent</th><th>After Accept</th><th>After Reject</th></tr></thead>
-            <tbody>{s.consentRows.map((r) => <tr key={r.label}><td>{r.label}</td>{r.cells.map((x, i) => <td key={i} className={x === "Not Tested" ? "sn-nt" : undefined}>{x}</td>)}</tr>)}</tbody>
-          </table>
-        )}
-
         <Title icon="shield" note="India DPDP Act, 2023 and Rules, 2025">Key Compliance Checks</Title>
         <CheckTable checks={ten.checks} ten={ten} />
-
-        <Title icon="page" note={s.selectionNotes[0]}>Page URLs (Scanned)</Title>
-        {s.selection.length === 0 ? <p className="sn-muted">The page list was not loaded for this scan.</p> : (
-          <table className="sn-table sn-pages" data-testid="sn-pages">
-            <thead><tr><th>#</th><th>Page URL</th><th>Why it was chosen</th><th>Result</th></tr></thead>
-            <tbody>{s.selection.map((r) => <tr key={r.url}><td className="sn-n">{r.n}</td><td className="sn-url" title={r.url}>{short(r.url, 90)}</td><td>{r.reason}</td><td className="sn-nowrap">{r.status}</td></tr>)}</tbody>
-          </table>
-        )}
 
         <div className="sn-row sn-two sn-end">
           <div className="sn-block sn-summary" data-testid="sn-page-summary">
@@ -349,10 +397,10 @@ function Page2({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
           </div>
         </div>
 
-        <div className="sn-cta" data-testid="sn-cta">
+        <div className="sn-cta" data-testid="sn-cta" data-gaps={cta.gaps}>
           <Icon name="bolt" size={22} />
-          <div><b>{SIGNUP_TEXT}</b><span>{SIGNUP_SUB}</span></div>
-          <a href={SIGNUP_URL} data-testid="sn-signup">Sign Up</a>
+          <div><b>{cta.title}</b><span>{cta.sub}</span></div>
+          <a href={SIGNUP_URL} data-testid="sn-signup">{cta.button}</a>
         </div>
         <div className="sn-disc" data-testid="sn-disclaimer"><Icon name="info" size={18} /><p><b>Disclaimer:</b> {SNAPSHOT_DISCLAIMER}</p></div>
       </div>
@@ -369,6 +417,8 @@ export function SnapshotReport({ model }: { model: ReportModel }) {
   const ten = model.assessment ?? NO_ASSESSMENT;
   const doc = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState<[number, number]>([0, 0]);
+  // The last resort once every tightening step is used: scale the panel down by the amount it is over, so the report stays two pages (never below 80%).
+  const [squeeze, setSqueeze] = useState<[number, number]>([1, 1]);
   useLayoutEffect(() => {
     const sheets = doc.current?.querySelectorAll("section.pg");
     if (!sheets) return;
@@ -383,17 +433,22 @@ export function SnapshotReport({ model }: { model: ReportModel }) {
       return r.height / zoom > PAGE_HEIGHT + 0.05;
     };
     const next: [number, number] = [fit[0], fit[1]];
+    const sq: [number, number] = [squeeze[0], squeeze[1]];
     let changed = false;
-    for (const i of [0, 1] as const) if (over(i) && next[i] < SNAPSHOT_MAX_FIT) { next[i] += 1; changed = true; }
-    if (changed) setFit(next);
+    for (const i of [0, 1] as const) {
+      if (!over(i)) continue;
+      if (next[i] < SNAPSHOT_MAX_FIT) { next[i] += 1; changed = true; }
+      else if (sq[i] > SQUEEZE_MIN) { sq[i] = Math.max(SQUEEZE_MIN, Math.round((sq[i] - 0.015) * 1000) / 1000); changed = true; }
+    }
+    if (changed) { setFit(next); setSqueeze(sq); }
   });
   return (
     // The server prints from a narrow viewport, where pages.css would zoom the sheets down for a small screen. The printed page is not zoomed, so when printing the zoom is turned off:
     // the layout that is measured and fitted is then the layout that is printed.
     <div className="pg-doc" data-testid="summary-report" ref={doc} style={PRINTING ? { zoom: 1 } : undefined}>
       <SheetPageStyle />
-      <Page1 s={s} ten={ten} model={model} fit={fit[0]} />
-      <Page2 s={s} ten={ten} model={model} fit={fit[1]} />
+      <Page1 s={s} ten={ten} model={model} fit={fit[0]} squeeze={squeeze[0]} />
+      <Page2 s={s} ten={ten} model={model} fit={fit[1]} squeeze={squeeze[1]} />
     </div>
   );
 }

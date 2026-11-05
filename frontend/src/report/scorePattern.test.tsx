@@ -63,7 +63,6 @@ describe("one score: the server's ten-check score, on every surface", () => {
 
     render(<SnapshotReport model={m} />);
     expect(screen.getByTestId("pg-percent-snapshot")).toHaveTextContent(number);
-    expect(screen.getByTestId("sn-summary-text")).toHaveTextContent(`The Privacy Readiness Score is ${a.scoreText}`);
     cleanup();
 
     for (const R of [FreeReport, FullReport]) {
@@ -92,17 +91,9 @@ describe("one score: the server's ten-check score, on every surface", () => {
     cleanup();
     render(<SnapshotReport model={m} />);
     expect(screen.getByTestId("pg-percent-snapshot")).toHaveTextContent("No score");
-    expect(screen.getByTestId("sn-summary-text")).toHaveTextContent("No Privacy Readiness Score is shown");
     cleanup();
     const { container } = render(<FreeReport model={m} />);
     expect(container.querySelector(".pg-score-ring")!.textContent).toContain("No score");
-  });
-
-  it("the Summary PDF's ring and the headline in its 'how to read' text are the same figure", () => {
-    const m = withA(A.typical);
-    render(<SnapshotReport model={m} />);
-    const ring = screen.getByTestId("pg-percent-snapshot").textContent;
-    expect(screen.getByTestId("sn-summary-text").textContent).toContain(`${ring}/100`);
   });
 });
 

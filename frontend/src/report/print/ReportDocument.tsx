@@ -207,13 +207,13 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
     add("consent", "Consent behaviour", <Para muted>The scan evidence could not be loaded, so the consent comparison, technologies and privacy elements are not shown.</Para>);
   }
 
-  // 8. The ten checks behind the score
+  // 8. The checks behind the score
   if (model.assessment && model.assessment.checks.length) {
     const a = model.assessment;
     const resultTone = (r: string): Tone => (r === "Passed" ? "good" : r === "Failed" ? "bad" : r === "Partially Passed" ? "warn" : "mute");
-    add("checks", "The ten checks behind the score", (
+    add("checks", "The checks behind the score", (
       <>
-        <Para muted small>Each of the ten checks, its result and the marks it earned. The marks add up to {a.totalText}, which is the score {a.scoreText}.</Para>
+        <Para muted small>{a.scanner ? <>Each parameter, its result and the points it earned. The score is the share of the assessable points earned, out of 100: {a.scoreText}.</> : <>Each check, its result and the marks it earned. The marks add up to {a.totalText}, which is the score {a.scoreText}.</>}</Para>
         <Table
           head={[{ h: "No.", w: "30px" }, { h: "What is checked, and the evidence" }, { h: "Marks", w: "70px", num: true }, { h: "Result", w: "96px" }]}
           rows={a.checks.map((c) => [

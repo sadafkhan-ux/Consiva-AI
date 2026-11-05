@@ -186,7 +186,7 @@ export function buildTransparency(input: {
     page: { value: pageValue, definition: "Pages scanned out of the pages of the entered domain the scan found. It says how much of the site was visited, not how much of the law was checked." },
     checks: {
       value: a ? `${assessed} of ${a.checks.length} checks assessed${counts ? ` (${counts.notAssessed} not assessable from outside, ${counts.notApplicable} not applicable)` : ""}` : "Not available",
-      definition: "How many of the ten checks the scan could assess. It is the assessment's own count and has nothing to do with the number of pages.",
+      definition: "How many of the checks the scan could assess. It is the assessment's own count and has nothing to do with the number of pages.",
     },
     consentStates: { value: `${tested} of 3 states tested`, definition: "Which of Before Consent, After Accept and After Reject were actually exercised and observed." },
     counts,

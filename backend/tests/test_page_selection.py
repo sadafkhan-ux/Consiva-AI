@@ -167,8 +167,8 @@ class TestRepeatsOfAnAddress:
 
 class TestEachPageCarriesItsReason:
     @pytest.mark.parametrize("path,rank,words", [
-        ("/privacy", 0, "Privacy or cookie page"), ("/cookie-policy", 0, "Privacy or cookie page"), ("/terms", 1, "Terms page"),
-        ("/contact", 2, "Contact or legal-notice page"), ("/disclaimer", 2, "Contact or legal-notice page"), ("/login", 3, "Sign-up, login or checkout"),
+        ("/privacy", 0, "Privacy page"), ("/cookie-policy", 0, "Cookie policy"), ("/terms", 1, "Terms or legal page"),
+        ("/contact", 2, "Contact or grievance page"), ("/disclaimer", 2, "Terms or legal page"), ("/login", 3, "Sign-up, login or checkout"),
         ("/about", 4, "About, product or service"), ("/random", 5, "Other public page"), ("/blog/post", 6, "Blog or news page"),
     ])
     def test_the_reason_names_the_kind_of_page_and_where_it_was_found(self, path, rank, words):
@@ -192,7 +192,7 @@ class TestEachPageCarriesItsReason:
 
         pages = [SimpleNamespace(id=1, url="https://x.test/privacy", title="P", http_status=200, discovered_via="sitemap", final_url=None, content_type=None), SimpleNamespace(id=2, url="https://x.test/x", title=None, http_status=None, discovered_via="failed", final_url=None, content_type=None)]
         detailed = _serialize_evidence(pages, [], [], [], [], [], [], include_cookie_detail=True)["pages"]
-        assert "Privacy or cookie page" in detailed[0]["selection_reason"] and detailed[1]["selection_reason"] is None
+        assert "Privacy page" in detailed[0]["selection_reason"] and detailed[1]["selection_reason"] is None
         assert all("selection_reason" not in p for p in _serialize_evidence(pages, [], [], [], [], [], [])["pages"])
 
 

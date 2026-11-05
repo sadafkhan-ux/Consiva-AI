@@ -242,6 +242,30 @@ _REASON_BY_RANK = {
 }
 
 
+#: The kinds of page a public (five-page) scan reads one of each (Functional Scope QS-08, QS-11), in the order it picks them. Every page that is none of these is the "remaining" kind, of which it reads one:
+#: the most prominent. Five pages therefore give five different kinds of evidence, not five versions of one.
+PAGE_CATEGORIES = ("privacy", "cookie", "terms", "contact", "form", "remaining")
+_PRIVACY_WORDS = re.compile(r"privacy|data-protection|data-privacy|gdpr|dpdp|datenschutz")
+
+
+def category_of(url: str) -> str:
+    """The kind of page an address is, one of PAGE_CATEGORIES, read from the address alone. "privacy-and-cookies" is a privacy page; "cookie-policy" is the cookie policy. A page that only mentions
+    one of these words without being named like the page (/privacy-blueprint) is "remaining", as it is for the ranking."""
+    rank = effective_rank(url)
+    if rank <= 2:
+        path = (urlsplit(normalize_url(url)).path or "/").lower()
+        if _PRIVACY_WORDS.search(path):
+            return "privacy"
+        if "cookie" in path:
+            return "cookie"
+        if "terms" in path or "tos" in path.split("/")[-1].split("-"):
+            return "terms"
+        if "contact" in path or "grievance" in path:
+            return "contact"
+        return "terms" if any(w in path for w in ("legal", "disclaimer", "imprint")) else "remaining"
+    return "form" if rank == 3 else "remaining"
+
+
 def display_order_key(url: str, discovered_via: str | None) -> tuple:
     """Where a scanned page sits in the report's list: the seed first, then the pages in the order the crawler picks them (rank, then the tie-break), then attempts that failed.
 
@@ -251,13 +275,32 @@ def display_order_key(url: str, discovered_via: str | None) -> tuple:
     return (group, effective_rank(url), *tie_break_key(url))
 
 
-def selection_reason(url: str, discovered_via: str | None) -> str | None:
-    """Why this page was chosen, in one sentence: its kind (the rank the crawler orders pages by) and where the crawler found it. None for a page record that is not a
-    chosen page (an attempt that failed keeps the reason it failed, which is its status)."""
+_REASON_BY_CATEGORY = {
+    "privacy": "Privacy page: the site's privacy or data protection notice, read first because it settles the notice checks.",
+    "cookie": "Cookie policy: says which cookies and trackers the site discloses.",
+    "terms": "Terms or legal page: the site's terms and legal notices.",
+    "contact": "Contact or grievance page: how a visitor reaches the site and complains.",
+}
+
+
+def selection_reason(url: str, discovered_via: str | None, has_form: bool | None = None) -> str | None:
+    """Why this page was chosen, in one sentence: its kind and where the crawler found it. The reason is only ever true (QS-09, QS-10): a page chosen for collecting visitor details says so only
+    when a form was found on it (`has_form`), and otherwise says it was judged by its address. None for a page record that is not a chosen page (an attempt that failed keeps the reason it
+    failed, which is its status)."""
     if discovered_via == "seed":
         return "The address that was entered: always scanned first."
     if discovered_via not in ("link", "sitemap"):
         return None
     found = "found in the sitemap" if discovered_via == "sitemap" else "found through a link on a scanned page"
-    kind = "A page whose address mentions privacy, cookies, terms or contact but is not named like a policy page: ranked after the site's own policy pages." if effective_rank(url) == _KEYWORD_ONLY_RANK else _REASON_BY_RANK[priority(url)]
+    category = category_of(url)
+    if effective_rank(url) == _KEYWORD_ONLY_RANK:
+        kind = "A page whose address mentions privacy, cookies, terms or contact but is not named like a policy page: ranked after the site's own policy pages."
+    elif category in _REASON_BY_CATEGORY:
+        kind = _REASON_BY_CATEGORY[category]
+    elif category == "form":
+        kind = ("Page that collects visitor details: a form was found on it." if has_form is True
+                else "Sign-up, login or checkout page by its address; no form was found on it." if has_form is False
+                else "Sign-up, login or checkout page by its address; whether it has a form was not recorded.")
+    else:
+        kind = _REASON_BY_RANK[priority(url)]
     return f"{kind} Selected from pages {found}."

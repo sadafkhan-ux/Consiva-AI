@@ -32,9 +32,15 @@ export function buildHeroView(a: TenAssessment | null): HeroView {
   const scoreValue = a ? a.score : null;
   // A good reading on little evidence is not a strong one: the band says so when fewer than half the checks could be assessed.
   const limited = !!a?.limitedBasis;
-  const band = !a ? "Score not available" : scoreValue === null ? "Insufficient evidence" : limited && scoreValue >= 60 ? `${scoreBand(scoreValue)}, on limited evidence` : scoreBand(scoreValue);
-  const tone: HeroTone = scoreValue === null ? "mute" : limited || scoreValue < 80 ? "warn" : "good";
-  const headline = !a
+  const sc = a?.scanner ?? null;
+  // The Scanner Score brings its own band (the server's, never worked out here); the old numeric bands below are for the ten-check rollback only.
+  const band = sc ? (scoreValue === null ? "Insufficient evidence" : sc.band) : !a ? "Score not available" : scoreValue === null ? "Insufficient evidence" : limited && scoreValue >= 60 ? `${scoreBand(scoreValue)}, on limited evidence` : scoreBand(scoreValue);
+  const tone: HeroTone = scoreValue === null ? "mute" : sc ? (sc.band === "Evidence-led" || sc.band === "Substantially addressed" ? "good" : sc.band === "Insufficient evidence" ? "mute" : "warn") : limited || scoreValue < 80 ? "warn" : "good";
+  const headline = sc && scoreValue !== null
+    ? `${sc.explanation} Band: ${sc.band} · Coverage ${sc.coverage}% · Evidence confidence: ${sc.confidence.label}.`
+    : sc && scoreValue === null
+    ? `Not enough could be assessed to give a score. ${sc.explanation} Band: ${sc.band} · Coverage ${sc.coverage}% · Evidence confidence: ${sc.confidence.label}.`
+    : !a
     ? "The score could not be loaded for this report."
     : scoreValue === null
       ? "A Privacy Readiness Score is not shown: no check could be assessed on the evidence available."

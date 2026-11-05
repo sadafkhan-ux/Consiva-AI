@@ -43,7 +43,7 @@ def detect_forms(page_local_id: str, forms: list[ParsedForm]) -> list[FormRecord
             selector=form.selector,
             action_url=form.action_url,
             method=form.method,
-            fields=[FormField(name=f.name, field_type=f.field_type, required=f.required, label=f.label) for f in form.fields],
+            fields=[FormField(name=f.name, field_type=f.field_type, required=f.required, label=f.label, checked=f.checked) for f in form.fields],
             purpose_guess=_guess_purpose(form.fields),
         ))
     return records

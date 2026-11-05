@@ -156,6 +156,9 @@ class Settings(BaseSettings):
     # scan. Must be 1..5: the upper bound is a hard ceiling in code, so no environment value
     # can turn the public profile into a larger one (scan_profiles.MAX_WEB_PAGES).
     consent_web_max_pages: int = Field(default=5, ge=1)
+    # SCORING_ENGINE -- which engine serves GET /scans/{id}/assessment: "scorecard" (the ten-row DPDP Website Readiness Scorecard, scoring/scorecard.py, over the 24 checks of scoring/domain_score.py), "scanner" (the seven-domain Scanner Score alone) or "ten_check" (the engine it
+    # replaced, kept for rollback until the Scanner Score is verified in production). Anything else is refused at start-up.
+    scoring_engine: Literal["scorecard", "scanner", "ten_check"] = "scorecard"
     # CONSENT_APP_MAX_PAGES -- authorized application scans. 0 means "no fixed page-count
     # cap" (see CONSENT_APP_MAX_SECONDS for the optional time deadline); a positive value is an
     # explicit cap for deployments that want one. Negative values are rejected.

@@ -1,7 +1,7 @@
 /**
- * The ten-check assessment and the Privacy Readiness Score, as the server serves them (GET /api/v1/consent/scans/{id}/assessment).
+ * The assessment and the Privacy Readiness Score, as the server serves them (GET /api/v1/consent/scans/{id}/assessment).
  *
- * There is no scoring in the browser. The one engine lives on the server (backend app/scoring/ten_checks.py), so the web page, the email, the dashboard and every PDF show the same
+ * There is no scoring in the browser. The one engine lives on the server (backend app/scoring/domain_score.py, the Scanner Score; the ten-check engine is kept there for rollback), so the web page, the email, the dashboard and every PDF show the same
  * result of the same function on the same stored evidence. This file holds the shape of that result, the words printed beside a check's kind, and the conversion from the API's
  * field names. A page that has no assessment (not loaded yet, or the request failed) shows that, never a number worked out here.
  */
@@ -18,6 +18,10 @@ export type TenBasis =
 
 export interface TenCheck {
   id: number;
+  /** The parameter's reference in the Scanner Score ("A1", "B2"); absent under the ten-check rollback. */
+  ref?: string;
+  /** The scorecard's category; absent for the other engines. */
+  category?: string;
   name: string;
   result: TenResult;
   /** 1, 0.5 or 0; null when the check does not apply or could not be assessed. */
@@ -39,7 +43,50 @@ export interface TenCheck {
   coverage: string | null;
 }
 
+/** The whole Scanner Score result as the server serves it under `scanner`: only what the pages read is typed here; the rest passes through untouched. */
+export interface ScannerResult {
+  version: string;
+  mode: "quick" | "deep";
+  status: "completed" | "restricted";
+  /** A whole number 0 to 100, or null when nothing could be assessed. */
+  score: number | null;
+  /** Every score is out of 100, for a Quick Scan and a Deep Scan alike. */
+  scale: number;
+  band: string;
+  bandNotes: string[];
+  /** Whole percent of the points this scan type can reach that could be assessed. */
+  coverage: number;
+  confidence: { level: "high" | "medium" | "low"; label: string; reasons: string[] };
+  explanation: string;
+  disclaimer: string;
+  whatWasNotAssessed: string[];
+  beyondQuickScan: { ref: string; name: string; points: number }[];
+  removed: { ref: string; name: string; points: number; state: string; reason: string }[];
+  findings: { ref: string; title: string; outcome: string; severity: string; confidence: string; observed: string; whyItMatters: string; action: string; owner: string; effort: string; consequences: string[] }[];
+  /** Statements the Act and Rules relate to a website that the Scoring Mechanism does not score: evidence and an outcome, never marks. */
+  indicators?: {
+    id: string; name: string; scored: false; outcome: string; found: string;
+    evidence: { observed: string; page: string | null; at: string | null }[];
+    statutory: { provision: string; summary: string; relation: string; commences: string; inForce: boolean }[];
+  }[];
+  /** The scorecard's three categories and ten rows (Scorecard engine); each row carries its detailed sub-checks. Absent for the other engines. */
+  categories?: { category: string; marks: number; awarded: number; assessable: number }[];
+  rows?: { id: string; name: string; outcome: string; subChecks: { id: string; name: string; result: string }[] }[];
+  /** Each choice by purpose switched on alone in a fresh session (Deep Scan): what was contacted, and whether that is what the purpose's name says. */
+  purposes?: {
+    tested: boolean; reason: string | null; requestsOnly: boolean;
+    purposes: { kind: string; label: string; observed: { vendor: string | null; category: string; host: string }[]; verdict: "as_expected" | "unexpected" }[];
+  } | null;
+  rules: Record<string, string>;
+  scannedAt: string | null;
+  perfectScoreNotice?: { text: string; movesIt: string[]; notCovered: string; recommendedCadence: string; cadenceReason: string };
+}
+
 export interface TenAssessment {
+  /** Which engine produced this: the Scanner Score, or the ten-check engine after a rollback. */
+  engine?: "scorecard" | "scanner" | "ten_check";
+  /** The whole Scanner Score result; null or absent under the ten-check rollback. */
+  scanner?: ScannerResult | null;
   checks: TenCheck[];
   awarded: number;
   applicableMax: number;
@@ -50,7 +97,7 @@ export interface TenAssessment {
   totalText: string;
   /** The score as printed everywhere: "94.4/100", or "No meaningful score". */
   scoreText: string;
-  counts: { passed: number; partial: number; failed: number; notAssessed: number; notApplicable: number };
+  counts: { passed: number; partial: number; failed: number; notAssessed: number; notApplicable: number; beyondScanType?: number };
   incomplete: number;
   limitedBasis: boolean;
   summary: string;
@@ -81,6 +128,13 @@ export function fromApiAssessment(raw: unknown): TenAssessment {
   const a = camelKeys(raw) as Partial<TenAssessment> | null;
   if (!a || typeof a !== "object" || !Array.isArray(a.checks) || !a.counts || typeof a.scoreText !== "string") throw new Error("The response is not a ten-check assessment.");
   return a as TenAssessment;
+}
+
+/** What must always be shown together with a Scanner Score (SC-25): the band, the coverage and the evidence confidence. Null under the ten-check rollback. */
+export function scoreContext(a: TenAssessment | null): { band: string; coverage: number; confidence: string; text: string } | null {
+  const s = a?.scanner;
+  if (!s) return null;
+  return { band: s.band, coverage: s.coverage, confidence: s.confidence.label, text: `Band: ${s.band} · Coverage ${s.coverage}% · Evidence confidence: ${s.confidence.label}` };
 }
 
 /** What the report pages draw when no assessment could be loaded: no checks and no score, said so, never a number worked out here. */

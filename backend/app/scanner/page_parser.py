@@ -28,6 +28,9 @@ class ParsedFormField:
     # What the control says to the person, for a checkbox or a radio button: the text of the label it sits in or the label that points at it. A script-built form gives
     # such a control a generated name (for example "_R_2apbsnpfiv5stbH1_") that says nothing, so the wording is the only evidence of what is being agreed to. None when there is none.
     label: str | None = None
+    # Whether a checkbox or radio button is ticked as the page loads, as the browser reports it (the live `checked` property; a script-built form has no `checked` attribute). None for any other control
+    # and when it was not read. A consent control that is already ticked is a pre-selected consent (DPDP Act s.6(1): consent needs a clear affirmative action).
+    checked: bool | None = None
 
 
 @dataclass
@@ -36,6 +39,8 @@ class ParsedForm:
     action_url: str | None
     method: str | None
     fields: list[ParsedFormField]
+    # Whether the form, or the small container it sits in, links to a privacy notice or terms (what a person sees at the point where their details are asked for).
+    notice_link: bool = False
 
 
 @dataclass
@@ -86,6 +91,20 @@ def _clean_label(text: str) -> str | None:
     return text[:_LABEL_MAX] or None
 
 
+def _form_controls(form_tag) -> list:
+    """The controls of a form that are shown to a person, in page order: hidden inputs and buttons are not."""
+    return [inp for inp in form_tag.find_all(["input", "textarea", "select"]) if inp.get("type") not in ("hidden", "submit", "button")]
+
+
+def _checked_of(inp, live: list | None, index: int) -> bool | None:
+    """Whether a checkbox or radio button starts ticked: the live state the browser reported when there is one, else the `checked` attribute in the markup."""
+    if inp.name != "input" or inp.get("type") not in ("checkbox", "radio"):
+        return None
+    if live is not None and index < len(live) and live[index] is not None:
+        return bool(live[index])
+    return inp.has_attr("checked")
+
+
 def field_label(inp, form_tag) -> str | None:
     """The words next to a checkbox or radio button, in the order a reader would find them: the label it is inside, the label whose `for` names it, its accessible name, then the text of the
     small element that holds it. Nothing is inferred beyond text that is on the page; a control with no such text has no label."""
@@ -111,7 +130,27 @@ def field_label(inp, form_tag) -> str | None:
     return None
 
 
-def parse_page(html: str, page_url: str) -> ParsedPage:
+_NOTICE_LINK = re.compile(r"privacy|data[-\s]?protection|terms|consent|notice|policy|gdpr", re.IGNORECASE)
+
+
+def _anchors_mention_notice(tag) -> bool:
+    return any(_NOTICE_LINK.search(f"{a.get_text(' ', strip=True)} {a.get('href', '')} {a.get('aria-label', '')}") for a in tag.find_all("a", href=True))
+
+
+def form_has_notice_link(form_tag) -> bool:
+    """True when a link to a privacy notice or terms is inside the form, in the element that holds it, or in the sibling right beside it. The footer of the page is not 'the point of collection'."""
+    if _anchors_mention_notice(form_tag):
+        return True
+    parent = form_tag.parent
+    if parent is not None and parent.name not in ("body", "html", "main", "[document]") and _anchors_mention_notice(parent):
+        return True
+    for sibling in (form_tag.find_previous_sibling(), form_tag.find_next_sibling()):
+        if sibling is not None and sibling.name != "form" and sibling.find("form") is None and len(sibling.get_text()) < 400 and _anchors_mention_notice(sibling):
+            return True
+    return False
+
+
+def parse_page(html: str, page_url: str, checked_states: list | None = None) -> ParsedPage:
     soup = BeautifulSoup(html, "lxml")
 
     title = soup.title.get_text(strip=True) if soup.title else None
@@ -148,6 +187,7 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
 
     forms = []
     for i, form_tag in enumerate(soup.find_all("form")):
+        live_checked = checked_states[i] if checked_states is not None and i < len(checked_states) else None
         fields = [
             ParsedFormField(
                 # `placeholder`/`aria-label` are a real, rendered fallback -- plenty of
@@ -163,15 +203,16 @@ def parse_page(html: str, page_url: str) -> ParsedPage:
                 field_type=inp.get("type", "text") if inp.name == "input" else inp.name,
                 required=inp.has_attr("required"),
                 label=field_label(inp, form_tag),
+                checked=_checked_of(inp, live_checked, j),
             )
-            for j, inp in enumerate(form_tag.find_all(["input", "textarea", "select"]))
-            if inp.get("type") not in ("hidden", "submit", "button")
+            for j, inp in enumerate(_form_controls(form_tag))
         ]
         forms.append(ParsedForm(
             selector=form_tag.get("id") and f"#{form_tag['id']}" or f"form:nth-of-type({i + 1})",
             action_url=urljoin(page_url, form_tag["action"]) if form_tag.get("action") else None,
             method=form_tag.get("method"),
             fields=fields,
+            notice_link=form_has_notice_link(form_tag),
         ))
 
     page_text = soup.get_text(separator=" ", strip=True)

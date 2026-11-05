@@ -69,3 +69,12 @@ The two-page report lists each page on page 1, **why it was chosen** (its kind a
 * Menus are not distinguished from other links.
 * A sitemap contributes at most its first 500 addresses; a privacy page listed after that is found only if some scanned page links to it.
 * Five pages are never the whole site. Accept and Reject are tested on the homepage only.
+
+
+## One page of each kind (5 Nov 2026, Functional Scope QS-08 to QS-11)
+A public (five-page) scan now reads at most one page of each of these kinds, so five pages give five different kinds of evidence: the entered address, then the **privacy** page, the **cookie policy**, the **terms or legal** page, the **contact or grievance** page, and a **page that collects visitor details** (sign-up, login, checkout), in that order. The kind is read from the address alone (`url_normalize.category_of`): "/privacy-and-cookies" is a privacy page, "/cookie-policy" is the cookie policy, a page that only mentions a word without being named like the page ("/privacy-blueprint") is "remaining".
+- A second page of a kind already read or in flight waits. It is read only if the first page of that kind failed to load, which frees the kind. At the end of the crawl the waiting pages are recorded as skipped with the reason `category_already_covered`.
+- "Remaining" pages (about, product, blog, anything else) are not limited to one: they fill what is left of the budget, most prominent first, so a site with few policy pages still uses its five pages. This is a deliberate step away from "one remaining page", which would have left a scan of an ordinary site at two pages.
+- The authorised application (Deep) scan reads every page and is unchanged.
+- The reason shown for each page is true to what was found (QS-10): a page chosen as one that collects visitor details says "a form was found on it" only when a form was found; otherwise it says it was judged by its address and that no form was found.
+- Where the choices per purpose were found is named from the scan's own record of the page the consent choices were examined on.
