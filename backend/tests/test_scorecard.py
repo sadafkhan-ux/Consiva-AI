@@ -43,12 +43,12 @@ def banner_ev(**kw):
 
 
 # ── the scorecard itself ──
-def test_ten_rows_in_three_categories_weighted_as_the_workbook_says():
-    assert [(r[0], r[3]) for r in sc.ROWS] == [("P1", 8), ("P2", 8), ("P3", 12), ("P4", 12), ("P5", 8), ("P6", 6), ("P7", 10), ("P8", 10), ("P9", 10), ("P10", 16)]
+def test_twelve_rows_in_three_categories_weighted_to_100():
+    assert [(r[0], r[3]) for r in sc.ROWS] == [("P1", 8), ("P2", 8), ("P3", 12), ("P4", 12), ("P5", 8), ("P6", 6), ("P7", 10), ("P8", 10), ("P9", 10), ("P10", 8), ("P11", 4), ("P12", 4)]
     assert sum(r[3] for r in sc.ROWS) == 100 and all(r[3] % 2 == 0 for r in sc.ROWS)
     r = go()
     assert [c["category"] for c in r["categories"]] == ["Cookie Consent", "Privacy Notice", "Forms & Security"] and [c["marks"] for c in r["categories"]] == [48, 36, 16]
-    assert len(r["rows"]) == 10 and len(r["details"]) == 24                       # the 24 detailed checks stay inside, under the rows
+    assert len(r["rows"]) == 12 and len(r["details"]) == 24                       # the 24 detailed checks stay inside, under the rows
 
 
 def test_every_internal_check_belongs_to_exactly_one_row_so_no_finding_is_counted_twice():
@@ -181,9 +181,9 @@ def test_p10_forms_and_security():
 
 # ── score, bands, rules ──
 def test_marks_not_assessed_and_not_applicable_leave_the_denominator():
-    r = go(ev=banner_ev(), mode="quick")                                          # P5 and P10 are left out
-    assert r["points"]["not_assessable"] == 8 and r["points"]["not_applicable"] == 16 and r["points"]["in_play"] == 76
-    assert r["coverage"] == 92
+    r = go(ev=banner_ev(), mode="quick")                                          # P5, P11 and P12 are not assessed (no certificate record in this evidence); P10 is not applicable
+    assert r["points"]["not_assessable"] == 16 and r["points"]["not_applicable"] == 8 and r["points"]["in_play"] == 76
+    assert r["coverage"] == 84
 
 
 def test_the_score_is_a_whole_number_out_of_100_and_a_quick_scan_is_held_at_99():
@@ -235,9 +235,9 @@ def test_the_scorecard_is_served_in_the_existing_response_shape_and_is_the_defau
     meta = {"pages_scanned": 2, "pages_discovered": 2, "accept_interaction": "clicked", "reject_interaction": "clicked"}
     r = svc.assess_parts(banner_ev(), copy.deepcopy(FULL_POLICY), meta, HOME, mode="deep", scanned_at=WHEN)
     resp = AssessmentResponse(scan_id="11111111-1111-1111-1111-111111111111", methodology_version=svc.active_version(), scan_status="completed", policy_analysis="done", final=True, **r)
-    assert resp.engine == "scorecard" and len(resp.checks) == 10 and [c.ref for c in resp.checks] == [f"P{i}" for i in range(1, 11)]
+    assert resp.engine == "scorecard" and len(resp.checks) == 12 and [c.ref for c in resp.checks] == [f"P{i}" for i in range(1, 13)]
     assert svc.active_version() == f"scorecard-{sc.SCORECARD_VERSION}" and resp.scanner["categories"][0]["category"] == "Cookie Consent"
-    assert resp.score_text == f"{resp.score}/100" and sum(resp.counts.model_dump().values()) == 10
+    assert resp.score_text == f"{resp.score}/100" and sum(resp.counts.model_dump().values()) == 12
     assert all(rec.id == 0 or r["checks"][rec.id - 1]["ref"] for rec in resp.recommendations)
 
 
@@ -247,9 +247,9 @@ def test_the_two_earlier_engines_remain_available_for_rollback():
     assert svc.assess_parts(banner_ev(), copy.deepcopy(FULL_POLICY), meta, HOME, engine="ten_check")["engine"] == "ten_check"
 
 
-def test_a_blocked_row_rests_on_the_evidence_of_the_row_that_blocks_it_and_withdrawal_is_never_blocked_in_a_quick_scan():
+def test_a_blocked_row_rests_on_the_evidence_of_the_row_that_blocks_it_and_withdrawal_follows_the_same_rule_in_a_quick_scan_as_in_a_deep_one():
     ev = _evidence(trackers=[GA])
     quick = go(ev=ev, visual=_consent(known=(1, 1, 0)), mode="quick")
-    assert R(quick, "P5")["outcome"] == "not_assessed" and R(quick, "P1")["outcome"] == "fail"       # Deep only: left out, not scored against the site
+    assert R(quick, "P5")["outcome"] == "fail" and R(quick, "P5")["blocked_by"] == "P1" and R(quick, "P1")["outcome"] == "fail"       # withdrawal is tested on every scan (3.2.0): with no banner it is blocked by P1, as in a Deep Scan
     deep = go(ev=ev, visual=_consent(known=(1, 1, 0)), mode="deep")
     assert R(deep, "P5")["outcome"] == "fail" and R(deep, "P5")["blocked_by"] == "P1" and R(deep, "P5")["evidence"] and all(e in R(deep, "P1")["evidence"] for e in R(deep, "P5")["evidence"])

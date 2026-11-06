@@ -42,15 +42,13 @@ REOPEN_HINTS = (
 #: Selectors of the persistent "reopen" control some consent tools draw themselves (a floating icon, a footer link). Tried before the words above.
 REOPEN_SELECTORS = (
     ".cky-btn-revisit", ".cky-btn-revisit-wrapper", "#ot-sdk-btn", ".ot-sdk-show-settings", ".termly-display-preferences", ".iubenda-cs-preferences-link", ".cmplz-manage-consent",
-    ".cc-revoke", "[data-cc='c-settings']", "#cookiescript_badge", ".osano-cm-widget", "#CookiebotWidget", ".didomi-notice-reopen", "[data-consiva-consent-settings]",
+    ".cc-revoke", "[data-cc='c-settings']", "#cookiescript_badge", ".osano-cm-widget", "#CookiebotWidget", ".didomi-notice-reopen", "[data-consiva-consent-settings]", ".cmp-floating-btn",
 )
 #: Words on a control inside the reopened dialog that takes consent back. "Save" or "confirm" alone does not: it keeps whatever the switches say.
 WITHDRAW_HINTS = (
     "withdraw consent", "withdraw", "revoke", "reject all", "decline all", "deny all", "reject non-essential", "reject optional", "necessary only", "only necessary", "essential only",
     "only essential", "turn off all", "opt out", "reject", "decline",
 )
-_CLICKABLE = "button, a, [role='button'], input[type='button'], input[type='submit'], [onclick]"
-_MAX_CANDIDATES = 120
 _LOADER = re.compile(r"googletagmanager\.com/(gtm\.js|gtag/js)", re.IGNORECASE)
 _SETTLE_MS = 2500
 _FURTHER_PAGES = 2
@@ -82,6 +80,37 @@ def non_essential_requests(records: list[tuple[str, str]], site_domain: str) -> 
     return out
 
 
+#: Finds the clickable element whose words (text, aria-label, title, value) match the earliest hint, looking into open shadow roots too, skips what is not visible, and with `stay on page` skips a link that
+#: leaves the page. It stamps the winner with data-consiva-pick so that it can be clicked, and returns {hint, text} (or null).
+_PICK_JS = """([hints, stay]) => {
+  const sel = "button, a, [role='button'], input[type='button'], input[type='submit'], [onclick]";
+  const all = [];
+  const walk = (root) => {
+    for (const el of root.querySelectorAll(sel)) all.push(el);
+    for (const el of root.querySelectorAll('*')) if (el.shadowRoot) walk(el.shadowRoot);
+  };
+  walk(document);
+  let best = null;
+  for (const el of all) {
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    if (!(r.width > 0 && r.height > 0) || cs.visibility === 'hidden' || cs.display === 'none') continue;
+    const text = [(el.innerText || '').trim(), el.getAttribute('aria-label') || '', el.getAttribute('title') || '', el.getAttribute('value') || ''].join(' ').trim().toLowerCase();
+    if (!text) continue;
+    const idx = hints.findIndex((h) => text.includes(h));
+    if (idx < 0 || (best && idx >= best.hint)) continue;
+    if (stay && el.tagName === 'A') { const href = (el.getAttribute('href') || '').trim().toLowerCase(); if (href && !href.startsWith('#') && !href.startsWith('javascript:')) continue; }
+    best = { hint: idx, el, text: text.slice(0, 80) };
+  }
+  if (!best) return null;
+  best.el.setAttribute('data-consiva-pick', '1');
+  return { hint: best.hint, text: best.text };
+}"""
+_UNPICK_JS = """() => {
+  const walk = (root) => { for (const el of root.querySelectorAll('[data-consiva-pick]')) el.removeAttribute('data-consiva-pick'); for (const el of root.querySelectorAll('*')) if (el.shadowRoot) walk(el.shadowRoot); };
+  walk(document);
+}"""
+
+
 async def _click_hint(page: Page, hints: tuple[str, ...], *, selectors: tuple[str, ...] = (), stay_on_page: bool = False) -> str | None:
     """Clicks the first visible control whose words match a hint (in hint order) and returns what it said, or None. With `stay_on_page`, a link that goes to another page is passed over:
     a reopen control changes the dialog, not the address."""
@@ -91,35 +120,35 @@ async def _click_hint(page: Page, hints: tuple[str, ...], *, selectors: tuple[st
             locator = frame.locator(selector)
             try:
                 if await _bounded(locator.count()) and await _bounded(locator.first.is_visible()):
-                    label = (await locator.first.inner_text(timeout=1000)).strip()[:80] or selector
+                    label = ((await locator.first.inner_text(timeout=1000)).strip() or await locator.first.get_attribute("aria-label") or await locator.first.get_attribute("title") or selector)[:80]
                     await locator.first.click(timeout=3000)
                     return label
             except PlaywrightError:
                 continue
-    for hint in hints:
-        for frame in frames:
-            candidates = frame.locator(_CLICKABLE)
+    # One pass per frame: every clickable element, in the light DOM and in open shadow roots (a consent tool's own widget lives there), is read once, its words are matched against the hints
+    # in hint order, and only the winner is clicked. (Before, each hint made a browser call per element, capped at the first 120 on the page: a long page took minutes, and a control at the
+    # end of the page, in a shadow root, was never reached.)
+    best: tuple[int, int, str] | None = None            # (hint index, frame index, text)
+    for fi, frame in enumerate(frames):
+        try:
+            found = await _bounded(frame.evaluate(_PICK_JS, [list(hints), stay_on_page]))
+        except PlaywrightError:
+            continue
+        if found and (best is None or found["hint"] < best[0]):
+            best = (found["hint"], fi, found["text"])
+    try:
+        if best is not None:
             try:
-                count = min(await _bounded(candidates.count()), _MAX_CANDIDATES)
+                await frames[best[1]].locator('[data-consiva-pick="1"]').first.click(timeout=3000)
+                return best[2]
             except PlaywrightError:
-                continue
-            for i in range(count):
-                el = candidates.nth(i)
-                try:
-                    if not await el.is_visible():
-                        continue
-                    text = " ".join(filter(None, [(await el.inner_text(timeout=800)).strip(), await el.get_attribute("aria-label") or "", await el.get_attribute("title") or "",
-                                                  await el.get_attribute("value") or ""])).strip().lower()
-                    if hint not in text:
-                        continue
-                    if stay_on_page and (await el.evaluate("e => e.tagName")) == "A":
-                        href = (await el.get_attribute("href") or "").strip().lower()
-                        if href and not href.startswith(("#", "javascript:")):
-                            continue
-                    await el.click(timeout=3000)
-                    return text[:80]
-                except PlaywrightError:
-                    continue
+                return None
+    finally:
+        for frame in frames:
+            try:
+                await _bounded(frame.evaluate(_UNPICK_JS))
+            except PlaywrightError:
+                pass
     return None
 
 

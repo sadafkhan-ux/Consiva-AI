@@ -66,9 +66,9 @@ BANNER = [{"mechanism_type": "banner", "cmp_vendor": "CookieYes", "has_reject_al
 
 
 # ── the matrix ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-def test_the_matrix_is_a_hundred_points_and_a_quick_scan_reaches_seventy():
+def test_the_matrix_is_a_hundred_points_and_a_quick_scan_reaches_seventy_five():
     assert sum(p[3] for p in ds.PARAMETERS) == 100
-    assert sum(p[3] for p in ds.PARAMETERS if p[4] == "both") == 70
+    assert sum(p[3] for p in ds.PARAMETERS if p[4] == "both") == 75
     by_domain = {d: sum(p[3] for p in ds.PARAMETERS if p[1] == d) for d in "ABCDEFG"}
     assert by_domain == {"A": 26, "B": 28, "C": 20, "D": 6, "E": 10, "F": 6, "G": 4}
 
@@ -86,7 +86,7 @@ def test_worked_example_no_banner_no_tracking_no_notice_scores_twenty_needs_atte
     for ref in ("A2", "A3", "A4", "C3"):
         assert P(r, ref)["state"] == "prerequisite" and P(r, ref)["blocked_by"] == "A1"
     assert P(r, "B3")["state"] == "not_applicable" and P(r, "B4")["state"] == "not_applicable" and P(r, "G1")["state"] == "not_applicable"
-    assert r["points"]["in_play"] == 57 and r["points"]["awarded"] == 16 and r["points"]["beyond_scan_type"] == 30
+    assert r["points"]["in_play"] == 57 and r["points"]["awarded"] == 16 and r["points"]["beyond_scan_type"] == 25
     assert r["score"] == 28 and r["scale"] == 100 and r["band"] == "Needs attention"      # 16 of 57 assessable points, out of 100
     # four parameters failing for one reason read as one finding with consequences (L-05)
     a1 = next(f for f in r["findings"] if f["ref"] == "A1")
@@ -94,10 +94,10 @@ def test_worked_example_no_banner_no_tracking_no_notice_scores_twenty_needs_atte
     assert [f["ref"] for f in r["findings"]] == ["A1"]
 
 
-def test_a_quick_scan_itemises_the_thirty_points_it_cannot_reach():
+def test_a_quick_scan_itemises_the_twenty_five_points_it_cannot_reach():
     r = run()
-    assert sum(x["points"] for x in r["beyond_quick_scan"]) == 30
-    assert {x["ref"] for x in r["beyond_quick_scan"]} == {"A5", "B5", "B6", "C4", "D1", "D2", "E1", "E2", "E3", "F2", "G2"}
+    assert sum(x["points"] for x in r["beyond_quick_scan"]) == 25
+    assert {x["ref"] for x in r["beyond_quick_scan"]} == {"A5", "C4", "D1", "D2", "E1", "E2", "E3", "F2", "G2"}
 
 
 # ── redistribution and the two reasons a point goes unawarded ───────────────────────────────────────────────────────────────────────
@@ -350,7 +350,7 @@ def test_deep_scan_scores_out_of_one_hundred_with_the_same_formula_as_quick():
     q, d = run(ev=_evidence(trackers=[GA]), visual=_consent(known=(1, 1, 0))), run(ev=_evidence(trackers=[GA]), visual=_consent(known=(1, 1, 0)), mode="deep")
     for r in (q, d):
         assert r["scale"] == 100 and r["score_text"].endswith("/100") and "ceiling" not in r
-    assert d["points"]["reachable"] == 100 and q["points"]["reachable"] == 70
+    assert d["points"]["reachable"] == 100 and q["points"]["reachable"] == 75
 
 
 def test_a_consent_tool_whose_banner_was_never_shown_is_inconclusive_not_a_missing_banner():

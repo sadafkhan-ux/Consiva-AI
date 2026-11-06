@@ -86,6 +86,14 @@ docker compose -f docker-compose.prod.yml logs migrate     # the error, with the
 Fix the cause and run `bash scripts/deploy.sh` again. Nothing needs cleaning up: the failed file
 rolled back and was not recorded.
 
+## "Conflict. The container name ... consiva-migrate-1 is already in use"
+`migrate` is a one-shot container that Compose recreates on every deploy: it renames the old one to `<hash>_consiva-migrate-1`, creates the new one, then deletes the old. If that is interrupted (a cancelled build, Docker restarting) or two `docker compose up` commands run at the same time, the renamed leftover stays and the next `up` fails with that error.
+
+It is harmless and holds no data (migrations are recorded in the database). **Use the deploy scripts, which remove any `migrate` container that is not running before they start** (a migration in progress is never touched): `scripts/deploy.sh` on Linux, `scripts\deploy.ps1` on Windows (`scripts\deploy.ps1 -Service frontend` rebuilds one service). `deploy.ps1` also refuses to start while another deploy is running. Do not run two `docker compose up` commands at once.
+
+By hand, if you ran `docker compose up` directly and hit it:
+`docker rm -f $(docker ps -aq --filter label=com.docker.compose.service=migrate --filter status=exited --filter status=created --filter status=dead)` and run `up` again.
+
 ## Existing databases
 
 - **Already managed by `migrate.py`** (the normal case): only pending migrations run; `Nothing to do`

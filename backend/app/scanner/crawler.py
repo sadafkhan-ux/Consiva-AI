@@ -96,6 +96,7 @@ from app.scanner.page_signals import (
 from app.scanner.policy_detector import detect_policies
 from app.scanner.purposes import run_purpose_test
 from app.scanner.reject_and_compare import run_button_comparison, run_reject_persistence
+from app.scanner.tls_assessment import assess_site_tls
 from app.scanner.robots import RobotsRules, parse_robots
 from app.scanner.scan_profiles import APPLICATION, MAX_WEB_PAGES, ScanProfile, resolve_profile
 from app.scanner.schemas import (
@@ -1922,7 +1923,8 @@ async def run_scan(
             # After everything else has finished, so the re-check really is one page view with nothing else running.
             recheck = await _recheck_pre_consent(browser, pages, cookies, trackers, root_url, settings, disallowed_prefixes)
             # The Deep Scan also tests taking consent back, and whether that holds on two further pages (Scanner Score B5, B6). A Quick Scan does not.
-            withdrawal = await _run_withdrawal(browser, root_url, settings, disallowed_prefixes, pages) if profile is not None and profile.name == APPLICATION else None
+            # Taking consent back is tested on every scan, Quick or Deep (scorecard P5): one fresh session, then two further pages.
+            withdrawal = await _run_withdrawal(browser, root_url, settings, disallowed_prefixes, pages)
             purposes = await _run_purposes(browser, root_url, settings) if profile is not None and profile.name == APPLICATION else None
             # Accept and Reject measured side by side on every scan; Reject on further pages on a Deep Scan (scanner/reject_and_compare.py).
             button_comparison = await _run_button_comparison(browser, root_url, settings)
@@ -1969,6 +1971,12 @@ async def run_scan(
         "accept_scroll_steps": accept_scroll_steps,
         "reject_scroll_steps": reject_scroll_steps,
     }
+    if settings is None or getattr(settings, "scanner_tls_assessment", True):
+        # The certificate and TLS version of the address the site was served from (scorecard P11, P12): one verified handshake, no request. https when the home page was served over https.
+        served_https = (pre_consent_diagnostics.get("security_signals") or {}).get("homepage_https")
+        host = urlparse(root_url).hostname or ""
+        tls_url = root_url if served_https is None else (f"https://{host}" if served_https else f"http://{host}")
+        scan_diagnostics["tls_signals"] = await assess_site_tls(tls_url)
 
     return ScanResult(
         domain=urlparse(root_url).netloc,

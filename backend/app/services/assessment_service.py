@@ -25,7 +25,7 @@ SCANNER_VERSION = domain_score.SCORE_VERSION
 
 
 #: What the crawler records about the pages, in the website-scan stage record, for Scanner Score A5, D1, D2 and G1 (scanner/page_signals.py).
-SCAN_SIGNAL_KEYS = ("language_signals", "notice_link_signals", "child_surfaces", "form_signals", "security_signals", "banner_by_page", "storage_signals", "mixed_content")
+SCAN_SIGNAL_KEYS = ("language_signals", "notice_link_signals", "child_surfaces", "form_signals", "security_signals", "banner_by_page", "storage_signals", "mixed_content", "tls_signals")
 
 
 def active_engine() -> str:
@@ -216,9 +216,9 @@ def as_scorecard(r: dict[str, Any]) -> dict[str, Any]:
     by: dict[str, list[str]] = {}
     for x in r["rows"]:
         if x["outcome"] == "not_assessed":
-            by.setdefault(x["reason"], []).append(x["id"])
+            by.setdefault(x["reason"], []).append(x["id"][1:])      # the number in the checks table, never the internal P-code
     for reason, ids in by.items():
-        limitations.append(f"Row{_plural(len(ids), '', 's')} {', '.join(ids)} could not be assessed (left out of the score): {reason}")
+        limitations.append(f"Check{_plural(len(ids), '', 's')} {', '.join(ids)} could not be assessed (left out of the score): {reason}")
     limitations.extend(r["band_notes"])
     number = {c["ref"]: c["id"] for c in checks}
     recs = [{"id": number.get(f["ref"], 0), "text": f["action"]} for f in r["priority_actions"]]

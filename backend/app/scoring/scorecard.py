@@ -23,7 +23,7 @@ from app.scoring import domain_score as ds
 from app.scoring import legal_map
 from app.scoring.ten_checks import _find, _is_verified
 
-SCORECARD_VERSION = "3.0.0"
+SCORECARD_VERSION = "3.2.3"
 RULES = {**ds.RULES, "scoring_rules": SCORECARD_VERSION, "scorecard": "DPDP_Website_Readiness_Scorecard.xlsx"}
 
 PASS, PARTIAL, FAIL, NOT_ASSESSED, NA = "pass", "partial", "fail", "not_assessed", "not_applicable"
@@ -43,8 +43,14 @@ ROWS: tuple[tuple[str, str, str, int, tuple[str, ...]], ...] = (
     ("P7", "Privacy Notice", "Notice itemises data collected and specific purposes", 10, ("A2", "A3")),
     ("P8", "Privacy Notice", "DPO or grievance officer contact published", 10, ("C1", "C2")),
     ("P9", "Privacy Notice", "Data Principal rights and how to exercise them", 10, ("C3", "C4", "A4")),
-    ("P10", "Forms & Security", "Forms collecting personal data have consent and a notice link, over HTTPS", 16, ("G1", "G2", "F1", "F2")),
+    ("P10", "Forms & Security", "Forms collecting personal data have consent and a notice link, over HTTPS", 8, ("G1", "G2", "F1", "F2")),
+    ("P11", "Forms & Security", "SSL certificate installed and valid for more than 90 days", 4, ()),
+    ("P12", "Forms & Security", "Secure TLS version (TLS 1.3 preferred, TLS 1.2 accepted)", 4, ()),
 )
+#: The rows that read the certificate and TLS record (scanner/tls_assessment.py) rather than the 24 detailed checks; their legal basis is that of the secure-serving check F1 (Act s.8(5), Rules r.6).
+TLS_ROWS = ("P11", "P12")
+#: A certificate with more than this many days left earns full marks; a valid one with this many or fewer earns half.
+SSL_FULL_DAYS = 90
 WEIGHT = {r[0]: r[3] for r in ROWS}
 assert sum(WEIGHT.values()) == 100 and all(w % 2 == 0 for w in WEIGHT.values())
 
@@ -59,7 +65,14 @@ PHRASES: dict[str, tuple[str, str, str, str, str]] = {
     "P7": ("The notice does not itemise the personal data collected, or does not state the purposes.", "A visitor cannot tell what is collected or why.", "List each category of personal data and the specific purpose for it.", "Privacy lead", "Low"),
     "P8": ("The business contact for privacy questions, or the grievance route with a response period, is not fully published.", "A visitor with a question or complaint needs a published way to ask.", "Publish a business contact (email or phone) and a grievance route with a response period of at most 90 days.", "Privacy lead", "Low"),
     "P9": ("The notice does not fully list the rights, how to exercise them, how to withdraw consent and how to complain to the Board.", "A right that cannot be exercised has little value to the visitor.", "List the rights and give a route for each, for withdrawing consent, and for complaining to the Board.", "Privacy lead", "Low"),
+    "P11": ("The site has no valid SSL certificate, or the certificate expires within 90 days.", "A missing, invalid or lapsing certificate lets browsers warn visitors away or lets data be read in transit.", "Install a trusted certificate for the exact host name and renew it well before it expires, ideally with automatic renewal.", "Engineering", "Low"),
+    "P12": ("The site does not offer TLS 1.3 (TLS 1.2 is accepted, TLS 1.1 or below is not).", "Older TLS versions have known weaknesses and are retired by browsers.", "Enable TLS 1.3 on the web server or CDN, keep TLS 1.2 as the fallback, and switch off TLS 1.1 and below.", "Engineering", "Low"),
     "P10": ("A form that collects personal data lacks a consent control or notice link, has a pre-ticked box, or is not served securely.", "Details are collected without telling the visitor why, or in the open.", "Add an unticked consent control or a notice link beside each form and serve every form over HTTPS.", "Website owner", "Medium"),
+}
+
+#: What is missing and the action when a row is only partly met, where that differs from the row's general phrase (id -> missing, action).
+PARTIAL_PHRASES: dict[str, tuple[str, str]] = {
+    "P5": ("The choice can be reopened, but withdrawing it did not stop the analytics or advertising activity.", "Make withdrawal take effect at once: update the consent state of the tags (for example Google consent mode) and hold analytics and advertising tags when consent is withdrawn."),
 }
 
 
@@ -94,14 +107,14 @@ def assess_scorecard(
     prereq_p1 = st("B1") == "not_met"                                                                              # tracking with no banner: the rows that depend on a banner are blocked by P1
     rows: list[dict[str, Any]] = []
 
-    def row(rid: str, outcome: str, found: str, subs: list[tuple[str, str, str]], blocked_by: str | None = None) -> None:
+    def row(rid: str, outcome: str, found: str, subs: list[tuple[str, str, str]], blocked_by: str | None = None, evidence_override: list[dict] | None = None) -> None:
         _, cat, name, marks, refs = next(r for r in ROWS if r[0] == rid)
-        ev_refs = [e for r in refs if internal[r]["state"] in ("earned", "partial", "not_met", "prerequisite") for e in internal[r]["evidence"]][:3]
+        ev_refs = evidence_override if evidence_override is not None else [e for r in refs if internal[r]["state"] in ("earned", "partial", "not_met", "prerequisite") for e in internal[r]["evidence"]][:3]
         if not ev_refs and blocked_by:
             ev_refs = next((x["evidence"] for x in rows if x["id"] == blocked_by), [])      # a blocked row rests on the evidence of the row that blocks it
         reason = "" if outcome in IN_PLAY else found
         provisions = []
-        for r in refs:
+        for r in (("F1",) if rid in TLS_ROWS else refs):
             for s in internal[r]["statutory"]:
                 if s["provision"] not in [p["provision"] for p in provisions]:
                     provisions.append(s)
@@ -110,7 +123,7 @@ def assess_scorecard(
             "awarded": marks if outcome == PASS else marks // 2 if outcome == PARTIAL else 0 if outcome == FAIL else None,
             "found": found if outcome in IN_PLAY else "", "reason": reason, "evidence": ev_refs, "blocked_by": blocked_by,
             "sub_checks": [{"id": i, "name": n, "result": r} for i, n, r in subs], "internal": list(refs), "statutory": provisions,
-            "limitation": next((internal[r]["limitation"] for r in refs if internal[r]["limitation"]), None),
+            "limitation": None if rid in TLS_ROWS else next((internal[r]["limitation"] for r in refs if internal[r]["limitation"]), None),
         })
 
     def unknown(*states: str) -> bool:
@@ -217,7 +230,7 @@ def assess_scorecard(
             row("P5", PARTIAL, "The choice can be reopened, but withdrawing it did not stop the activity" + (" on further pages." if st("B5") != "not_met" else "."), subs5)
         else:
             row("P5", PASS, internal["B5"]["found"], subs5)
-    banner_dependent("P5", "B5", p5, deep_only=True)
+    banner_dependent("P5", "B5", p5)
 
     # ── P6 notice reachable ──
     ln = signals.get("notice_link_signals") or {}
@@ -303,6 +316,48 @@ def assess_scorecard(
     else:
         row("P10", PASS, "Every form that collects personal details has a consent control or notice link, no consent box is pre-ticked, and the pages are served over HTTPS.", subs10)
 
+    # ── P11 SSL certificate and P12 TLS version (one verified handshake, scanner/tls_assessment.py; an observation not made is not assessed, never passed) ──
+    tls = signals.get("tls_signals") or {}
+    cert, tver = tls.get("certificate") or {}, tls.get("tls") or {}
+    host_page = f"https://{tls['host']}" if tls.get("host") else None
+
+    def tls_ev(text: str) -> list[dict]:
+        return [{"observed": text, "page": host_page, "at": scanned_at}]
+
+    cstatus, days, version = cert.get("status"), cert.get("days_remaining"), tver.get("version")
+    subs11 = [("P11.1", "A certificate is installed and trusted for the host", "not recorded" if cstatus in (None, "unreachable") else "met" if cstatus == "valid" else "not met"),
+              ("P11.2", f"More than {SSL_FULL_DAYS} days of validity remain", "met" if cstatus == "valid" and isinstance(days, int) and days > SSL_FULL_DAYS else "not met" if cstatus in ("valid", "expired", "invalid", "no_https") else "not recorded")]
+    if not tls or cstatus in (None, "unreachable"):
+        row("P11", NOT_ASSESSED, "The site's certificate was not checked in this scan." if not tls else "The certificate could not be checked: " + (cert.get("reason") or "the handshake did not complete") + ".", subs11)
+    elif cstatus == "valid" and isinstance(days, int):
+        issuer = f"; issuer {cert['issuer']}" if cert.get("issuer") else ""
+        text = f"SSL certificate valid; expires {cert.get('not_after')} ({days} day{'s' if days != 1 else ''} remaining){issuer}."
+        if days > SSL_FULL_DAYS:
+            row("P11", PASS, f"A valid SSL certificate is installed and has {days} days left.", subs11, evidence_override=tls_ev(text))
+        else:
+            row("P11", PARTIAL, f"A valid SSL certificate is installed but it expires in {days} day{'s' if days != 1 else ''} (within {SSL_FULL_DAYS} days).", subs11, evidence_override=tls_ev(text))
+    elif cstatus == "valid":
+        row("P11", NOT_ASSESSED, "The certificate was accepted but its expiry date could not be read.", subs11)
+    elif cstatus == "expired":
+        when = f" on {cert['not_after']}" if cert.get("not_after") else ""
+        row("P11", FAIL, f"The SSL certificate has expired{when}.", subs11, evidence_override=tls_ev(f"SSL certificate expired{when}."))
+    elif cstatus == "no_https":
+        row("P11", FAIL, "The site was reached over http and no SSL certificate is in use.", subs11, evidence_override=tls_ev("The site was served over http, with no SSL certificate."))
+    else:
+        row("P11", FAIL, "The SSL certificate is not valid for this site (" + (cert.get("reason") or "it is not trusted") + ").", subs11, evidence_override=tls_ev("SSL certificate not trusted: " + (cert.get("reason") or "not valid for the host") + "."))
+    subs12 = [("P12.1", "TLS 1.2 or higher is offered", "not recorded" if not version else "met" if version in ("1.2", "1.3") else "not met"),
+              ("P12.2", "TLS 1.3 is offered", "not recorded" if not version else "met" if version == "1.3" else "not met")]
+    if not tls or (not version and cstatus != "no_https"):
+        row("P12", NOT_ASSESSED, "The TLS version was not checked in this scan." if not tls else "The TLS version could not be determined: " + (tver.get("reason") or "the handshake did not complete") + ".", subs12)
+    elif cstatus == "no_https":
+        row("P12", FAIL, "The site was reached over http, so there is no TLS connection.", subs12, blocked_by="P11", evidence_override=tls_ev("The site was served over http, with no TLS connection."))
+    elif version == "1.3":
+        row("P12", PASS, "The server negotiates TLS 1.3.", subs12, evidence_override=tls_ev("TLS 1.3 detected."))
+    elif version == "1.2":
+        row("P12", PARTIAL, "The server negotiates TLS 1.2 but not TLS 1.3.", subs12, evidence_override=tls_ev("TLS 1.2 detected; TLS 1.3 not offered."))
+    else:
+        row("P12", FAIL, f"The best TLS version the server offers is {version}, which is retired.", subs12, evidence_override=tls_ev(f"Best TLS version offered: {version}."))
+
     return _result(base, rows, internal, mode, scan_day)
 
 
@@ -336,6 +391,8 @@ def _result(base: dict[str, Any], rows: list[dict[str, Any]], internal: dict[str
     findings = []
     for r in sorted((x for x in rows if x["outcome"] in (PARTIAL, FAIL)), key=lambda x: (-(x["marks"] - (x["awarded"] or 0)), x["id"])):
         miss, why, action, owner, effort = PHRASES[r["id"]]
+        if r["id"] in PARTIAL_PHRASES and r["outcome"] == PARTIAL:
+            miss, action = PARTIAL_PHRASES[r["id"]]          # the half-way case needs a different fix from the missing one
         lost = r["marks"] - (r["awarded"] or 0)
         severity = "High" if lost >= 10 else "Medium" if lost >= 5 else "Low"
         conf = {"high": "High", "medium": "Medium", "low": "Low"}[level]

@@ -1,15 +1,15 @@
-# The DPDP Website Readiness Scorecard (engine `scorecard-3.0.0`)
+# The DPDP Website Readiness Scorecard (engine `scorecard-3.2.3`)
 
 Source: `Task01/DPDP_Website_Readiness_Scorecard.xlsx`. Code: `backend/app/scoring/scorecard.py`. Tests: `backend/tests/test_scorecard.py`, `test_scorecard_evidence.py`. It is served by `GET /api/v1/consent/scans/{id}/assessment` (same path, same response fields) and is the default engine (`SCORING_ENGINE=scorecard`). Roll back with `SCORING_ENGINE=scanner` (the 24-check Scanner Score alone) or `ten_check`.
 
 ## What it is
-Ten rows, 100 marks, three categories. The 24 detailed checks of the Scanner Score stay inside as the detail behind each row ("Level 2"); nothing is detected twice. Every row has a written decision table below.
+Twelve rows, 100 marks, three categories (3.1.0 added P11 SSL certificate and P12 TLS version). The 24 detailed checks of the Scanner Score stay inside as the detail behind each row ("Level 2"); nothing is detected twice. Every row has a written decision table below.
 
 | Category | Rows | Marks |
 |---|---|---|
 | Cookie Consent | P1 banner 8, P2 Accept and Reject 8, P3 nothing before a choice 12, P4 Reject blocks 12, P5 withdrawal 8 | 48 |
 | Privacy Notice | P6 notice reachable 6, P7 data and purposes 10, P8 contact and grievance 10, P9 rights and routes 10 | 36 |
-| Forms & Security | P10 forms, consent, HTTPS 16 | 16 |
+| Forms & Security | P10 forms, consent, HTTPS 8, P11 SSL certificate 4, P12 TLS version 4 | 16 |
 
 Outcomes per row: **pass** (full marks), **partial** (half; every weight is even), **fail** (0), **not assessed** (left out of the denominator: it applies but could not be run), **not applicable** (left out: it does not apply). The workbook has four outcomes; the fifth keeps a check we could not run from being scored as a failure (Scope L-03, GR-18).
 Score = marks awarded / marks in play x 100, a whole number. Bands: 90 and over **Substantially addressed**, 75 to 89 **Largely addressed**, 50 to 74 **Partially addressed**, under 50 **Needs attention** (the workbook's thresholds, with neutral names). Fewer than 60% of the marks assessable: **Insufficient evidence** and no score. Low evidence confidence lowers the band one level. A Quick Scan is held at 99; 100 needs a Deep Scan at full coverage and high confidence. **There is no hard-fail cap.**
@@ -21,12 +21,16 @@ Score = marks awarded / marks in play x 100, a whole number. Bands: 90 and over 
 | P2 Accept and Reject | Reject on the first layer, comparable to Accept | Reject exists but is less prominent (rules below) | No reject control | N/A with P1. Blocked rows below. Not assessed if undetermined |
 | P3 nothing before a choice | 0 analytics or advertising cookies or requests, and no tracking identifier in browser storage | Only consent-denied pings, or a tracking identifier in storage | Analytics or advertising before any choice | Not assessed if the pre-consent state was not observed |
 | P4 Reject blocks | 0 after Reject, held on the further pages tested | Consent-denied pings only, or activity on a further page | Activity still observed after Reject | Not assessed if Reject could not be clicked and confirmed |
-| P5 withdrawal | Reopened, withdrawn, nothing followed (and held on further pages) | Reopened, but activity continued, here or on a further page | No way to reopen the choice | **Not assessed in a Quick Scan** (Deep only), and when the test stopped short. N/A with P1 |
+| P5 withdrawal | Reopened, withdrawn, nothing followed (and held on further pages) | Reopened, but activity continued, here or on a further page | No way to reopen the choice | **Tested on every scan, Quick or Deep** (from 3.2.0). Not assessed when the test stopped short (no reopen control reached, fewer than two further pages). N/A with P1 |
 | P6 notice reachable | Found, loads, linked from every page read, enough text | Not linked from every page read, or under 1,500 characters | No notice found | Not assessed if the notice page could not be read |
 | P7 data and purposes | Data itemised and purposes stated | One of the two (partly) | Neither | Not assessed if the notice could not be read. Fail, blocked by P6, if there is no notice |
 | P8 contact and grievance | A business contact for privacy questions, and a grievance route with a response period | Only part (named in the finding) | Neither | As P7 |
 | P9 rights and routes | Rights listed, with routes to exercise them, to withdraw consent, to complain to the Board, and nomination | Rights listed, a route or the nomination right missing | No rights, no way to exercise them | As P7 |
 | P10 forms and security | Every personal-data form has a consent control or notice link, none pre-ticked, pages and forms served over HTTPS, no insecure content on form pages | Some forms lack consent or a link, a pre-ticked box, an http page, a cross-organisation destination, or insecure content on a form page | A form submits over http, or no form has consent or a notice link | **N/A when there is no form that collects personal details** |
+| P11 SSL certificate | A certificate trusted for the host with **more than 90 days** left | Valid, with 90 days or fewer left | No certificate (served over http), expired, or not trusted for the host | **Not assessed** when the handshake could not be made (timeout, DNS, refused) and in scans made before 3.1.0 |
+| P12 TLS version | Best version the server negotiates is **TLS 1.3** | **TLS 1.2** | **TLS 1.1 or below**; served over http (blocked by P11) | **Not assessed** when the version could not be determined |
+
+P11 and P12 come from one verified TLS handshake to the site's address after the crawl (`scanner/tls_assessment.py`, stored as `tls_signals`): no request is sent and no page is read; only public certificate facts (expiry date, issuer, days remaining) and the negotiated version are kept. P12 scores the best version the server offers; a server that also still accepts an older version is not penalised here (that is not asked). An expired or untrusted certificate does not hide the TLS version, so P12 is still scored. Evidence shown in the report: status, expiry date, days remaining, issuer, TLS version. Weights: P10 went from 16 to 8 and the two new rows take 4 each, so Forms & Security stays 16 marks, nothing else moved, and the total stays 100 (every weight stays even, so a half mark is a whole number). **This redistribution is a change to the scoring rules and needs the named legal/product sign-off (GR-24).** Turn the check off with `SCANNER_TLS_ASSESSMENT=false`.
 
 Where a row depends on an artefact the site lacks (no banner but tracking observed; no notice), the dependent rows are **fail, blocked by P1 or P6**, and the finding for P1 or P6 names them as its consequences (Scoring Mechanism SC-05, SC-16; Scope L-05). One missing banner therefore costs P1 to P5, which is the workbook's own rubric read literally. Say if you want a different treatment.
 
@@ -47,3 +51,9 @@ Not built: **P4.4** (pre-existing trackers cleared after Reject). It needs Rejec
 - A scan made before the new evidence existed shows those sub-checks as "not recorded", and they never lower a row.
 - Requests and storage key names are observed; cookies after withdrawal are not classified (the scanner does not hold the lookup table).
 - The legal references of every row come from `scoring/legal_map.py` (each checked against the PDF). They have not had the named legal review GR-24 requires.
+
+## Change log
+- **3.2.0 (6 Nov 2026):** the withdrawal test (P5; internal checks B5 and B6) now runs on every scan, Quick or Deep, so P5 is scored in a Quick Scan too. A Quick Scan therefore reaches 75 of the 100 marks of the Scanner Score's matrix (it was 70), and itemises 25 as Deep Scan only (it was 30). The cost is one more fresh browser session per scan (the withdrawal test: Accept, reopen the choice, withdraw, then two further pages), about 20 to 40 seconds more. The purposes test and Reject on further pages (P4.3) remain Deep Scan only. Engine detail version 2.2.0.
+- **3.1.0 / 3.1.1 (6 Nov 2026):** P11 SSL certificate and P12 TLS version added; P10 went from 16 to 8 marks.
+- **3.2.2 (6 Nov 2026):** the withdrawal test found no reopen control on swaransoft.com and scored P5 as failed, which was wrong: the site has one (an icon in a shadow root at the end of a long page, labelled only "Cookie Preferences"). Only the first 120 clickable elements were read, so it was never reached, and the search took minutes. It is now found in one pass over the page, shadow roots included (the scan took 215 s with the defect and about 40 s without). The scoring rules are unchanged. The corrected result for swaransoft.com is P5 partial: after "Revoke All" one Google Analytics hit with the consent state still "granted" (`gcs=G111`) was sent about 0.5 to 1.8 s later (a timer-driven engagement hit), and nothing was sent on two further pages. A grace period longer than 0.5 s was tried and withdrawn: the delay varies, so it would have been a tuning to the site, not a rule.
+- **3.2.3 (6 Nov 2026):** wording only: when P5 is partly met (the choice can be reopened but withdrawing it did not stop the activity) the finding and the recommendation say that, instead of the general "add a settings control". No scoring change.

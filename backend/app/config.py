@@ -136,6 +136,8 @@ class Settings(BaseSettings):
 
     # Scanner
     scanner_headless: bool = True
+    # The certificate and TLS version check of the scanned site (scorecard rows P11, P12): one verified handshake, no request. Off only in tests, which must not open network connections.
+    scanner_tls_assessment: bool = True
     # Pages FETCHED in the pre_consent crawl. Robots-disallowed and duplicate-spelling
     # URLs do not spend it (crawler._crawl_full_site).
     # Fallback page limit for code that calls the crawler WITHOUT a scan profile. Console, scheduled

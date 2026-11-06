@@ -40,7 +40,7 @@ from app.scoring.ten_checks import (
     sharing_names_recipients,
 )
 
-SCORE_VERSION = "2.1.4"
+SCORE_VERSION = "2.2.2"
 RULES = {"scoring_rules": SCORE_VERSION, "check_list": "2026.11.1", "classification_scheme": "2026.11.1", "statutory_mapping": "2026.10.1"}
 
 #: Every score is out of 100, whatever the scan type. A Quick Scan cannot assess every parameter; those it cannot reach are left out and the rest are redistributed (SC-14), exactly as for any
@@ -62,8 +62,8 @@ PARAMETERS: tuple[tuple[str, str, str, int, str], ...] = (
     ("B2", "B", "Nothing non-essential runs before a choice is made", 7, "both"),
     ("B3", "B", "Reject is offered as easily as Accept", 5, "both"),
     ("B4", "B", "Reject is honoured", 5, "both"),
-    ("B5", "B", "Consent can be withdrawn, and withdrawal is honoured", 3, "deep"),
-    ("B6", "B", "Withdrawal persists across pages", 2, "deep"),
+    ("B5", "B", "Consent can be withdrawn, and withdrawal is honoured", 3, "both"),
+    ("B6", "B", "Withdrawal persists across pages", 2, "both"),
     ("C1", "C", "Contact for privacy questions published", 6, "both"),
     ("C2", "C", "Grievance mechanism published", 6, "both"),
     ("C3", "C", "Rights and how to exercise them published", 6, "both"),

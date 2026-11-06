@@ -68,3 +68,5 @@ Limits: requests only (cookies are not read); a preferences control the scan can
 
 ## The scorecard is now the default engine (5 Nov 2026)
 `SCORING_ENGINE` now defaults to `scorecard`: the ten-row DPDP Website Readiness Scorecard (`docs/SCORECARD.md`) over the 24 checks described above, which stay as its detail. `scanner` (this document's engine alone) and `ten_check` remain available for rollback. The report cache is keyed by `scorecard-3.0.0`.
+- 2.2.0 (6 Nov 2026): B5 and B6 (withdrawal, and that it persists) are assessed on every scan, not only a Deep Scan: a Quick Scan now reaches 75 of the 100 points and itemises 25 as Deep Scan only (it was 70 and 30). Everything else unchanged.
+- 2.2.2 (6 Nov 2026): the reopen control of the withdrawal test is found in one pass over the page, shadow roots included (it was missed beyond the first 120 elements, and the search took minutes). No scoring rule changed. See docs/SCORECARD.md, 3.2.2.

@@ -35,9 +35,9 @@ def test_quick_scan_lists_every_parameter_and_marks_the_ones_it_cannot_reach_as_
     r = svc.assess_parts(ev, pol, _meta(), HOME, mode="quick", engine="scanner")
     assert len(r["checks"]) == 24
     beyond = [c for c in r["checks"] if c["marks_text"] == "Deep Scan only"]
-    assert {c["ref"] for c in beyond} == {"A5", "B5", "B6", "C4", "D1", "D2", "E1", "E2", "E3", "F2", "G2"}
+    assert {c["ref"] for c in beyond} == {"A5", "C4", "D1", "D2", "E1", "E2", "E3", "F2", "G2"}
     assert all(c["result"] == "Not Assessed" and c["awarded"] is None and c["max"] is None and "Deep Scan" in c["explanation"] for c in beyond)
-    assert sum(x["points"] for x in r["scanner"]["beyond_quick_scan"]) == 30
+    assert sum(x["points"] for x in r["scanner"]["beyond_quick_scan"]) == 25
     assert any("Run a Deep Scan" in x["text"] for x in r["recommendations"]) and not any("A Quick Scan assesses" in x for x in r["limitations"])
     assert r["score"] == svc.assess_parts(ev, pol, _meta(), HOME, mode="quick", engine="scanner")["score"]      # listing them changes no mark
 
@@ -136,7 +136,7 @@ def test_check_numbers_run_without_gaps_with_the_reachable_parameters_first_and_
     ev, pol = _parts()
     r = svc.assess_parts(ev, pol, _meta(), HOME, mode="quick", engine="scanner")
     assert [c["id"] for c in r["checks"]] == list(range(1, 25))
-    assert [c["ref"] for c in r["checks"][:13]] == ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "C1", "C2", "C3", "F1", "G1"]
-    assert all(c["marks_text"] == "Deep Scan only" for c in r["checks"][13:])
-    assert r["counts"]["beyond_scan_type"] == 11 and r["counts"]["not_assessed"] == 0              # "could not be assessed" is for what the scan tried and could not do
+    assert [c["ref"] for c in r["checks"][:15]] == ["A1", "A2", "A3", "A4", "B1", "B2", "B3", "B4", "B5", "B6", "C1", "C2", "C3", "F1", "G1"]
+    assert all(c["marks_text"] == "Deep Scan only" for c in r["checks"][15:])
+    assert r["counts"]["beyond_scan_type"] == 9 and r["counts"]["not_assessed"] == 0              # "could not be assessed" is for what the scan tried and could not do
     assert r["incomplete"] == 0 and sum(r["counts"].values()) == 24

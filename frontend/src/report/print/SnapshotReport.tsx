@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ReportModel } from "../buildReport";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
 import { buildSummaryReport, SIGNUP_URL, type SummaryView } from "../summaryReport";
@@ -8,6 +8,7 @@ import { BigRing, Icon, Pill, SheetPageStyle, type IconName } from "./PageParts"
 import "./pages.css";
 import "./snapshot.css";
 import "./snapshot-v2.css";
+import "./snapshot-polish.css";
 
 /** The two-page "Website Privacy Readiness Report" (variant "summary"), laid out as the approved reference: page 1 is the website overview, page 2 the detailed findings. */
 export const SNAPSHOT_COOKIES = 5;
@@ -164,50 +165,74 @@ function Page1({ s, ten, model, fit, squeeze }: { s: SummaryView; ten: TenAssess
           </div>
         </div>
 
-        <div className="sn-hero">
-          <div className="sn-card sn-score" data-testid="sn-score">
-            <b className="sn-card-t">Privacy Readiness Score</b>
-            <div className="pg-score-ring"><BigRing percent={ten.score} label={ten.score === null ? "" : ringNumber(ten.scoreText)} id="snapshot" /></div>
-            {ten.scanner && <span className="sn-band" data-testid="sn-band">{ten.scanner.band}</span>}
-          </div>
-          <div className="sn-card sn-banner" data-testid="sn-banner">
-            <div className="sn-card-head"><b><Icon name="shield" size={17} />Consent Banner</b></div>
-            {el("Consent banner") && <div className="sn-status" data-tone={el("Consent banner")!.tone} data-testid="sn-banner-status">{el("Consent banner")!.label === "Found" ? "Detected" : el("Consent banner")!.label}</div>}
-            {bannerFacts(model).length > 0 && (
-              <dl className="sn-facts" data-testid="sn-banner-facts">
-                {bannerFacts(model).map((f) => <div key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}
-              </dl>
-            )}
-            {bannerFacts(model).length === 0 && !el("Consent banner") && <p className="sn-muted" data-testid="sn-banner-none">No consent banner evidence was recorded for this scan.</p>}
-            <div className="sn-opts">
-              {["Accept option", "Reject option"].map((k) => el(k) && <span key={k}><b>{k}</b><Pill s={{ label: el(k)!.label, tone: el(k)!.tone }} /></span>)}
+        {/* Page 1, executive overview: the result (score with its three category totals, then the six privacy elements) on the left; the evidence (the homepage as the scanner saw it, then the consent banner) on the right. */}
+        <div className="sn-hero2">
+          <div className="sn-h2-main">
+            <div className="sn-card sn-score" data-testid="sn-score">
+              <div className="sn-score-head">
+                <b className="sn-card-t">Privacy Readiness Score</b>
+                <div className="pg-score-ring"><BigRing percent={ten.score} label={ten.score === null ? "" : ringNumber(ten.scoreText)} id="snapshot" /></div>
+                {ten.scanner && <span className="sn-band" data-testid="sn-band">{ten.scanner.band}</span>}
+              </div>
+              {cats.length > 0 && (
+                <div className="sn-cats" data-testid="sn-categories">
+                  {cats.map((c) => {
+                    const pct = c.assessable > 0 ? Math.round((100 * c.awarded) / c.assessable) : 0;
+                    return (
+                      <div key={c.category} className="sn-cat" data-testid="sn-category">
+                        <div className="sn-cat-top"><b>{c.category}</b><span>{c.assessable > 0 ? <><strong>{c.awarded}</strong> of {c.assessable} marks</> : "Not assessed"}</span></div>
+                        <div className="sn-meter" role="img" aria-label={`${c.category}: ${pct} percent of the assessable marks`}><i style={{ width: `${pct}%` }} /></div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          <div className="sn-card sn-elements" data-testid="sn-elements">
+            <div className="sn-card-head"><b><Icon name="doc" size={17} />Website Privacy Elements</b><em>{foundCount} of {ELEMENT_ORDER.length} found</em></div>
+            <div className="sn-els">
+              {ELEMENT_ORDER.map((d) => {
+                const state = elState(el(d.key)?.label);
+                return (
+                  <div key={d.key} className="sn-el" data-state={state} data-testid="sn-element">
+                    <span className="sn-el-st" aria-hidden="true"><Icon name={state === "found" ? "check" : state === "missing" ? "cross" : "info"} size={13} /></span>
+                    <Icon name={d.icon} size={20} className="sn-el-icon" />
+                    <b>{d.label}</b>
+                    <span className="sn-el-word">{EL_WORD[state]}</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
-          <figure className="sn-card sn-shot" data-testid="pg-hero-preview">
-            {preview.src ? (
-              <>
-                <div className="sn-browser"><i /><i /><i /><span>{address}</span></div>
-                <img className="sn-shot-img" src={preview.src} alt={`Homepage of ${preview.domain} as the scanner saw it`} data-testid="pg-hero-screenshot" />
-              </>
-            ) : (
-              <div className="pg-shot-missing" data-testid="pg-hero-missing"><b>Homepage preview not available</b><span>{preview.unavailable}</span></div>
-            )}
-          </figure>
-        </div>
-
-        {cats.length > 0 && (
-          <div className="sn-cats" data-testid="sn-categories">
-            {cats.map((c) => {
-              const pct = c.assessable > 0 ? Math.round((100 * c.awarded) / c.assessable) : 0;
-              return (
-                <div key={c.category} className="sn-cat" data-testid="sn-category">
-                  <div className="sn-cat-top"><b>{c.category}</b><span>{c.assessable > 0 ? <><strong>{c.awarded}</strong> of {c.assessable} marks</> : "Not assessed"}</span></div>
-                  <div className="sn-meter" role="img" aria-label={`${c.category}: ${pct} percent of the assessable marks`}><i style={{ width: `${pct}%` }} /></div>
-                </div>
-              );
-            })}
           </div>
-        )}
+          <div className="sn-h2-side">
+            <figure className="sn-card sn-shot" data-testid="pg-hero-preview">
+              {preview.src ? (
+                <>
+                  <div className="sn-browser"><i /><i /><i /><span>{address}</span></div>
+                  <img className="sn-shot-img" src={preview.src} alt={`Homepage of ${preview.domain} as the scanner saw it`} data-testid="pg-hero-screenshot" />
+                </>
+              ) : (
+                <div className="pg-shot-missing" data-testid="pg-hero-missing"><b>Homepage preview not available</b><span>{preview.unavailable}</span></div>
+              )}
+            </figure>
+            <div className="sn-card sn-banner" data-testid="sn-banner">
+              <div className="sn-card-head">
+                <b><Icon name="shield" size={17} />Consent Banner</b>
+                {el("Consent banner") && <div className="sn-status" data-tone={el("Consent banner")!.tone} data-testid="sn-banner-status">{el("Consent banner")!.label === "Found" ? "Detected" : el("Consent banner")!.label}</div>}
+              </div>
+              {bannerFacts(model).length > 0 && (
+                <dl className="sn-facts" data-testid="sn-banner-facts">
+                  {bannerFacts(model).map((f) => <div key={f.label}><dt>{f.label}</dt><dd>{f.value}</dd></div>)}
+                </dl>
+              )}
+              {bannerFacts(model).length === 0 && !el("Consent banner") && <p className="sn-muted" data-testid="sn-banner-none">No consent banner evidence was recorded for this scan.</p>}
+              <div className="sn-opts">
+                {["Accept option", "Reject option"].map((k) => el(k) && <span key={k}><b>{k}</b><Pill s={{ label: el(k)!.label, tone: el(k)!.tone }} /></span>)}
+              </div>
+            </div>
+          </div>
+        </div>
 
         <div className="sn-contacts" data-testid="sn-contacts">
           {officers(s).map((o) => (
@@ -220,23 +245,6 @@ function Page1({ s, ten, model, fit, squeeze }: { s: SummaryView; ten: TenAssess
               </div>
             </div>
           ))}
-        </div>
-
-        <div className="sn-card sn-elements" data-testid="sn-elements">
-          <div className="sn-card-head"><b><Icon name="doc" size={17} />Website Privacy Elements</b><em>{foundCount} of {ELEMENT_ORDER.length} found</em></div>
-          <div className="sn-els">
-            {ELEMENT_ORDER.map((d) => {
-              const state = elState(el(d.key)?.label);
-              return (
-                <div key={d.key} className="sn-el" data-state={state} data-testid="sn-element">
-                  <span className="sn-el-st" aria-hidden="true"><Icon name={state === "found" ? "check" : state === "missing" ? "cross" : "info"} size={13} /></span>
-                  <Icon name={d.icon} size={20} className="sn-el-icon" />
-                  <b>{d.label}</b>
-                  <span className="sn-el-word">{EL_WORD[state]}</span>
-                </div>
-              );
-            })}
-          </div>
         </div>
 
         <div className="sn-dpdp" data-testid="sn-framework">
@@ -419,6 +427,13 @@ export function SnapshotReport({ model }: { model: ReportModel }) {
   const [fit, setFit] = useState<[number, number]>([0, 0]);
   // The last resort once every tightening step is used: scale the panel down by the amount it is over, so the report stays two pages (never below 80%).
   const [squeeze, setSqueeze] = useState<[number, number]>([1, 1]);
+  // The report's typeface loads after the first layout. Measure again once it has, so that the two-page fit is decided with the real letter widths.
+  const [, setFontsReady] = useState(false);
+  useEffect(() => {
+    let live = true;
+    document.fonts?.ready.then(() => { if (live) setFontsReady(true); });
+    return () => { live = false; };
+  }, []);
   useLayoutEffect(() => {
     const sheets = doc.current?.querySelectorAll("section.pg");
     if (!sheets) return;

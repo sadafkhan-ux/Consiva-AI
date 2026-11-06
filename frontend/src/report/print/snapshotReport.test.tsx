@@ -196,11 +196,12 @@ describe("the two-page report (variant summary)", () => {
     expect(p2.getByTestId("sn-total-marks")).toHaveTextContent(ten.totalText);
   });
 
-  it("the consent banner sits in the left column under the score, with a prominent status and only what was detected", () => {
+  it("page 1 puts the result on the left (score with its three category totals, then the six elements) and the evidence on the right (the homepage, then a compact consent banner)", () => {
     render(<SnapshotReport model={model()} />);
-    const hero = document.querySelector(".sn-hero")!;
-    const kids = [...hero.children].map((e) => e.getAttribute("data-testid"));
-    expect(kids).toEqual(["sn-score", "sn-banner", "pg-hero-preview"]);                                              // score, banner, then the homepage
+    const hero = document.querySelector(".sn-hero2")!;
+    const [main, side] = [...hero.children];
+    expect([...main.children].map((e) => e.getAttribute("data-testid"))).toEqual(["sn-score", "sn-elements"]);       // the score first, then the six privacy elements
+    expect([...side.children].map((e) => e.getAttribute("data-testid"))).toEqual(["pg-hero-preview", "sn-banner"]);   // the homepage, then the banner
     expect(within(screen.getByTestId("sn-banner")).getByTestId("sn-banner-status")).toHaveTextContent("Detected");
     expect(screen.getByTestId("sn-banner-facts")).toHaveTextContent("Consent management platform");
   });

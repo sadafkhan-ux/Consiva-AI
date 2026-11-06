@@ -33,11 +33,11 @@ if (state() === 'accepted') beacon();
 FOOTER = '<footer><button id="s" onclick="reopen()">Cookie settings</button></footer>'
 
 
-def _page(mode: str, title: str, reopen: bool = True) -> str:
-    return PAGE.format(title=title, mode=mode, beacon=BEACON, footer=FOOTER if reopen else "<footer><a href='/privacy'>Privacy</a></footer>", banner_hidden="")
+def _page(mode: str, title: str, reopen: bool = True, footer: str | None = None) -> str:
+    return PAGE.format(title=title, mode=mode, beacon=BEACON, footer=footer if footer is not None else (FOOTER if reopen else "<footer><a href='/privacy'>Privacy</a></footer>"), banner_hidden="")
 
 
-async def _run(mode: str, reopen: bool = True) -> dict:
+async def _run(mode: str, reopen: bool = True, footer: str | None = None) -> dict:
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         context = await browser.new_context()
@@ -49,7 +49,7 @@ async def _run(mode: str, reopen: bool = True) -> dict:
             if url.startswith("https://site.test/"):
                 path = url.removeprefix("https://site.test")
                 title = {"/": "Home", "/a": "Page A", "/b": "Page B"}.get(path.split("?")[0], "Other")
-                return await route.fulfill(status=200, content_type="text/html", body=_page(mode, title, reopen))
+                return await route.fulfill(status=200, content_type="text/html", body=_page(mode, title, reopen, footer))
             return await route.abort()
 
         await context.route("**/*", handle)
@@ -115,3 +115,24 @@ def test_the_browser_reports_a_box_a_script_ticked_which_the_markup_does_not_sho
     assert "checked" not in markup.split("<script>")[0]            # the markup alone would have said it was not ticked
     box = parse_page(markup, "https://x.test/", states).forms[0].fields
     assert [f.checked for f in box] == [None, True, False]
+
+
+# A long page, and a consent tool whose only way back is an icon (no words on it, only an aria-label) drawn in a shadow root at the very end of the page. Before the fix the test looked at the first 120
+# clickable elements only, never reached it, and called the site one with "no way to reopen the choice" (a false finding, seen on a real site) and took minutes doing so.
+SHADOW_ICON = (
+    "<div>" + "".join(f'<a href="/p{i}">Link {i}</a> ' for i in range(300)) + "</div>"
+    '<div id="host"></div><script>'
+    "const root = document.getElementById('host').attachShadow({mode: 'open'});"
+    "root.innerHTML = '<button class=\"x-icon\" aria-label=\"Cookie Preferences\" title=\"Cookie Preferences\" style=\"position:fixed;left:20px;bottom:20px;width:44px;height:44px\"></button>';"
+    "root.querySelector('button').addEventListener('click', () => reopen());"
+    "</script>"
+)
+
+
+def test_an_icon_only_reopen_control_in_a_shadow_root_at_the_end_of_a_long_page_is_found():
+    import time
+    start = time.monotonic()
+    r = run_with_browser(lambda: _run("honours", footer=SHADOW_ICON))
+    assert r["tested"] is True and r["reason"] is None, r
+    assert "cookie preferences" in r["reopen_control"].lower() and r["after_withdrawal"] == []
+    assert time.monotonic() - start < 40, "one pass over the page, not a browser call per element"

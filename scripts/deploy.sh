@@ -53,6 +53,18 @@ rm -f /tmp/consiva-compose-check.$$
 echo "compose file valid; required settings present"
 
 # ── 2. Build, migrate, start, wait ──────────────────────────────────────────────
+# `migrate` is a one-shot container that Compose recreates on every deploy: it renames the old one to <hash>_consiva-migrate-1, creates the new one, then deletes the old. If that is interrupted
+# (a cancelled build, Docker restarting) or two `up` commands overlap, the renamed leftover blocks the name and the next deploy fails with
+#   Conflict. The container name "/<hash>_consiva-migrate-1" is already in use
+# A finished or dead one-shot holds nothing (migrations are recorded in the database), so any `migrate` container that is NOT running is removed first. A running one (a migration in progress)
+# is never touched. Matched by Compose's own labels, so the renamed ones are found too.
+STALE_MIGRATE="$(docker ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME:-consiva}" --filter "label=com.docker.compose.service=migrate" --filter status=exited --filter status=created --filter status=dead 2>/dev/null || true)"
+if [ -n "$STALE_MIGRATE" ]; then
+  say "Removing finished 'migrate' container(s) left by an earlier deploy (not running; holds no data)"
+  # shellcheck disable=SC2086
+  docker rm -f $STALE_MIGRATE >/dev/null
+fi
+
 say "Building, migrating and starting (this applies any pending migrations automatically)"
 if ! compose up -d --build --remove-orphans --wait --wait-timeout "$WAIT_TIMEOUT"; then
   say "DEPLOYMENT FAILED -- service status"
