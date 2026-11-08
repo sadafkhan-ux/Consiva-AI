@@ -70,17 +70,6 @@ class AgentRunAlreadyInProgressError(ConsivaError):
     status_code = 409
 
 
-class DiscoveryAlreadyInProgressError(ConsivaError):
-    """Raised when discovery is requested for a source that already has a run in
-    flight. The ROPA counterpart to AgentRunAlreadyInProgressError above, and for the
-    same reason: a double-click or a client retry used to start a second independent
-    run against the customer's database, doubling the read load on a production system
-    Consiva is a guest in. A live sweep fired eight identical requests and got eight
-    runs."""
-
-    status_code = 409
-
-
 class FindingAlreadyDecidedError(ConsivaError):
     """Raised when approve/reject/edit targets a finding that is no longer "pending"
     -- either a stale UI showing an already-decided finding, or two reviewers racing
@@ -119,14 +108,6 @@ class InvalidActionTransitionError(ConsivaError):
     unapproved finding)."""
 
     status_code = 409
-
-
-class InvalidSourceRequestError(ConsivaError):
-    """Raised when a source-assessment request names an unsupported connector, or omits
-    the field that connector requires (a DSN for postgres, content for csv, a spec URL
-    for rest) -- a malformed request from the caller, not a server failure."""
-
-    status_code = 422
 
 
 class InvalidEditError(ConsivaError):

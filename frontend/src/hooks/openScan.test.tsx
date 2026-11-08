@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   listScans: vi.fn(), createScan: vi.fn(), getScan: vi.fn(), getStages: vi.fn(), getEvidence: vi.fn(),
-  getDpdpScore: vi.fn(), analyze: vi.fn(), getFindings: vi.fn(), getAudit: vi.fn(), getPolicyAnalysis: vi.fn(), getScreenshot: vi.fn(),
+  getDpdpScore: vi.fn(), getScore: vi.fn(), analyze: vi.fn(), getFindings: vi.fn(), getAudit: vi.fn(), getPolicyAnalysis: vi.fn(), getScreenshot: vi.fn(),
 }));
 vi.mock("../api/client", () => ({ api }));
 
@@ -22,6 +22,7 @@ beforeEach(() => {
   api.getAudit.mockResolvedValue([]);
   api.getEvidence.mockResolvedValue(null);
   api.getDpdpScore.mockResolvedValue(null);
+  api.getScore.mockResolvedValue(null);
   api.getPolicyAnalysis.mockResolvedValue(null);
   api.getScreenshot.mockResolvedValue(null);
 });

@@ -4,7 +4,7 @@ import type { DpdpScoreResponse, ScanEvidenceResponse, ScanScreenshot, WebsiteSc
 import fixtures from "../../test/dpdpScoreFixtures.json";
 import { buildReportModel } from "../buildReport";
 import { buildScoreView } from "../dpdpScore";
-import { buildTenChecks } from "../tenChecks";
+import { TEN } from "../../test/score";
 import { buildPageReport, FREE_PAGES, FULL_PAGES, reportIdFor } from "../pageReports";
 import { ctaKeyFor, resolveCta } from "../reportCta";
 import { FreeReport } from "./FreeReport";
@@ -31,7 +31,7 @@ const EVIDENCE = {
 } as unknown as ScanEvidenceResponse;
 const SHOT: ScanScreenshot = { scan_id: "9bd5ccef-6909-4903-8d44-2b52a5668a06", domain: "x.test", status: "ok", available: true, message: null, page_url: "https://x.test/", mime: "image/jpeg", width: 1280, height: 720, captured_at: "2026-10-22T20:08:00Z", data: "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/" };
 const model = (o: { score?: keyof typeof F | null; shot?: ScanScreenshot | null; meta?: WebsiteScanMetadata; evidence?: ScanEvidenceResponse | null } = {}) =>
-  buildReportModel(SCAN, [], o.meta ?? META, [], [], o.score === null ? null : buildScoreView(F[o.score ?? "mixed"]), o.evidence === undefined ? EVIDENCE : o.evidence, null, null, o.shot === undefined ? SHOT : o.shot);
+  buildReportModel(SCAN, [], o.meta ?? META, [], [], o.score === null ? null : buildScoreView(F[o.score ?? "mixed"]), o.evidence === undefined ? EVIDENCE : o.evidence, null, null, o.shot === undefined ? SHOT : o.shot, null, TEN);
 
 afterEach(cleanup);
 
@@ -143,7 +143,7 @@ describe("the Free Scan report", () => {
   it("prints the 10-check Privacy Readiness Score even when the weighted score is withheld, and asks to complete the assessment", () => {
     const m = model({ score: "insufficient" });
     render(<FreeReport model={m} />);
-    expect(screen.getByTestId("pg-percent-free").textContent).toBe(String(buildTenChecks(m).score));
+    expect(screen.getByTestId("pg-percent-free").textContent).toBe(String(m.tenChecks.score));
     expect(screen.getByTestId("pg-score-free")).toHaveAttribute("data-source", "ten-checks");
     expect(screen.getByTestId("pg-cta")).toHaveAttribute("data-cta", "complete");
   });

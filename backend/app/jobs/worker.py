@@ -10,8 +10,7 @@ child process on Windows -- so N scans in one event loop really do overlap.
 Two independent loops run here, and keeping them apart is the point:
 
   * the job pump claims work and runs it in up to N slots;
-  * the maintenance loop reaps stale jobs, dispatches due monitoring schedules and
-    runs the two SLA sweeps.
+  * the maintenance loop reaps stale jobs and dispatches due monitoring schedules.
 
 These used to be one loop, with the job processed inline. That meant a long job
 blocked every periodic duty for its whole duration -- including reap_stale_jobs, the
@@ -36,7 +35,7 @@ from dotenv import load_dotenv
 # Must also run before app.db.session is imported, because that module builds the
 # engine at import time.
 #
-# The worker is deliberately CROSS-TENANT: the SLA sweeps walk every organisation's
+# The worker is deliberately CROSS-TENANT: stale-job reaping walks every organisation's
 # rows and the monitoring dispatcher walks every schedule, and there is no single
 # org_id to scope them to. Once the API moves to the least-privilege role that
 # migration 0018 creates, row-level security would correctly show this process
@@ -64,24 +63,15 @@ if os.getenv("WORKER_DATABASE_URL"):
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from app.agents.breach.services import sla_service as incident_sla_service
-from app.agents.dsr.services import sla_service as dsr_sla_service
-from app.agents.regwatch.services import action_sla_service as regwatch_action_sla_service
 from app.config import get_settings
 from app.db.models import AgentJob
-from app.db.repositories import ropa_repository
 from app.db.session import async_session_factory
 from app.jobs import capacity, queue
 from app.services import (
     analysis_service,
     consent_api_chain_service,
-    dsr_run_service,
-    incident_run_service,
-    purpose_run_service,
     monitoring_service,
-    regwatch_run_service,
     report_cache_service,
-    ropa_run_service,
     scan_service,
 )
 
@@ -94,9 +84,9 @@ logger = logging.getLogger(__name__)
 # the database two trivially cheap indexed SELECTs per second per idle worker (status, run_after index).
 POLL_INTERVAL_SECONDS = 0.5
 # The maintenance loop's own cadence, now that it no longer shares the job loop. 2s was
-# never a requirement of the work -- a DSR deadline is measured in days and a monitoring
-# interval in hours -- it was just whatever the job poll happened to be. 30s also keeps
-# three cross-tenant queries off the database 15x less often, which matters more now
+# never a requirement of the work -- a monitoring interval is measured in hours --
+# it was just whatever the job poll happened to be. 30s also keeps the
+# cross-tenant queries off the database 15x less often, which matters more now
 # that several workers may each be running them.
 MAINTENANCE_INTERVAL_SECONDS = 30
 # How often the worker logs what it is doing about capacity (running, CPU, memory, why it is holding), so an operator can see why jobs are waiting.
@@ -135,88 +125,6 @@ async def _process_one(job: AgentJob) -> None:
     elif job.job_type == "render_reports":
         # Pre-generation: print and keep a finished scan's reports so the first download is already waiting (services/report_cache_service.py).
         await report_cache_service.prewarm(uuid.UUID(job.payload["scan_id"]))
-    elif job.job_type == "ropa_discovery":
-        # Agent 2 (Data Discovery / ROPA) connector run: connects to the
-        # customer's database and reads its schema, which can take as long as
-        # the slowest table -- exactly the kind of work that must not run
-        # inside a request (ropa_run_service.run_discovery_for_source creates
-        # the run and enqueues this; this is the only place that actually
-        # calls discover_and_analyze). Uses this same agent_jobs queue rather
-        # than a second job framework.
-        await ropa_run_service.execute_queued_discovery(
-            uuid.UUID(job.payload["run_id"]),
-            uuid.UUID(job.payload["org_id"]),
-        )
-    elif job.job_type == "ropa_evidence_analysis":
-        # Agent 2 evidence-push: the adapter already handed us its data, but
-        # analysis now also calls the LLM for enrichment of ambiguous columns
-        # -- a real network call that can hang or retry for minutes against a
-        # slow/unavailable model (an incident proved exactly this). That's the
-        # same "must not run inside a request" condition ropa_discovery is
-        # queued for above, so this queues too (ropa_run_service.
-        # ingest_pushed_evidence creates the run and enqueues this; this is the
-        # only place that actually calls run_pipeline_enriched for a push).
-        await ropa_run_service.execute_queued_evidence_analysis(
-            uuid.UUID(job.payload["run_id"]),
-            uuid.UUID(job.payload["org_id"]),
-            job.payload["evidence"],
-        )
-    elif job.job_type == "dsr_search":
-        # Agent 3 (DSR Fulfillment) subject search across authorized sources. Uses
-        # this same agent_jobs queue rather than a third job framework -- a DSR
-        # search can take as long as the slowest source, which is exactly the kind
-        # of work that must not run inside a request.
-        await dsr_run_service.execute_queued_search(
-            uuid.UUID(job.payload["request_id"]),
-            uuid.UUID(job.payload["org_id"]),
-            job_id=job.id,
-        )
-    elif job.job_type == "dsr_execute":
-        # Executes the APPROVED actions on a DSR case. Safe to retry: every action
-        # claims an idempotency key before it does anything, so a job that dies
-        # mid-flight and is retried returns the previous outcome for work already
-        # done rather than performing a deletion twice (§25).
-        await dsr_run_service.execute_queued_actions(
-            uuid.UUID(job.payload["request_id"]),
-            uuid.UUID(job.payload["org_id"]),
-            job_id=job.id,
-        )
-    elif job.job_type == "incident_analysis":
-        # Agent 4 (Breach Response) analysis: derive the affected-data map from ROPA,
-        # seed the timeline from evidence, assess risk. Queued because it reads schema
-        # baselines and iterates evidence, which should not sit inside a request.
-        #
-        # Containment is deliberately NOT a job type. A person performs a tracked
-        # action and attests to it; a queued "disable account" job would be exactly the
-        # fake execution the build forbids.
-        await incident_run_service.run_analysis(
-            uuid.UUID(job.payload["incident_id"]),
-            uuid.UUID(job.payload["org_id"]),
-            job_id=job.id,
-        )
-    elif job.job_type == "purpose_assessment":
-        # Agent 6 (Purpose Classifier). An async service pipeline like every agent
-        # except the Consent Agent -- no LangGraph, because nothing in this flow pauses
-        # for a human mid-run; review happens after the findings exist.
-        await purpose_run_service.execute_job(job.payload)
-    elif job.job_type == "regwatch_collect":
-        # Agent 5 (Regulatory Watch): fetch one approved source, compare it against
-        # the accepted baseline, and raise a finding if anything moved -- including
-        # when the fetch FAILED, which is a finding in its own right.
-        await regwatch_run_service.run_collection(
-            uuid.UUID(job.payload["source_id"]),
-            uuid.UUID(job.payload["org_id"]),
-            job_id=job.id,
-        )
-    elif job.job_type == "regwatch_assess":
-        # Relevance, priority and impact are deterministic and always run; the
-        # interpretation step is optional and its failure leaves an open question on
-        # the finding rather than failing the job.
-        await regwatch_run_service.run_assessment(
-            uuid.UUID(job.payload["finding_id"]),
-            uuid.UUID(job.payload["org_id"]),
-            job_id=job.id,
-        )
     else:
         raise ValueError(f"Unknown job_type: {job.job_type}")
 
@@ -252,13 +160,13 @@ async def _run_job(job: AgentJob) -> None:
 
 
 async def _maintenance_loop(stopping: asyncio.Event) -> None:
-    """Stale-job reaping, the monitoring dispatcher and the two SLA sweeps.
+    """Stale-job reaping and the monitoring dispatcher.
 
     Every step is wrapped. On the old shared loop, reaping and dispatch were bare, so a
     failure there killed the process and `restart: unless-stopped` brought it back --
     crude, but it did not fail silently. On a dedicated task an unhandled exception
     would instead kill just this task and leave the pump running happily, which is
-    exactly the silent stop the DSR sweep's own comment warns about. So each step
+    exactly the kind of silent stop nobody would notice. So each step
     catches, logs and continues, and the loop itself is the only thing that can end.
     """
     while not stopping.is_set():
@@ -271,17 +179,6 @@ async def _maintenance_loop(stopping: asyncio.Event) -> None:
         except Exception:
             logger.exception("Stale-job reaping failed; continuing with the other duties")
 
-        # A ROPA run whose queue job has permanently failed would otherwise stay
-        # "pending"/"analyzing" forever; close it with the job's real error.
-        try:
-            async with async_session_factory() as db:
-                closed = await ropa_repository.fail_runs_with_dead_jobs(db)
-                await db.commit()
-            if closed:
-                logger.warning("ROPA: closed %d run(s) whose processing job had failed", closed)
-        except Exception:
-            logger.exception("ROPA stuck-run reconciliation failed; continuing with the other duties")
-
         try:
             async with async_session_factory() as db:
                 dispatched = await monitoring_service.dispatch_due_schedules(db)
@@ -290,61 +187,6 @@ async def _maintenance_loop(stopping: asyncio.Event) -> None:
         except Exception:
             logger.exception("Monitoring dispatch failed; continuing with the other duties")
 
-        # Agent 3 SLA sweep (§36). Rides this loop rather than adding a scheduler: a
-        # DSR deadline is measured in days, so once every maintenance tick is far more
-        # often than it needs to be. Best-effort -- a DB hiccup while flagging an SLA
-        # must not stop the worker from processing jobs.
-        try:
-            async with async_session_factory() as db:
-                breached = await dsr_sla_service.sweep_overdue(db)
-                await db.commit()
-            if breached:
-                logger.warning("DSR: %d case(s) newly past their SLA", breached)
-        except Exception:
-            logger.exception("DSR SLA sweep failed; continuing with job processing")
-
-        # Agent 4 incident sweep. Rides the same loop for the same reason, and flags
-        # the organisation's own internal response target -- NOT a statutory deadline.
-        # Whether a notification obligation applies is a decision for a person against
-        # approved guidance, never a timer.
-        try:
-            async with async_session_factory() as db:
-                overdue = await incident_sla_service.sweep_overdue(db)
-                await db.commit()
-            if overdue:
-                logger.warning(
-                    "Incidents: %d newly past their internal response target", overdue
-                )
-        except Exception:
-            logger.exception("Incident sweep failed; continuing with job processing")
-
-        # Agent 5 action sweep. Flags work whose own target date has passed -- the
-        # organisation's date, never a statutory one, which every row it writes says
-        # explicitly. Marks once per action and never again, because this loop runs
-        # every tick and the audit log is append-only.
-        try:
-            async with async_session_factory() as db:
-                overdue = await regwatch_action_sla_service.sweep_overdue(db)
-                await db.commit()
-            if overdue:
-                logger.warning(
-                    "Regulatory watch: %d action(s) newly past their target date", overdue
-                )
-        except Exception:
-            logger.exception("Regulatory action sweep failed; continuing with job processing")
-
-        # Agent 5 due-source sweep. Enqueues rather than collecting inline, so one
-        # slow regulator cannot hold up every other organisation's watch. A source
-        # whose interval has elapsed and which is NOT collected is the failure mode
-        # this agent exists to make visible, so a failure here is logged loudly.
-        try:
-            enqueued = await regwatch_run_service.sweep_due_sources()
-            if enqueued:
-                logger.info("Regulatory watch: %d source collection(s) enqueued", enqueued)
-        except Exception:
-            logger.exception(
-                "Regulatory watch sweep failed; due sources were NOT enqueued this tick"
-            )
 
         await _sleep_or_stop(stopping, MAINTENANCE_INTERVAL_SECONDS)
 

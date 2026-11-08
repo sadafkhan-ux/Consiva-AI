@@ -187,13 +187,6 @@ jobs:
         working-directory: backend
         run: python -m pytest -q --tb=short
 
-      - name: Score the ROPA classifier against its labelled benchmark
-        working-directory: backend
-        # The one measured accuracy figure this platform has (95.7% on 140 hand-labelled
-        # columns from a real production schema). Run on every push so a rule change
-        # that breaks classification is visible immediately rather than argued about.
-        run: python -m tools.classifier_benchmark
-
       - name: Seed two organisations so the isolation check can prove something
         working-directory: backend
         # An RLS test against an empty database passes without proving anything: "0

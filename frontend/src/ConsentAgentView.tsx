@@ -24,7 +24,7 @@ import { DpdpReferencesSection, RecommendationsSection } from "./components/Dpdp
 import { AuditSection, DiagnosticsSection } from "./components/AuditAndDiagnostics";
 import { ANALYSIS_INCOMPLETE_NOTE, untestedConsentStates } from "./report/buildReport";
 import { reportModelFromState } from "./report/modelFromState";
-import { buildTenChecks } from "./report/tenChecks";
+import { fromScoreResponse, isScoreResponse } from "./report/tenChecks";
 import { TenChecksPanel } from "./components/TenChecksPanel";
 import { buildInsightSections } from "./report/insights";
 import { buildReadinessReview } from "./report/readiness";
@@ -35,14 +35,9 @@ import { ApiError } from "./api/types";
 // The stages that turn rule results into findings; if one fails, "no findings" says nothing about what the rules found.
 const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
 
-/** The 10-check score for the scan on screen, from the same report model the PDF is drawn from; null when the scan has no evidence to score or the model cannot be built. */
+/** The 10-check score for the scan on screen, as the backend calculated it (the same one the PDF prints); null until it has loaded. */
 function tenAssessmentFor(state: Parameters<typeof reportModelFromState>[0]) {
-  if (!state.scan || !state.evidence) return null;
-  try {
-    return buildTenChecks(reportModelFromState(state));
-  } catch {
-    return null;
-  }
+  return state.scan && isScoreResponse(state.tenScore) ? fromScoreResponse(state.tenScore) : null;
 }
 const tenScoreOf = (t: ReturnType<typeof tenAssessmentFor>) => (t ? { score: t.score, totalText: t.totalText, scoreText: t.scoreText, passed: t.counts.passed, applicable: t.applicableMax } : null);
 

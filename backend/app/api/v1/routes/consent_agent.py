@@ -33,15 +33,12 @@ from app.api.v1.schemas.consent_agent import (
     ScanStatusResponse,
     SummaryResponse,
 )
+from app.api.v1.schemas.score import ScoreResponse
 from app.config import get_settings
-from app.core.exceptions import ConsivaError, InvalidUrlError, NotFoundError, RateLimitExceededError
 
-# `get_caller`, not `get_current_user`: these endpoints accept either a signed-in
-# person or a long-lived service key, because a website integration cannot re-enter a
-# password every twelve hours and a login token that never expired would be a password
-# nobody could rotate. Both paths produce the same CurrentUser, so nothing below reads
-# the caller differently. See core/integration_auth.get_caller.
-from app.core.integration_auth import get_application_scan_caller, get_caller
+# No token needed while open access is on; see core/api_access.get_caller.
+from app.core.api_access import get_caller
+from app.core.exceptions import ConsivaError, InvalidUrlError, NotFoundError, RateLimitExceededError
 from app.core.security import CurrentUser
 from app.db.session import get_db
 from app.jobs import queue
@@ -50,6 +47,7 @@ from app.services import (
     agent_webhook_service,
     audit_service,
     scan_service,
+    score_service,
     webhook_service,
 )
 from app.services import (
@@ -76,17 +74,6 @@ class ScanConflictError(ConsivaError):
     """The scan exists but is not in a state this operation accepts."""
 
     status_code = 409
-
-
-class ApplicationScanNotPermittedError(ConsivaError):
-    """The caller may use the web profile but not the application profile.
-
-    403: authenticated, but not allowed. The application profile has no fixed page cap, so it is
-    limited to organisation administrators and to service keys explicitly granted
-    `consent:scan:application`.
-    """
-
-    status_code = 403
 
 
 class WebhookNotConfiguredError(ConsivaError):
@@ -140,22 +127,6 @@ def _clamp_options(body: CreateScanRequest, profile: scan_profiles.ScanProfile |
         "scan_after_accept": bool(states and requested.scan_after_accept),
         "scan_after_reject": bool(states and requested.scan_after_reject),
     }
-
-
-def _require_application_permission(user: CurrentUser) -> None:
-    """Server-side authorization for the application profile.
-
-    A service key has already been checked for `consent:scan:application` by the dependency
-    (core/integration_auth.get_application_scan_caller); holding it is what stands in for an
-    admin role, because a key has none. A signed-in person must be an administrator -- a token
-    with no role is not one. Nothing in the request is consulted.
-    """
-    if user.key_name is None and user.role != "admin":
-        raise ApplicationScanNotPermittedError(
-            "Application scans have no fixed page limit and are restricted to organisation "
-            "administrators and to service keys granted the consent:scan:application scope. "
-            "Use POST /api/v1/consent-agent/scans/web for a standard scan."
-        )
 
 
 async def _submit_scan(
@@ -367,9 +338,7 @@ async def create_scan(
         "Authorized application scan: no fixed page-count cap when `CONSENT_APP_MAX_PAGES` is 0, "
         "no crawl deadline when `CONSENT_APP_MAX_SECONDS` is 0 (the default); a fixed 24 hour "
         "ceiling still aborts a scan that is hung.\n\n"
-        "Requires an organisation administrator, or a service key with the "
-        "`consent:scan:application` scope, AND a domain that has passed DNS ownership "
-        "verification. The target is still checked against the same SSRF rules as every scan, so "
+        "Requires a domain that has passed DNS ownership verification. The target is still checked against the same SSRF rules as every scan, so "
         "private and loopback addresses are refused.\n\n" + _SCAN_DESCRIPTION
     ),
 )
@@ -381,10 +350,9 @@ async def create_application_scan(
         description="Opaque caller-chosen string, unique per intended scan. Scoped to "
                     "your organisation.",
     ),
-    user: CurrentUser = Depends(get_application_scan_caller),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> CreateScanResponse:
-    _require_application_permission(user)
     return await _submit_scan(scan_profiles.APPLICATION, body, response, idempotency_key, user, db)
 
 
@@ -493,6 +461,26 @@ async def get_scan_summary(
 ) -> SummaryResponse:
     scan = await _load_scan(db, scan_id, user)
     return SummaryResponse(**await api_service.get_summary(db, scan))
+
+
+@router.get(
+    "/scans/{scan_id}/score",
+    response_model=ScoreResponse,
+    summary="Privacy Readiness Score",
+    description=(
+        "The ten checks and the one score they give: Passed = 1, Partially Passed = 0.5, Failed = 0, and checks that "
+        "could not be assessed or do not apply are left out of the maximum. Computed from the scan's stored evidence, "
+        "so it is available as soon as the crawl has finished; the policy checks need the analysis to have run.\n\n"
+        "An indicative readiness reading, not a legal determination or certification."
+    ),
+)
+async def get_scan_score(
+    scan_id: uuid.UUID,
+    user: CurrentUser = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+) -> ScoreResponse:
+    scan = await _load_scan(db, scan_id, user)
+    return ScoreResponse(**await score_service.score_scan(db, scan))
 
 
 @router.post(

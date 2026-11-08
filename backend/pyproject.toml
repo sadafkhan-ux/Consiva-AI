@@ -27,8 +27,7 @@ dependencies = [
     "PyJWT>=2.9",
     "bcrypt>=4.1",
     "dnspython>=2.6",
-    # Envelope encryption for ROPA data-source credentials (connectors/factory.py's
-    # optional encrypted-at-rest path, alongside the existing env-var one).
+    # Encryption at rest for a caller-supplied callback_secret (app/core/secret_box.py).
     "cryptography>=43",
 ]
 

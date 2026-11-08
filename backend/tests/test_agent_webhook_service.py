@@ -1,5 +1,5 @@
 """agent_webhook_service — the fixed external-partner notification channel for
-ROPA run completion/failure and Consent Agent API scan completion/failure.
+Consent Agent API scan completion/failure.
 
 Mirrors test_notification_delivery.py's pattern (mocked settings via
 patch("app.services.X.get_settings"), mocked httpx.AsyncClient.post, plus one
@@ -26,7 +26,7 @@ async def test_send_event_does_nothing_when_url_is_unset():
         patch("app.services.agent_webhook_service.get_settings", return_value=_settings(url=None)),
         patch("httpx.AsyncClient.post", new=AsyncMock()) as mock_post,
     ):
-        await agent_webhook_service.send_event("ropa.run.completed", run_id="r-1")
+        await agent_webhook_service.send_event("consent.scan.completed", scan_id="r-1")
     mock_post.assert_not_called()
 
 
@@ -35,7 +35,7 @@ async def test_send_event_does_nothing_when_secret_is_unset():
         patch("app.services.agent_webhook_service.get_settings", return_value=_settings(secret=None)),
         patch("httpx.AsyncClient.post", new=AsyncMock()) as mock_post,
     ):
-        await agent_webhook_service.send_event("ropa.run.completed", run_id="r-1")
+        await agent_webhook_service.send_event("consent.scan.completed", scan_id="r-1")
     mock_post.assert_not_called()
 
 
@@ -65,7 +65,7 @@ async def test_send_event_signs_exactly_as_the_partner_spec_requires():
         patch("app.services.agent_webhook_service.assert_safe_url", new=AsyncMock(return_value=[])),
         patch("httpx.AsyncClient.post", new=_fake_post),
     ):
-        await agent_webhook_service.send_event("ropa.run.completed", run_id="r-1")
+        await agent_webhook_service.send_event("consent.scan.completed", scan_id="r-1")
 
     assert captured["url"] == "https://partner.example/webhook"
     timestamp = captured["headers"]["X-Agent-Timestamp"]
@@ -90,12 +90,12 @@ async def test_payload_shape_matches_the_partner_spec():
         patch("httpx.AsyncClient.post", new=_fake_post),
     ):
         await agent_webhook_service.send_event(
-            "ropa.run.failed", run_id="00000000-0000-0000-0000-000000000001", error="boom"
+            "consent.scan.failed", scan_id="00000000-0000-0000-0000-000000000001", error="boom"
         )
 
     body = captured["body"]
-    assert body["event"] == "ropa.run.failed"
-    assert body["run_id"] == "00000000-0000-0000-0000-000000000001"
+    assert body["event"] == "consent.scan.failed"
+    assert body["scan_id"] == "00000000-0000-0000-0000-000000000001"
     assert body["error"] == "boom"
     # event_id is a fresh uuid per delivery, not a static/reused value.
     import uuid as uuid_module
@@ -116,7 +116,7 @@ async def test_send_event_never_raises_on_a_non_2xx_response():
         patch("app.services.agent_webhook_service.assert_safe_url", new=AsyncMock(return_value=[])),
         patch("httpx.AsyncClient.post", new=AsyncMock(return_value=MagicMock(status_code=500))),
     ):
-        await agent_webhook_service.send_event("ropa.run.completed", run_id="r-1")  # must not raise
+        await agent_webhook_service.send_event("consent.scan.completed", scan_id="r-1")  # must not raise
 
 
 async def test_send_event_never_raises_on_a_network_error():
@@ -130,7 +130,7 @@ async def test_send_event_never_raises_on_a_network_error():
             new=AsyncMock(side_effect=httpx.ConnectError("boom", request=MagicMock())),
         ),
     ):
-        await agent_webhook_service.send_event("ropa.run.completed", run_id="r-1")  # must not raise
+        await agent_webhook_service.send_event("consent.scan.completed", scan_id="r-1")  # must not raise
 
 
 async def test_send_event_succeeds_against_a_real_http_endpoint():
@@ -151,7 +151,7 @@ async def test_send_event_succeeds_against_a_real_http_endpoint():
         "app.services.agent_webhook_service.get_settings",
         return_value=_settings(url="https://httpbin.org/post"),
     ):
-        await agent_webhook_service.send_event("ropa.run.completed", run_id="r-1")
+        await agent_webhook_service.send_event("consent.scan.completed", scan_id="r-1")
     # No exception raised == the real signed POST to a real endpoint succeeded.
 
 
@@ -167,7 +167,7 @@ async def test_send_event_never_raises_and_never_posts_for_an_unsafe_destination
         ),
         patch("httpx.AsyncClient.post", new=AsyncMock()) as mock_post,
     ):
-        await agent_webhook_service.send_event("ropa.run.completed", run_id="r-1")
+        await agent_webhook_service.send_event("consent.scan.completed", scan_id="r-1")
     mock_post.assert_not_called()
 
 
@@ -193,7 +193,7 @@ async def test_send_event_prefers_the_per_call_override_over_fixed_config():
         patch("httpx.AsyncClient.post", new=_fake_post),
     ):
         await agent_webhook_service.send_event(
-            "ropa.run.completed", run_id="r-1",
+            "consent.scan.completed", scan_id="r-1",
             callback_url="https://override.example/webhook", callback_secret="override-secret",
         )
 
@@ -226,7 +226,7 @@ async def test_send_event_falls_back_to_fixed_config_when_only_one_override_fiel
         patch("httpx.AsyncClient.post", new=_fake_post),
     ):
         await agent_webhook_service.send_event(
-            "ropa.run.completed", run_id="r-1", callback_url="https://override.example/webhook",
+            "consent.scan.completed", scan_id="r-1", callback_url="https://override.example/webhook",
         )
 
     assert captured["url"] == "https://fixed.example/webhook"
@@ -260,14 +260,13 @@ class TestPrepareCallbackOverride:
                 "http://169.254.169.254/", "secret"
             )
 
-    async def test_encrypts_the_secret_and_round_trips_through_resolve(self):
-        import os
-
+    async def test_encrypts_the_secret_and_round_trips_through_resolve(self, monkeypatch):
         from cryptography.fernet import Fernet
 
-        old_key = os.environ.get("ROPA_CREDENTIAL_ENCRYPTION_KEY")
-        os.environ["ROPA_CREDENTIAL_ENCRYPTION_KEY"] = Fernet.generate_key().decode()
         from app.config import get_settings as real_get_settings
+
+        monkeypatch.delenv("ROPA_CREDENTIAL_ENCRYPTION_KEY", raising=False)
+        monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
         real_get_settings.cache_clear()
         try:
             url, ciphertext = await agent_webhook_service.prepare_callback_override(
@@ -279,26 +278,41 @@ class TestPrepareCallbackOverride:
             assert agent_webhook_service.resolve_callback_secret(ciphertext) == "a-real-callback-secret"
             assert agent_webhook_service.resolve_callback_secret(None) is None
         finally:
-            if old_key is None:
-                os.environ.pop("ROPA_CREDENTIAL_ENCRYPTION_KEY", None)
-            else:
-                os.environ["ROPA_CREDENTIAL_ENCRYPTION_KEY"] = old_key
             real_get_settings.cache_clear()
 
-    async def test_raises_when_encryption_is_not_configured(self):
-        import os
+    async def test_the_legacy_key_name_still_decrypts_stored_secrets(self, monkeypatch):
+        """Secrets stored before the rename were encrypted under ROPA_CREDENTIAL_ENCRYPTION_KEY;
+        a deployment that still sets only that name must keep delivering them."""
+        from cryptography.fernet import Fernet
 
-        import pytest
-
-        old_key = os.environ.pop("ROPA_CREDENTIAL_ENCRYPTION_KEY", None)
         from app.config import get_settings as real_get_settings
+
+        monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
+        monkeypatch.setenv("ROPA_CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
         real_get_settings.cache_clear()
         try:
-            with pytest.raises(ValueError, match="ROPA_CREDENTIAL_ENCRYPTION_KEY"):
+            _url, ciphertext = await agent_webhook_service.prepare_callback_override(
+                "https://example.com/hook", "legacy-secret"
+            )
+            assert agent_webhook_service.resolve_callback_secret(ciphertext) == "legacy-secret"
+        finally:
+            real_get_settings.cache_clear()
+
+    async def test_raises_when_encryption_is_not_configured(self, monkeypatch):
+        import pytest
+
+        from app.config import Settings
+        from app.config import get_settings as real_get_settings
+
+        monkeypatch.delenv("CREDENTIAL_ENCRYPTION_KEY", raising=False)
+        monkeypatch.delenv("ROPA_CREDENTIAL_ENCRYPTION_KEY", raising=False)
+        # A developer's backend/.env may set the key; the file must not count here.
+        monkeypatch.setitem(Settings.model_config, "env_file", None)
+        real_get_settings.cache_clear()
+        try:
+            with pytest.raises(ValueError, match="CREDENTIAL_ENCRYPTION_KEY"):
                 await agent_webhook_service.prepare_callback_override(
                     "https://example.com/hook", "a-secret"
                 )
         finally:
-            if old_key is not None:
-                os.environ["ROPA_CREDENTIAL_ENCRYPTION_KEY"] = old_key
             real_get_settings.cache_clear()

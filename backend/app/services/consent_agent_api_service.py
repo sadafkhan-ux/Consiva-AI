@@ -493,8 +493,7 @@ async def list_scans(
 ) -> tuple[list[dict[str, Any]], int]:
     """Recent scans for this organisation, newest first, with the total for paging.
 
-    Agent 1 was the only agent in the platform with no list endpoint -- ROPA, DSR,
-    Incidents and Regulatory Watch all have one. A caller who lost a scan_id had no way
+    Without a list endpoint, a caller who lost a scan_id had no way
     to find it again, and a frontend could not show scan history at all.
 
     Returns a summary row per scan, not the full result: this is a list view, and

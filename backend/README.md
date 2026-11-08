@@ -8,9 +8,7 @@ grounded DPDP Act/Rules context via RAG, drafts findings and recommendations wit
 NVIDIA-hosted LLM, and routes everything through human review before anything is
 considered final. Every step is audited.
 
-Scope note: **only the Consent Agent** is built here. The other four planned agents
-(Data Discovery/ROPA, DSR Fulfillment, Breach Response, Regulatory Watch), the ML
-classifier layer, continuous monitoring, and the post-approval Action Module are
+Scope note: **only the Consent Agent** is built here. The ML classifier layer is
 explicitly deferred — see [Future work](#future-work).
 
 ## Architecture at a glance
@@ -247,4 +245,3 @@ columns `cookies.source`, `cookies.consent_states`, `trackers.source`,
   instead of NVIDIA; NVIDIA was kept for this build per explicit direction, revisit
   once India-region self-hosting infra actually exists.
 - A review UI — only the backend API + the negative bypass test exist; no frontend.
-- The other four agents (Data Discovery/ROPA, DSR, Breach Response, Regulatory Watch).

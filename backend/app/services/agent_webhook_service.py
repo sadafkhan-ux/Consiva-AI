@@ -1,5 +1,5 @@
 """Outbound event notifications to an external-partner endpoint, fired when a
-ROPA run or a Consent Agent API scan reaches a final state (completed or
+Consent Agent API scan reaches a final state (completed or
 failed).
 
 NOT the same thing as `webhook_service.py`: that module delivers to a
@@ -24,8 +24,8 @@ exist for exactly this: the caller that created the run or scan is the one who
 actually knows which environment started it, and may pass its own destination
 and secret to override the fixed config for that one delivery. Neither is
 persisted anywhere by this module -- callers that need the override to survive
-past the original request (a connector-pull discovery run the worker executes
-later) persist it themselves (migration 0032) and pass it back in at send time.
+past the original request (a scan the worker finishes later) persist it
+themselves (migration 0032) and pass it back in at send time.
 
 Fire-and-forget by design: the run/scan's own state is already durably
 persisted by the time this is called, so a partner endpoint being briefly
@@ -49,9 +49,8 @@ from typing import Any
 
 import httpx
 
-from app.agents.ropa.connectors.base import ConnectorError
-from app.agents.ropa.connectors.factory import decrypt_credential, encrypt_credential
 from app.config import get_settings
+from app.core import secret_box
 from app.scanner.url_safety import assert_safe_url
 
 logger = logging.getLogger(__name__)
@@ -90,10 +89,10 @@ async def prepare_callback_override(
     pair supplied (almost certainly a caller error, not "use the fixed config
     instead"); a non-http(s) or unsafe (private/loopback/metadata) URL, same
     check `webhook_service.validate_target` applies to the per-scan
-    `webhook_url`; or a secret with no ROPA_CREDENTIAL_ENCRYPTION_KEY
-    configured to encrypt it under (CredentialEncryptionNotConfigured, a
-    ConnectorError -- converted to ValueError here so every caller of this
-    function has one exception type to catch)."""
+    `webhook_url`; or a secret with no CREDENTIAL_ENCRYPTION_KEY configured
+    to encrypt it under (secret_box.EncryptionNotConfigured -- converted to
+    ValueError here so every caller of this function has one exception type
+    to catch)."""
     if not callback_url and not callback_secret:
         return None, None
     if not (callback_url and callback_secret):
@@ -102,8 +101,8 @@ async def prepare_callback_override(
         raise ValueError("callback_url must be an absolute http:// or https:// URL")
     await assert_safe_url(callback_url)
     try:
-        ciphertext = encrypt_credential(callback_secret)
-    except ConnectorError as exc:
+        ciphertext = secret_box.encrypt(callback_secret)
+    except secret_box.SecretBoxError as exc:
         raise ValueError(str(exc)) from exc
     return callback_url, ciphertext
 
@@ -113,7 +112,7 @@ def resolve_callback_secret(ciphertext: str | None) -> str | None:
     callback_secret back to plaintext at delivery time. None in, None out --
     callers pass this straight through to send_event's callback_secret, and a
     row with no override naturally yields no override."""
-    return decrypt_credential(ciphertext) if ciphertext else None
+    return secret_box.decrypt(ciphertext) if ciphertext else None
 
 
 def is_configured() -> bool:

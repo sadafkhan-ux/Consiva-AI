@@ -7,6 +7,7 @@ import type {
   ScanScreenshot,
   FindingResponse,
   DpdpScoreResponse,
+  ScoreResponse,
   ScanEvidenceResponse,
   ScanStatusResponse,
   StageResponse,
@@ -181,6 +182,8 @@ export interface ConsentScanState {
   /** The proposed DPDP Compliance Score. Null until loaded, and left null if it could not be (the page shows nothing rather
    *  than a made-up number). Optional so state built before it existed keeps working. */
   dpdpScore?: DpdpScoreResponse | null;
+  /** The Privacy Readiness Score from the backend (null until loaded, or when it could not be). */
+  tenScore?: ScoreResponse | null;
   /** What the site's policies say (null until loaded, or when it could not be). */
   policyAnalysis?: PolicyAnalysis | null;
   /** The scanned homepage's preview (null until loaded, or when it could not be). */
@@ -205,6 +208,7 @@ const INITIAL_STATE: ConsentScanState = {
   audit: [],
   evidence: null,
   dpdpScore: null,
+  tenScore: null,
   policyAnalysis: null,
   screenshot: null,
   error: null,
@@ -225,17 +229,19 @@ export function useConsentScan() {
     // Each settles on its own. Previously `Promise.all` with only the evidence call
     // guarded meant one failing request discarded the other two results as well --
     // so a 500 on findings also blanked the evidence that had loaded fine.
-    const [findings, audit, evidence, dpdpScore, policyAnalysis, screenshot] = await Promise.all([
+    const [findings, audit, evidence, dpdpScore, policyAnalysis, screenshot, tenScore] = await Promise.all([
       api.getFindings(scanId).catch(() => null),
       api.getAudit(scanId).catch(() => null),
       api.getEvidence(scanId).catch(() => null),
       api.getDpdpScore(scanId).catch(() => null),
       api.getPolicyAnalysis(scanId).catch(() => null),
       api.getScreenshot(scanId).catch(() => null),
+      api.getScore(scanId).catch(() => null),
     ]);
     if (runIdRef.current !== myRunId) return;
     setState((s) => ({
       ...s,
+      tenScore: tenScore ?? s.tenScore ?? null,
       findings: findings ?? s.findings,
       audit: audit ?? s.audit,
       evidence: evidence ?? s.evidence,
@@ -254,18 +260,19 @@ export function useConsentScan() {
    *  worse than one that renders nothing at all -- it is a confident false negative
    *  in a product whose whole job is to find what a site is doing. */
   const loadEvidenceRegardless = useCallback(async (scanId: string, myRunId: number) => {
-    const [evidence, dpdpScore, policyAnalysis, screenshot] = await Promise.all([
+    const [evidence, dpdpScore, policyAnalysis, screenshot, tenScore] = await Promise.all([
       api.getEvidence(scanId).catch(() => null),
       api.getDpdpScore(scanId).catch(() => null),
       api.getPolicyAnalysis(scanId).catch(() => null),
       api.getScreenshot(scanId).catch(() => null),
+      api.getScore(scanId).catch(() => null),
     ]);
     if (runIdRef.current !== myRunId) return;
     if (!evidence) {
       setState((s) => ({ ...s, evidenceFailed: !s.evidence }));
       return;
     }
-    setState((s) => ({ ...s, evidence, evidenceFailed: false, dpdpScore: dpdpScore ?? s.dpdpScore ?? null, policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null, screenshot: screenshot ?? s.screenshot ?? null }));
+    setState((s) => ({ ...s, evidence, evidenceFailed: false, dpdpScore: dpdpScore ?? s.dpdpScore ?? null, policyAnalysis: policyAnalysis ?? s.policyAnalysis ?? null, screenshot: screenshot ?? s.screenshot ?? null, tenScore: tenScore ?? s.tenScore ?? null }));
   }, []);
 
   const pollStagesUntilAuditOrPending = useCallback(

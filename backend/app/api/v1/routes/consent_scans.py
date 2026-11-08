@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.schemas.score import ScoreResponse
 from app.config import get_settings
 from app.core.exceptions import NotFoundError, ScanNotReadyError
 from app.core.security import CurrentUser, get_current_user
@@ -30,6 +31,7 @@ from app.services import (
     report_cache_service,
     report_pdf_service,
     scan_service,
+    score_service,
     usage_service,
 )
 
@@ -948,6 +950,20 @@ async def get_scan_evidence(
     evidence = await scan_repository.get_scan_evidence_summary_concurrent(scan_id, include_cookie_detail=True)
     return ScanEvidenceResponse(**evidence)
 
+
+
+@router.get("/{scan_id}/score", response_model=ScoreResponse)
+async def get_scan_score(
+    scan_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The Privacy Readiness Score: ten checks and one score (app/scoring/ten_checks.py), computed on demand from the
+    scan's stored evidence. The one score the dashboard, the PDF reports and the Consent Agent API show."""
+    result = await score_service.score_scan_by_id(db, scan_id, uuid.UUID(user.org_id))
+    if result is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    return ScoreResponse(**result)
 
 
 @router.get("/{scan_id}/dpdp-score", response_model=DpdpScoreResponse)

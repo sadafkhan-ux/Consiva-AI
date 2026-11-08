@@ -876,6 +876,20 @@ export interface SectorAssessment {
   agrees_with_scan?: boolean | null;
 }
 
+/** The Privacy Readiness Score as the backend returns it (backend app/scoring/ten_checks.py, GET .../score). The one score. */
+export interface ScoreCheckResponse {
+  id: number; name: string; result: string; awarded: number | null; max: number | null; evidence: string; source_url: string | null;
+  explanation: string; legal: string | null; completed: boolean; limitation: string | null; marks_text: string; kind: string; kind_label: string;
+  basis: string; quality: string; coverage: string | null;
+}
+export interface ScoreResponse {
+  methodology: string; score: number | null; score_text: string; total_text: string; awarded: number; applicable_max: number; formula: string;
+  counts: { passed: number; partial: number; failed: number; not_assessed: number; not_applicable: number };
+  incomplete: number; limited_basis: boolean; summary: string; checks: ScoreCheckResponse[];
+  recommendations: { id: number; text: string }[]; pages: { discovered: number | null; scanned: number; failed: number; skipped: number };
+  limitations: string[];
+}
+
 export interface DpdpScoreResponse {
   methodology_version: string;
   as_of: string;

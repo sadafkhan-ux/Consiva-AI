@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { ReportModel } from "../buildReport";
 import { CONSIVA_LOGO_PNG } from "../consivaLogo";
 import { buildSummaryReport, SIGNUP_SUB, SIGNUP_TEXT, SIGNUP_URL, type SummaryView } from "../summaryReport";
-import { buildTenChecks, KIND_LABEL, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
+import { KIND_LABEL, type TenAssessment, type TenCheck, type TenResult } from "../tenChecks";
 import { BigRing, Icon, Pill, SheetPageStyle, type IconName } from "./PageParts";
 import "./pages.css";
 import "./snapshot.css";
@@ -358,7 +358,7 @@ function Page2({ s, ten, model, fit }: { s: SummaryView; ten: TenAssessment; mod
  */
 export function SnapshotReport({ model }: { model: ReportModel }) {
   const s = buildSummaryReport(model);
-  const ten = buildTenChecks(model);
+  const ten = model.tenChecks;
   const doc = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState<[number, number]>([0, 0]);
   useLayoutEffect(() => {

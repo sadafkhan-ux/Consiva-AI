@@ -146,9 +146,6 @@ async def test_a_long_job_does_not_block_the_maintenance_loop(monkeypatch):
 
     reaps = 0
 
-    async def _noop_sweep():
-        return 0
-
     async def fake_reap(db):
         nonlocal reaps
         reaps += 1
@@ -156,13 +153,6 @@ async def test_a_long_job_does_not_block_the_maintenance_loop(monkeypatch):
 
     monkeypatch.setattr(worker.queue, "reap_stale_jobs", fake_reap)
     monkeypatch.setattr(worker.monitoring_service, "dispatch_due_schedules", _noop)
-    monkeypatch.setattr(worker.dsr_sla_service, "sweep_overdue", _noop)
-    monkeypatch.setattr(worker.incident_sla_service, "sweep_overdue", _noop)
-    # Agent 5's due-source sweep rides the same loop and opens its own session. Stubbed
-    # like the other three: this test is about the two loops being independent, and a
-    # real database round trip per tick at a 10ms interval made it fail under load
-    # while passing in isolation.
-    monkeypatch.setattr(worker.regwatch_run_service, "sweep_due_sources", _noop_sweep)
     monkeypatch.setattr(worker, "MAINTENANCE_INTERVAL_SECONDS", 0.01)
 
     stopping = asyncio.Event()

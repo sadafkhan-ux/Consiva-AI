@@ -26,7 +26,10 @@ clicks Accept, clicks Reject, and compares what tracking fires in each state.
 
 ## Authentication
 
-Every request needs a bearer token from the normal Consiva login.
+**For now the API is open.** On a deployment with `APP_ENV=development` or
+`OPEN_ACCESS=true`, you can leave the `Authorization` header out entirely; the request
+acts as that deployment's default account. Everywhere else, send a bearer token from the
+normal Consiva login:
 
 ```http
 Authorization: Bearer <access_token>

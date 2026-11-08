@@ -40,8 +40,6 @@ def issue_access_token(
 
     12 hours by default: long enough that an operator isn't re-authenticating
     all day, short enough that a leaked token is not a permanent credential.
-    Long-lived machine access is what integration keys are for -- see
-    app/core/integration_auth.py -- so this never needs to be measured in days.
     """
     now = datetime.now(UTC)
     expires = now + timedelta(hours=ttl_hours)

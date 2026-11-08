@@ -1,24 +1,34 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { AUTH_BYPASSED, OPEN_ACCESS, autoLogin, getProfile, logout, type Profile } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
 import { ConsentAgentView } from "./ConsentAgentView";
 import { LoginScreen } from "./components/LoginScreen";
-import { agentFromHash, writeHash } from "./components/dsrRoute";
 import { ReportPage } from "./report/print/ReportPage";
 
-// Each of the other five consoles is its own chunk: the sign-in screen and the Consent console (the one everybody opens first) no longer carry their code. The
-// report page stays in the main chunk on purpose: the server prints it, and a separate chunk to fetch added about 0.3 s to every PDF (measured).
-const BreachConsole = lazy(() => import("./components/BreachConsole").then((m) => ({ default: m.BreachConsole })));
-const DsrConsole = lazy(() => import("./components/DsrConsole").then((m) => ({ default: m.DsrConsole })));
-const PurposeConsole = lazy(() => import("./components/PurposeConsole").then((m) => ({ default: m.PurposeConsole })));
-const RegWatchConsole = lazy(() => import("./components/RegWatchConsole").then((m) => ({ default: m.RegWatchConsole })));
-const RopaDashboard = lazy(() => import("./components/RopaDashboard").then((m) => ({ default: m.RopaDashboard })));
+// One view for now. Add an agent here (and to NAV below) to give it its own screen.
+type View = "consent";
 
-type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch" | "purpose";
+const VIEWS: readonly View[] = ["consent"];
+
+/** The view named by `#/<view>`, so a reload returns to it. Never a token or personal data. */
+function viewFromHash(hash: string): View | null {
+  const m = /^#\/([a-z]+)(?:\/|$)/.exec(hash);
+  return m && (VIEWS as readonly string[]).includes(m[1]) ? (m[1] as View) : null;
+}
+
+/** Update the address without adding a history entry. Never throws: a sandboxed frame that
+ *  forbids it simply loses reload-restore. */
+function writeHash(hash: string): void {
+  try {
+    if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
+  } catch {
+    /* reload-restore is a convenience, not a requirement */
+  }
+}
 
 /**
- * Shell around the five agents. Agent 1's UI is unchanged -- it moved verbatim
- * into ConsentAgentView; this file only adds the sign-in gate and the switcher.
+ * Shell around the Consent Agent. Its UI lives in ConsentAgentView; this file only adds
+ * the sign-in gate and the sidebar that switches between agent screens.
  */
 export default function App() {
   // The report for one scan has its own address (/?report=<scanId>); the server prints it (&print=1) to make the PDF. It shows only the report,
@@ -40,10 +50,10 @@ export default function App() {
 
 function Console() {
   const [profile, setProfile] = useState<Profile | null>(() => getProfile());
-  // The active agent lives in the address (#/dsr/...), so a reload returns to it instead of to Consent.
-  const [agent, setAgentState] = useState<Agent>(() => agentFromHash(window.location.hash) ?? "consent");
-  function setAgent(next: Agent) {
-    setAgentState(next);
+  // The active view lives in the address (#/consent), so a reload returns to it.
+  const [view, setViewState] = useState<View>(() => viewFromHash(window.location.hash) ?? "consent");
+  function setView(next: View) {
+    setViewState(next);
     writeHash(`#/${next}`);
   }
   // Only meaningful while AUTH_BYPASSED is true. `null` means "not tried yet", which
@@ -92,13 +102,8 @@ function Console() {
     setProfile(null);
   }
 
-  const AGENTS: { id: Agent; label: string }[] = [
+  const NAV: { id: View; label: string }[] = [
     { id: "consent", label: "Privacy Policy" },
-    { id: "ropa", label: "ROPA" },
-    { id: "dsr", label: "DSR" },
-    { id: "breach", label: "Breach" },
-    { id: "regwatch", label: "Regulatory Watch" },
-    { id: "purpose", label: "Purpose" },
   ];
 
   return (
@@ -110,11 +115,11 @@ function Console() {
         </div>
 
         <nav className="shell-nav">
-          {AGENTS.map(({ id, label }) => (
+          {NAV.map(({ id, label }) => (
             <button
               key={id}
-              className={agent === id ? "active" : ""}
-              onClick={() => setAgent(id)}
+              className={view === id ? "active" : ""}
+              onClick={() => setView(id)}
             >
               <span className="dot" />
               {label}
@@ -159,14 +164,7 @@ function Console() {
         )}
 
         <div className="shell-content">
-          {agent === "consent" && <ConsentAgentView />}
-          <Suspense fallback={<div className="muted" style={{ padding: 16 }}>Loading…</div>}>
-            {agent === "ropa" && <RopaDashboard />}
-            {agent === "dsr" && <DsrConsole onOpenRopa={() => setAgent("ropa")} />}
-            {agent === "breach" && <BreachConsole />}
-            {agent === "regwatch" && <RegWatchConsole />}
-            {agent === "purpose" && <PurposeConsole />}
-          </Suspense>
+          {view === "consent" && <ConsentAgentView />}
         </div>
       </div>
     </div>

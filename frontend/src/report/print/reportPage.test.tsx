@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DpdpScoreResponse, PolicyAnalysis, ScanEvidenceResponse, ScanScreenshot } from "../../api/types";
 import type { ConsentScanState } from "../../hooks/useConsentScan";
 import fixtures from "../../test/dpdpScoreFixtures.json";
+import { SCORE_RESPONSE } from "../../test/score";
 
 const F = fixtures as unknown as Record<string, DpdpScoreResponse>;
 const SCAN_ID = "11111111-1111-1111-1111-111111111111";
@@ -28,7 +29,7 @@ const EVIDENCE = {
 } as unknown as ScanEvidenceResponse;
 const POLICY = { status: "not_run", reason: null, sector: null, documents: [], notes: [], limitations: [], model: null, summary: null, requirements: [] } as unknown as PolicyAnalysis;
 const SHOT = { scan_id: SCAN_ID, domain: "x.test", status: "not_captured", available: false, message: "No preview.", page_url: null, mime: null, width: null, height: null, captured_at: null, data: null } as ScanScreenshot;
-const COMPLETE = { phase: "completed", scanId: SCAN_ID, scan: { id: SCAN_ID, url: "https://x.test/", status: "completed", evidence_counts: { pages: 1, cookies: 0, trackers: 0, third_party_services: 0, policies: 1, forms: 0 } }, evidence: EVIDENCE, dpdpScore: F.mixed, policyAnalysis: POLICY, screenshot: SHOT } as unknown as Partial<ConsentScanState>;
+const COMPLETE = { phase: "completed", scanId: SCAN_ID, scan: { id: SCAN_ID, url: "https://x.test/", status: "completed", evidence_counts: { pages: 1, cookies: 0, trackers: 0, third_party_services: 0, policies: 1, forms: 0 } }, evidence: EVIDENCE, dpdpScore: F.mixed, tenScore: SCORE_RESPONSE, policyAnalysis: POLICY, screenshot: SHOT } as unknown as Partial<ConsentScanState>;
 
 beforeEach(() => {
   current = {};
@@ -61,7 +62,7 @@ describe("the report page the server prints", () => {
 
   it("is not ready until the scan has finished loading, then waits a bounded time for the rest and draws what it has", async () => {
     vi.useFakeTimers();
-    current = { ...COMPLETE, evidence: null, dpdpScore: null, policyAnalysis: null, screenshot: null };
+    current = { ...COMPLETE, evidence: null, dpdpScore: null, tenScore: null, policyAnalysis: null, screenshot: null };
     render(<ReportPage scanId={SCAN_ID} print />);
     expect(window.__REPORT_READY__).toBeUndefined();
     expect(screen.getByTestId("report-loading")).toBeInTheDocument();

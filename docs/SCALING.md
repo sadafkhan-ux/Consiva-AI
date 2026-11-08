@@ -127,8 +127,7 @@ retry costs one cheap request, not a browser crawl. Set `SCANNER_ROBOTS_UNREADAB
 With `SCANNER_MAX_SCANS_PER_ORG_PER_DAY=0` and `CONSENT_API_SCANS_PER_HOUR=0` nothing caps how many scans one organisation may queue. What still bounds the system: the worker never runs more
 jobs than the CPU/memory governor allows, organisations are served fairly in turn, and a scan has its own time and page limits. What is not bounded: queue length and total browser time (so
 cost grows with demand, and a flood from one organisation delays its own later scans but not others'). Recommended, configurable production settings: keep unlimited for normal tenants, but set a
-generous ceiling (for example `SCANNER_MAX_SCANS_PER_ORG_PER_DAY=500`, `CONSENT_API_SCANS_PER_HOUR=200`) on API-key/integrator organisations and any free tier, and alert on queue depth. The purpose-classifier
-daily limit (`PURPOSE_MAX_ASSESSMENTS_PER_ORG_PER_DAY`, a different agent) and the DSR one-time-code throttle are unrelated to scanning and unchanged. A local `backend/.env` may still carry old values
+generous ceiling (for example `SCANNER_MAX_SCANS_PER_ORG_PER_DAY=500`, `CONSENT_API_SCANS_PER_HOUR=200`) on API-key/integrator organisations and any free tier, and alert on queue depth. A local `backend/.env` may still carry old values
 (this checkout's sets the daily limit to 1000000); `.env.example` and the compose default are 0.
 
 ## A domain that does not resolve

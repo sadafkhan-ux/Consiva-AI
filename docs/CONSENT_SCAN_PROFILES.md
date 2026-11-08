@@ -9,7 +9,7 @@ in a request body can choose or widen it.
 | Endpoint | `POST /api/v1/consent-agent/scans/web` (also the original `POST /scans`) | `POST /api/v1/consent-agent/scans/application` |
 | Pages per scan | at most `CONSENT_WEB_MAX_PAGES` unique pages (default **5**, never above 5 -- a larger configured value is clamped; every page is a page of the entered main domain) | **no fixed page-count cap** when `CONSENT_APP_MAX_PAGES=0` |
 | Wall-clock bound | **no crawl deadline**; per-page timeout only; fixed 30 min ceiling for a hung scan | **no crawl deadline** by default (`CONSENT_APP_MAX_SECONDS=0`); optional deadline if set; fixed 24 h ceiling for a hung scan |
-| Who may call | any signed-in user, or a key with `consent:scan` | an **organisation admin**, or a service key with `consent:scan:application` |
+| Who may call | any caller (no token needed while the API is open, see `core/api_access.py`) | any caller, on a DNS-verified domain |
 | Domain | existing deployment policy (`SCANNER_REQUIRE_DOMAIN_VERIFICATION`) | **must have passed DNS ownership verification**, always |
 | SSRF / same-site / robots / de-dup / concurrency / per-navigation timeout | applied | applied, identically |
 
@@ -67,20 +67,18 @@ python -m pytest tests/test_scan_profiles.py -q
 #   PowerShell:        $env:CONSENT_WEB_MAX_PAGES="0"; python -c "from app.config import get_settings; get_settings()"
 #                      (then: Remove-Item Env:CONSENT_WEB_MAX_PAGES)
 
-# API (replace TOKEN; use an admin token for /application)
+# API (replace TOKEN, or drop the Authorization header while the API is open)
 curl -s -X POST http://127.0.0.1:8000/api/v1/consent-agent/scans/web \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"website_url":"https://example.com","authorized":true,"scan_options":{"max_pages":100}}'
 # -> {"profile":"web","max_pages":5,...}   (the 100 was ignored)
 
 curl -s -X POST http://127.0.0.1:8000/api/v1/consent-agent/scans/application \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"website_url":"https://app.example.com","authorized":true}'
-# -> 403 unless the caller is an admin (or a key with consent:scan:application)
-#    and the domain is DNS-verified; then {"profile":"application","max_pages":null,"max_seconds":3600,...}
+# -> 403 unless the domain is DNS-verified; then {"profile":"application","max_pages":null,...}
+# While the API is open (APP_ENV=development or OPEN_ACCESS=true) the Authorization header can be left out.
 ```
-
-To mint a key for the application profile, grant it the `consent:scan:application` scope.
 
 ## What counts as a page (public scans)
 

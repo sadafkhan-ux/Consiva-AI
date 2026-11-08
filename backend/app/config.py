@@ -3,18 +3,15 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load backend/.env into the PROCESS environment, once, before anything reads it.
 #
 # `env_file` below already feeds the Settings fields declared in this class -- but
-# only those. Secrets named by a `credential_ref` are different: their names live in
-# the database (DEMO_DB_READ_PASSWORD, and whatever a customer calls theirs), they can
-# never be declared here, and the connectors read them with a plain `os.getenv`. Put
-# such a secret in .env, as .env.example tells you to, and without this line it simply
-# was not there: Agent 3's search failed with "credential_ref ... is not set in this
-# environment" against a database that was otherwise correctly configured.
+# only those. Anything read with a plain `os.getenv` (app/jobs/worker.py's
+# WORKER_DATABASE_URL handling, for one) would otherwise miss a value that lives in
+# the file rather than the real environment.
 #
 # override=False so a real environment variable always beats the file. That is the
 # precedence Docker needs -- compose sets DATABASE_URL in the environment while an
@@ -87,16 +84,17 @@ class Settings(BaseSettings):
     # without it, /api/v1/auth/login cannot issue tokens.
     consiva_jwt_secret: str | None = None
 
-    # ROPA (Agent 2) data-source credential encryption -- the smallest extension
-    # that lets a customer self-service a new data source's secret through the
-    # API, instead of an operator editing this process's environment and
-    # restarting it. A urlsafe-base64, 32-byte Fernet key (Fernet.generate_key()).
-    # Optional: the existing env-var `credential_ref` path (connectors/factory.py)
-    # is untouched and keeps working with no key set at all. Only
-    # POST /sources/{id}/credential requires this to be configured; everything
-    # else -- reading sources, running discovery against an env-var-backed
-    # source -- is unaffected by whether it's set.
-    ropa_credential_encryption_key: str | None = None
+    # Encryption at rest for secrets a caller hands us -- today, the per-scan
+    # callback_secret on the Consent Agent API (services/agent_webhook_service.py,
+    # app/core/secret_box.py). A urlsafe-base64, 32-byte Fernet key
+    # (Fernet.generate_key()). Optional: only a scan that supplies its own
+    # callback_secret needs it. Still read from ROPA_CREDENTIAL_ENCRYPTION_KEY when
+    # that is what a deployment has set, because secrets already stored were
+    # encrypted under that key -- renaming the variable must not orphan them.
+    credential_encryption_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CREDENTIAL_ENCRYPTION_KEY", "ROPA_CREDENTIAL_ENCRYPTION_KEY"),
+    )
 
     # Supabase auth -- now OPTIONAL. Identity used to come from Supabase; local
     # auth replaces it. These stay so a deployment mid-transition keeps
@@ -178,14 +176,6 @@ class Settings(BaseSettings):
 
         return min(value, MAX_WEB_PAGES)
 
-    @field_validator("dpdp_score_weights")
-    @classmethod
-    def _score_weights_are_valid(cls, value: dict[str, int]) -> dict[str, int]:
-        from app.scoring.dpdp_score import resolve_weights
-
-        resolve_weights(value)           # raises a ValueError (a startup failure) on an unknown id or an out-of-range weight
-        return value
-
     @field_validator("consent_app_max_seconds")
     @classmethod
     def _deadline_is_off_or_sensible(cls, value: int) -> int:
@@ -240,18 +230,9 @@ class Settings(BaseSettings):
     report_frontend_url: str = "http://frontend:8080"
     report_pdf_timeout_seconds: int = Field(default=90, ge=10, le=600)
     report_pdf_max_concurrent: int = Field(default=2, ge=1, le=8)
-    # When set, a source's `credential_ref` (the name of the environment variable holding its secret) must start with this. Empty = only the platform's own
-    # variables are refused (app/core/credential_refs.py). Set it, and name each source's variable to match, to allow only variables made for sources.
-    credential_ref_required_prefix: str = ""
     report_pdf_cache_seconds: int = Field(default=120, ge=0, le=3600)
     # Pre-generated PDFs (services/report_cache_service.py) are kept this many days, then dropped the next time one is stored.
     report_pdf_retention_days: int = Field(default=30, ge=1, le=365)
-    # Purpose Classifier (Agent 6): an assessment request can carry a caller-supplied
-    # DSN/spec URL/CSV body that the worker will act on -- unbounded submissions let
-    # one org occupy every slot in the single shared worker pool (jobs/worker.py's
-    # fixed WORKER_CONCURRENCY) with requests that are slow to fail rather than
-    # queued. Same shape of problem as the scanner's own rate limit above.
-    purpose_max_assessments_per_org_per_day: int = 100
     # Bounded concurrent page fetching for the pre_consent crawl (moved here from a
     # hardcoded crawler.py constant so ops can tune it per deployment without a code
     # change). Default of 4 is the value already measured live against a real 25-page
@@ -269,10 +250,6 @@ class Settings(BaseSettings):
     # actual vantage point -- that limitation needs a real India-region proxy/egress,
     # which is a separate infrastructure decision, not something these two settings
     # can substitute for.
-    # DPDP Compliance Score: optional overrides of the documented requirement weights, as JSON, e.g.
-    # DPDP_SCORE_WEIGHTS={"DPDP-C1": 6}. Each weight is a whole number 1..10 for a known requirement id; anything else stops
-    # the app from starting. Empty means the documented defaults. A custom set is declared in every result and report.
-    dpdp_score_weights: dict[str, int] = Field(default_factory=dict)
     scanner_locale: str = "en-IN"
     scanner_accept_language: str = "en-IN,en;q=0.9"
     # When True, a scan is refused unless the target domain has passed DNS-TXT
@@ -337,8 +314,8 @@ class Settings(BaseSettings):
 
     webhook_signing_secret: str | None = None
 
-    # Fixed external-partner notification channel (ROPA run + Consent Agent API
-    # scan completion/failure). Distinct from webhook_signing_secret above: that
+    # Fixed external-partner notification channel (Consent Agent API scan
+    # completion/failure). Distinct from webhook_signing_secret above: that
     # one signs a CALLER-supplied per-scan webhook_url with Consiva's own scheme;
     # this is ONE operator-configured destination per deployment (set
     # differently in UAT vs production, same as cors_allowed_origins already

@@ -41,7 +41,13 @@ from pypdf import PdfReader, PdfWriter
 
 from app.config import Settings
 from app.core.exceptions import ReportGenerationError
-from app.scoring.dpdp_score import DISCLAIMER
+
+#: Printed in the footer of every report page.
+DISCLAIMER = (
+    "This report is for informational purposes only and does not constitute legal advice. It reflects an automated scan of the pages "
+    "listed, measured against Consiva's own checks, and is not a certification or guarantee of compliance with any law. Consult a "
+    "qualified legal professional before relying on it."
+)
 
 logger = logging.getLogger(__name__)
 

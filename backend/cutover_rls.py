@@ -12,10 +12,10 @@ WORKER and MIGRATION URLs to the privileged role.
 
 Those last two are not an oversight, they are the design (0018's ops note):
 
-  * The WORKER is deliberately cross-tenant. The DSR and incident SLA sweeps and the
-    regulatory due-source sweep walk every organisation's rows and have no single
-    org_id to scope to. Under the restricted role they would correctly see nothing
-    and stop sweeping silently, which is the worst way for a compliance sweep to stop.
+  * The WORKER is deliberately cross-tenant. Stale-job reaping and the monitoring
+    dispatcher walk every organisation's rows and have no single org_id to scope to.
+    Under the restricted role they would correctly see nothing and stop silently,
+    which is the worst way for a background duty to stop.
 
   * MIGRATIONS need DDL. consiva_app has none, by design.
 

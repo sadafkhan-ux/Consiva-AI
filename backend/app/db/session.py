@@ -82,7 +82,7 @@ def set_org_scope(org_id: str | uuid.UUID | None) -> None:
 async def apply_org_scope(db: AsyncSession, org_id: str | uuid.UUID) -> None:
     """Bind the scope AND stamp the transaction that is already open.
 
-    `after_begin` only fires when a transaction starts. The login and integration-key
+    `after_begin` only fires when a transaction starts. The login and open-API
     paths have to read the database BEFORE they know which organisation they are
     acting for, so by the time they find out, a transaction is already underway and
     the hook has been and gone. This covers that one, and the ContextVar covers every

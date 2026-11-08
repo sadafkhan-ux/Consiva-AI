@@ -161,8 +161,8 @@ def _strict_json_schema(schema: dict) -> dict:
     if out.get("type") == "object" or "properties" in out:
         out.setdefault("additionalProperties", False)
         # Strict mode also demands every property be listed in `required`; pydantic
-        # omits fields that have defaults, which Groq rejected for RegWatch's
-        # `_Interpretation` ("`required` ... must include every key in properties").
+        # omits fields that have defaults, which Groq rejected for a schema with
+        # defaulted fields ("`required` ... must include every key in properties").
         # Wire-only, like the line above: the model still validates with defaults.
         if isinstance(out.get("properties"), dict):
             out["required"] = list(out["properties"])
@@ -858,8 +858,8 @@ async def generate_structured_with_fallback(
     }
 
     # Usage tracking (app/llm/usage_tracking.py) needs the per-attempt token counts
-    # usage_sink carries, regardless of whether the CALLER wants them -- most callers
-    # (ROPA, RegWatch) don't pass usage_sink today, which previously meant their
+    # usage_sink carries, regardless of whether the CALLER wants them -- some callers
+    # don't pass usage_sink, which previously meant their
     # tokens were never even captured, let alone recorded. Tracking internally like
     # this is the smallest fix: every caller's own usage_sink (if any) is still
     # populated exactly as before.

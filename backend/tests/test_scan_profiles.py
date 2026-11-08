@@ -27,16 +27,15 @@ from pydantic import ValidationError
 from app.api.v1.routes import consent_agent as route
 from app.api.v1.schemas.consent_agent import CreateScanRequest, ScanOptions
 from app.config import Settings, get_settings
-from app.core import integration_auth
+from app.core import api_access
 from app.core.exceptions import ScanAuthorizationError, ScanTimeoutError
 from app.core.security import CurrentUser
 from app.jobs import queue
 from app.scanner import crawler, run_single_scan, scan_profiles
 from app.scanner.scan_profiles import APPLICATION, WEB, resolve_profile
 from app.services import scan_service
-
 from tests.test_error_modes_db_partial import _fake_scan_result
-from tests.test_scanner_coverage import ROOT, _FakeContext, _crawl, _links
+from tests.test_scanner_coverage import ROOT, _crawl, _FakeContext, _links
 
 ORG = uuid.uuid4()
 USER = uuid.uuid4()
@@ -543,7 +542,6 @@ def _body(max_pages=None):
 ADMIN = CurrentUser(user_id=str(USER), org_id=str(ORG), role="admin")
 MEMBER = CurrentUser(user_id=str(USER), org_id=str(ORG), role="member")
 LEGACY = CurrentUser(user_id=str(USER), org_id=str(ORG), role=None)
-KEY = CurrentUser(user_id=str(USER), org_id=str(ORG), role=None, key_name="ci-key")
 
 
 @pytest.mark.parametrize("requested", [None, 1, 5, 6, 25, 100])
@@ -613,27 +611,15 @@ async def test_an_unverified_domain_is_refused_for_an_application_scan(monkeypat
 
 
 @pytest.mark.parametrize("user", [MEMBER, LEGACY], ids=["member", "token-with-no-role"])
-def test_a_person_who_is_not_an_admin_cannot_use_the_application_profile(user):
-    with pytest.raises(route.ApplicationScanNotPermittedError) as caught:
-        route._require_application_permission(user)
-    assert caught.value.status_code == 403
-    assert "scans/web" in str(caught.value), "the refusal points at the endpoint they may use"
-
-
-def test_an_admin_and_a_scoped_service_key_pass_the_application_check():
-    route._require_application_permission(ADMIN)
-    route._require_application_permission(KEY)     # scope already proven by the dependency
-
-
-async def test_a_non_admin_is_stopped_before_anything_is_checked_or_queued(monkeypatch):
+async def test_any_caller_may_start_an_application_scan_while_the_api_is_open(monkeypatch, user):
+    """The admin-only gate went with the service-key system; only the verified domain remains."""
     rec = _wire_submit(monkeypatch)
 
-    with pytest.raises(route.ApplicationScanNotPermittedError):
-        await route.create_application_scan(
-            body=_body(), response=MagicMock(), idempotency_key=None, user=MEMBER, db=_Db(),
-        )
+    out = await route.create_application_scan(
+        body=_body(), response=MagicMock(), idempotency_key=None, user=user, db=_Db(),
+    )
 
-    assert rec.request_scan_kwargs is None and rec.enqueued is None
+    assert out.profile == APPLICATION and rec.enqueued is not None
 
 
 async def test_a_body_that_names_a_profile_or_a_huge_limit_changes_nothing(monkeypatch):
@@ -681,12 +667,7 @@ async def test_an_idempotent_replay_on_the_same_profile_returns_the_original(mon
     assert rec.request_scan_kwargs is None
 
 
-# ── Authorization at the dependency: a key needs the application scope ───────────
-
-def test_the_application_scope_exists_and_is_mintable():
-    assert integration_auth.SCOPE_CONSENT_SCAN_APPLICATION == "consent:scan:application"
-    assert "consent:scan:application" in integration_auth.KNOWN_SCOPES
-
+# ── Who the caller is: the open API (core/api_access.get_caller) ─────────────────
 
 def _route_dependencies(path: str, method: str = "POST") -> set:
     for r in route.router.routes:
@@ -695,73 +676,63 @@ def _route_dependencies(path: str, method: str = "POST") -> set:
     raise AssertionError(f"no {method} {path}")
 
 
-def test_each_endpoint_is_wired_to_the_dependency_that_matches_its_profile():
+def test_every_scan_endpoint_uses_the_one_open_caller_dependency():
     base = "/api/v1/consent-agent/scans"
-    assert integration_auth.get_application_scan_caller in _route_dependencies(f"{base}/application")
-    assert integration_auth.get_caller not in _route_dependencies(f"{base}/application")
-    for path in (base, f"{base}/web"):
-        assert integration_auth.get_caller in _route_dependencies(path)
-        assert integration_auth.get_application_scan_caller not in _route_dependencies(path)
+    for path in (base, f"{base}/web", f"{base}/application"):
+        assert api_access.get_caller in _route_dependencies(path)
 
 
-async def _auth_with_key(monkeypatch, scopes):
-    full_key, _prefix, _hash = integration_auth.generate_key()
-    principal = integration_auth.IntegrationPrincipal(
-        org_id=str(ORG), key_id=uuid.uuid4(), name="k", scopes=tuple(scopes),
-    )
-    monkeypatch.setattr(integration_auth, "resolve_integration_key", AsyncMock(return_value=principal))
-    monkeypatch.setattr(integration_auth, "apply_org_scope", AsyncMock())
+def _db_with_user(user):
     db = MagicMock()
-    db.execute = AsyncMock(return_value=MagicMock(
-        scalar_one=MagicMock(return_value=SimpleNamespace(created_by_user_id=USER)),
-    ))
-    creds = SimpleNamespace(credentials=full_key)
-    return await integration_auth.get_application_scan_caller(
-        credentials=creds, db=db, settings=get_settings(),
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=user)))
+    return db
+
+
+async def test_no_token_acts_as_the_default_account_when_open_access_is_on(monkeypatch):
+    scoped = AsyncMock()
+    monkeypatch.setattr(api_access, "apply_org_scope", scoped)
+    account = SimpleNamespace(id=USER, org_id=ORG, role="admin")
+
+    caller = await api_access.get_caller(
+        credentials=None, db=_db_with_user(account), settings=_settings(open_access=True),
     )
 
+    assert caller == CurrentUser(user_id=str(USER), org_id=str(ORG), role="admin")
+    scoped.assert_awaited_once()   # row-level security is still bound to that organisation
 
-async def test_a_key_with_only_the_web_scope_is_refused_the_application_endpoint(monkeypatch):
+
+async def test_no_token_is_still_401_when_open_access_is_off():
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as caught:
-        await _auth_with_key(monkeypatch, ["consent:scan"])
-    assert caught.value.status_code == 403 and "consent:scan:application" in caught.value.detail
-
-
-async def test_a_key_with_the_application_scope_is_accepted_and_is_never_an_admin(monkeypatch):
-    user = await _auth_with_key(monkeypatch, ["consent:scan:application"])
-    assert user.key_name == "k" and user.role is None
-
-
-async def test_no_credentials_means_401():
-    from fastapi import HTTPException
-
-    with pytest.raises(HTTPException) as caught:
-        await integration_auth.get_application_scan_caller(
-            credentials=None, db=MagicMock(), settings=get_settings(),
+        await api_access.get_caller(
+            credentials=None, db=MagicMock(),
+            settings=_settings(app_env="production", open_access=False),
         )
     assert caught.value.status_code == 401
 
 
-def test_over_http_a_member_token_gets_403_with_a_stable_error_code_and_no_token_gets_401():
-    from fastapi.testclient import TestClient
+async def test_no_token_and_no_account_to_act_as_is_409():
+    from fastapi import HTTPException
 
+    with pytest.raises(HTTPException) as caught:
+        await api_access.get_caller(
+            credentials=None, db=_db_with_user(None), settings=_settings(open_access=True),
+        )
+    assert caught.value.status_code == 409
+
+
+async def test_a_login_token_still_acts_as_that_user():
     from app.core.tokens import issue_access_token
-    from app.main import app
 
-    client = TestClient(app)
-    payload = {"website_url": "https://app.example.com", "authorized": True}
-    url = "/api/v1/consent-agent/scans/application"
+    settings = _settings(open_access=True)
+    token, _ = issue_access_token(user_id=str(USER), org_id=str(ORG), role="member", settings=settings)
 
-    assert client.post(url, json=payload).status_code == 401
-
-    token, _ = issue_access_token(
-        user_id=str(USER), org_id=str(ORG), role="member", settings=get_settings(),
+    caller = await api_access.get_caller(
+        credentials=SimpleNamespace(credentials=token), db=MagicMock(), settings=settings,
     )
-    denied = client.post(url, json=payload, headers={"Authorization": f"Bearer {token}"})
-    assert denied.status_code == 403
-    assert denied.json()["error"]["code"] == "APPLICATION_SCAN_NOT_PERMITTED"
+
+    assert caller.user_id == str(USER) and caller.role == "member"
 
 
 # ── Service layer: the application profile always needs a verified domain ────────

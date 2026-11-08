@@ -9,6 +9,7 @@ import { buildCookieInventory, type CookieInventory } from "./cookieInventory";
 import { buildScanPages, type ScanPagesView } from "./scanPages";
 import { buildReportVisual, type ReportVisual } from "./reportVisual";
 import { buildTransparency, type ScanTiming, type TransparencyView } from "./scanTransparency";
+import { SCORE_UNAVAILABLE, type TenAssessment } from "./tenChecks";
 
 /** Risk ordering, worst first -- used both to pick the overall band and to decide which
  *  findings earn a place on a deliberately one-page summary. */
@@ -63,6 +64,8 @@ export interface ReportModel {
   insights: InsightSection[];
   /** The five-page DPDP readiness review: the same one the dashboard shows. */
   readiness: ReadinessReview;
+  /** The Privacy Readiness Score, as the backend calculated it (GET .../score). SCORE_UNAVAILABLE when it could not be loaded. */
+  tenChecks: TenAssessment;
 }
 
 /** Everything the one-page PDF needs, derived from data the app already has in state.
@@ -86,6 +89,7 @@ export function buildReportModel(
   policyAnalysis: PolicyAnalysis | null = null,
   screenshot: ScanScreenshot | null = null,
   timing: ScanTiming | null = null,
+  tenChecks: TenAssessment | null = null,
 ): ReportModel {
   const sorted = [...findings].sort((a, b) => riskRank(a.risk_level) - riskRank(b.risk_level));
   const provisional = findings.some((f) => f.status === "pending");
@@ -222,5 +226,6 @@ export function buildReportModel(
     screenshot,
     insights: buildInsightSections({ policy: policyAnalysis, meta, evidence, sector: dpdpScore?.sector ?? null, siteUrl: scan?.url ?? null }),
     readiness: buildReadinessReview({ siteUrl: scan?.url ?? "", evidence, meta, policy: policyAnalysis, sector: dpdpScore?.sector ?? null }),
+    tenChecks: tenChecks ?? SCORE_UNAVAILABLE,
   };
 }

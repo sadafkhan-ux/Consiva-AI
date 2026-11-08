@@ -5,62 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agents.dsr.connectors import factory as dsr_factory
-from app.agents.dsr.connectors.authorization import SourceNotAuthorizedError
-from app.agents.regwatch.services import collection_service
-from app.agents.ropa.connectors import factory as ropa_factory
-from app.agents.ropa.connectors.base import ConnectorError
-from app.config import get_settings
-from app.core.credential_refs import CredentialRefNotAllowedError, assert_credential_ref_allowed
 from app.jobs import queue
 from app.llm import usage_tracking
 from app.scanner.url_normalize import normalize_url
 from app.services import consent_agent_api_service as api_service
 from app.services.review_service import InvalidEditError, _validate_edited_payload
-
-# ── a source cannot name the platform's own secrets ─────────────────────────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("name", ["DATABASE_URL", "CONSIVA_JWT_SECRET", "SUPABASE_JWT_SECRET", "anthropic_api_key", "NVIDIA_API_KEY", "ROPA_CREDENTIAL_ENCRYPTION_KEY",
-                                  "WEBHOOK_SIGNING_SECRET", "POSTGRES_PASSWORD", "PGPASSWORD", "WORKER_DATABASE_URL"])
-def test_a_variable_the_platform_uses_itself_cannot_be_a_credential_ref(name):
-    with pytest.raises(CredentialRefNotAllowedError):
-        assert_credential_ref_allowed(name)
-
-
-@pytest.mark.parametrize("name", ["PREPMYEVENT_DB_PASSWORD", "REGWATCH_MEITY_TOKEN", "CRM_READONLY_PASSWORD"])
-def test_a_variable_made_for_a_source_is_still_allowed(name):
-    assert assert_credential_ref_allowed(name) == name
-
-
-def test_the_required_prefix_setting_turns_the_rule_into_an_allowlist():
-    settings = get_settings().model_copy(update={"credential_ref_required_prefix": "SRC_"})
-    assert assert_credential_ref_allowed("SRC_CRM_PASSWORD", settings=settings) == "SRC_CRM_PASSWORD"
-    with pytest.raises(CredentialRefNotAllowedError):
-        assert_credential_ref_allowed("PREPMYEVENT_DB_PASSWORD", settings=settings)
-
-
-def test_the_error_never_repeats_the_name_it_refused():
-    with pytest.raises(CredentialRefNotAllowedError) as err:
-        assert_credential_ref_allowed("DATABASE_URL")
-    assert "DATABASE_URL" not in str(err.value)
-
-
-def test_no_connector_reads_a_platform_secret_from_the_environment(monkeypatch):
-    """The three places that read a credential_ref from the environment all refuse a platform variable BEFORE reading it."""
-    monkeypatch.setenv("CONSIVA_JWT_SECRET", "must-never-be-returned")
-    with pytest.raises(ConnectorError):
-        ropa_factory._resolve_secret("CONSIVA_JWT_SECRET")
-    with pytest.raises(SourceNotAuthorizedError):
-        dsr_factory._resolve_secret("CONSIVA_JWT_SECRET", purpose="read")
-    with pytest.raises(collection_service.SourceNotAuthorizedError):
-        collection_service._resolve_credential(SimpleNamespace(credential_ref="CONSIVA_JWT_SECRET"))
-
-
-def test_a_source_credential_still_resolves_for_a_variable_made_for_it(monkeypatch):
-    monkeypatch.setenv("CRM_READONLY_PASSWORD", "s3cret")
-    assert ropa_factory._resolve_secret("CRM_READONLY_PASSWORD") == "s3cret"
-    assert dsr_factory._resolve_secret("CRM_READONLY_PASSWORD", purpose="read") == "s3cret"
-
 
 # ── one bad link must not fail a scan ───────────────────────────────────────────────────────────────────────────────────────────
 
@@ -88,7 +37,6 @@ def test_an_application_scan_run_through_the_api_gets_the_long_lease():
 def test_a_web_chain_job_covers_its_crawl_and_the_analysis_after_it():
     chain = queue.stale_threshold_for(_job("consent_api_chain", "web"))
     assert chain > queue.stale_threshold_for(_job("scan", "web"))
-    assert queue.stale_threshold_for(_job("dsr_search")) == queue.stale_threshold_for(_job("anything_else"))
 
 
 # ── a reviewer's cookie correction ──────────────────────────────────────────────────────────────────────────────────────────────

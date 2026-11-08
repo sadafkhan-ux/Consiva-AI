@@ -33,8 +33,7 @@ that tell the model nothing. The English text of the same provisions is present.
 
 **Confirmed healthy, no change needed:** evidence compaction (grouped trackers, table format, caps), the batched query
 embedding and its cache, `top_k = 3` per query with at most 8 chunks (measured in earlier work), prefix-friendly prompt order.
-ROPA makes one capped batch call per run, RegWatch one call per detected change. `prompts/ropa_agent_prompt.md` is not used by any
-code and costs nothing.
+
 
 ## 2. Changes
 

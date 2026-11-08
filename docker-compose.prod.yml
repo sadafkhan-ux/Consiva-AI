@@ -25,8 +25,8 @@
 # that separate polling process. Without it every scan sits at status "pending"
 # forever (the exact "Timed out waiting for the backend" symptom seen in development).
 #
-# There is deliberately NO scheduler service -- the periodic sweeps (DSR/incident SLA,
-# regulatory due-sources, monitoring, stale-job reaping) run inside `worker`. The other
+# There is deliberately NO scheduler service -- the periodic duties (monitoring,
+# stale-job reaping) run inside `worker`. The other
 # __main__ entrypoints in the project (app.rag.ingest, app.lookup.loader, create_user.py)
 # are one-shot CLI tools, not daemons.
 #
@@ -262,10 +262,10 @@ services:
       # Same override as backend -- see the `db` service comment above.
       #
       # The worker STAYS on the privileged role even after the API cuts over. It is
-      # deliberately cross-tenant: the DSR and incident SLA sweeps and the regulatory
-      # due-source sweep walk every organisation's rows and have no single org_id to
-      # scope to. On the restricted role they would correctly see nothing and stop
-      # sweeping silently -- the worst way for a compliance sweep to stop. After the
+      # deliberately cross-tenant: stale-job reaping and the monitoring dispatcher
+      # walk every organisation's rows and have no single org_id to scope to. On the
+      # restricted role they would correctly see nothing and stop silently -- the
+      # worst way for a background duty to stop. After the
       # cutover, set WORKER_DATABASE_URL to this same value; worker.py prefers it.
       DATABASE_URL: *database_url
       # How many queued jobs this worker runs at once. Before this existed the worker

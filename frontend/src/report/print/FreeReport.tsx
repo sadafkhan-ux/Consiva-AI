@@ -1,6 +1,5 @@
 import type { ReportModel } from "../buildReport";
 import { buildPageReport, FREE_PAGES, type PageReportView } from "../pageReports";
-import { buildTenChecks } from "../tenChecks";
 import { AreasBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, TechCards, UpgradeBand } from "./Blocks";
 import { Icon, PageFrame, SecHead, SheetPageStyle, SHORT_DISCLAIMER } from "./PageParts";
 import "./pages.css";
@@ -40,7 +39,7 @@ function FirstPage({ model, view, frame, tag, numbered = true }: { model: Report
         </div>
 
         <div className="pg-row2">
-          <ScoreCard view={view} id="free" ten={buildTenChecks(model)} />
+          <ScoreCard view={view} id="free" ten={model.tenChecks} />
           <CtaCard view={view} />
         </div>
 

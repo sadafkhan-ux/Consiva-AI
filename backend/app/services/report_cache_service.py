@@ -33,7 +33,7 @@ from app.db.models import (
     ScanScreenshot,
 )
 from app.db.session import async_session_factory
-from app.scoring import dpdp_score
+from app.scoring import ten_checks
 from app.services import report_pdf_service
 from app.services.report_pdf_service import RenderedReport
 
@@ -82,7 +82,7 @@ async def fingerprint(db: AsyncSession, scan: ConsentScan, settings: Settings | 
         RENDER_VERSION, str(scan.id), scan.status, scan.completed_at,
         [(str(r[0]), r[1], r[2]) for r in runs], [(str(f[0]), f[1]) for f in findings],
         [(s[0], s[1], s[2], str(s[3])) for s in stages], tuple(shot) if shot else None,
-        dpdp_score.today_in_india().isoformat(), dpdp_score.METHODOLOGY_VERSION, settings.dpdp_score_weights or {},
+        ten_checks.METHODOLOGY,
         await frontend_signature(settings),
     ])
 

@@ -3,6 +3,7 @@ import type {
   AuditLogResponse,
   FindingResponse,
   DpdpScoreResponse,
+  ScoreResponse,
   ScanEvidenceResponse,
   PolicyAnalysis,
   ScanListItem,
@@ -55,7 +56,7 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
  * and is not: the header still shows your email, the console still renders, and every
  * request fails locally with "Not signed in." before it reaches the server -- with no
  * way back except finding the Sign out button. Agents 2, 3 and 4 all did exactly that
- * until a real session expired on the Breach tab and showed it.
+ * until a real session expired mid-use and showed it.
  */
 export function handleUnauthorized(): void {
   logout();
@@ -205,6 +206,10 @@ export const api = {
   compareDpdpScore(scanId: string, against?: string): Promise<ScoreComparison> {
     const query = against ? `?against=${encodeURIComponent(against)}` : "";
     return request(`/api/v1/consent/scans/${scanId}/dpdp-score/compare` + query);
+  },
+  /** The Privacy Readiness Score (ten checks), computed by the backend. */
+  getScore(scanId: string): Promise<ScoreResponse> {
+    return request(`/api/v1/consent/scans/${scanId}/score`);
   },
   getDpdpScore(scanId: string): Promise<DpdpScoreResponse> {
     return request(`/api/v1/consent/scans/${scanId}/dpdp-score`);

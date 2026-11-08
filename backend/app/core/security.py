@@ -51,18 +51,6 @@ class CurrentUser:
     # Present on Consiva-issued tokens; None for a legacy Supabase token, which
     # carries no role. Callers that gate on role must treat None as "not admin".
     role: str | None = None
-    # Set only when the caller authenticated with a SERVICE KEY rather than a login
-    # (see core/integration_auth.get_caller). `user_id` then names the person who
-    # minted that key, so attribution still points at a human; this says which
-    # integration acted on their behalf, which "a human did it" alone would lose.
-    # None means a person was really at the keyboard.
-    key_name: str | None = None
-    # The key's own row id, alongside key_name -- set together, by the same
-    # branch of core/integration_auth._authenticate_with_scope. Lets a caller
-    # record WHICH key acted (a structured id, not just its display name) without
-    # a second lookup, the same way ROPA runs already resolve a display name back
-    # from a stored integration_key_id.
-    key_id: uuid.UUID | None = None
 
 
 def get_current_user(

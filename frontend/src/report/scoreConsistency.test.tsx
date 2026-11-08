@@ -5,7 +5,7 @@ import { DpdpScoreSection } from "../components/DpdpScoreSection";
 import fixtures from "../test/dpdpScoreFixtures.json";
 import { buildReportModel } from "./buildReport";
 import { buildScoreView } from "./dpdpScore";
-import { buildTenChecks } from "./tenChecks";
+import { TEN } from "../test/score";
 import { buildPageReport } from "./pageReports";
 import { FreeReport } from "./print/FreeReport";
 import { FullReport } from "./print/FullReport";
@@ -24,7 +24,7 @@ const EVIDENCE = {
   pages: [{ id: "p", url: "https://x.test/", title: "t", http_status: 200, discovered_via: "seed" }], forms: [], cookies: [], trackers: [], third_party_services: [], policies: [], consent_signals: [],
 } as unknown as ScanEvidenceResponse;
 const SCAN = { id: "11111111-1111-1111-1111-111111111111", url: "https://x.test/", evidence_counts: { pages: 1, cookies: 0, trackers: 0, third_party_services: 0, policies: 0, forms: 0 } } as never;
-const model = (score: DpdpScoreResponse, evidence: ScanEvidenceResponse = EVIDENCE) => buildReportModel(SCAN, [], META, [], [], buildScoreView(score), evidence, null, null, null);
+const model = (score: DpdpScoreResponse, evidence: ScanEvidenceResponse = EVIDENCE) => buildReportModel(SCAN, [], META, [], [], buildScoreView(score), evidence, null, null, null, null, TEN);
 
 const SCORED = Object.entries(F).filter(([, v]) => v.readiness.status === "scored");
 
@@ -48,7 +48,7 @@ describe("every surface shows the number the server sent", () => {
     // the fixed Free and Full sheets print the Privacy Readiness Score of the 10-check assessment: the same number as the two-page summary and the dashboard hero, never the weighted section's
     for (const R of [FreeReport, FullReport]) {
       const { container } = render(<R model={m} />);
-      expect(container.querySelector(".pg-score-ring")!.textContent).toContain(String(buildTenChecks(m).score));
+      expect(container.querySelector(".pg-score-ring")!.textContent).toContain(String(m.tenChecks.score));
       cleanup();
     }
 

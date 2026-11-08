@@ -1,49 +1,33 @@
 # Consiva-AI
 
-DPDP (Digital Personal Data Protection Act, 2023) compliance platform. Two agents,
-one console.
+DPDP (Digital Personal Data Protection Act, 2023) compliance platform built around one
+agent, the **Consent Agent**.
 
-**Consent Agent** scans a website for consent/tracking evidence, reasons over it
-against a RAG knowledge base built from the actual DPDP Act and Rules, and produces
-grounded, citation-validated findings a human reviews before they count.
+It scans a website for consent/tracking evidence, reads its privacy policy, reasons over
+the evidence against a RAG knowledge base built from the actual DPDP Act and Rules, and
+produces grounded, citation-validated findings a human reviews before they count.
 
-**Data Discovery / ROPA Agent** takes authorized metadata from an organization's own
-systems and turns it into an evidence-backed Record of Processing Activities —
-classifying personal data, mapping data subjects, purposes, processing activities and
-data flows, detecting privacy gaps, and tracking schema changes over time.
+No AI inference becomes an authoritative record. Everything material passes a human
+review gate, and anything the evidence doesn't support stays explicitly `Unknown`
+rather than being guessed at.
 
-Neither agent lets an AI inference become an authoritative record. Everything material
-passes a human review gate, and anything the evidence doesn't support stays explicitly
-`Unknown` rather than being guessed at.
-
-## The two flows
+## The flow
 
 ```
-AGENT 1 — Consent
 Website
   -> scan (Playwright, three consent states: pre / accept / reject)
-  -> structured evidence
+  -> structured evidence (+ privacy-policy content analysis)
   -> deterministic rules + lookup
   -> RAG retrieval (pgvector over approved DPDP documents)
   -> LLM reasoning (Claude primary when ANTHROPIC_API_KEY is set; else self-hosted; NVIDIA/Groq fallback)
   -> structured-output validation + citation grounding
   -> findings -> human review gate -> append-only audit
-
-AGENT 2 — Data Discovery / ROPA
-Authorized source (Postgres, REST API, or a customer-side adapter)
-  -> metadata only: tables, columns, types, foreign keys. Never row values.
-  -> deterministic classification (12 personal-data categories, with confidence)
-  -> data subject + purpose mapping (never invented; Unknown -> review)
-  -> processing activities -> data flows -> risk/gap findings
-  -> versioned ROPA records -> human review -> audit
-  -> schema change detection against a promoted baseline
 ```
 
 ## Stack
 
-- **Backend** — Python 3.13, FastAPI. Agent 1 uses LangGraph for durable pause/resume
-  at its review gate; Agent 2's pipeline is a linear, deterministic chain with no
-  graph (see `app/agents/ropa/services/discovery_service.py`).
+- **Backend** — Python 3.13, FastAPI. The Consent Agent uses LangGraph for durable
+  pause/resume at its review gate (`app/agents/consent_agent/graph.py`).
 - **Database** — Postgres 16 + `pgvector`, row-level security, append-only audit log.
   Runs as a local container in production (`docker-compose.prod.yml`); it was on
   Supabase until the shared session pooler's 15-client cap became the bottleneck.
@@ -105,33 +89,14 @@ The worker is not optional — scans submitted without one running stay queued.
 See [backend/README.md](backend/README.md) for full setup, environment variables,
 migrations, API examples, and troubleshooting.
 
-## Agent 2 without a running server
+## Integrating a website or backend
 
-The ROPA pipeline is pure and synchronous, so it can be exercised from the CLI against
-any Postgres you're authorized to read:
-
-```bash
-python -m app.agents.ropa.run_single_discovery https://customer.example \
-  --host db.internal --dbname prod --user consiva_readonly --password '...'
-```
-
-The connection is forced read-only at the server (`default_transaction_read_only`), and
-a superuser or bypass-RLS credential is rejected before anything is read.
-
-## Integrating an external source
-
-For a customer who won't (and shouldn't) hand over database credentials,
-`backend/ropa_integration/` is a self-contained adapter they run inside their own
-infrastructure. It reads their schema locally and pushes curated metadata to
-`POST /api/v1/ropa/evidence` over authenticated HTTPS.
-
-- It issues no SQL — everything comes from SQLAlchemy's `Inspector`.
-- It transmits no row values; `sample_pattern` is never populated.
-- Nothing leaves their system unless it's in the allow-list in their copy of
-  `adapter.py`.
-
-`ropa_integration/prepmyevent/` is the first implementation, with a README, a data
-contract, and a security statement written for the customer's own reviewers.
+External callers use the Consent Agent API (`/api/v1/consent-agent/*`). For now it is
+**open**: with `APP_ENV=development` or `OPEN_ACCESS=true`, a request with no token acts as
+the oldest user's account (the same one the console auto-logs in as). A request with a
+login token acts as that user. With neither setting, a token is still required. A
+replacement auth system is planned. See
+[docs/CONSENT_AGENT_API_FOR_WEBSITE_TEAM.md](docs/CONSENT_AGENT_API_FOR_WEBSITE_TEAM.md).
 
 ## Configuration
 
@@ -152,15 +117,15 @@ cd backend
 ```
 
 Some tests need real infrastructure and skip cleanly without it: retrieval quality
-needs an ingested knowledge base, and the ROPA integration tests read a live database
-catalog.
+needs an ingested knowledge base.
 
 ## Scope
 
-Both agents are implemented and deployed. Deliberately still out of scope: the ML
+The Consent Agent is implemented and deployed. Deliberately still out of scope: the ML
 classifier (`app/ml/` is an unused stub — there is no labelled training data yet, and
 the rules layer is the documented Phase 1), and per-key rate limiting (needs Redis to
-work across worker processes). ROPA connector discovery runs ARE queued: a connector
-run creates a `pending` run, enqueues a `ropa_discovery` job, and returns immediately;
-`app/jobs/worker.py` dispatches it (`app/services/ropa_run_service.py`), so a large
-customer database never blocks the request path.
+work across worker processes).
+
+The database migrations for the agents that were removed (ROPA, DSR, Breach, Regulatory
+Watch, Purpose Classifier) are kept unchanged, so existing databases still match the
+migration ledger; their tables are simply no longer used.

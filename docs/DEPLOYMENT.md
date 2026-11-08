@@ -155,7 +155,6 @@ a different database than the one the application reads.
   printed or overwritten by any of this.
 - The first administrator, once per environment:
   `docker compose -f docker-compose.prod.yml run --rm backend python create_user.py --email you@example.com --org "Your Org" --admin`
-- Regulatory sources, once per organisation: `python seed_regwatch_sources.py --org-id <uuid>`.
 - Row-level-security cutover to the `consiva_app` role is a separate, existing, manual step (see the
   comments in `docker-compose.prod.yml`); the owner role used by `migrate` must remain the owner.
 - Take a database backup before deploying migrations you have not reviewed.

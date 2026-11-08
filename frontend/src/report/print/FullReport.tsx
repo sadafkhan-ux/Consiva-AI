@@ -1,7 +1,6 @@
 import type { ReportModel } from "../buildReport";
 import { buildPageReport, FULL_PAGES, type SeriesPoint } from "../pageReports";
 import { CONSIVA_UPDATES, OMITTED_DUTIES_NOTE } from "../reportScope";
-import { buildTenChecks } from "../tenChecks";
 import { AreasBlock, ConsentTable, CtaCard, ElementsGrid, FindingsList, FrameworkBlock, ScoreCard, SummaryTiles, UpgradeBand } from "./Blocks";
 import { Icon, PageFrame, Pill, SecHead, SheetPageStyle, type IconName } from "./PageParts";
 import { ScanTransparency } from "./Transparency";
@@ -80,7 +79,7 @@ export function FullReport({ model }: { model: ReportModel }) {
             )}
           </figure>
         </div>
-        <ScoreCard view={view} id="full" ten={buildTenChecks(model)} />
+        <ScoreCard view={view} id="full" ten={model.tenChecks} />
         <SecHead n={1} title="Quick Summary" />
         <SummaryTiles view={view} />
         {model.analysisNote && <p className="pg-callout" data-testid="pg-analysis-note">{model.analysisNote}</p>}

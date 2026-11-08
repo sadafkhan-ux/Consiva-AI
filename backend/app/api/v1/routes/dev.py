@@ -13,8 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core import tokens
-from app.db.models import Organization, User
+from app.core import api_access, tokens
+from app.db.models import Organization
 from app.db.session import get_db
 
 router = APIRouter(prefix="/api/v1/dev", tags=["dev"])
@@ -84,9 +84,7 @@ async def auto_login(db: AsyncSession = Depends(get_db)) -> dict:
     # A real row, so the token carries a real org and the console shows real data.
     # Ordered by created_at so repeated calls land on the same account rather than
     # whichever row the planner happened to return.
-    user = (
-        await db.execute(select(User).order_by(User.created_at).limit(1))
-    ).scalar_one_or_none()
+    user = await api_access.default_user(db)
     if user is None:
         raise HTTPException(
             status_code=409,

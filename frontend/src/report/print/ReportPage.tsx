@@ -76,7 +76,7 @@ export function ReportPage({ scanId, print, variant, part }: { scanId: string; p
 
   const terminal = ["completed", "degraded", "failed", "awaiting_review"].includes(state.phase) && state.scan?.id === scanId;
   const complete = terminal && state.scan?.status === "completed";
-  const loaded = !!state.evidence && !!state.dpdpScore && state.policyAnalysis !== null && state.screenshot !== null;
+  const loaded = !!state.evidence && !!state.dpdpScore && !!state.tenScore && state.policyAnalysis !== null && state.screenshot !== null;
 
   // What the page still waits for after the scan itself: the evidence, the score, the policy analysis and the picture load alongside it. A part that
   // cannot be loaded is shown as unavailable, so waiting stops after a short while rather than holding the report back for ever.

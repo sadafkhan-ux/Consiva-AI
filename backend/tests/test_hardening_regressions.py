@@ -201,58 +201,6 @@ def test_the_worker_keeps_its_own_connection_string():
     )
 
 
-# ── Finding 6: Agent 2's status column had no CHECK constraint ──────────────────
-
-def test_the_ropa_status_vocabulary_matches_what_the_code_writes():
-    """The constraint is only worth having if it lists every value. A first pass at
-    this missed 'analyzing', which is written by the evidence-push path, and broke
-    three end-to-end tests the moment it was applied."""
-    migration = (BACKEND / "migrations" / "0017_ropa_run_hygiene.sql").read_text(encoding="utf-8")
-    constrained = set(re.findall(
-        r"check \(status in \(([^)]*)\)\)", migration
-    )[0].replace("'", "").replace(" ", "").split(","))
-
-    written = set()
-    for path in (BACKEND / "app" / "services" / "ropa_run_service.py",
-                 BACKEND / "app" / "db" / "repositories" / "ropa_repository.py"):
-        source = path.read_text(encoding="utf-8")
-        written |= set(re.findall(r'run\.status\s*=\s*"([a-z_]+)"', source))
-        written |= set(re.findall(r'ingest_mode=ingest_mode,\s*status="([a-z_]+)"', source))
-
-    missing = written - constrained
-    assert not missing, (
-        f"the code writes {sorted(missing)} but the CHECK constraint rejects them; "
-        "every such write will fail with a CheckViolationError"
-    )
-
-
-# ── Finding 7: discovery could be triggered repeatedly with no guard ────────────
-
-def test_discovery_refuses_to_start_twice_for_one_source():
-    """Eight identical POSTs produced eight runs, each opening its own connection to
-    the customer's production database."""
-    import inspect
-
-    from app.services import ropa_run_service
-
-    body = inspect.getsource(ropa_run_service.run_discovery_for_source)
-    assert "find_active_run_for_source" in body
-    assert "DiscoveryAlreadyInProgressError" in body
-
-
-def test_only_non_terminal_runs_block_a_retry():
-    """A failed run must not wedge the source forever -- re-running after a failure is
-    exactly what an operator does next."""
-    import inspect
-
-    from app.db.repositories import ropa_repository
-
-    body = inspect.getsource(ropa_repository.find_active_run_for_source)
-    assert '"pending", "discovering"' in body
-    assert "completed" not in body.split('"""')[-1]
-    assert "failed" not in body.split('"""')[-1]
-
-
 # ── Finding 4: a migration applied outside the runner ───────────────────────────
 
 def test_every_migration_on_disk_is_numbered_uniquely_and_in_order():
@@ -328,48 +276,21 @@ async def test_no_tenant_table_is_left_without_a_policy():
         await conn.close()
 
 
-# ── Secrets named by a credential_ref must be readable from .env ────────────────
+# ── Values read with os.getenv must be readable from .env ───────────────────────
 
 def test_dotenv_is_loaded_into_the_process_environment():
-    """Agents 2 and 3 resolve source credentials with a plain `os.getenv(credential_ref)`.
-
-    The NAME of that variable lives in the database and is chosen by whoever configures
-    the source, so it can never be a declared Settings field — which means
-    pydantic-settings' `env_file` does not load it, and it was simply absent. A DSR
-    search against a correctly configured demo database failed with "credential_ref
-    'DEMO_DB_READ_PASSWORD' is not set in this environment" for exactly that reason.
-    """
+    """Some settings are read with a plain `os.getenv` rather than through Settings
+    (the worker's WORKER_DATABASE_URL, for one), so pydantic-settings' `env_file` does
+    not load them; config.py must put .env into the process environment itself."""
     source = (BACKEND / "app" / "config.py").read_text(encoding="utf-8")
     assert "load_dotenv" in source, (
-        "app/config.py no longer loads .env into os.environ; every credential_ref that "
-        "names a variable living only in .env will read as unset"
+        "app/config.py no longer loads .env into os.environ; a value read with "
+        "os.getenv that lives only in .env will read as unset"
     )
     assert "override=False" in source, (
         "load_dotenv must not override a real environment variable -- compose sets "
         "DATABASE_URL in the environment while an older value may sit in a baked .env"
     )
-
-
-def test_a_credential_ref_is_read_by_name_and_never_logged():
-    """The error path names the reference, never the value. These messages reach logs
-    and API responses."""
-    import os
-
-    from app.agents.dsr.connectors import factory
-
-    os.environ["CONSIVA_TEST_SECRET_REF"] = "super-secret-value"
-    try:
-        assert factory._resolve_secret("CONSIVA_TEST_SECRET_REF", purpose="read") == "super-secret-value"
-    finally:
-        del os.environ["CONSIVA_TEST_SECRET_REF"]
-
-    from app.agents.dsr.errors import SourceNotAuthorizedError
-
-    with pytest.raises(SourceNotAuthorizedError) as caught:
-        factory._resolve_secret("CONSIVA_DEFINITELY_NOT_SET", purpose="read")
-    message = str(caught.value)
-    assert "CONSIVA_DEFINITELY_NOT_SET" in message
-    assert "super-secret" not in message
 
 
 # ── The compose file has to actually parse ─────────────────────────────────────

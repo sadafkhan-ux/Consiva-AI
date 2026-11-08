@@ -146,9 +146,12 @@ def test_auto_login_issues_a_real_token_not_a_special_one():
 def test_it_signs_in_as_a_real_user_from_the_database():
     """Not a fabricated identity. The org on the token has to be one that owns data,
     or every screen loads empty under row-level security."""
-    body = inspect.getsource(dev.auto_login)
-    assert "select(User)" in body
-    assert "User.created_at" in body  # stable choice across calls
+    from app.core import api_access
+
+    assert "api_access.default_user" in inspect.getsource(dev.auto_login)
+    lookup = inspect.getsource(api_access.default_user)
+    assert "select(User)" in lookup
+    assert "User.created_at" in lookup  # stable choice across calls
 
 
 def test_an_empty_database_gets_an_explanation_not_a_crash():
