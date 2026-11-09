@@ -883,7 +883,7 @@ describe("the hero: score top left, domain above the homepage picture top right"
     expect(caption.y).toBeGreaterThan(img.y + img.h);
     expect(caption.y).toBeLessThan(next.y - 8);
     const captionText = recorded.calls.filter((c) => c.page === 0 && c.x === caption.x && c.y >= caption.y && c.y < caption.y + 12).map((c) => c.t).join("");   // the line may wrap
-    expect(flat(captionText)).toContain(flat("22 Oct 2026, 16:43 UTC"));
+    expect(flat(captionText)).toContain(flat("22 Oct 2026, 22:13 IST"));
   });
 
   it("appears once, on page 1 only", async () => {
@@ -1020,7 +1020,7 @@ describe("the hero's words and facts, worked out once for the dashboard and the 
   it("builds the preview from the server's picture, or says why there is none in the server's own words", () => {
     const ok = buildPreviewView({ scan_id: "s", domain: "d.example", status: "ok", available: true, message: null, page_url: "https://d.example/", mime: "image/jpeg", width: 1280, height: 720, captured_at: "2026-10-22T16:43:00Z", data: "QUJD" }, "https://d.example/");
     expect(ok).toMatchObject({ domain: "d.example", src: "data:image/jpeg;base64,QUJD", width: 1280, height: 720, address: null, unavailable: null });
-    expect(ok.caption).toBe("Homepage as scanned · 22 Oct 2026, 16:43 UTC");
+    expect(ok.caption).toBe("Homepage as scanned · 22 Oct 2026, 22:13 IST");
     const none = buildPreviewView({ scan_id: "s", domain: "d.example", status: "blocked", available: false, message: "Blocked, plainly.", page_url: null, mime: null, width: null, height: null, captured_at: null, data: null }, "https://d.example/x");
     expect(none).toMatchObject({ src: null, unavailable: "Blocked, plainly.", address: "https://d.example/x" });
     expect(buildPreviewView(null, "https://d.example/").unavailable).toBe("A homepage preview is not available for this scan.");
@@ -1137,7 +1137,7 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
   it("prints the five sections with the same facts the dashboard shows", async () => {
     const { summary } = await build();
     // A note can cross a page; the running header at the top of a page and the footer (the disclaimer and the page number) are not part of the note.
-    const t = flat(summary).split(flat("x.testScanned 21 Oct 2026, 06:41 UTC")).join("").split(flat(REPORT_DISCLAIMER)).join("").replace(/Page\d+of\d+/g, "");
+    const t = flat(summary).split(flat("x.testScanned 21 Oct 2026, 12:11 IST")).join("").split(flat(REPORT_DISCLAIMER)).join("").replace(/Page\d+of\d+/g, "");
     const sections = buildInsightSections({ policy: POLICY, meta: META_SIGNALS, evidence: EVID, sector: buildRequirementsView(scoreWithImpact()).sector });
     expect(sections).toHaveLength(5);
     for (const s of sections) {

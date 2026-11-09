@@ -78,9 +78,12 @@ describe("the two-page report (variant summary)", () => {
     expect(p2.getAllByTestId("sn-checkpoint").length).toBeGreaterThan(0);
     const p1 = within(screen.getByTestId("sn-page-1"));                                                              // the scanned pages sit on page 1, giving page 2 room for the checks
     expect(p1.getByTestId("sn-pages")).toHaveTextContent("x.test/privacy");
-    expect(p2.getByTestId("sn-page-summary")).toHaveTextContent("Pages scanned");
-    expect(p2.getByTestId("sn-page-summary")).toHaveTextContent("Not recorded per page");   // the scan does not record the banner or tracking per page: nothing is invented
-    expect(p2.getByTestId("sn-next").children.length).toBeGreaterThan(0);
+    expect(p2.queryByTestId("sn-page-summary")).toBeNull();                                                          // Page Scan Summary and Recommendations are not on page 2
+    expect(p2.getByTestId("sn-cta")).toHaveTextContent("Unlock Your Complete Privacy Assessment");
+    expect(p2.getByTestId("sn-cta")).toHaveTextContent("Go Beyond the Quick Scan");
+    expect(p2.queryByTestId("sn-limits")).toBeNull();
+    expect(p2.queryByTestId("sn-reco")).toBeNull();
+    expect(p2.queryByText("Recommendations")).toBeNull();
     expect(p2.getByTestId("sn-disclaimer")).toHaveTextContent(SNAPSHOT_DISCLAIMER);
   });
 
@@ -224,14 +227,6 @@ describe("the two-page report (variant summary)", () => {
     for (const x of q) expect(x).toMatch(/^Evidence: (Specific|General|Limited|None)$/);
   });
 
-  it("recommendations name the check they come from and none is worded as a violation", () => {
-    const m = model();
-    const weak = { ...m, policyAnalysis: null } as typeof m;
-    render(<SnapshotReport model={weak} />);
-    const items = within(screen.getByTestId("sn-next")).getAllByRole("listitem").map((e) => e.textContent ?? "");
-    expect(items.length).toBeGreaterThan(0);
-    for (const x of items) expect(x).not.toMatch(/violat|illegal/i);
-  });
 
   it("counts the checks assessed, never the points in play", () => {
     const base = A.typical;
@@ -297,8 +292,8 @@ describe("the two-page report (variant summary)", () => {
     const failing: TenAssessment = { ...A.typical, checks: A.typical.checks.map((c, i) => ({ ...c, result: i < 3 ? ("Failed" as const) : ("Passed" as const) })) };
     render(<SnapshotReport model={model({ assessment: failing })} />);
     const cta = screen.getByTestId("sn-cta");
-    expect(cta).toHaveTextContent("3 checks need fixes");
-    expect(cta).toHaveTextContent("Apply remediations");
+    expect(cta).toHaveTextContent("Unlock Your Complete Privacy Assessment");
+    expect(cta).toHaveTextContent("Run a Full Scan to gain a complete view");
     expect(cta.textContent).not.toMatch(/Want to run your own/);
     expect(screen.getByTestId("sn-signup")).toHaveTextContent("Apply Remediations");
     expect(screen.getByTestId("sn-signup")).toHaveAttribute("href", SIGNUP_URL);

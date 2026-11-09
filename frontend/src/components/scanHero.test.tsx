@@ -28,7 +28,7 @@ describe("the hero on the dashboard", () => {
     expect(img.getAttribute("src")).toBe(`data:image/jpeg;base64,${B64}`);
     expect(img.alt).toBe("Homepage of swaransoft.com as the scanner saw it");
     expect(img).toHaveAttribute("width", "1280");
-    expect(screen.getByTestId("hero-caption")).toHaveTextContent("Homepage as scanned · 22 Oct 2026, 16:43 UTC");
+    expect(screen.getByTestId("hero-caption")).toHaveTextContent("Homepage as scanned · 22 Oct 2026, 22:13 IST");
   });
 
   it("puts the score ring first, in the same row as the picture", () => {

@@ -167,8 +167,8 @@ describe("duration", () => {
     const stages = [stage("website_scan", "2026-10-26T10:00:00Z", "2026-10-26T10:00:20Z", 20_000), stage("classification", "2026-10-26T10:00:25Z", "2026-10-26T10:00:26Z", 1_000)];
     const t = model("shop.example", evidence("shop.example"), {}, "mixed", stages).transparency.timing!;
     expect(t.total).toBe("26.0 s");
-    expect(t.started).toContain("10:00:00");
-    expect(t.completed).toContain("10:00:26");
+    expect(t.started).toContain("15:30:00");
+    expect(t.completed).toContain("15:30:26");
     expect(t.stages.map((s) => s.label)).toEqual(["Website scan", "Cookie and tracker classification"]);
     expect(t.waiting).toBe("5.00 s");
   });

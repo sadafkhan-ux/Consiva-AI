@@ -75,15 +75,6 @@ function formsAndConsent(model: ReportModel, s: SummaryView): Item[] {
   ];
 }
 
-/** The page counts the scan records per page: forms (each form carries its page) and where a tracking script was first seen. The consent banner and tracking are not recorded for each page separately, so those two are not counted. */
-function pageSummary(model: ReportModel, s: SummaryView) {
-  const ev = model.evidence;
-  const scannedUrls = new Set((ev?.pages ?? []).filter((p) => p.http_status && p.http_status < 400).map((p) => p.url));
-  const withForms = new Set((ev?.forms ?? []).map((f) => f.page_url).filter((u): u is string => !!u && (scannedUrls.size === 0 || scannedUrls.has(u))));
-  const trackerPages = new Set((ev?.trackers ?? []).map((t) => t.page_url).filter((u): u is string => !!u));
-  return { scanned: s.pagesScanned, withForms: ev ? withForms.size : null, trackerPages: ev ? trackerPages.size : null };
-}
-
 /** What the scanner itself recorded about the consent banner, one line each; a fact the scan did not record is left out, never guessed. */
 function bannerFacts(model: ReportModel): { label: string; value: string }[] {
   const sig = model.evidence?.consent_signals?.[0];
@@ -351,8 +342,6 @@ function Page2({ s, ten, model, fit, squeeze }: { s: SummaryView; ten: TenAssess
   const cc = s.cookieCounts;
   const lines = s.cookieLines.slice(0, SNAPSHOT_COOKIES);
   const forms = formsAndConsent(model, s);
-  const ps = pageSummary(model, s);
-  const unit = (n: number | null, one: string) => (n === null ? "Not recorded" : String(n) + (one ? ` ${one}` : ""));
   const cta = remediationCta(ten);
   return (
     <Sheet n={2} fit={fit} squeeze={squeeze} testId="sn-page-2">
@@ -385,29 +374,9 @@ function Page2({ s, ten, model, fit, squeeze }: { s: SummaryView; ten: TenAssess
         <Title icon="shield" note="India DPDP Act, 2023 and Rules, 2025">Key Compliance Checks</Title>
         <CheckTable checks={ten.checks} ten={ten} />
 
-        <div className="sn-row sn-two sn-end">
-          <div className="sn-block sn-summary" data-testid="sn-page-summary">
-            <Title icon="board">Page Scan Summary</Title>
-            <dl>
-              <div><dt>Pages discovered</dt><dd>{ten.pages.discovered ?? "Not recorded"}</dd></div>
-              <div><dt>Pages scanned</dt><dd>{ten.pages.scanned}</dd></div>
-              <div><dt>Pages failed to load</dt><dd>{ten.pages.failed}</dd></div>
-              <div><dt>Pages found, not scanned</dt><dd>{ten.pages.skipped}</dd></div>
-              <div><dt>Pages with forms</dt><dd>{unit(ps.withForms, "")}</dd></div>
-              <div><dt>Pages where tracking scripts were first seen</dt><dd>{unit(ps.trackerPages, "")}</dd></div>
-              <div><dt>Consent banner / tracking, page by page</dt><dd>Not recorded per page</dd></div>
-            </dl>
-          </div>
-          <div className="sn-block sn-reco" data-testid="sn-reco">
-            <Title icon="target">Recommendations</Title>
-            <ul data-testid="sn-next">{[...ten.recommendations.slice(0, 3).map((r) => (r.id ? `Check ${r.id}: ${r.text}` : r.text)), ...s.nextSteps.filter((t) => /full scan/i.test(t))].map((t) => <li key={t}>{t}</li>)}</ul>
-            <ul className="sn-limits" data-testid="sn-limits">{[...s.limitations.filter((l) => !/found on the main domain/.test(l)), ...ten.limitations.filter((l) => !s.limitations.includes(l))].map((l) => <li key={l}>{l}</li>)}</ul>
-          </div>
-        </div>
-
         <div className="sn-cta" data-testid="sn-cta" data-gaps={cta.gaps}>
           <Icon name="bolt" size={22} />
-          <div><b>{cta.title}</b><span>{cta.sub}</span></div>
+          <div><b>Unlock Your Complete Privacy Assessment</b><em>Go Beyond the Quick Scan</em><span>Discover deeper privacy risks, assess more website pages, uncover hidden compliance gaps, and get comprehensive findings with actionable recommendations. Run a Full Scan to gain a complete view of your website&rsquo;s privacy posture.</span></div>
           <a href={SIGNUP_URL} data-testid="sn-signup">{cta.button}</a>
         </div>
         <div className="sn-disc" data-testid="sn-disclaimer"><Icon name="info" size={18} /><p><b>Disclaimer:</b> {SNAPSHOT_DISCLAIMER}</p></div>

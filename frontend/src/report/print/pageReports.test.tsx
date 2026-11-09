@@ -64,8 +64,8 @@ describe("which call to action is shown (scope 8.3)", () => {
 
 describe("the page report view", () => {
   it("names a report from its kind, the scan's date and the start of its id, so it repeats", () => {
-    expect(reportIdFor("free", "9bd5ccef-6909-4903-8d44", "22 Oct 2026, 20:08 UTC")).toBe("FR-20261022-9BD5");
-    expect(reportIdFor("full", "9bd5ccef-6909", "22 Oct 2026, 20:08 UTC")).toBe("FS-20261022-9BD5");
+    expect(reportIdFor("free", "9bd5ccef-6909-4903-8d44", "22 Oct 2026, 20:08 IST")).toBe("FR-20261022-9BD5");
+    expect(reportIdFor("full", "9bd5ccef-6909", "22 Oct 2026, 20:08 IST")).toBe("FS-20261022-9BD5");
     expect(reportIdFor("free", null, "not recorded")).toBe("FR");
   });
 

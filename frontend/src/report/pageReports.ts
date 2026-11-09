@@ -95,11 +95,12 @@ export function findingPill(f: FindingRow): StatusPillView {
   return { label: f.label, tone: f.tone };
 }
 
-/** "22 Oct 2026, 20:08 UTC" to 20261022. Null when the text is not a date. */
+/** "22 Oct 2026, 20:08 IST" (or UTC) to 20261022, the date as the text shows it. Null when the text is not a date. */
 function compactDate(text: string): string | null {
-  const t = Date.parse(text.replace(/,/g, "").replace(/ UTC$/, " UTC"));
+  const ist = / IST$/.test(text);
+  const t = Date.parse(text.replace(/,/g, "").replace(/ IST$/, " GMT+0530").replace(/ UTC$/, " UTC"));
   if (Number.isNaN(t)) return null;
-  const d = new Date(t);
+  const d = new Date(ist ? t + 330 * 60000 : t);
   return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 

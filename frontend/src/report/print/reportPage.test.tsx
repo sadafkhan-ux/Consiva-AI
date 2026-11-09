@@ -48,7 +48,7 @@ describe("the report page the server prints", () => {
     expect(await screen.findByTestId("rpt")).toBeInTheDocument();
     await waitFor(() => expect(window.__REPORT_READY__).toBe(true));
     expect(window.__REPORT_META__!.domain).toBe("x.test");
-    expect(window.__REPORT_META__!.scanned).toMatch(/^Scanned .+ UTC/);
+    expect(window.__REPORT_META__!.scanned).toMatch(/^Scanned .+ IST/);
     expect(window.__REPORT_META__!.filename).toMatch(/^consiva-privacy-report-x\.test-\d{4}-\d{2}-\d{2}\.pdf$/);
     expect(document.title).toBe("Privacy Readiness Report - x.test");
     expect(window.__REPORT_ERROR__).toBeUndefined();

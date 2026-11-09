@@ -114,8 +114,8 @@ function formatTimestamp(iso: string | null | undefined): string {
   if (!iso) return NOT_AVAILABLE;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return NOT_AVAILABLE;
-  // Explicit UTC, so the PDF reads the same wherever it is opened.
-  return `${d.toISOString().replace("T", " ").slice(0, 19)} UTC`;
+  // Explicit Indian Standard Time (UTC+5:30), so the PDF reads the same wherever it is opened.
+  return `${new Date(d.getTime() + 330 * 60000).toISOString().replace("T", " ").slice(0, 19)} IST`;
 }
 
 /** The expiry date, with the lifetime the browser computed from it (Max-Age is turned

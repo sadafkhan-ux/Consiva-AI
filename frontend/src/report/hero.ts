@@ -69,12 +69,12 @@ export function isBareHomepage(url: string): boolean {
   }
 }
 
-/** "22 Oct 2026, 16:43 UTC". */
+/** "22 Oct 2026, 22:13 IST" (Indian Standard Time). */
 export function formatCaptured(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" })}, ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC`;
+  return `${d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })}, ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} IST`;
 }
 
 export interface PreviewView {

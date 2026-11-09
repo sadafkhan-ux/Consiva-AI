@@ -220,3 +220,10 @@
 .pg.sn.sn-v2 .sn-hero2 .sn-banner .sn-facts > div { padding: 2px 0; }
 .pg.sn.sn-v2 .sn-hero2 .sn-banner .sn-opts { margin-top: 1px; gap: 5px; }
 .pg.sn.sn-v2 .sn-hero2 .sn-banner .sn-opts > span { padding: 1.5px 7px; font-size: 8.2px; }
+
+/* Page 2 closing call to action: heading, strapline and a supporting paragraph, visible at every fit step */
+.pg.sn.sn-v2 .sn-cta { padding: 18px 24px; gap: 18px; border-radius: 14px; }
+.pg.sn.sn-v2 .sn-cta b { font-size: 19px; letter-spacing: -.02em; }
+.pg.sn.sn-v2 .sn-cta em { display: block; font-style: normal; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #a8c4ff; margin-top: 4px; }
+.pg.sn.sn-v2 .sn-cta span, .pg.sn.sn-v2.sn-fit-3 .sn-cta span, .pg.sn.sn-v2.sn-fit-4 .sn-cta span { display: block; font-size: 10.4px; line-height: 1.55; margin-top: 7px; max-width: 78ch; }
+.pg.sn.sn-v2 a[data-testid="sn-signup"] { font-size: 12px; padding: 10px 24px; }
