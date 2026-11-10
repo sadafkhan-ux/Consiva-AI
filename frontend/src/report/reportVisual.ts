@@ -183,8 +183,8 @@ export function buildReportVisual(
       : mechanism === "banner" || mechanism === "cmp"
         ? { title: "Consent banner", status: "found", note: vendor ?? "Vendor not identified" }
         : { title: "Consent banner", status: "unverified", note: "Not known" },
-    optionElement("Accept option", meta?.accept_interaction),
-    optionElement("Reject option", meta?.reject_interaction),
+    // With no banner there is nothing to click, so these two are left out; showing "unable to verify" would suggest a banner existed and could not be tested.
+    ...(mechanism === "none" ? [] : [optionElement("Accept option", meta?.accept_interaction), optionElement("Reject option", meta?.reject_interaction)]),
     forms.length ? { title: "Forms", status: "found", note: plural(forms.length, "form", "forms") }
       : { title: "Forms", status: "not_found", note: "None in scanned scope" },
     granular === true ? { title: "Per-purpose choices", status: "found", note: "Offered in the banner" }

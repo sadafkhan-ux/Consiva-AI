@@ -259,7 +259,6 @@
 .pg.sn.sn-v2 .sn-head { box-shadow: inset 0 -1px 0 rgba(150, 185, 255, .22); }
 
 /* the one-line statement of how the score is calculated, under the total */
-.pg.sn.sn-v2 .sn-total .sn-method { display: block; font-size: 7.6px; font-weight: 500; letter-spacing: 0; line-height: 1.35; margin-top: 2px; color: #c9d7ff; opacity: .95; }
 
 /* Card consistency (measured in Chrome): every card is 12px round, every section-heading icon 26px, every privacy-element tile the same height */
 .pg.sn.sn-v2 .sn-contacts > div, .pg.sn.sn-v2 .sn-contacts > div:nth-child(2) { border-radius: 12px; }

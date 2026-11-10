@@ -236,7 +236,7 @@ describe("the two-page report (variant summary)", () => {
     const make = (awarded: number, applicableMax: number, score: number | null): TenAssessment => ({ ...base, engine: "scorecard", scanner: sc, awarded, applicableMax, score, scoreText: score === null ? "No meaningful score" : `${score}/100` });
     const { unmount } = render(<SnapshotReport model={model({ assessment: make(34, 64, 53) })} />);
     expect(screen.getByTestId("sn-score-basis")).toHaveTextContent("34 of 64 assessed marks = 53%");
-    expect(screen.getByTestId("sn-score-method")).toHaveTextContent("marks awarded ÷ marks assessed × 100, rounded to a whole number. The 36 marks of checks not assessed or not applicable are left out of both.");
+    expect(screen.queryByTestId("sn-score-method")).toBeNull();     // the explanatory line under the score is not printed
     unmount();
     render(<SnapshotReport model={model({ assessment: make(64, 64, 99) })} />);
     expect(screen.getByTestId("sn-score-basis")).toHaveTextContent(/^64 of 64 assessed marks$/);

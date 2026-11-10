@@ -322,8 +322,7 @@ function CheckTable({ checks: all, ten }: { checks: TenCheck[]; ten: TenAssessme
       </tbody>
       <tfoot>
         <tr className="sn-total" data-testid="sn-total-row">
-          <td colSpan={3}>{ten.scanner ? <>Privacy Readiness Score, out of 100{ten.applicableMax > 0 && <> &middot; <span data-testid="sn-score-basis">{ten.awarded} of {ten.applicableMax} assessed marks{ten.score !== null && Math.round((100 * ten.awarded) / ten.applicableMax) === ten.score ? ` = ${ten.score}%` : ""}</span></>}</> : <>Total Weightage Awarded (applicable checks) &middot; Privacy Readiness Score {ten.scoreText}</>}{ten.counts.notAssessed > 0 && <> &middot; {ten.counts.notAssessed} not assessed, left out</>}
-            {ten.scanner && ten.applicableMax > 0 && <small className="sn-method" data-testid="sn-score-method">How it is calculated: marks awarded &divide; marks assessed &times; 100, rounded to a whole number.{ten.applicableMax < 100 ? ` The ${100 - ten.applicableMax} marks of checks not assessed or not applicable are left out of both.` : ""}</small>}</td>
+          <td colSpan={3}>{ten.scanner ? <>Privacy Readiness Score, out of 100{ten.applicableMax > 0 && <> &middot; <span data-testid="sn-score-basis">{ten.awarded} of {ten.applicableMax} assessed marks{ten.score !== null && Math.round((100 * ten.awarded) / ten.applicableMax) === ten.score ? ` = ${ten.score}%` : ""}</span></>}</> : <>Total Weightage Awarded (applicable checks) &middot; Privacy Readiness Score {ten.scoreText}</>}{ten.counts.notAssessed > 0 && <> &middot; {ten.counts.notAssessed} not assessed, left out</>}</td>
           <td className="sn-num" data-testid="sn-total-marks">{ten.scanner ? ten.scoreText : ten.totalText}</td>
         </tr>
       </tfoot>

@@ -56,3 +56,17 @@ describe("one counting method", () => {
     expect(screen.getByTestId("state-unit-note")).toHaveTextContent("one distinct address");
   });
 });
+
+describe("the privacy-element cards on a site with no consent banner", () => {
+  const ev = { pages: [], third_party_services: [], trackers: [], cookies: [], policies: [], forms: [], consent_signals: [{ mechanism_type: "none" }] } as never;
+  it("leave out Accept and Reject, which have nothing to click, and call the banner not found", () => {
+    const titles = buildReportVisual(ev, { consent_mechanism: "none", accept_interaction: "cmp_not_found", reject_interaction: "cmp_not_found" } as never, null)!.elements.map((e) => `${e.title}:${e.status}`);
+    expect(titles).toContain("Consent banner:not_found");
+    expect(titles.some((t) => t.startsWith("Accept option") || t.startsWith("Reject option"))).toBe(false);
+  });
+  it("keep them when there is a banner", () => {
+    const evb = { pages: [], third_party_services: [], trackers: [], cookies: [], policies: [], forms: [], consent_signals: [{ mechanism_type: "banner" }] } as never;
+    const titles = buildReportVisual(evb, { consent_mechanism: "banner", accept_interaction: "clicked", reject_interaction: "clicked" } as never, null)!.elements.map((e) => e.title);
+    expect(titles).toEqual(expect.arrayContaining(["Accept option", "Reject option"]));
+  });
+});
