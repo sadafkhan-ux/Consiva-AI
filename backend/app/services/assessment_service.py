@@ -25,6 +25,11 @@ SCANNER_VERSION = domain_score.SCORE_VERSION
 
 
 #: What the crawler records about the pages, in the website-scan stage record, for Scanner Score A5, D1, D2 and G1 (scanner/page_signals.py).
+def _check_name(code: str) -> str:
+    """How a blocking check is named to the reader: "Check 6" for a scorecard row (P6), never the internal code. A code that is not a scorecard row reads as "an earlier check"."""
+    return f"Check {code[1:]}" if len(code) > 1 and code[0] == "P" and code[1:].isdigit() else "an earlier check"
+
+
 SCAN_SIGNAL_KEYS = ("language_signals", "notice_link_signals", "child_surfaces", "form_signals", "security_signals", "banner_by_page", "storage_signals", "mixed_content", "tls_signals")
 
 
@@ -120,7 +125,7 @@ def as_assessment(r: dict[str, Any]) -> dict[str, Any]:
         st = p["state"]
         text = p["found"] or p["reason"] or ""
         if st == "prerequisite" and p["blocked_by"]:
-            text = f"{text} (depends on {p['blocked_by']})".strip()
+            text = f"{text} (depends on {_check_name(p['blocked_by'])})".strip()
         ev = p["evidence"]
         in_play = st in domain_score.IN_PLAY
         checks.append({
@@ -186,7 +191,7 @@ def as_scorecard(r: dict[str, Any]) -> dict[str, Any]:
         in_play = o in scorecard.IN_PLAY
         text = x["found"] or x["reason"] or ""
         if x["blocked_by"]:
-            text = f"{text} (depends on {x['blocked_by']})".strip()
+            text = f"{text} (depends on {_check_name(x['blocked_by'])})".strip()
         ev = x["evidence"]
         checks.append({
             "id": i, "ref": x["id"], "name": x["name"], "category": x["category"], "kind": "dpdp" if x["category"] != "Forms & Security" else "technical", "result": _SC_RESULT[o],

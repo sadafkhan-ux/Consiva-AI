@@ -28,6 +28,12 @@ def _name(name: x509.Name) -> str:
     return ""
 
 
+def _org(name: x509.Name) -> str:
+    """The organisation that issued a certificate ("Let's Encrypt"), which a reader recognises where the intermediate's own name ("YE2") means nothing to them."""
+    attrs = name.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)
+    return str(attrs[0].value) if attrs else ""
+
+
 def _host_matches(host: str, names: list[str]) -> bool:
     host = host.lower()
     return any(n.lower() == host or (n.startswith("*.") and fnmatch.fnmatch(host, n.lower()) and host.count(".") == n.count(".")) for n in names)
@@ -45,7 +51,7 @@ def parse_certificate(der: bytes, host: str, now: datetime | None = None) -> dic
         san = []
     names = list(san) or ([_name(cert.subject)] if _name(cert.subject) else [])
     return {
-        "subject": _name(cert.subject), "issuer": _name(cert.issuer), "names": names[:10],
+        "subject": _name(cert.subject), "issuer": _name(cert.issuer), "issuer_org": _org(cert.issuer), "names": names[:10],
         "not_before": not_before.date().isoformat(), "not_after": not_after.date().isoformat(),
         "expired": now > not_after, "not_yet_valid": now < not_before,
         "days_since_expiry": (now - not_after).days if now > not_after else None,

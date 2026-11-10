@@ -315,9 +315,13 @@ export function buildInsightSections(args: {
   /** The address that was entered: the security signals describe that page. */
   siteUrl?: string | null;
 }): InsightSection[] {
+  // The children's section is shown only on a site that points to children (a children's sector, or forms asking for a child's details). On any other site it is left out entirely,
+  // not shown as "not applicable". It never changes the score either way.
+  const children = buildChildrenSection(args.sector, args.evidence, args.policy);
+  const childrenApply = children.tone !== "mute";
   return [
     buildGrievanceSection(args.policy), buildDpoSection(args.policy), buildLanguageSection(args.meta, args.policy),
-    buildChildrenSection(args.sector, args.evidence, args.policy), buildSecuritySection(args.meta, args.evidence, args.siteUrl),
+    ...(childrenApply ? [children] : []), buildSecuritySection(args.meta, args.evidence, args.siteUrl),
   ];
 }
 

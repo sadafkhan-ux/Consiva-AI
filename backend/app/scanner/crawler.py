@@ -307,6 +307,8 @@ _SHADOW_DOM_CONTROL_TEXT_JS = """() => {
     const SEL = 'button, a, input, summary, label, [role=button], [role=dialog],' +
                 '[role=alertdialog], [aria-modal=true]';
     const HINT = /(cookie|consent|gdpr|ccpa|cmp|privacy)/i;
+    const BARE_ACCEPT = new Set(['accept', 'accept all', 'accept & close', 'accept and close', 'i accept', 'agree', 'i agree', 'allow', 'allow all', 'ok', 'okay', 'got it', 'accept cookies', 'allow cookies']);
+    const BARE_REJECT = new Set(['decline', 'decline all', 'reject', 'reject all', 'deny', 'refuse', 'no thanks', 'i decline', 'decline cookies', 'reject cookies']);
     // Only what a visitor can see. A consent tool renders its second layer (the preference centre, with "Reject All Cookies") into the page hidden, so reading hidden controls
     // made every such banner look as if it offered Reject on its first layer (konicaminolta.com: Accept All + Cookie Settings visible, Reject All only inside the closed panel).
     function shown(el) {
@@ -329,6 +331,23 @@ _SHADOW_DOM_CONTROL_TEXT_JS = """() => {
             const key = (el.className || '') + ' ' + (el.id || '');
             if (HINT.test(key) && shown(el)) out.push(el.innerText || el.textContent || '');
         }
+        // A cookie notice whose buttons say only "Accept" / "Decline" (greenply.com) is recognised by structure: a short, visible container named as cookie or consent UI, that speaks of
+        // cookies, holding a button whose whole label is a bare accept (or decline) word. The same rule as page_parser.cookie_dialog_controls.
+        let dialogAccept = false, dialogReject = false;
+        for (const box of root.querySelectorAll('[class], [id]')) {
+            const key = (box.className || '') + ' ' + (box.id || '');
+            if (!/(cookie|consent|gdpr|ccpa)/i.test(key) || !shown(box)) continue;
+            const text = (box.innerText || '').trim().toLowerCase();
+            if (text.length < 15 || text.length > 700 || !text.includes('cookie')) continue;
+            for (const c of box.querySelectorAll('button, a, input[type=button], input[type=submit], [role=button]')) {
+                if (!shown(c)) continue;
+                const label = ((c.innerText || c.value || c.getAttribute('aria-label') || '') + '').trim().toLowerCase().replace(/^[.! ]+|[.! ]+$/g, '');
+                if (BARE_ACCEPT.has(label)) dialogAccept = true;
+                if (BARE_REJECT.has(label)) dialogReject = true;
+            }
+        }
+        if (dialogAccept) out.push('cookie-dialog-accept');
+        if (dialogReject) out.push('cookie-dialog-reject');
     }
     function walk(root, depth, out) {
         if (depth > 6) return;
@@ -1734,6 +1753,10 @@ async def _recheck_one_page(browser, url: str, root_url: str, settings: Settings
     loads = [first]
     if first["loaded"] and first["fired"]:
         for _ in range(_RECHECK_CONFIRMATION_LOADS):
+            counted_so_far = [load for load in loads if load["loaded"]]
+            # The answer is "fired in most loads". When two loads have been read and both fired, a third cannot change it (2 of 3 or 3 of 3 is still most), so it is not spent.
+            if len(counted_so_far) >= 2 and all(load["fired"] for load in counted_so_far):
+                break
             loads.append(await _recheck_one_load(browser, url, root_url, settings, disallowed_prefixes))
     counted = [load for load in loads if load["loaded"]]
     fired_loads = sum(1 for load in counted if load["fired"])
@@ -1868,6 +1891,13 @@ async def run_scan(
     settings = settings or get_settings()
     safe_ips = await assert_safe_url(root_url)  # fail fast; _guard_navigation re-checks every hop below
     launch_args = _host_resolver_pin_args(urlparse(root_url).hostname, safe_ips)
+    phase_clock = [time.monotonic()]
+
+    def mark(phase: str) -> None:
+        """Logs how long the phase that just ended took, so a slow scan can be traced to the phase that made it slow."""
+        now = time.monotonic()
+        logger.info("Scan phase %s of %s took %.1fs", phase, root_url, now - phase_clock[0])
+        phase_clock[0] = now
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=settings.scanner_headless, args=launch_args)
@@ -1913,6 +1943,7 @@ async def run_scan(
                 raise
             finally:
                 await _close_quietly(context, "the crawl context")
+            mark("crawl")
             homepage_screenshot = pre_consent_diagnostics.pop("homepage_screenshot", None)
             url_inventory = pre_consent_diagnostics.pop("url_inventory_records", [])
 
@@ -1920,14 +1951,18 @@ async def run_scan(
                 (accept_cookies, accept_trackers, accept_status, accept_confirmed, accept_scroll_steps, accept_gate),
                 (reject_cookies, reject_trackers, reject_status, reject_confirmed, reject_scroll_steps, reject_gate),
             ) = await (passes_task if passes_task is not None else consent_passes())
+            mark("wait for the Accept and Reject passes")
             # After everything else has finished, so the re-check really is one page view with nothing else running.
             recheck = await _recheck_pre_consent(browser, pages, cookies, trackers, root_url, settings, disallowed_prefixes)
+            mark("pre-consent re-check")
             # The Deep Scan also tests taking consent back, and whether that holds on two further pages (Scanner Score B5, B6). A Quick Scan does not.
             # Taking consent back is tested on every scan, Quick or Deep (scorecard P5): one fresh session, then two further pages.
             withdrawal = await _run_withdrawal(browser, root_url, settings, disallowed_prefixes, pages)
+            mark("withdrawal test")
             purposes = await _run_purposes(browser, root_url, settings) if profile is not None and profile.name == APPLICATION else None
             # Accept and Reject measured side by side on every scan; Reject on further pages on a Deep Scan (scanner/reject_and_compare.py).
             button_comparison = await _run_button_comparison(browser, root_url, settings)
+            mark("button comparison")
             reject_persistence = await _run_reject_persistence(browser, root_url, settings, disallowed_prefixes, pages) if profile is not None and profile.name == APPLICATION else None
         finally:
             await _close_quietly(browser, "the browser")

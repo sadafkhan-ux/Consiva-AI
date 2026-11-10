@@ -248,6 +248,30 @@ _CONSENT_CONTAINER_HINT = re.compile(
 )
 
 
+# A cookie notice whose buttons say only "Accept" / "Decline" (greenply.com): no phrase such as "accept all" or "accept cookies" appears anywhere, so the wording search alone misses it. It is recognised by
+# STRUCTURE instead: a short container named as cookie or consent UI, that speaks of cookies, with a button whose whole label is a bare accept word. A policy page does not qualify (it is long), and neither does
+# a forum comment (it is not a container named as consent UI holding a button).
+_COOKIE_DIALOG_HINT = re.compile(r"(cookie|consent|gdpr|ccpa)", re.IGNORECASE)
+_BARE_ACCEPT = frozenset({"accept", "accept all", "accept & close", "accept and close", "i accept", "agree", "i agree", "allow", "allow all", "ok", "okay", "got it", "accept cookies", "allow cookies"})
+_BARE_REJECT = frozenset({"decline", "decline all", "reject", "reject all", "deny", "refuse", "no thanks", "i decline", "decline cookies", "reject cookies"})
+_DIALOG_MAX_CHARS = 700
+
+
+def cookie_dialog_controls(soup: BeautifulSoup) -> tuple[bool, bool]:
+    """(has a bare accept control, has a bare decline control) in a short cookie or consent dialog."""
+    accept = reject = False
+    containers = list(soup.find_all(attrs={"class": _COOKIE_DIALOG_HINT})) + list(soup.find_all(attrs={"id": _COOKIE_DIALOG_HINT}))
+    for box in containers:
+        text = box.get_text(" ", strip=True).lower()
+        if not 15 <= len(text) <= _DIALOG_MAX_CHARS or "cookie" not in text:
+            continue
+        for control in box.select("button, a, input[type=button], input[type=submit], [role=button]"):
+            label = (control.get_text(" ", strip=True) or str(control.get("value") or "") or str(control.get("aria-label") or "")).strip().lower().strip(".!")
+            accept = accept or label in _BARE_ACCEPT
+            reject = reject or label in _BARE_REJECT
+    return accept, reject
+
+
 def extract_control_text(soup: BeautifulSoup) -> str:
     """The text of clickable controls and consent-dialog containers, lowercased.
 
@@ -274,4 +298,7 @@ def extract_control_text(soup: BeautifulSoup) -> str:
         parts.append(element.get_text(separator=" ", strip=True))
     for element in soup.find_all(attrs={"id": _CONSENT_CONTAINER_HINT}):
         parts.append(element.get_text(separator=" ", strip=True))
-    return " ".join(p for p in parts if p).lower()[:5000]
+    text = " ".join(p for p in parts if p).lower()[:5000]
+    # Markers for a cookie dialog recognised by its structure (see cookie_dialog_controls); the detector reads them like any other consent wording.
+    has_accept, has_reject = cookie_dialog_controls(soup)
+    return text + (" cookie-dialog-accept" if has_accept else "") + (" cookie-dialog-reject" if has_reject else "")

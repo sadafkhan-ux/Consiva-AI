@@ -12,6 +12,7 @@ from app.api.v1.routes import (
     purpose,
     regwatch,
     ropa,
+    system,
     websites,
 )
 from app.config import get_settings
@@ -24,6 +25,7 @@ from app.core.security import bind_request_scope
 api_router = APIRouter(dependencies=[Depends(bind_request_scope)])
 api_router.include_router(auth.router)
 api_router.include_router(consent_scans.router)
+api_router.include_router(system.router)
 # The external integration API. Registered on the SAME router as everything
 # else, so bind_request_scope above applies to it too -- an integration
 # endpoint that skipped org binding would read with no RLS scope at all.

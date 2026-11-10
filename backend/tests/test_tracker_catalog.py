@@ -78,3 +78,53 @@ def test_an_asset_cdn_classifies_the_same_with_and_without_a_query_string():
     plain = categorise("https://ik.imagekit.io/aktvd2sxx/img/9305f8e0.png")
     transformed = categorise("https://ik.imagekit.io/aktvd2sxx/img/PANDA99.png?tr=w-400")
     assert plain == transformed, "the same CDN classified two ways within one scan"
+
+
+def test_public_cdns_maps_and_bot_checks_are_known_and_functional():
+    """Caught unclassified on live scans (poolscapes.in, groupsnp.com): while one request is unclassified, whether a banner is needed cannot be decided."""
+    for url, vendor in (
+        ("https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js", "Public script and style CDN"),
+        ("https://unpkg.com/react@18/umd/react.production.min.js", "Public script and style CDN"),
+        ("https://code.jquery.com/jquery-3.7.1.min.js", "Public script and style CDN"),
+        ("https://maps.googleapis.com/maps/api/js?key=K", "Google Maps"),
+        ("https://maps.gstatic.com/maps-api-v3/api/js/66/13d/main.js", "Google Maps"),
+        ("https://www.google.com/maps/embed?pb=x", "Google Maps"),
+        ("https://www.google.com/recaptcha/api.js?render=K", "reCAPTCHA / hCaptcha"),
+        ("https://www.gstatic.com/recaptcha/releases/x/recaptcha__en.js", "reCAPTCHA / hCaptcha"),
+    ):
+        sig = match_vendor(script_src=url)
+        assert sig is not None and sig.vendor == vendor and sig.default_category == "functional", url
+
+
+def test_the_new_entries_do_not_swallow_analytics_or_advertising():
+    for url, vendor in (
+        ("https://www.google-analytics.com/g/collect?v=2", "Google Analytics"),
+        ("https://www.googletagmanager.com/gtm.js?id=X", "Google Tag Manager"),
+        ("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js", "Google Ads"),
+        ("https://fonts.googleapis.com/css2?family=Inter", "Google Fonts"),
+        ("https://www.google.com/ads/ga-audiences?x=1", "Google Ads"),
+    ):
+        sig = match_vendor(script_src=url)
+        assert sig is not None and sig.vendor == vendor, url
+
+
+def test_google_ads_beacons_on_google_com_are_marketing_not_unclassified():
+    """Seen on 150 stored scans as plain google.com requests filed 'unclassified', which hid them from the rule for advertising before consent."""
+    for url in (
+        "https://www.google.com/ccm/collect?en=page_view", "https://www.google.com/rmkt/collect/123/456", "https://www.google.co.in/pagead/1p-user-list/123",
+        "https://www.google.com/ads/measurement/l?ver=1", "https://www.google.com/measurement/conversion/?x=1", "https://ep1.adtrafficquality.google/getconfig/sodar",
+    ):
+        sig = match_vendor(script_src=url)
+        assert sig is not None and sig.vendor == "Google Ads" and sig.default_category == "marketing", url
+
+
+def test_other_vendors_seen_unclassified_are_named_with_the_right_category():
+    for url, vendor, cat in (
+        ("https://c.bing.com/c.gif?x=1", "Bing Ads", "marketing"), ("https://dpm.demdex.net/id?x=1", "Adobe Audience Manager", "marketing"),
+        ("https://id5-sync.com/i/1/0.gif", "ID5", "marketing"), ("https://assets.adobedtm.com/launch-x.min.js", "Adobe Launch", "analytics"),
+        ("https://sb.scorecardresearch.com/beacon.js", "Comscore (Scorecard Research)", "analytics"), ("https://static.chartbeat.com/js/chartbeat.js", "Chartbeat", "analytics"),
+        ("https://assets.calendly.com/assets/external/widget.js", "Calendly Embed", "functional"), ("https://m.stripe.network/inner.html", "Stripe", "functional"),
+        ("https://cdn.privacy-mgmt.com/unified/wrapperMessagingWithoutDetection.js", "Sourcepoint (consent management)", "functional"),
+    ):
+        sig = match_vendor(script_src=url)
+        assert sig is not None and sig.vendor == vendor and sig.default_category == cat, url

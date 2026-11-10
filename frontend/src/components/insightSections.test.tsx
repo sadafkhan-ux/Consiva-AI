@@ -26,15 +26,15 @@ const meta: WebsiteScanMetadata = {
 describe("the dedicated sections on the dashboard", () => {
   const sections = buildInsightSections({ policy, meta, evidence: null, sector: null });
 
-  it("shows each of the five, in order, with its status and the kind of knowledge it rests on", () => {
+  it("shows each of the four, in order, with its status and the kind of knowledge it rests on", () => {
     render(<InsightSections sections={sections} />);
-    for (const key of ["grievance", "dpo", "language", "children", "security"]) {
+    for (const key of ["grievance", "dpo", "language", "security"]) {
       expect(screen.getByTestId(`insight-${key}`)).toBeInTheDocument();
       expect(screen.getByTestId(`insight-${key}-status`)).toBeInTheDocument();
       expect(["Confirmed", "Observed", "Not verified"]).toContain(screen.getByTestId(`insight-${key}-knowledge`).textContent);
     }
     const order = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
-    expect(order).toEqual(["Grievance officer", "Data Protection Officer", "Indian-language support", "Children's data and age gate", "Observable security signals"]);
+    expect(order).toEqual(["Grievance officer", "Data Protection Officer", "Indian-language support", "Observable security signals"]);
   });
 
   it("gives the grievance contact, the response period, the policy's own words with their page, and the provisions", () => {
@@ -49,11 +49,10 @@ describe("the dedicated sections on the dashboard", () => {
     expect(screen.getByTestId("insight-grievance-legal")).toHaveTextContent("DPDP Act, 2023, Section 13(1)");
   });
 
-  it("separates what was observed from what was not verified: language is observed, children is not applicable and not verified", () => {
+  it("separates what was observed from what was not verified: language is observed, and the children's section is left out when nothing points to children", () => {
     render(<InsightSections sections={sections} />);
     expect(screen.getByTestId("insight-language-knowledge")).toHaveTextContent("Observed");
-    expect(screen.getByTestId("insight-children-knowledge")).toHaveTextContent("Not verified");
-    expect(screen.getByTestId("insight-children-status")).toHaveTextContent("Not applicable on the evidence");
+    expect(screen.queryByTestId("insight-children-status")).toBeNull();
     expect(screen.getByTestId("insight-security-status")).toHaveTextContent("4 of 8 signals observed");
     expect(screen.getByTestId("insight-security")).toHaveTextContent("cannot be seen from outside");
   });

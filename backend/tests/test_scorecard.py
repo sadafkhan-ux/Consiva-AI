@@ -91,6 +91,15 @@ def test_p1_partial_when_the_banner_is_missing_on_an_inner_page_or_describes_no_
     assert R(go(ev=banner_ev(), signals={**SIGNALS, "banner_by_page": [{"url": HOME, "banner": True}]}), "P1")["outcome"] == "pass"
 
 
+def test_a_reject_control_found_but_not_clickable_is_not_assessed_never_failed():
+    """Under load a click can fail on a control that exists. That is the scan's limit, not the site's failure: 0 marks for it was the cause of the same site scoring 26 and 29."""
+    failed_click = [{**BANNER[0], "has_reject_all": False, "evidence": {"reject_interaction": "click_failed", "accept_interaction": "clicked"}}]
+    p2 = R(go(ev=_evidence(consent_signals=failed_click)), "P2")
+    assert p2["outcome"] == "not_assessed" and "could not be clicked" in p2["reason"]
+    not_there = [{**BANNER[0], "has_reject_all": False, "evidence": {"reject_interaction": "not_found", "accept_interaction": "clicked"}}]
+    assert R(go(ev=_evidence(consent_signals=not_there)), "P2")["outcome"] == "fail"           # a control the scan looked for and did not find still fails
+
+
 def test_p2_reject_row():
     assert R(go(ev=banner_ev()), "P2")["outcome"] == "pass"
     assert R(go(ev=_evidence(consent_signals=[{**BANNER[0], "has_reject_all": False}])), "P2")["outcome"] == "fail"

@@ -1089,7 +1089,7 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
 
   it("adds the fixes and the five sections after the table of every check and before the pages scanned, in a fixed order", async () => {
     const { appendixAt } = await build();
-    const names = ["THE CHECKS BEHIND THE SCORE", "PRIORITISED FIXES", "GRIEVANCE OFFICER", "DATA PROTECTION OFFICER", "INDIAN-LANGUAGE SUPPORT", "CHILDREN'S DATA AND AGE GATE", "OBSERVABLE SECURITY SIGNALS", "WEBSITE PAGES SCANNED"];
+    const names = ["THE CHECKS BEHIND THE SCORE", "PRIORITISED FIXES", "GRIEVANCE OFFICER", "DATA PROTECTION OFFICER", "INDIAN-LANGUAGE SUPPORT", "OBSERVABLE SECURITY SIGNALS", "WEBSITE PAGES SCANNED"];
     const at = names.map((n) => recorded.calls.findIndex((c) => c.page < appendixAt && c.t.toUpperCase().replace(/\s+/g, " ") === n));   // the heading as drawn, not the same words inside a fix
     expect(names.filter((_, i) => at[i] < 0), "missing headings").toEqual([]);
     expect(at).toEqual([...at].sort((a, b) => a - b));
@@ -1139,7 +1139,7 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
     // A note can cross a page; the running header at the top of a page and the footer (the disclaimer and the page number) are not part of the note.
     const t = flat(summary).split(flat("x.testScanned 21 Oct 2026, 12:11 IST")).join("").split(flat(REPORT_DISCLAIMER)).join("").replace(/Page\d+of\d+/g, "");
     const sections = buildInsightSections({ policy: POLICY, meta: META_SIGNALS, evidence: EVID, sector: buildRequirementsView(scoreWithImpact()).sector });
-    expect(sections).toHaveLength(5);
+    expect(sections).toHaveLength(4);   // no sign of children on this site, so the children's section is left out
     for (const s of sections) {
       expect(t, `${s.title} status`).toContain(flat(s.status));
       expect(t, `${s.title} knowledge`).toContain(flat(s.knowledge));

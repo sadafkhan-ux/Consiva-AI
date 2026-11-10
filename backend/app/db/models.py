@@ -152,6 +152,20 @@ class ReportPdf(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
+class ReportApproval(Base):
+    """The named person who approved a scan's report for release (migration 0048). One row per scan; stale when the scorecard version has moved on, void once revoked."""
+
+    __tablename__ = "report_approvals"
+
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("consent_scans.id", ondelete="CASCADE"), primary_key=True)
+    approved_by_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    report_version: Mapped[str] = mapped_column(String, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+
 class ConsentForm(Base):
     __tablename__ = "consent_forms"
 

@@ -29,15 +29,15 @@ def test_weights_still_total_100_and_forms_and_security_keeps_its_16_marks():
     assert next(c for c in r["categories"] if c["category"] == "Forms & Security")["marks"] == 16
 
 
-def test_certificate_with_more_than_90_days_earns_full_marks_and_the_evidence_shows_expiry_and_days():
+def test_certificate_with_more_than_30_days_earns_full_marks_and_the_evidence_shows_expiry_and_days():
     p11, _, _ = rows(days=91)
     assert p11["outcome"] == "pass" and p11["awarded"] == 4
     text = p11["evidence"][0]["observed"]
     assert "2027-05-24" in text and "91 days remaining" in text and "R11" in text
 
 
-def test_certificate_with_90_days_or_fewer_earns_half():
-    for d in (90, 12, 0):
+def test_certificate_with_30_days_or_fewer_earns_half():
+    for d in (30, 12, 0):
         p11, _, _ = rows(days=d)
         assert p11["outcome"] == "partial" and p11["awarded"] == 2, d
 
@@ -138,3 +138,17 @@ def test_the_probe_marks_a_closed_port_unreachable_not_failed():
 async def test_a_site_reached_over_http_has_no_certificate():
     r = await tls_mod.assess_site_tls("http://x.test/")
     assert r["certificate"]["status"] == "no_https"
+
+
+def test_a_certificate_that_renews_every_90_days_is_not_marked_down_while_it_has_more_than_30_days():
+    for d in (31, 37, 83, 90):
+        p11, _, _ = rows(days=d)
+        assert p11["outcome"] == "pass" and p11["awarded"] == 4, d
+
+
+def test_the_issuer_is_named_by_its_organisation_when_the_intermediate_name_alone_would_mean_nothing():
+    r = go(ev=banner_ev(forms=[FORM]), signals=sig(days=91))
+    sigs = sig(days=91)
+    sigs["tls_signals"]["certificate"].update({"issuer": "YE2", "issuer_org": "Let's Encrypt"})
+    p11 = R(go(ev=banner_ev(forms=[FORM]), signals=sigs), "P11")
+    assert "issuer Let's Encrypt (YE2)" in p11["evidence"][0]["observed"]

@@ -227,3 +227,41 @@
 .pg.sn.sn-v2 .sn-cta em { display: block; font-style: normal; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: #a8c4ff; margin-top: 4px; }
 .pg.sn.sn-v2 .sn-cta span, .pg.sn.sn-v2.sn-fit-3 .sn-cta span, .pg.sn.sn-v2.sn-fit-4 .sn-cta span { display: block; font-size: 10.4px; line-height: 1.55; margin-top: 7px; max-width: 78ch; }
 .pg.sn.sn-v2 a[data-testid="sn-signup"] { font-size: 12px; padding: 10px 24px; }
+
+/* the marks assessed against the marks in all, beside a category's figure */
+.pg.sn.sn-v2 .sn-cat-of { font-size: .72em; font-weight: 600; opacity: .85; margin-left: 2px; }
+/* a long address breaks at a slash or hyphen, never in the middle of a word */
+.pg.sn.sn-v2 .sn-pages td, .pg.sn.sn-v2 .sn-form-row small { overflow-wrap: break-word; word-break: normal; }
+
+/* Release polish: print-safe edges. A shadow with a blur is printed as a raster soft mask, and some PDF viewers draw that mask with a rectangular edge behind small tiles and icons.
+   On the small elements a flat hairline replaces the blur; the large surfaces (score panel, call to action, cards, table) keep their depth. */
+.pg.sn.sn-v2 .sn-el-icon { box-shadow: inset 0 0 0 1px rgba(15, 30, 100, .14); }
+.pg.sn.sn-v2 .sn-el-st { box-shadow: none; }
+.pg.sn.sn-v2 .sn-el, .pg.sn.sn-v2 .sn-meta, .pg.sn.sn-v2 .sn-chip, .pg.sn.sn-v2 .sn-opts > span, .pg.sn.sn-v2 .sn-form-row, .pg.sn.sn-v2 .sn-summary dl { box-shadow: inset 0 0 0 1px rgba(15, 30, 100, .08); }
+.pg.sn.sn-v2 .sn-band, .pg.sn.sn-v2 .sn-status, .pg.sn.sn-v2 .sn-hero2 .sn-band, .pg.sn.sn-v2 .sn-hero2 .sn-banner .sn-status { box-shadow: none; }
+.pg.sn.sn-v2 .sn-h i { box-shadow: none; }
+.pg.sn.sn-v2 .pg-good, .pg.sn.sn-v2 .pg-warn, .pg.sn.sn-v2 .pg-bad { box-shadow: none; }
+.pg.sn.sn-v2 .sn-meter i, .pg.sn.sn-v2 .sn-hero2 .sn-meter i { box-shadow: none; }
+.pg.sn.sn-v2 .sn-tile, .pg.sn.sn-v2 .sn-cat { box-shadow: inset 3px 0 0 var(--b); }
+.pg.sn.sn-v2 .sn-shot-img { box-shadow: none; }
+.pg.sn.sn-v2 a[data-testid="sn-signup"] { box-shadow: none; }
+/* result badges: one width and one centre line in the table, so the column reads straight */
+.pg.sn.sn-v2 .sn-checks td .pg-pill { min-width: 84px; text-align: center; }
+/* the disclaimer: larger, darker, with air between lines */
+.pg.sn.sn-v2 .sn-disc { font-size: 8.6px; line-height: 1.5; color: #1f2a55; }
+.pg.sn.sn-v2 .sn-disc b { font-weight: 800; }
+
+/* Second pass: the large surfaces too. A blurred shadow on a page-sized panel is printed as a page-sized raster mask; a hairline edge and the existing borders carry the depth without one. */
+.pg.sn.sn-v2.sn-p1 .sn-panel { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .6); }
+.pg.sn.sn-v2 .sn-card, .pg.sn.sn-v2 .sn-shot, .pg.sn.sn-v2 .sn-table { box-shadow: none; }
+.pg.sn.sn-v2 .sn-hero2 .sn-h2-main, .pg.sn.sn-v2 .sn-hero2 .sn-score { box-shadow: inset 0 0 0 1px rgba(150, 185, 255, .22); }
+.pg.sn.sn-v2 .sn-cta { box-shadow: inset 0 0 0 1px rgba(150, 185, 255, .25); }
+.pg.sn.sn-v2 .sn-head { box-shadow: inset 0 -1px 0 rgba(150, 185, 255, .22); }
+
+/* the one-line statement of how the score is calculated, under the total */
+.pg.sn.sn-v2 .sn-total .sn-method { display: block; font-size: 7.6px; font-weight: 500; letter-spacing: 0; line-height: 1.35; margin-top: 2px; color: #c9d7ff; opacity: .95; }
+
+/* Card consistency (measured in Chrome): every card is 12px round, every section-heading icon 26px, every privacy-element tile the same height */
+.pg.sn.sn-v2 .sn-contacts > div, .pg.sn.sn-v2 .sn-contacts > div:nth-child(2) { border-radius: 12px; }
+.pg.sn.sn-v2 .sn-h i { width: 26px; height: 26px; flex: 0 0 26px; }
+.pg.sn.sn-v2 .sn-hero2 .sn-el { min-height: 53px; }

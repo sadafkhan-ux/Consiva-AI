@@ -23,7 +23,7 @@ from app.scoring import domain_score as ds
 from app.scoring import legal_map
 from app.scoring.ten_checks import _find, _is_verified
 
-SCORECARD_VERSION = "3.2.3"
+SCORECARD_VERSION = "3.4.0"
 RULES = {**ds.RULES, "scoring_rules": SCORECARD_VERSION, "scorecard": "DPDP_Website_Readiness_Scorecard.xlsx"}
 
 PASS, PARTIAL, FAIL, NOT_ASSESSED, NA = "pass", "partial", "fail", "not_assessed", "not_applicable"
@@ -44,13 +44,13 @@ ROWS: tuple[tuple[str, str, str, int, tuple[str, ...]], ...] = (
     ("P8", "Privacy Notice", "DPO or grievance officer contact published", 10, ("C1", "C2")),
     ("P9", "Privacy Notice", "Data Principal rights and how to exercise them", 10, ("C3", "C4", "A4")),
     ("P10", "Forms & Security", "Forms collecting personal data have consent and a notice link, over HTTPS", 8, ("G1", "G2", "F1", "F2")),
-    ("P11", "Forms & Security", "SSL certificate installed and valid for more than 90 days", 4, ()),
+    ("P11", "Forms & Security", "SSL certificate installed and valid for more than 30 days", 4, ()),
     ("P12", "Forms & Security", "Secure TLS version (TLS 1.3 preferred, TLS 1.2 accepted)", 4, ()),
 )
 #: The rows that read the certificate and TLS record (scanner/tls_assessment.py) rather than the 24 detailed checks; their legal basis is that of the secure-serving check F1 (Act s.8(5), Rules r.6).
 TLS_ROWS = ("P11", "P12")
 #: A certificate with more than this many days left earns full marks; a valid one with this many or fewer earns half.
-SSL_FULL_DAYS = 90
+SSL_FULL_DAYS = 30
 WEIGHT = {r[0]: r[3] for r in ROWS}
 assert sum(WEIGHT.values()) == 100 and all(w % 2 == 0 for w in WEIGHT.values())
 
@@ -65,7 +65,7 @@ PHRASES: dict[str, tuple[str, str, str, str, str]] = {
     "P7": ("The notice does not itemise the personal data collected, or does not state the purposes.", "A visitor cannot tell what is collected or why.", "List each category of personal data and the specific purpose for it.", "Privacy lead", "Low"),
     "P8": ("The business contact for privacy questions, or the grievance route with a response period, is not fully published.", "A visitor with a question or complaint needs a published way to ask.", "Publish a business contact (email or phone) and a grievance route with a response period of at most 90 days.", "Privacy lead", "Low"),
     "P9": ("The notice does not fully list the rights, how to exercise them, how to withdraw consent and how to complain to the Board.", "A right that cannot be exercised has little value to the visitor.", "List the rights and give a route for each, for withdrawing consent, and for complaining to the Board.", "Privacy lead", "Low"),
-    "P11": ("The site has no valid SSL certificate, or the certificate expires within 90 days.", "A missing, invalid or lapsing certificate lets browsers warn visitors away or lets data be read in transit.", "Install a trusted certificate for the exact host name and renew it well before it expires, ideally with automatic renewal.", "Engineering", "Low"),
+    "P11": ("The site has no valid SSL certificate, or the certificate expires within 30 days.", "A missing, invalid or lapsing certificate lets browsers warn visitors away or lets data be read in transit.", "Install a trusted certificate for the exact host name and renew it well before it expires, ideally with automatic renewal.", "Engineering", "Low"),
     "P12": ("The site does not offer TLS 1.3 (TLS 1.2 is accepted, TLS 1.1 or below is not).", "Older TLS versions have known weaknesses and are retired by browsers.", "Enable TLS 1.3 on the web server or CDN, keep TLS 1.2 as the fallback, and switch off TLS 1.1 and below.", "Engineering", "Low"),
     "P10": ("A form that collects personal data lacks a consent control or notice link, has a pre-ticked box, or is not served securely.", "Details are collected without telling the visitor why, or in the open.", "Add an unticked consent control or a notice link beside each form and serve every form over HTTPS.", "Website owner", "Medium"),
 }
@@ -330,7 +330,8 @@ def assess_scorecard(
     if not tls or cstatus in (None, "unreachable"):
         row("P11", NOT_ASSESSED, "The site's certificate was not checked in this scan." if not tls else "The certificate could not be checked: " + (cert.get("reason") or "the handshake did not complete") + ".", subs11)
     elif cstatus == "valid" and isinstance(days, int):
-        issuer = f"; issuer {cert['issuer']}" if cert.get("issuer") else ""
+        org, cn = cert.get("issuer_org") or "", cert.get("issuer") or ""
+        issuer = f"; issuer {org} ({cn})" if org and cn and org != cn else f"; issuer {org or cn}" if (org or cn) else ""
         text = f"SSL certificate valid; expires {cert.get('not_after')} ({days} day{'s' if days != 1 else ''} remaining){issuer}."
         if days > SSL_FULL_DAYS:
             row("P11", PASS, f"A valid SSL certificate is installed and has {days} days left.", subs11, evidence_override=tls_ev(text))
@@ -439,6 +440,9 @@ def validate_scorecard(r: dict[str, Any]) -> None:
             raise ds.ResultRefused(f"{x['id']}: prohibited wording")
     if sum(x["marks"] for x in r["rows"]) != 100:
         raise ds.ResultRefused("the weights do not sum to 100")
+    from app.services import report_qc            # calculation QC: the rows, the categories, the points and the score reconcile
+    if problems := report_qc.check_scorecard(r):
+        raise ds.ResultRefused("calculation check failed: " + "; ".join(problems))
     if r["score"] is not None and (not isinstance(r["score"], int) or not 0 <= r["score"] <= 100):
         raise ds.ResultRefused("score is not a whole number from 0 to 100")
     for f in r["findings"]:

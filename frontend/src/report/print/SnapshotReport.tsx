@@ -171,7 +171,7 @@ function Page1({ s, ten, model, fit, squeeze }: { s: SummaryView; ten: TenAssess
                     const pct = c.assessable > 0 ? Math.round((100 * c.awarded) / c.assessable) : 0;
                     return (
                       <div key={c.category} className="sn-cat" data-testid="sn-category">
-                        <div className="sn-cat-top"><b>{c.category}</b><span>{c.assessable > 0 ? <><strong>{c.awarded}</strong> of {c.assessable} marks</> : "Not assessed"}</span></div>
+                        <div className="sn-cat-top"><b>{c.category}</b><span>{c.assessable > 0 ? <><strong>{c.awarded}</strong> of {c.assessable} marks{c.marks > c.assessable ? <small className="sn-cat-of"> assessed, {c.marks} in all</small> : null}</> : "Not assessed"}</span></div>
                         <div className="sn-meter" role="img" aria-label={`${c.category}: ${pct} percent of the assessable marks`}><i style={{ width: `${pct}%` }} /></div>
                       </div>
                     );
@@ -295,7 +295,7 @@ function CheckTable({ checks: all, ten }: { checks: TenCheck[]; ten: TenAssessme
         {checks.map((c, i) => (
           <Fragment key={c.id}>
             {c.category && c.category !== checks[i - 1]?.category && (
-              <tr className="sn-grp" data-testid="sn-group"><td colSpan={4}><b>{c.category}</b>{totals.get(c.category) && <em>{totals.get(c.category)!.awarded} of {totals.get(c.category)!.assessable} marks</em>}</td></tr>
+              <tr className="sn-grp" data-testid="sn-group"><td colSpan={4}><b>{c.category}</b>{totals.get(c.category) && <em>{totals.get(c.category)!.awarded} of {totals.get(c.category)!.assessable} marks{totals.get(c.category)!.marks > totals.get(c.category)!.assessable ? ` assessed, ${totals.get(c.category)!.marks} in all` : ""}</em>}</td></tr>
             )}
             <tr data-testid="sn-checkpoint" data-status={c.result} data-kind={c.kind}>
               <td className="sn-n">{c.id}</td>
@@ -322,7 +322,8 @@ function CheckTable({ checks: all, ten }: { checks: TenCheck[]; ten: TenAssessme
       </tbody>
       <tfoot>
         <tr className="sn-total" data-testid="sn-total-row">
-          <td colSpan={3}>{ten.scanner ? "Privacy Readiness Score, out of 100" : <>Total Weightage Awarded (applicable checks) &middot; Privacy Readiness Score {ten.scoreText}</>}{ten.counts.notAssessed > 0 && <> &middot; {ten.counts.notAssessed} not assessed, left out</>}</td>
+          <td colSpan={3}>{ten.scanner ? <>Privacy Readiness Score, out of 100{ten.applicableMax > 0 && <> &middot; <span data-testid="sn-score-basis">{ten.awarded} of {ten.applicableMax} assessed marks{ten.score !== null && Math.round((100 * ten.awarded) / ten.applicableMax) === ten.score ? ` = ${ten.score}%` : ""}</span></>}</> : <>Total Weightage Awarded (applicable checks) &middot; Privacy Readiness Score {ten.scoreText}</>}{ten.counts.notAssessed > 0 && <> &middot; {ten.counts.notAssessed} not assessed, left out</>}
+            {ten.scanner && ten.applicableMax > 0 && <small className="sn-method" data-testid="sn-score-method">How it is calculated: marks awarded &divide; marks assessed &times; 100, rounded to a whole number.{ten.applicableMax < 100 ? ` The ${100 - ten.applicableMax} marks of checks not assessed or not applicable are left out of both.` : ""}</small>}</td>
           <td className="sn-num" data-testid="sn-total-marks">{ten.scanner ? ten.scoreText : ten.totalText}</td>
         </tr>
       </tfoot>

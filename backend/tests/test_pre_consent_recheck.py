@@ -146,12 +146,13 @@ def test_a_clean_load_that_fires_nothing_is_recorded_as_not_fired(monkeypatch):
     assert browser.log == ["new", "closed"]          # nothing fired, so no extra loads were spent
 
 
-def test_a_page_that_fires_every_time_is_loaded_three_times_and_fired(monkeypatch):
+def test_a_page_that_fires_in_its_first_two_loads_is_fired_without_a_third_load(monkeypatch):
+    """Two of two fired already decides "most loads fired", so a third load is not spent."""
     _patch_page_loading(monkeypatch)
     browser = _Browser([(GA, "xhr")])
     out = _run(crawler._recheck_one_page(browser, "https://x.test/", "https://x.test/", get_settings(), set()))
-    assert (out["loads"], out["fired_loads"], out["fired"]) == (3, 3, True)
-    assert browser.log == ["new", "closed"] * 3
+    assert (out["loads"], out["fired_loads"], out["fired"]) == (2, 2, True)
+    assert browser.log == ["new", "closed"] * 2
 
 
 def test_a_single_blip_is_recorded_as_a_blip_not_as_a_repeat(monkeypatch):
@@ -170,7 +171,7 @@ def test_a_single_blip_is_recorded_as_a_blip_not_as_a_repeat(monkeypatch):
 
 def test_a_page_that_fires_in_two_of_three_loads_counts_as_firing(monkeypatch):
     _patch_page_loading(monkeypatch)
-    answers = iter([[(GA, "xhr")], [(GA, "xhr")], []])
+    answers = iter([[(GA, "xhr")], [], [(GA, "xhr")]])      # the first two disagree, so the third decides
 
     class Flaky(_Browser):
         async def new_context(self, **_k):

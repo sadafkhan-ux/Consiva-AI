@@ -138,6 +138,18 @@ class InvalidEditError(ConsivaError):
     status_code = 422
 
 
+class ReviewerRequiredError(ConsivaError):
+    """Approving or withdrawing a report's release is for an administrator (the report reviewer)."""
+
+    status_code = 403
+
+
+class ReportNotApprovedError(ConsivaError):
+    """The report has not been approved for release yet (or its approval is stale or withdrawn). 409: the scan is fine; a reviewer has to approve the report first."""
+
+    status_code = 409
+
+
 class ReportGenerationError(ConsivaError):
     """The PDF report could not be produced (the browser that prints it was unavailable, the report page did not finish, or the output was not a PDF).
     status_code=503: the scan and its data are fine and the caller may retry. The message is client-safe; the cause is in the server log."""

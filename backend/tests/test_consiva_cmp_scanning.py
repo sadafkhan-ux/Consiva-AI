@@ -139,8 +139,8 @@ class _Frame:
     def locator(self, selector):
         return self._selectors.get(selector, _Locator(count=0))
 
-    async def evaluate(self, script):
-        return 1
+    async def evaluate(self, script, arg=None):
+        return False if script == ci._PICK_JS else 1            # no control is found by wording here; the catalogued selectors do the clicking
 
 
 def _page(selectors):

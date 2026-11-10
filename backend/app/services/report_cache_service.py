@@ -17,12 +17,14 @@ import logging
 import time
 import uuid
 from datetime import timedelta
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.core.exceptions import ReportGenerationError
 from app.core.tokens import issue_access_token
 from app.db.models import (
     AgentRun,
@@ -34,7 +36,7 @@ from app.db.models import (
 )
 from app.db.session import async_session_factory
 from app.scoring import requirements
-from app.services import assessment_service, report_pdf_service
+from app.services import assessment_service, report_pdf_service, report_qc
 from app.services.report_pdf_service import RenderedReport
 
 logger = logging.getLogger(__name__)
@@ -114,6 +116,7 @@ async def get_or_render(
     """The report of one completed scan: the stored copy when it is current, otherwise printed now (once, however many ask at the same moment) and stored.
     Returns (report, "stored" | "printed")."""
     settings = settings or get_settings()
+    scan_url = getattr(scan, "url", None)        # read now as well: the rollback below expires the row
     scan_id = scan.id          # read now: the rollback below expires the row, and reading it afterwards would need the database again
     current = await fingerprint(db, scan, settings)
     stored = await get_stored(db, scan_id, variant, current)
@@ -132,7 +135,17 @@ async def get_or_render(
             try:
                 rendered = await report_pdf_service.render_report_pdf(
                     scan_id, version=current, token=token, user_id=user_id, org_id=org_id, role=role, settings=settings, variant=variant)
-                await _store(scan_id, variant, current, rendered, settings)
+                # Quality gate: a report that fails its checks is neither stored nor served (see services/report_qc.py).
+                try:
+                    report_qc.enforce(report_qc.check_pdf(rendered.pdf, variant, domain=urlparse(scan_url).hostname if scan_url else None))
+                except report_qc.ReportQcError as exc:
+                    logger.error("Report of scan %s (%s) failed quality control and was withheld: %s", scan_id, variant, exc)
+                    raise ReportGenerationError("The report did not pass the internal quality check and has been withheld for review.") from exc
+                # A report printed while the web app could not be read is keyed "unknown"; storing it could keep a stale copy alive after the next frontend update, so it is served this once only.
+                if await frontend_signature(settings) == "unknown":
+                    logger.warning("Report of scan %s (%s) was not stored: the web app could not be reached to identify its build", scan_id, variant)
+                else:
+                    await _store(scan_id, variant, current, rendered, settings)
                 return rendered
             finally:
                 _inflight.pop(key, None)

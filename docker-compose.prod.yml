@@ -275,7 +275,7 @@ services:
       # a scan that completed fine.
       #
       # 0 = decide from the machine (app/jobs/capacity.py): at most one job per CPU, and
-      # a new one is taken only while the CPU is under WORKER_TARGET_CPU_PERCENT (85) and
+      # a new one is taken only while the CPU is under WORKER_TARGET_CPU_PERCENT (50) and
       # memory remains for it, a step at a time. A fixed 4 left a large idle machine
       # mostly unused while 100 scans waited (median 86 s in the queue at 32% CPU) and
       # was already too many on a small one (four real scans measured 790% of eight

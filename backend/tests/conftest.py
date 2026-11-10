@@ -32,3 +32,21 @@ def _fresh_query_embedding_cache():
     clear_query_embedding_cache()
     yield
     clear_query_embedding_cache()
+
+
+@pytest.fixture(autouse=True)
+def _report_qc_sees_stand_in_pdfs(request, monkeypatch):
+    """Tests that exercise the report cache hand it stand-in bytes (b"%PDF-new"), which are not real PDFs; the printed-PDF quality gate is checked in test_report_qc.py with real ones."""
+    if request.module.__name__.endswith("test_report_qc"):
+        return
+    from app.services import report_qc
+
+    monkeypatch.setattr(report_qc, "check_pdf", lambda pdf, variant, domain=None: [])
+    if request.module.__name__.endswith("test_report_cache_invalidation"):
+        return                      # these tests are about the real web-app signature
+    from app.services import report_cache_service
+
+    async def known_build(settings=None):
+        return "test-build"
+
+    monkeypatch.setattr(report_cache_service, "frontend_signature", known_build)

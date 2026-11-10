@@ -12,9 +12,9 @@ from app.scanner.schemas import ConsentSignalRecord
 
 # Phrases that, on a clickable control, evidence a consent mechanism BY THEMSELVES.
 # Each names the consent action explicitly; none is ordinary page furniture.
-_ACCEPT_HINTS = ("accept all", "allow all", "accept cookies", "allow cookies", "agree and continue")
+_ACCEPT_HINTS = ("accept all", "allow all", "accept cookies", "allow cookies", "agree and continue", "cookie-dialog-accept")
 _REJECT_HINTS = ("reject all", "decline all", "reject non-essential", "deny all",
-                 "reject cookies", "refuse all")
+                 "reject cookies", "refuse all", "cookie-dialog-reject")
 _GRANULAR_HINTS = ("manage preferences", "cookie settings", "cookie preferences",
                    "manage cookies", "privacy preferences")
 

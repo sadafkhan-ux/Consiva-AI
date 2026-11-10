@@ -13,7 +13,12 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.exceptions import ConsivaError, NotFoundError, ScanNotReadyError
+from app.core.exceptions import (
+    ConsivaError,
+    NotFoundError,
+    ReviewerRequiredError,
+    ScanNotReadyError,
+)
 from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import (
     audit_repository,
@@ -30,6 +35,7 @@ from app.services import (
     analysis_service,
     assessment_service,
     consent_agent_api_service,
+    report_approval_service,
     report_cache_service,
     report_pdf_service,  # noqa: F401  (tests patch it through this module)
     scan_service,
@@ -1205,6 +1211,8 @@ async def get_scan_report_pdf(
         raise NotFoundError(f"Scan {scan_id} not found")
     if scan.status != "completed":
         raise ScanNotReadyError(f"Scan {scan_id} is not completed yet (status={scan.status}), so it has no report")
+    # Release gate: with REPORT_REQUIRE_APPROVAL on, only an approved report is handed to a customer; an administrator may always download it to review it.
+    release = await report_approval_service.require_release(db, scan_id, user.role, get_settings())
     auth = request.headers.get("authorization", "")
     token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
     # The stored copy when it is still exactly what would be printed now; otherwise printed once (however many ask together) and stored.
@@ -1219,8 +1227,69 @@ async def get_scan_report_pdf(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
             "X-Report-Source": source,
+            "X-Report-Release": release,
         },
     )
+
+
+class ReportApprovalRequest(BaseModel):
+    note: str | None = None
+
+
+class ReportApprovalResponse(BaseModel):
+    state: str
+    approved_by_user_id: str | None = None
+    approved_at: str | None = None
+    report_version: str | None = None
+    note: str | None = None
+    current_version: str
+    required: bool
+    quality_owner: str = ""
+
+
+async def _approval_scan(db: AsyncSession, scan_id: uuid.UUID, user: CurrentUser):
+    scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
+    if scan is None:
+        raise NotFoundError(f"Scan {scan_id} not found")
+    return scan
+
+
+def _approval_body(state) -> ReportApprovalResponse:
+    return ReportApprovalResponse(**{k: getattr(state, k) for k in ("state", "approved_by_user_id", "approved_at", "report_version", "note", "current_version")}, required=get_settings().report_require_approval, quality_owner=get_settings().report_quality_owner)
+
+
+@router.get("/{scan_id}/report-approval", response_model=ReportApprovalResponse)
+async def get_report_approval(scan_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Whether this scan's report has been approved for release, by whom and when."""
+    await _approval_scan(db, scan_id, user)
+    return _approval_body(await report_approval_service.get_state(db, scan_id))
+
+
+@router.post("/{scan_id}/report-approval", response_model=ReportApprovalResponse)
+async def approve_report(
+    scan_id: uuid.UUID, request: Request, body: ReportApprovalRequest | None = None,
+    user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db),
+):
+    """Approve the report for release. Administrators only. The report is printed first and must pass the quality checks (page count, no internal codes, one score, correct links and metadata)
+    before the approval is recorded, so a report that fails them cannot be approved."""
+    if not report_approval_service.is_reviewer(user.role):
+        raise ReviewerRequiredError("Only an administrator can approve a report for release.")
+    scan = await _approval_scan(db, scan_id, user)
+    if scan.status != "completed":
+        raise ScanNotReadyError(f"Scan {scan_id} is not completed yet (status={scan.status}), so it has no report")
+    auth = request.headers.get("authorization", "")
+    token = auth.split(" ", 1)[1].strip() if auth.lower().startswith("bearer ") else ""
+    await report_cache_service.get_or_render(db, scan, "summary", token=token, user_id=user.user_id, org_id=user.org_id, role=user.role, settings=get_settings())
+    return _approval_body(await report_approval_service.approve(db, scan_id, user.user_id, (body.note if body else None)))
+
+
+@router.delete("/{scan_id}/report-approval", response_model=ReportApprovalResponse)
+async def revoke_report_approval(scan_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    """Withdraw an approval: the report is no longer released to customers. Administrators only."""
+    if not report_approval_service.is_reviewer(user.role):
+        raise ReviewerRequiredError("Only an administrator can withdraw a report's approval.")
+    await _approval_scan(db, scan_id, user)
+    return _approval_body(await report_approval_service.revoke(db, scan_id, user.user_id))
 
 
 @router.get("/{scan_id}/policy-analysis", response_model=PolicyAnalysisResponse)

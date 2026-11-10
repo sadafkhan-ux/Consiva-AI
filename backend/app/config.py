@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     # 0 (the default) = decide from the machine: at most one job per CPU, taken only while the CPU is below the target and memory remains for another job (app/jobs/capacity.py).
     # A number above 0 caps the jobs this process runs at once; the CPU and memory limits below still apply to it. Either way it is also bounded by the database
     # connections this process holds (DB_POOL_SIZE + DB_MAX_OVERFLOW, less three).
-    worker_target_cpu_percent: int = Field(default=85, ge=30, le=100)
+    worker_target_cpu_percent: int = Field(default=50, ge=30, le=100)    # 50 since 10 Nov 2026: at 85 the machine reached 93-96% CPU, Accept/Reject clicks failed and six of six scans got no score; at 50 all six were clicked and scored, in about the same total time
     # What one running job is expected to need, used to decide whether memory remains for another. 700 MB was measured for a scan (about 0.55 GB, with margin); raise it for
     # heavier sites. Not a capacity claim: it is divided into the memory actually available at the moment.
     worker_memory_per_job_mb: int = Field(default=700, ge=100)
@@ -255,6 +255,11 @@ class Settings(BaseSettings):
     report_pdf_cache_seconds: int = Field(default=120, ge=0, le=3600)
     # Pre-generated PDFs (services/report_cache_service.py) are kept this many days, then dropped the next time one is stored.
     report_pdf_retention_days: int = Field(default=30, ge=1, le=365)
+    # REPORT_REQUIRE_APPROVAL -- when true, a report PDF is downloadable only after an administrator has approved it for release (services/report_approval_service.py).
+    # Administrators can always download a report to review it. Off by default so that existing deployments keep behaving as they do today.
+    report_require_approval: bool = False
+    # REPORT_QUALITY_OWNER -- the named person accountable for the quality of customer reports (shown in the approval record and the version route). Free text, e.g. "Name <email>".
+    report_quality_owner: str = ""
     # Purpose Classifier (Agent 6): an assessment request can carry a caller-supplied
     # DSN/spec URL/CSV body that the worker will act on -- unbounded submissions let
     # one org occupy every slot in the single shared worker pool (jobs/worker.py's

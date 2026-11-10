@@ -56,7 +56,7 @@ def _certificate(der: bytes | None, host: str, status: str, reason: str | None =
             info = parse_certificate(der, host, now)
         except Exception:  # noqa: BLE001 -- a certificate we cannot parse is simply not described
             return out
-        out.update({"not_after": info["not_after"], "not_before": info["not_before"], "issuer": info["issuer"], "subject": info["subject"],
+        out.update({"not_after": info["not_after"], "not_before": info["not_before"], "issuer": info["issuer"], "issuer_org": info.get("issuer_org") or "", "subject": info["subject"],
                     "days_remaining": info["days_until_expiry"] if not info["expired"] else -(info["days_since_expiry"] or 0), "hostname_matches": info["hostname_matches"],
                     "self_signed": info["self_signed"]})
     return out

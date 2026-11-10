@@ -68,6 +68,7 @@ from app.agents.breach.services import sla_service as incident_sla_service
 from app.agents.dsr.services import sla_service as dsr_sla_service
 from app.agents.regwatch.services import action_sla_service as regwatch_action_sla_service
 from app.config import get_settings
+from app.core import versions
 from app.db.models import AgentJob
 from app.db.repositories import ropa_repository
 from app.db.session import async_session_factory
@@ -404,6 +405,7 @@ async def _job_pump(stopping: asyncio.Event, governor: capacity.Governor) -> Non
 
 async def run_forever() -> None:
     settings = get_settings()
+    logger.info("Worker code: %s", versions.describe())
     governor = capacity.governor_for(settings)
     logger.info("Worker %s starting: up to %d jobs at once (%s), taking more only while CPU is under %d%% and memory remains", WORKER_ID, governor.slots,
                 "set by WORKER_CONCURRENCY" if settings.worker_concurrency > 0 else "from the CPU count", settings.worker_target_cpu_percent)

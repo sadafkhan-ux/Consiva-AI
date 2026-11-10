@@ -145,32 +145,58 @@ async def _try_cmp_selectors(page: Page, *, accept: bool) -> str:
     return "click_failed" if found_but_failed else "not_found"
 
 
+# One pass over the page finds the visible clickable control whose words match the earliest hint, instead of reading the first 50 controls one browser call at a time: on a large page (greenply.com)
+# the cookie popup's "Accept" button sits after hundreds of other buttons in the document, beyond the first 50, and the banner was reported as "not automatable".
+_PICK_JS = """([hints, selector]) => {
+  const all = [];
+  const walk = (root) => {
+    for (const el of root.querySelectorAll(selector)) all.push(el);
+    for (const el of root.querySelectorAll('*')) if (el.shadowRoot) walk(el.shadowRoot);
+  };
+  walk(document);
+  let best = null;
+  for (const el of all) {
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    if (!(r.width > 0 && r.height > 0) || cs.visibility === 'hidden' || cs.display === 'none') continue;
+    const text = ((el.innerText || el.value || el.getAttribute('aria-label') || '') + '').trim().toLowerCase();
+    if (!text) continue;
+    const idx = hints.findIndex((h) => text.includes(h));
+    if (idx < 0) continue;
+    if (!best || idx < best.idx || (idx === best.idx && text.length < best.len)) best = { el, idx, len: text.length };
+  }
+  if (!best) return false;
+  best.el.setAttribute('data-consiva-pick', '1');
+  return true;
+}"""
+_UNPICK_JS = """() => {
+  const walk = (root) => { for (const el of root.querySelectorAll('[data-consiva-pick]')) el.removeAttribute('data-consiva-pick'); for (const el of root.querySelectorAll('*')) if (el.shadowRoot) walk(el.shadowRoot); };
+  walk(document);
+}"""
+
+
 async def _try_text_match(page: Page, *, hints: tuple[str, ...]) -> str:
     """Returns "clicked" | "click_failed" | "not_found" -- same distinction as
     _try_cmp_selectors above, for the generic text-match fallback path."""
     found_but_failed = False
     for frame in (await _probe_frames(page))[0]:
-        candidates = frame.locator(_CLICKABLE_SELECTOR)
         try:
-            count = await _bounded(candidates.count())
+            picked = await _bounded(frame.evaluate(_PICK_JS, [list(hints), _CLICKABLE_SELECTOR]))
         except PlaywrightError as exc:
-            logger.debug("Could not enumerate clickable elements in frame %r: %s", frame.url, exc)
+            logger.debug("Could not search clickable elements in frame %r: %s", frame.url, exc)
             continue
-
-        for i in range(min(count, _MAX_CANDIDATES)):
-            element = candidates.nth(i)
+        if not picked:
+            continue
+        try:
+            await frame.locator('[data-consiva-pick="1"]').first.click(timeout=3000)
+            return "clicked"
+        except PlaywrightError as exc:
+            logger.debug("Matched a control in frame %r but the click failed: %s", frame.url, exc)
+            found_but_failed = True
+        finally:
             try:
-                text = (await element.inner_text(timeout=1000)).strip().lower()
-            except PlaywrightError as exc:  # detached/hidden elements are expected on real pages
-                logger.debug("Could not read candidate #%d text in frame %r: %s", i, frame.url, exc)
-                continue
-            if any(hint in text for hint in hints):
-                try:
-                    await element.click(timeout=3000)
-                    return "clicked"
-                except PlaywrightError as exc:
-                    logger.debug("Matched candidate #%d in frame %r but click failed: %s", i, frame.url, exc)
-                    found_but_failed = True
+                await _bounded(frame.evaluate(_UNPICK_JS))
+            except PlaywrightError:
+                pass
     return "click_failed" if found_but_failed else "not_found"
 
 
@@ -181,6 +207,7 @@ async def _try_text_match(page: Page, *, hints: tuple[str, ...]) -> str:
 # that case; this cost is only ever paid when the first pass found nothing, so a page
 # with a normally-present banner is unaffected.
 _RETRY_WAIT_MS = 800
+_RETRY_WAITS_MS = (_RETRY_WAIT_MS, 2500)    # two retries, each after a longer wait
 
 # Outcome precedence when combining multiple search attempts (CMP selectors, text
 # match, the retry pass): a real click anywhere wins outright; failing that, "we found
@@ -198,12 +225,15 @@ async def _search_all_frames(page: Page, *, hints: tuple[str, ...], accept: bool
     """Returns "clicked" | "click_failed" | "not_found" -- see _try_cmp_selectors'
     docstring for why "click_failed" is kept distinct rather than collapsed into
     "not_found"."""
-    first_pass = _best(await _try_cmp_selectors(page, accept=accept), await _try_text_match(page, hints=hints))
-    if first_pass == "clicked":
-        return first_pass
-    await page.wait_for_timeout(_RETRY_WAIT_MS)
-    second_pass = _best(await _try_cmp_selectors(page, accept=accept), await _try_text_match(page, hints=hints))
-    return _best(first_pass, second_pass)
+    best = _best(await _try_cmp_selectors(page, accept=accept), await _try_text_match(page, hints=hints))
+    # A click that did not land is retried after a longer wait each time (the banner may still be animating in, or the machine is busy), so a slow moment is not scored as a failure.
+    # The wait is only paid when the click has not succeeded.
+    for wait_ms in _RETRY_WAITS_MS:
+        if best == "clicked":
+            return best
+        await page.wait_for_timeout(wait_ms)
+        best = _best(best, await _try_cmp_selectors(page, accept=accept), await _try_text_match(page, hints=hints))
+    return best
 
 
 async def click_accept(page: Page) -> str:

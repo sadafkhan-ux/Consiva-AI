@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from app.agents.consent_agent.graph import close_graph_resources, get_compiled_graph
 from app.api.v1.router import api_router
 from app.config import get_settings
+from app.core import versions
 from app.core.exceptions import ConsivaError
 from app.db.privilege_check import assert_rls_is_enforceable
 from app.lookup.health import warn_if_cookie_lookup_empty
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI):
     # actually enforceable for this connection. It was not, for a long time, and
     # nothing anywhere reported it -- the policies simply were never consulted.
     # Refuses to boot in production; warns loudly elsewhere.
+    logging.getLogger(__name__).info("API starting: %s", versions.describe())
     await assert_rls_is_enforceable()
     await warn_if_knowledge_base_empty()
     await warn_if_cookie_lookup_empty()

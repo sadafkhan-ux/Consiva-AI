@@ -40,7 +40,7 @@ from app.scoring.ten_checks import (
     sharing_names_recipients,
 )
 
-SCORE_VERSION = "2.2.2"
+SCORE_VERSION = "2.2.4"
 RULES = {"scoring_rules": SCORE_VERSION, "check_list": "2026.11.1", "classification_scheme": "2026.11.1", "statutory_mapping": "2026.10.1"}
 
 #: Every score is out of 100, whatever the scan type. A Quick Scan cannot assess every parameter; those it cannot reach are left out and the rest are redistributed (SC-14), exactly as for any
@@ -340,7 +340,7 @@ def assess_scanner(
         elif scanned == 0:
             put("A1", NOT_ASSESSABLE, RESTRICTED, reason="No page could be read, so the search for a notice was not made.")
         else:
-            put("A1", NOT_MET, NOT_DETECTED, found="No privacy notice was found.", ev_refs=[ref(searched("a privacy or data protection page, by page address and link text"), home)])
+            put("A1", NOT_MET, NOT_DETECTED, found=f"No privacy notice was found on the {scanned} page{'s' if scanned != 1 else ''} read.", ev_refs=[ref(searched("a privacy or data protection page, by page address and link text"), home)])
 
     def dependent(r: str, fn: Any) -> None:
         """A parameter that reads the notice: blocked when there is none, removed when we could not read it, otherwise judged on what it says."""
@@ -493,6 +493,9 @@ def assess_scanner(
         e = [ref("Consent mechanism examined on the home page" + (f" ({vendor})" if vendor else ""), home)]
         if rej is True:
             put("B3", EARNED, OBSERVED, found="A reject control was found at the first level of the banner.", ev_refs=e, limitation="Whether it is at the same level as Accept is judged from the banner as detected.")
+        elif rej is False and ((sig or {}).get("evidence") or {}).get("reject_interaction") == "click_failed":
+            # The scan FOUND a reject control and could not click it (a slow page, a busy server): that is not the same as the control being absent, and must not cost the site its marks.
+            put("B3", NOT_ASSESSABLE, INCONCLUSIVE, reason="A reject control was found but could not be clicked in this scan, so whether it is offered on the first level of the banner was not established.", ev_refs=e)
         elif rej is False:
             put("B3", NOT_MET, NOT_DETECTED, found="No reject control was found on the first level of the banner.", ev_refs=[*e, ref(searched("a reject control on the consent mechanism"), home)])
         else:

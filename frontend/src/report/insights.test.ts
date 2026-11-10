@@ -242,9 +242,11 @@ describe("observable security signals", () => {
 });
 
 describe("all five together", () => {
-  it("come in a fixed order, each with its own key, and always exist even when there is nothing to read", () => {
+  it("come in a fixed order, each with its own key; the children's section appears only when the site points to children", () => {
     const sections = buildInsightSections({ policy: null, meta: null, evidence: null, sector: null });
-    expect(sections.map((s) => s.key)).toEqual(["grievance", "dpo", "language", "children", "security"]);
+    expect(sections.map((s) => s.key)).toEqual(["grievance", "dpo", "language", "security"]);
+    const kids = buildInsightSections({ policy: null, meta: null, evidence: null, sector: sector() });
+    expect(kids.map((s) => s.key)).toEqual(["grievance", "dpo", "language", "children", "security"]);
     expect(sections.every((s) => s.title && s.status && s.legal && ["Confirmed", "Observed", "Not verified"].includes(s.knowledge))).toBe(true);
   });
 });

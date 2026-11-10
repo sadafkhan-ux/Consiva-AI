@@ -78,6 +78,8 @@ describe("the two-page report (variant summary)", () => {
     expect(p2.getAllByTestId("sn-checkpoint").length).toBeGreaterThan(0);
     const p1 = within(screen.getByTestId("sn-page-1"));                                                              // the scanned pages sit on page 1, giving page 2 room for the checks
     expect(p1.getByTestId("sn-pages")).toHaveTextContent("x.test/privacy");
+    expect(p1.getByTestId("sn-pages")).not.toHaveTextContent("x.test/old");           // a page that failed to load is not listed
+    expect(p1.getByTestId("sn-pages")).not.toHaveTextContent("Not scanned");
     expect(p2.queryByTestId("sn-page-summary")).toBeNull();                                                          // Page Scan Summary and Recommendations are not on page 2
     expect(p2.getByTestId("sn-cta")).toHaveTextContent("Unlock Your Complete Privacy Assessment");
     expect(p2.getByTestId("sn-cta")).toHaveTextContent("Go Beyond the Quick Scan");
@@ -227,6 +229,18 @@ describe("the two-page report (variant summary)", () => {
     for (const x of q) expect(x).toMatch(/^Evidence: (Specific|General|Limited|None)$/);
   });
 
+
+  it("the total row states the marks the score is made of, and only claims the percentage when it is the printed score", () => {
+    const base = A.typical;
+    const sc = { version: "3.3.0", mode: "quick", status: "completed", score: 53, scale: 100, band: "Partially addressed", bandNotes: [], coverage: 64, confidence: { level: "medium", label: "Medium", reasons: [] }, explanation: "x", disclaimer: "x", whatWasNotAssessed: [], beyondQuickScan: [], removed: [], findings: [], rules: {}, scannedAt: null, categories: [{ category: "Cookie Consent", marks: 48, awarded: 12, assessable: 12 }] } as unknown as TenAssessment["scanner"];
+    const make = (awarded: number, applicableMax: number, score: number | null): TenAssessment => ({ ...base, engine: "scorecard", scanner: sc, awarded, applicableMax, score, scoreText: score === null ? "No meaningful score" : `${score}/100` });
+    const { unmount } = render(<SnapshotReport model={model({ assessment: make(34, 64, 53) })} />);
+    expect(screen.getByTestId("sn-score-basis")).toHaveTextContent("34 of 64 assessed marks = 53%");
+    expect(screen.getByTestId("sn-score-method")).toHaveTextContent("marks awarded ÷ marks assessed × 100, rounded to a whole number. The 36 marks of checks not assessed or not applicable are left out of both.");
+    unmount();
+    render(<SnapshotReport model={model({ assessment: make(64, 64, 99) })} />);
+    expect(screen.getByTestId("sn-score-basis")).toHaveTextContent(/^64 of 64 assessed marks$/);
+  });
 
   it("counts the checks assessed, never the points in play", () => {
     const base = A.typical;

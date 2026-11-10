@@ -156,9 +156,10 @@ function buildSelection(model: ReportModel): { rows: PageSelectionRow[]; notes: 
   const sp = model.scanPages;
   if (!sp) return { rows: [], notes: [] };
   const byUrl = new Map((model.evidence?.pages ?? []).map((p) => [p.url, p]));
-  const rows = sp.rows.map((r, i) => {
+  // Only the pages that were scanned are listed: an attempt that failed to load or timed out is a fact about the scan, not about the site, and does not belong in a customer's page list.
+  const rows = sp.rows.filter((r) => r.scanned).map((r, i) => {
     const ev = byUrl.get(r.url);
-    const reason = r.scanned ? shortReason(ev?.selection_reason ?? fallbackReason(ev?.discovered_via)) : `Not scanned: ${r.status.replace("Not scanned: ", "")}`;
+    const reason = shortReason(ev?.selection_reason ?? fallbackReason(ev?.discovered_via));
     return { n: i + 1, url: r.url.replace(/^https?:\/\//, ""), reason, status: r.status, scanned: r.scanned };
   });
   const notes: string[] = [];

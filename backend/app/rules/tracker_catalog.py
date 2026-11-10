@@ -48,6 +48,8 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         # on a live scan, added on that direct evidence, not guessed.
         domain_substrings=(
             "googleadservices.com", "googlesyndication.com", "doubleclick.net", "/ads/ga-audiences",
+            # Seen on 150 stored scans as www.google.com / www.google.co.in requests filed "unclassified": Google Ads conversion measurement, remarketing and user-list beacons.
+            "/ccm/collect", "/rmkt/collect", "/pagead/", "/ads/measurement", "/measurement/conversion", "adtrafficquality.google",
         ),
         cookie_name_prefixes=("_gcl",),
         cookie_names=("IDE", "test_cookie"),
@@ -189,7 +191,7 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
     VendorSignature(
         vendor="Stripe",
         default_category="functional",
-        domain_substrings=("js.stripe.com",),
+        domain_substrings=("js.stripe.com", "m.stripe.network", "m.stripe.com"),
         cookie_name_prefixes=("__stripe",),
     ),
     VendorSignature(
@@ -296,6 +298,51 @@ TRACKER_CATALOG: tuple[VendorSignature, ...] = (
         default_category="functional",
         domain_substrings=("fonts.googleapis.com", "fonts.gstatic.com"),
     ),
+    # ── Public asset CDNs, maps and bot checks ───────────────────────────────────────────────
+    #
+    # Seen UNCLASSIFIED on the live scans of poolscapes.in (one script from cdn.jsdelivr.net) and groupsnp.com (27 requests: Google Maps and
+    # reCAPTCHA). That is not a neutral gap: while any request is unclassified, "is a consent banner needed here?" cannot be answered, so the four
+    # consent checks (banner shown, accept and reject, accept triggers and reject blocks, withdrawal) are left Not Assessed. Each entry says WHAT the host
+    # is (a place to download a library, a map, a spam check), never whether the request was consented to. Analytics and advertising stay in their own
+    # entries above, so a site that loads those without a banner is still found.
+    VendorSignature(
+        vendor="Public script and style CDN",
+        default_category="functional",
+        domain_substrings=(
+            "cdn.jsdelivr.net", "cdnjs.cloudflare.com", "unpkg.com", "code.jquery.com", "ajax.googleapis.com", "cdn.tailwindcss.com",
+            "maxcdn.bootstrapcdn.com", "stackpath.bootstrapcdn.com", "cdn.bootcdn.net", "use.fontawesome.com", "kit.fontawesome.com", "use.typekit.net",
+        ),
+    ),
+    VendorSignature(
+        vendor="Google Maps",
+        default_category="functional",
+        domain_substrings=("maps.googleapis.com", "maps.gstatic.com", "google.com/maps", "maps.google.com"),
+    ),
+    VendorSignature(
+        # A bot check on a form. It sets a cookie of its own and sends the visitor's browser details to the provider, which is worth stating in a
+        # notice, but it is not analytics or advertising.
+        vendor="reCAPTCHA / hCaptcha",
+        default_category="functional",
+        domain_substrings=("google.com/recaptcha", "gstatic.com/recaptcha", "recaptcha.net", "hcaptcha.com"),
+    ),
+    # ── Advertising, audience-data and measurement vendors seen unclassified on many stored scans ──────────────────────────────────────────────
+    # Each is a company whose business is the thing named; the entry says WHAT the host is, not whether the request was consented to.
+    VendorSignature(vendor="Bing Ads", default_category="marketing", domain_substrings=("c.bing.com",)),
+    VendorSignature(vendor="Adobe Audience Manager", default_category="marketing", domain_substrings=("demdex.net",)),
+    VendorSignature(vendor="Eyeota", default_category="marketing", domain_substrings=("eyeota.net",)),
+    VendorSignature(vendor="ID5", default_category="marketing", domain_substrings=("id5-sync.com",)),
+    VendorSignature(vendor="Tapad", default_category="marketing", domain_substrings=("tapad.com",)),
+    VendorSignature(vendor="Cxense", default_category="marketing", domain_substrings=("cxense.com",)),
+    VendorSignature(vendor="DoubleVerify", default_category="marketing", domain_substrings=("doubleverify.com",)),
+    VendorSignature(vendor="Ozone Project (header bidding)", default_category="marketing", domain_substrings=("the-ozone-project.com",)),
+    VendorSignature(vendor="Adobe Launch", default_category="analytics", domain_substrings=("adobedtm.com",)),
+    VendorSignature(vendor="Comscore (Scorecard Research)", default_category="analytics", domain_substrings=("scorecardresearch.com",)),
+    VendorSignature(vendor="Chartbeat", default_category="analytics", domain_substrings=("chartbeat.com", "chartbeat.net")),
+    VendorSignature(vendor="Optimizely", default_category="analytics", domain_substrings=("optimizely.com",)),
+    VendorSignature(vendor="DotMetrics", default_category="analytics", domain_substrings=("dotmetrics.net",)),
+    VendorSignature(vendor="Calendly Embed", default_category="functional", domain_substrings=("calendly.com",)),
+    VendorSignature(vendor="Sourcepoint (consent management)", default_category="functional", domain_substrings=("privacy-mgmt.com",)),
+
 )
 
 

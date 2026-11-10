@@ -126,7 +126,7 @@ class TestSlots:
         s = get_settings().model_copy(update={"worker_concurrency": 0, "db_pool_size": 10, "db_max_overflow": 5})
         g = capacity.governor_for(s, cpu_count=6)
         assert g.slots == 6
-        assert g.target_cpu == 85.0
+        assert g.target_cpu == 50.0
 
 
 class TestReadingTheMachine:

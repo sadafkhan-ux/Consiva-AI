@@ -65,7 +65,7 @@ sites; no 200-scan run was done; one 8-CPU host was used.
    about 5 workers before 100 connections. Beyond that, put PgBouncer in front of the database or raise `max_connections`, and lower `WORKER_DB_POOL_SIZE`
    (a worker needs roughly its `WORKER_CONCURRENCY` plus 2).
 3. **Slots per worker:** `WORKER_CONCURRENCY` (default 0 = decide from the machine). A worker runs at most one job per CPU, takes another only while
-   the machine's CPU is under `WORKER_TARGET_CPU_PERCENT` (85) and memory remains (`WORKER_MEMORY_PER_JOB_MB`, `WORKER_MIN_FREE_MEMORY_MB`), a step at a time
+   the machine's CPU is under `WORKER_TARGET_CPU_PERCENT` (50; it was 85, which saturated an 8-core machine under six scans at once and made clicks fail) and memory remains (`WORKER_MEMORY_PER_JOB_MB`, `WORKER_MIN_FREE_MEMORY_MB`), a step at a time
    (`app/jobs/capacity.py`). An idle worker always takes one job, so a loaded machine still progresses. A number above 0 caps the slots instead.
    Several workers on one host each see the whole host's CPU, so they hold each other back instead of overloading it.
 4. **More API processes** (`WEB_CONCURRENCY`) did not raise throughput in the test, because the load generator itself was the limit at about 75 requests per

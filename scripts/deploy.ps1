@@ -2,6 +2,7 @@
 #
 #   scripts\deploy.ps1                     # production, docker-compose.prod.yml
 #   scripts\deploy.ps1 -Service frontend   # rebuild and restart only that service (and what it needs)
+#   scripts\deploy.ps1 -Service backend    # rebuilds backend AND worker together: they are one image and must run the same code
 #
 # Why this exists: `migrate` is a one-shot container that Compose recreates on every deploy (it renames the old one to <hash>_consiva-migrate-1,
 # creates the new one, then deletes the old). If that is interrupted, or two `docker compose up` commands run at the same time, the renamed leftover
@@ -36,7 +37,9 @@ try {
 
     Write-Host "==> Building, migrating and starting"
     $composeArgs = @("compose", "-f", $ComposeFile, "up", "-d", "--build", "--remove-orphans", "--wait", "--wait-timeout", "$WaitTimeout")
-    if ($Service) { $composeArgs += $Service }
+    # backend and worker are the same image and must never run different code (a worker left on the previous build scored new scans with old scanner code), so naming either rebuilds both
+    if ($Service -in @("backend", "worker")) { $composeArgs += @("backend", "worker") }
+    elseif ($Service) { $composeArgs += $Service }
     & docker @composeArgs
     if ($LASTEXITCODE -ne 0) {
         Write-Host "==> DEPLOYMENT FAILED. Status:" -ForegroundColor Red

@@ -62,11 +62,17 @@ class _Frame:
         self.locator_calls = 0
         self._locator = _Locator(1 if banner else 0, hang=count_hangs)
 
-    async def evaluate(self, script):
+    async def evaluate(self, script, arg=None):
         if self._mode == "hangs":
             await asyncio.sleep(3600)
         if self._mode == "detached":
             raise PlaywrightError("Frame was detached")
+        if script == ci._PICK_JS:                       # the one-pass search for a control whose words match
+            if self._count_hangs:
+                await asyncio.sleep(3600)
+            return self._banner
+        if script == ci._UNPICK_JS:
+            return None
         return 1
 
     def locator(self, selector):
