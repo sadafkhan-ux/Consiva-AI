@@ -26,8 +26,21 @@ WORKDIR /app
 
 # Dependencies first, as their own layer: requirements change far less often than
 # application code, so this layer stays cached across ordinary code edits.
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+#
+# Installed from requirements.docker.lock.txt, EXACT versions (a `pip freeze` of the tested Linux image), not from requirements.txt. requirements.txt holds floor pins (>=), so
+# any change to it, or any cache miss, used to pull the newest version of every unpinned package, none of it tested: one such rebuild brought a Playwright whose driver needs
+# libatomic and the build failed. With exact pins a rebuild gives the same packages every time.
+#
+# To upgrade deliberately: edit requirements.txt, build once in a scratch image, run the full test suite, then regenerate the lock from that image:
+#   docker run --rm --entrypoint pip <image> freeze | sort -f > backend/requirements.docker.lock.txt
+COPY requirements.docker.lock.txt ./
+RUN pip install --no-cache-dir -r requirements.docker.lock.txt
+
+# libatomic1: the Node driver inside newer Playwright releases will not start without it, and the slim base image does not ship it. Installed on its own so that
+# `playwright install --with-deps` below can never be the first thing to find it missing.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libatomic1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Chromium + every OS library it needs. `--with-deps` asks Playwright itself which
 # packages this exact Playwright version requires, instead of hand-maintaining an

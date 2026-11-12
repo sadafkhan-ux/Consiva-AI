@@ -77,7 +77,7 @@ describe("one score: the server's ten-check score, on every surface", () => {
     const m = withA(a);
     render(<SnapshotReport model={m} />);
     expect(screen.getByTestId("sn-total-marks")).toHaveTextContent(a.totalText);
-    expect(screen.getByTestId("sn-total-row")).toHaveTextContent(a.scoreText);
+    expect(screen.getByTestId("sn-total-row")).not.toHaveTextContent(/assessed marks|not assessed, left out/);          // the bar carries the score only
     expect(document.body.textContent).not.toContain("56.5");                    // the weighted requirements percentage is not a score anywhere
     cleanup();
     render(<TenChecksPanel ten={a} />);

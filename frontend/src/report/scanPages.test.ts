@@ -68,7 +68,7 @@ describe("the page list is the pages the scan recorded, nothing assumed", () => 
       "https://shop.example/privacy", "https://shop.example/terms", "https://shop.example/contact", "https://shop.example/about"]);
     expect(v.rows[4].pageType).toBe("Scanned Page (found by the sitemap)");
     expect(v.rows[1].pageType).toBe("Scanned Page (found by a link)");
-    expect(v.rows.every((r) => r.status === "Scanned (HTTP 200)")).toBe(true);
+    expect(v.rows.every((r) => r.status === "Scanned")).toBe(true);          // no HTTP code in the report
   });
 
   it("says all five were included when all five loaded", () => {
@@ -237,5 +237,17 @@ describe("the PDF page", () => {
     expect(t).toContain("The list of pages could not be loaded for this report");
     expect(t).not.toContain("https://shop.example/privacy");
     expect(t).not.toContain("SCAN REVIEW");
+  });
+});
+
+
+describe("the result column for pages that did not load", () => {
+  const row = (via: string, http_status: number | null) => buildScanPages([{ url: "https://x.test/p", discovered_via: via, http_status }] as never, null, "https://x.test", 5)!.rows[0].status;
+  it("says a missing page is not found, a refused page is refused, and anything else failed to load", () => {
+    expect(row("failed", 404)).toBe("Not scanned: page not found");
+    expect(row("failed", 410)).toBe("Not scanned: page not found");
+    expect(row("failed", 403)).toBe("Not scanned: access refused");
+    expect(row("failed", null)).toBe("Not scanned: failed to load");
+    expect(row("timeout", null)).toBe("Not scanned: timed out");
   });
 });

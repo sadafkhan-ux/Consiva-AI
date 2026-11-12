@@ -70,3 +70,11 @@ describe("the privacy-element cards on a site with no consent banner", () => {
     expect(titles).toEqual(expect.arrayContaining(["Accept option", "Reject option"]));
   });
 });
+
+describe("Accept and Reject when a consent tool's banner was never shown", () => {
+  it("are unable to verify, not found, even if a click on something was recorded as failed", () => {
+    const ev = { pages: [], third_party_services: [], trackers: [], cookies: [], policies: [], forms: [], consent_signals: [{ mechanism_type: "cmp", cmp_vendor: "Some CMP", banner_displayed: false, evidence: { banner_ui_observed: false } }] } as never;
+    const els = buildReportVisual(ev, { consent_mechanism: "cmp", accept_interaction: "click_failed", reject_interaction: "click_failed" } as never, null)!.elements;
+    for (const title of ["Accept option", "Reject option"]) expect(els.find((e) => e.title === title)).toMatchObject({ status: "unverified", note: "No banner was shown to the scanner" });
+  });
+});

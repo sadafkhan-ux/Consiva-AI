@@ -345,14 +345,14 @@ def _headers():
     return {"Authorization": f"Bearer {token}"}
 
 
-def _wire(monkeypatch, row, scan=True):
+def _wire(monkeypatch, row, scan=True, status="completed"):
     from app.db.session import get_db
 
     async def fake_db():
         yield None
 
     async def get_scan(db, scan_id, org_id):
-        return SimpleNamespace(website_id=uuid.uuid4()) if scan else None
+        return SimpleNamespace(website_id=uuid.uuid4(), status=status) if scan else None
 
     async def get_site(db, wid):
         return SimpleNamespace(domain="acme.test")
@@ -482,3 +482,14 @@ def test_a_page_that_never_draws_is_still_photographed_and_judged_by_its_pixels(
     page = PaintingPage(blank_for=10_000)
     out = capture(page)
     assert out["status"] == "ok"                                          # nothing proves it flat, so the picture is kept
+
+
+def test_a_scan_that_did_not_complete_does_not_claim_it_predates_previews(monkeypatch):
+    """consiva.ai blocks the scanner: the scan fails before any picture is taken, and the old wording ("scanned before previews were added") was untrue."""
+    key = _wire(monkeypatch, None, status="failed")
+    try:
+        body = get().json()
+        assert body["status"] == "not_captured" and body["available"] is False
+        assert "did not complete" in body["message"] and "before previews" not in body["message"]
+    finally:
+        app.dependency_overrides.pop(key, None)

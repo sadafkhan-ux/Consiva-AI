@@ -1103,6 +1103,7 @@ class ScreenshotResponse(BaseModel):
 
 _NO_PREVIEW = {
     "not_captured": "No homepage preview was taken for this scan: it was scanned before previews were added.",
+    "scan_not_completed": "No homepage preview was taken because the scan did not complete (for example the site refused the scanner or could not be reached).",
     "blocked": "The site did not show its homepage to the scanner (it answered with an error or a security check), so no preview is shown.",
     "timeout": "The homepage preview could not be taken in time.",
     "failed": "A preview of the homepage could not be taken for this scan.",
@@ -1123,7 +1124,9 @@ async def get_scan_screenshot(
     domain = website.domain if website else ""
     row = await scan_repository.get_screenshot(db, scan_id)
     if row is None:
-        return ScreenshotResponse(scan_id=scan_id, domain=domain, status="not_captured", available=False, message=_NO_PREVIEW["not_captured"])
+        # A scan that did not complete (the site refused the scanner, was unreachable, ...) took no preview because it never got that far; "scanned before previews were added" would be untrue.
+        message = _NO_PREVIEW["scan_not_completed"] if scan.status in ("failed", "cancelled") else _NO_PREVIEW["not_captured"]
+        return ScreenshotResponse(scan_id=scan_id, domain=domain, status="not_captured", available=False, message=message)
     if row.status == "ok" and row.image:
         return ScreenshotResponse(
             scan_id=scan_id, domain=domain, status="ok", available=True, page_url=row.page_url, mime=row.mime or "image/jpeg",

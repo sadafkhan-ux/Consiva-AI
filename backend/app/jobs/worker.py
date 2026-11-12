@@ -70,7 +70,7 @@ from app.agents.regwatch.services import action_sla_service as regwatch_action_s
 from app.config import get_settings
 from app.core import versions
 from app.db.models import AgentJob
-from app.db.repositories import ropa_repository
+from app.db.repositories import ropa_repository, stage_repository
 from app.db.session import async_session_factory
 from app.jobs import capacity, queue
 from app.services import (
@@ -282,6 +282,16 @@ async def _maintenance_loop(stopping: asyncio.Event) -> None:
                 logger.warning("ROPA: closed %d run(s) whose processing job had failed", closed)
         except Exception:
             logger.exception("ROPA stuck-run reconciliation failed; continuing with the other duties")
+
+        # A stage left "running" after its scan finished (its worker was stopped mid-stage) would show a finished scan with a stage still spinning.
+        try:
+            async with async_session_factory() as db:
+                orphans = await stage_repository.close_orphan_stages(db)
+                await db.commit()
+            if orphans:
+                logger.warning("Closed %d stage(s) left running by a finished scan", orphans)
+        except Exception:
+            logger.exception("Orphan-stage sweep failed; continuing with the other duties")
 
         try:
             async with async_session_factory() as db:

@@ -26,7 +26,7 @@ diff.
 from __future__ import annotations
 
 import logging
-from xml.etree import ElementTree
+from defusedxml import ElementTree        # not xml.etree: a feed is untrusted, and the standard parser can be made to expand entities until memory runs out
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def normalize(raw: str) -> str | None:
         return None
     try:
         root = ElementTree.fromstring(raw)
-    except ElementTree.ParseError as exc:
+    except (ElementTree.ParseError, ValueError) as exc:      # ValueError: defusedxml's refusal of an entity or DTD bomb
         logger.info("Source looked like a feed but did not parse; falling back: %s", exc)
         return None
 

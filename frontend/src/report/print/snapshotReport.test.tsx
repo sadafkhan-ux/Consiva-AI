@@ -114,7 +114,7 @@ describe("the two-page report (variant summary)", () => {
     expect(marks).toEqual(ten.checks.map((c) => c.marksText));
     for (const x of marks) expect(x).toMatch(/^(1|0\.5|0) \/ 1$|^N\/A$|^Not assessed$/);
     expect(screen.getByTestId("sn-total-marks")).toHaveTextContent(`${ten.totalText}`);
-    expect(screen.getByTestId("sn-total-row")).toHaveTextContent(ten.scoreText);          // one engine: the total row, the ring and the story print the same score
+    expect(screen.getByTestId("sn-total-row")).not.toHaveTextContent(/assessed marks|not assessed, left out|Privacy Readiness Score/);       // the bar under the checks carries the score only, no sentence
     expect(ten.totalText).toMatch(/^\d+(\.\d)? \/ \d+$/);
   });
 
@@ -230,16 +230,15 @@ describe("the two-page report (variant summary)", () => {
   });
 
 
-  it("the total row states the marks the score is made of, and only claims the percentage when it is the printed score", () => {
+  it("the bar under the checks shows the score alone, with no sentence restating the marks it is made of", () => {
     const base = A.typical;
     const sc = { version: "3.3.0", mode: "quick", status: "completed", score: 53, scale: 100, band: "Partially addressed", bandNotes: [], coverage: 64, confidence: { level: "medium", label: "Medium", reasons: [] }, explanation: "x", disclaimer: "x", whatWasNotAssessed: [], beyondQuickScan: [], removed: [], findings: [], rules: {}, scannedAt: null, categories: [{ category: "Cookie Consent", marks: 48, awarded: 12, assessable: 12 }] } as unknown as TenAssessment["scanner"];
     const make = (awarded: number, applicableMax: number, score: number | null): TenAssessment => ({ ...base, engine: "scorecard", scanner: sc, awarded, applicableMax, score, scoreText: score === null ? "No meaningful score" : `${score}/100` });
-    const { unmount } = render(<SnapshotReport model={model({ assessment: make(34, 64, 53) })} />);
-    expect(screen.getByTestId("sn-score-basis")).toHaveTextContent("34 of 64 assessed marks = 53%");
-    expect(screen.queryByTestId("sn-score-method")).toBeNull();     // the explanatory line under the score is not printed
-    unmount();
-    render(<SnapshotReport model={model({ assessment: make(64, 64, 99) })} />);
-    expect(screen.getByTestId("sn-score-basis")).toHaveTextContent(/^64 of 64 assessed marks$/);
+    render(<SnapshotReport model={model({ assessment: make(34, 64, 53) })} />);
+    expect(screen.getByTestId("sn-total-marks")).toHaveTextContent("53/100");
+    expect(screen.getByTestId("sn-total-row")).toHaveTextContent(/^53\/100$/);
+    expect(screen.queryByTestId("sn-score-basis")).toBeNull();
+    expect(document.body.textContent).not.toMatch(/assessed marks|Privacy Readiness Score, out of 100|not assessed, left out|How it is calculated/);
   });
 
   it("counts the checks assessed, never the points in play", () => {

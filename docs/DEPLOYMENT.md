@@ -91,6 +91,8 @@ rolled back and was not recorded.
 
 It is harmless and holds no data (migrations are recorded in the database). **Use the deploy scripts, which remove any `migrate` container that is not running before they start** (a migration in progress is never touched): `scripts/deploy.sh` on Linux, `scripts\deploy.ps1` on Windows (`scripts\deploy.ps1 -Service frontend` rebuilds one service). `deploy.ps1` also refuses to start while another deploy is running. Do not run two `docker compose up` commands at once.
 
+**The backend image is built from exact pins.** `backend/Dockerfile` installs from `backend/requirements.docker.lock.txt` (a `pip freeze` of the tested image), not from `requirements.txt`, which only sets minimum versions. A rebuild therefore always gives the same packages, and changing `requirements.txt` alone no longer changes the image. It also installs `libatomic1`, which Playwright's driver needs on the slim base image. To upgrade a dependency on purpose: edit `requirements.txt`, build a scratch image, run the full test suite, then regenerate the lock from that image with `docker run --rm --entrypoint pip <image> freeze | sort -f > backend/requirements.docker.lock.txt`.
+
 By hand, if you ran `docker compose up` directly and hit it:
 `docker rm -f $(docker ps -aq --filter label=com.docker.compose.service=migrate --filter status=exited --filter status=created --filter status=dead)` and run `up` again.
 

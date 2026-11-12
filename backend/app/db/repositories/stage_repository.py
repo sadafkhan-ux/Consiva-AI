@@ -1,7 +1,7 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import AgentRunStage, ConsentScan
@@ -63,3 +63,21 @@ async def list_stages(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID) -
         .order_by(AgentRunStage.created_at)
     )
     return list(result.scalars().all())
+
+
+#: A stage that has been "running" this long, of a scan that has since finished, will never report its end (the worker that ran it was stopped or restarted mid-stage).
+ORPHAN_STAGE_AFTER = timedelta(hours=2)
+ORPHAN_STAGE_ERROR = "The stage never reported its end; its scan had already finished, so it is closed here."
+
+
+async def close_orphan_stages(db: AsyncSession, *, older_than: timedelta = ORPHAN_STAGE_AFTER) -> int:
+    """Closes stages left "running" long after their scan finished, so the progress shown for a finished scan never has a stage still spinning. Only stages of a scan that is
+    completed, failed or cancelled are touched, and only once they are older than `older_than`: a stage of a scan that is still being worked on is never closed. Returns how many."""
+    finished = select(ConsentScan.id).where(ConsentScan.status.in_(("completed", "failed", "cancelled")))
+    cutoff = datetime.now(UTC) - older_than
+    result = await db.execute(
+        update(AgentRunStage)
+        .where(AgentRunStage.status == "running", AgentRunStage.started_at < cutoff, AgentRunStage.scan_id.in_(finished))
+        .values(status="failed", completed_at=datetime.now(UTC), error=ORPHAN_STAGE_ERROR)
+    )
+    return result.rowcount or 0

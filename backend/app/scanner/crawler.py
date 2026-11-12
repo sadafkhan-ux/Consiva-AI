@@ -94,6 +94,7 @@ from app.scanner.page_signals import (
     response_headers,
 )
 from app.scanner.policy_detector import detect_policies
+from app.scanner.soft_404 import looks_not_found
 from app.scanner.purposes import run_purpose_test
 from app.scanner.reject_and_compare import run_button_comparison, run_reject_persistence
 from app.scanner.tls_assessment import assess_site_tls
@@ -592,6 +593,9 @@ async def _navigate_with_retry(
                 headers = getattr(response, "headers", None)
                 retry_after = parse_retry_after(headers.get("retry-after") if isinstance(headers, dict) else None)
                 raise NavigationHttpError(code, url, retry_after)
+            if await _page_is_a_block_page(browser_page):
+                # HTTP 200, but the page is the site's bot-protection message: treated exactly like a 403 (no score and findings about somebody's block screen).
+                raise NavigationHttpError(403, url, None)
             return response, "success", None, attempt
         except NavigationHttpError as exc:
             last_exc, status, retry_after = exc, "failed", exc.retry_after
@@ -657,6 +661,37 @@ _BLOCK_TITLE = re.compile(
 )
 
 
+# A block page that answers 200 and has an ordinary title is told apart by what it says. Only a SHORT page is tested (a real page has far more text), so a
+# privacy notice that mentions "access denied" in passing is never taken for a block.
+_BLOCK_BODY = re.compile(
+    r"automated (?:access|traffic|requests?) (?:is|are) not (?:permitted|allowed)|reference:\s*webdriver|(?:your )?access (?:to this (?:page|site|website) )?(?:has been|is) (?:denied|blocked)|"
+    r"you (?:have been|are) blocked|unusual traffic from your|verify you are (?:a )?human|checking your browser before accessing|(?:this|the) page can only be used from a regular browser",
+    re.IGNORECASE,
+)
+_BLOCK_BODY_MAX_CHARS = 1200
+
+
+async def _page_is_a_block_page(page: Page) -> bool:
+    """True when what the page shows is a bot-protection or access-denied message rather than the site. Never raises: a page that cannot be asked is not called blocked."""
+    try:
+        text = await page.evaluate("() => (document.body && document.body.innerText) || ''")
+    except Exception:  # noqa: BLE001 -- a failed read is "not known", never "blocked"
+        return False
+    text = text if isinstance(text, str) else ""
+    return 0 < len(text.strip()) <= _BLOCK_BODY_MAX_CHARS and bool(_BLOCK_BODY.search(text))
+
+
+async def _page_says_it_was_not_found(page: Page) -> bool:
+    """True when the page is a "not found" page served with a success status (see scanner/soft_404.py). Never raises: a page that cannot be asked is not called missing."""
+    try:
+        info = await page.evaluate("() => ({title: document.title || '', text: (document.body && document.body.innerText) || ''})")
+    except Exception:  # noqa: BLE001 -- a failed read is "not known", never "missing"
+        return False
+    if not isinstance(info, dict):
+        return False
+    return looks_not_found(info.get("title"), info.get("text"))
+
+
 async def _wait_until_painted(page: Page) -> bool:
     """Waits, bounded, until the page shows something. True when it does, or when that cannot be told (never an obstacle to the capture)."""
     waited = 0
@@ -693,7 +728,7 @@ async def _capture_homepage_screenshot(page: Page, *, http_status: int | None, f
         except PlaywrightError:
             title = ""
         info["page_title"] = title
-        if (http_status is not None and http_status >= 400) or _BLOCK_TITLE.search(title):
+        if (http_status is not None and http_status >= 400) or _BLOCK_TITLE.search(title) or await _page_is_a_block_page(page):
             return {**info, "status": "blocked", "reason": "blocked"}
         shot = {"type": "jpeg", "full_page": False, "timeout": _SHOT_TIMEOUT_MS, "animations": "disabled", "caret": "hide"}
         await _wait_until_painted(page)
@@ -900,6 +935,20 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         # gives async-loading trackers/tag-managers a fair, predictable chance to fire.
         await _wait_for_load_event(browser_page, url)
         await browser_page.wait_for_timeout(_TRACKER_SETTLE_MS)
+        # A bot-protection message drawn after the page loaded (HTTP 200) is the site turning the scanner away, not the site: handled like a 403.
+        if await _page_is_a_block_page(browser_page):
+            blocked = NavigationHttpError(403, url, None)
+            logger.warning("The page at %s is a bot-protection message, not the site: treated as blocked", url)
+            if is_seed:
+                raise _SeedUnreachable(url, blocked, attempts=attempts)
+            return {"url": url, "status": "failed", "attempts": attempts, "error": first_line(blocked, 300), "http_status": 403}
+        # A "page not found" page that answers 200 is not a page of the site: a missing privacy or terms page must be reported as missing, not scored as a notice that was found.
+        if await _page_says_it_was_not_found(browser_page):
+            missing = NavigationHttpError(404, url, None)
+            logger.warning("The page at %s says it was not found although it answered 200: treated as missing", url)
+            if is_seed:
+                raise _SeedUnreachable(url, missing, attempts=attempts)
+            return {"url": url, "status": "failed", "attempts": attempts, "error": "The page answered 200 but says it was not found", "http_status": 404}
         # The homepage preview: the seed page only, at the top of the page, before the scroll pass below moves it.
         screenshot = (
             await _capture_homepage_screenshot(browser_page, http_status=response.status if response else None, final_url=final_url)
@@ -1411,6 +1460,10 @@ async def _crawl_full_site(
         network_requests_by_page=network_requests_by_page,
     )
     policies = detect_policies(all_links, crawled_page_text, site_domain)
+    # A privacy or terms link that leads to a missing page (HTTP 404, or a 200 "page not found") is not a policy that was found.
+    missing_pages = {normalize_url(p.url) for p in pages if p.discovered_via == "failed" and p.http_status in (404, 410)}
+    if missing_pages:
+        policies = [p for p in policies if normalize_url(p.url) not in missing_pages]
     consent_signal = detect_consent_signal(
         scripts=all_scripts_flat, visible_text=" ".join(all_visible_text_parts),
         detected_global_vars=sorted(detected_global_vars),

@@ -28,11 +28,12 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from app.scanner.policy_detector import TRUNCATION_MARK
+from app.scanner.soft_404 import looks_not_found
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.db.models import AgentRunStage, ConsentScan, Policy
+from app.db.models import AgentRunStage, ConsentScan, Policy, PolicyAnalysisCache
 from app.db.repositories import scan_repository
 from app.db.session import async_session_factory
 from app.policy.requirements import BY_ID, CHILD_SECTORS, REQUIREMENTS, PolicyRequirement
@@ -204,6 +205,10 @@ async def fetch_policy_text(url: str) -> str | None:
                 if resp.status_code != 200 or "html" not in ctype.lower() or len(resp.content) > FETCH_MAX_BYTES:
                     return None
                 text = _html_to_text(resp.text)
+                title = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
+                if looks_not_found(title.group(1).strip() if title else "", text):
+                    logger.info("Policy page %s answers 200 but says it was not found: not read as a policy", url)
+                    return None             # a "page not found" page is not a privacy notice, whatever its status code says
                 return text if len(text) >= 200 else None
     except Exception as exc:  # fail-soft: an unreadable policy is a limitation, not an error
         logger.info("Could not fetch policy %s: %s", url, exc)
@@ -521,6 +526,29 @@ async def find_reusable(scan_id: uuid.UUID, website_id: uuid.UUID | None, org_id
     return {**previous, "reused_from_scan": str(row[1])}
 
 
+async def find_shared(digest: str) -> dict | None:
+    """The analysis any organisation's scan stored for exactly this question (same hash), so the same policy text gets the same answer wherever it is scanned. The cache holds the reading
+    of public policy text only (no organisation, scan or user id), and the hash covers the model, so nothing stale or foreign is served. None when there is none."""
+    async with async_session_factory() as db:
+        row = (await db.execute(select(PolicyAnalysisCache.result).where(PolicyAnalysisCache.input_hash == digest))).scalar_one_or_none()
+    if not isinstance(row, dict) or row.get("status") != ANALYSED:
+        return None
+    return {**row, "reused_from_scan": "earlier"}          # "earlier": it is not another organisation's scan id, which must never be shown
+
+
+async def store_shared(digest: str, result: dict) -> None:
+    """Keeps a finished analysis for any later scan that asks the identical question. Never raises: failing to store only costs a later model call."""
+    try:
+        from sqlalchemy.dialects.postgresql import insert
+
+        keep = {k: v for k, v in result.items() if k not in ("reused_from_scan", "notes")}
+        async with async_session_factory() as db:
+            await db.execute(insert(PolicyAnalysisCache).values(input_hash=digest, result=keep).on_conflict_do_nothing(index_elements=["input_hash"]))
+            await db.commit()
+    except Exception:
+        logger.warning("Could not store the policy analysis in the shared cache", exc_info=True)
+
+
 async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) -> dict:
     """Reads the scan's policies and returns the result (never raises). `extractor(system, user) -> (PolicyExtraction, meta)` can be
     injected for tests; by default the existing Claude-first client with NVIDIA/Groq fallback is used."""
@@ -557,6 +585,12 @@ async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) 
             except Exception:
                 logger.warning("Looking for a reusable policy analysis failed for %s", scan_id, exc_info=True)
                 reused = None
+            if reused is None:
+                try:
+                    reused = await find_shared(digest)
+                except Exception:
+                    logger.warning("Looking in the shared policy-analysis cache failed for %s", scan_id, exc_info=True)
+                    reused = None
             if reused is not None:
                 logger.info("Policy analysis for %s reused from scan %s: no model call", scan_id, reused["reused_from_scan"])
                 # What this scan fetched now is current; the model's reading is the earlier one, for the identical text and question.
@@ -570,8 +604,11 @@ async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) 
             return unavailable(f"The policy was read but the analysis model could not be reached ({type(exc).__name__}).", docs, notes)
 
         out = analyse(extraction, docs, sector, child)
-        return {"status": ANALYSED, "reason": None, "sector": sector, "documents": _doc_rows(docs), "notes": notes,
-                **out, "limitations": list(LIMITATIONS), "model": meta, "input_hash": digest}
+        result = {"status": ANALYSED, "reason": None, "sector": sector, "documents": _doc_rows(docs), "notes": notes,
+                  **out, "limitations": list(LIMITATIONS), "model": meta, "input_hash": digest}
+        if digest is not None:
+            await store_shared(digest, result)        # the same question, anywhere, is then answered the same way
+        return result
     except Exception as exc:
         logger.exception("Policy analysis failed for %s", scan_id)
         return unavailable(f"The policy analysis could not run ({type(exc).__name__}).")

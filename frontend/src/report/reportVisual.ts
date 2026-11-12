@@ -165,7 +165,9 @@ export function buildReportVisual(
   const signal = signals[0];
   const vendor = signal?.cmp_vendor ?? meta?.cmp_vendor ?? null;
   const optionElement = (title: string, outcome: string | undefined): ElementView =>
-    outcome === "clicked" ? { title, status: "found", note: "Clicked in the scan" }
+    // A consent tool whose banner the scanner never saw has no Accept or Reject to call "found": a failed click on nothing visible is not a finding.
+    toolOnly ? { title, status: "unverified", note: "No banner was shown to the scanner" }
+    : outcome === "clicked" ? { title, status: "found", note: "Clicked in the scan" }
       : outcome === "click_failed" ? { title, status: "found", note: "Found, could not be clicked" }
         : { title, status: "unverified", note: "Not reachable by the scan" };
   const granular = observedBannerFact(signal, signal?.has_granular_choices);

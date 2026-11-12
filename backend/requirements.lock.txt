@@ -20,6 +20,7 @@ colorama==0.4.6
 # from one developer's machine, which no other environment can resolve. It broke
 # the first CI run's install. If you regenerate this file, delete that line again.
 coverage==7.16.0
+defusedxml==0.7.1
 distro==1.9.0
 dnspython==2.8.0
 docstring-parser==0.18.0

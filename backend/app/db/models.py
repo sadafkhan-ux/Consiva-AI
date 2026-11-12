@@ -137,6 +137,17 @@ class ScanScreenshot(Base):
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
+class PolicyAnalysisCache(Base):
+    """The analysis of one exact question put to the policy-reading model (migration 0049), shared by every organisation. Keyed by the hash of the instructions, the public policy text, the
+    requirement list, the sector reading and the model, so it holds no organisation's data and a changed input is a different row."""
+
+    __tablename__ = "policy_analysis_cache"
+
+    input_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
 class ReportPdf(Base):
     """A pre-generated PDF report (migration 0043). One row per scan and report type; valid only while its fingerprint matches the scan's current one."""
 

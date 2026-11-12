@@ -198,7 +198,9 @@ async def run_withdrawal_test(context, root_url: str, further_urls: list[str], *
         # A request already on its way when the click landed is the old choice's, not the new one's: what counts starts after a short grace, taken once the click has returned.
         await page.wait_for_timeout(_GRACE_MS)
         mark = len(records)
-        await page.wait_for_timeout(settle_ms)
+        # Watched for twice the usual settle time: an analytics tag batches its hits and may send one several seconds after the click (Google Analytics on swaransoft.com did so in five scans
+        # of six and fell outside a 2.5 s window in the sixth, which made one site score 91 or 97). A longer look removes that chance miss; it does not change what counts.
+        await page.wait_for_timeout(settle_ms * 2)
         result["after_withdrawal"] = non_essential_requests(records[mark:], site)
         result["tested"] = True
 

@@ -85,10 +85,15 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 function statusOf(p: EvidencePageItem): { text: string; scanned: boolean } {
   const via = p.discovered_via ?? null;
   if (via !== null && LOADED_VIA.has(via)) {
-    return { text: p.http_status ? `Scanned (HTTP ${p.http_status})` : "Scanned", scanned: true };
+    return { text: "Scanned", scanned: true };          // the server's status code is a technical detail, not something the report reader acts on
   }
   if (via === "timeout") return { text: "Not scanned: timed out", scanned: false };
-  if (via === "failed") return { text: "Not scanned: failed to load", scanned: false };
+  if (via === "failed") {
+    const code = p.http_status ?? null;
+    if (code === 404 || code === 410) return { text: "Not scanned: page not found", scanned: false };
+    if (code === 401 || code === 403) return { text: "Not scanned: access refused", scanned: false };
+    return { text: "Not scanned: failed to load", scanned: false };
+  }
   if (via === "robots_disallowed") return { text: "Not scanned: blocked by robots.txt", scanned: false };
   // A scan stored before the load result was kept: the page was recorded, but whether it loaded was not.
   return { text: "Recorded; load result not stored for this scan", scanned: false };
