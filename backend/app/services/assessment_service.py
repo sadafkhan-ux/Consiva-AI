@@ -196,7 +196,8 @@ def as_scorecard(r: dict[str, Any]) -> dict[str, Any]:
         checks.append({
             "id": i, "ref": x["id"], "name": x["name"], "category": x["category"], "kind": "dpdp" if x["category"] != "Forms & Security" else "technical", "result": _SC_RESULT[o],
             "awarded": x["awarded"] if in_play else None, "max": x["marks"] if in_play else None,
-            "marks_text": f"{x['awarded']} of {x['marks']} pts" if in_play else ("Not assessed" if o == "not_assessed" else "N/A"),
+            # A row that was not assessed, or does not apply, earns nothing: its marks are lost, and the text says so (owner's decision, 16 Nov 2026).
+            "marks_text": f"{x['awarded']} of {x['marks']} pts" if in_play else (f"0 of {x['marks']} pts (not assessed)" if o == "not_assessed" else f"0 of {x['marks']} pts (not applicable)"),
             "evidence": ev[0]["observed"] if ev else "", "source_url": next((e["page"] for e in ev if e.get("page")), None), "explanation": text,
             "legal": _legal(x["statutory"]), "completed": o != "not_assessed", "limitation": x["limitation"] or (x["reason"] if o == "not_assessed" else None),
             "basis": _SC_BASIS[o], "quality": {"pass": "Specific", "partial": "Limited", "not_assessed": "Not assessed", "not_applicable": "n/a"}.get(o, "None"), "coverage": None,
@@ -208,7 +209,7 @@ def as_scorecard(r: dict[str, Any]) -> dict[str, Any]:
     counts = {"passed": count("Passed"), "partial": count("Partially Passed"), "failed": count("Failed"), "not_assessed": count("Not Assessed"), "not_applicable": count("Not Applicable"), "beyond_scan_type": 0}
     pts, conf, pg = r["points"], r["confidence"], r["pages"]
     cats = "; ".join(f"{c['category']} {c['awarded']} of {c['assessable']}" for c in r["categories"])
-    head = (("No score is given: fewer than 60% of the marks could be assessed" + f". Band: {r['band']}. Coverage {r['coverage']}%. Evidence confidence: {conf['label']}. This is not a finding about the website.")
+    head = (("No score is given: no row could be assessed" + f". Band: {r['band']}. Coverage {r['coverage']}%. Evidence confidence: {conf['label']}. This is not a finding about the website.")
             if r["score"] is None else f"Band: {r['band']}. Coverage {r['coverage']}%. Evidence confidence: {conf['label']}. {cats}.")
     limitations = []
     if pg["scanned"]:
@@ -223,14 +224,14 @@ def as_scorecard(r: dict[str, Any]) -> dict[str, Any]:
         if x["outcome"] == "not_assessed":
             by.setdefault(x["reason"], []).append(x["id"][1:])      # the number in the checks table, never the internal P-code
     for reason, ids in by.items():
-        limitations.append(f"Check{_plural(len(ids), '', 's')} {', '.join(ids)} could not be assessed (left out of the score): {reason}")
+        limitations.append(f"Check{_plural(len(ids), '', 's')} {', '.join(ids)} could not be assessed, so no marks were earned for {'them' if len(ids) != 1 else 'it'}: {reason}")
     limitations.extend(r["band_notes"])
     number = {c["ref"]: c["id"] for c in checks}
     recs = [{"id": number.get(f["ref"], 0), "text": f["action"]} for f in r["priority_actions"]]
     if by:
-        recs.append({"id": 0, "text": "Run the scan again when the pages and states it could not assess are reachable, so the rows left out can be assessed."})
+        recs.append({"id": 0, "text": "Run the scan again when the pages and states it could not assess are reachable, so the rows that earned no marks can be assessed."})
     return {
-        "checks": checks, "awarded": pts["awarded"], "applicable_max": pts["in_play"], "score": r["score"], "counts": counts, "formula": r["explanation"],
+        "checks": checks, "awarded": pts["awarded"], "applicable_max": 100, "score": r["score"], "counts": counts, "formula": r["explanation"],
         "total_text": "No applicable check" if pts["in_play"] == 0 else r["score_text"], "score_text": r["score_text"], "incomplete": counts["not_assessed"],
         "limited_basis": r["band"] == domain_score.INSUFFICIENT, "summary": f"{head} {r['explanation']}", "recommendations": recs,
         "pages": pg, "limitations": limitations, "engine": "scorecard", "scanner": r,

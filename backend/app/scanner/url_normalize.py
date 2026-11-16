@@ -218,6 +218,20 @@ def path_without_query(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", "", ""))
 
 
+#: Query parameters that name another page of the same list (/blog?page=2). A whole-site scan follows these: the next page of a list holds different posts.
+PAGINATION_PARAMS = frozenset({"page", "p", "paged", "pagenumber", "page_no", "pageno", "pg", "offset", "start"})
+
+
+def is_pagination_only(url: str) -> bool:
+    """True when every query parameter of `url` is a pagination one (/blog?page=2, /blog?paged=3&p=3). A filter, sort or tracking parameter makes it False."""
+    try:
+        query = urlsplit(normalize_url(url)).query
+    except ValueError:
+        return False
+    keys = {k.lower() for k, _ in parse_qsl(query, keep_blank_values=True)}
+    return bool(keys) and keys <= PAGINATION_PARAMS
+
+
 def query_variant_of(url: str) -> str | None:
     """The address without its query string, when `url` is only a query-string variant of a page that has a path of its own (/blog?page=2, /products?sort=price),
     else None. The root address and a script's address are never variants: /?p=12 and /index.php?id=3 are different pages, because the query is what selects them."""

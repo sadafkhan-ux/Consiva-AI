@@ -7,6 +7,9 @@ import { buildPolicyView, POLICY_BASIS_LABEL, POLICY_STATUS_LABEL } from "../pol
 import { READINESS_STATUS_TONE } from "../readiness";
 import { isReportCategory, OMITTED_DUTIES_NOTE, REPORT_DISCLAIMER } from "../reportScope";
 import { CTA_URLS, MAX_LISTED_PAGES, stripId, stripRuleCodes, topFindingRows, type RowTone } from "../reportText";
+
+/** How many page rows the report lists: every one for a whole-site scan (no page cap), at most MAX_LISTED_PAGES for a capped scan. */
+const listedCount = (sp: { rows: unknown[]; pageLimit: number | null }): number => (sp.pageLimit === null ? sp.rows.length : Math.min(sp.rows.length, MAX_LISTED_PAGES));
 import type { ElementStatus } from "../reportVisual";
 import { bannerFactText } from "../consentObservation";
 import { REQUEST_UNIT_NOTE } from "../stateCounts";
@@ -213,7 +216,7 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
     const resultTone = (r: string): Tone => (r === "Passed" ? "good" : r === "Failed" ? "bad" : r === "Partially Passed" ? "warn" : "mute");
     add("checks", "The checks behind the score", (
       <>
-        <Para muted small>{a.scanner ? <>Each parameter, its result and the points it earned. The score is the share of the assessable points earned, out of 100: {a.scoreText}.</> : <>Each check, its result and the marks it earned. The marks add up to {a.totalText}, which is the score {a.scoreText}.</>}</Para>
+        <Para muted small>{a.scanner ? <>Each parameter, its result and the points it earned. The score is the points earned, out of 100: {a.scoreText}. A parameter that was not assessed or does not apply earns no points.</> : <>Each check, its result and the marks it earned. The marks add up to {a.totalText}, which is the score {a.scoreText}.</>}</Para>
         <Table
           head={[{ h: "No.", w: "30px" }, { h: "What is checked, and the evidence" }, { h: "Marks", w: "70px", num: true }, { h: "Result", w: "96px" }]}
           rows={a.checks.map((c) => [
@@ -342,15 +345,15 @@ export function ReportDocument({ model, appendixOnly = false, noFront = false }:
           <>
             <Table
               head={[{ h: "No.", w: "42px" }, { h: "Page type", w: "120px" }, { h: "Page URL" }, { h: "Scan status", w: "100px" }]}
-              rows={sp.rows.slice(0, MAX_LISTED_PAGES).map((r) => [
+              rows={sp.rows.slice(0, sp.pageLimit === null ? sp.rows.length : MAX_LISTED_PAGES).map((r) => [
                 String(r.no), <span key="t" className={r.no === 1 ? "r-bold" : undefined}>{r.pageType}</span>,
                 /^https?:\/\//i.test(r.url) ? <a key="u" className="r-break" href={r.url}>{r.url}</a> : <span key="u" className="r-break">{r.url}</span>,
                 r.scanned ? <Pill key="s" tone="good">{r.status}</Pill> : <b key="s" className="r-badtext">{r.status}</b>,
               ])}
             />
             <Para muted small>
-              {Math.min(sp.rows.length, MAX_LISTED_PAGES)} {Math.min(sp.rows.length, MAX_LISTED_PAGES) === 1 ? "page" : "pages"} listed{sp.pageLimit ? `, of a limit of ${sp.pageLimit}` : ""}
-              {sp.rows.length > MAX_LISTED_PAGES ? `; ${sp.rows.length - MAX_LISTED_PAGES} more recorded by an earlier, larger scan are not listed` : ""}. Select a URL to open it.
+              {listedCount(sp)} {listedCount(sp) === 1 ? "page" : "pages"} listed{sp.pageLimit ? `, of a limit of ${sp.pageLimit}` : ""}
+              {sp.pageLimit !== null && sp.rows.length > MAX_LISTED_PAGES ? `; ${sp.rows.length - MAX_LISTED_PAGES} more recorded by an earlier, larger scan are not listed` : ""}. Select a URL to open it.
             </Para>
           </>
         )}

@@ -128,7 +128,7 @@ def resolve_profile(name: str | None, settings: Settings | None = None) -> ScanP
         return _profile(
             APPLICATION, settings, max_pages=cap,
             crawl_seconds=float(settings.consent_app_max_seconds) or None,  # 0 -> no crawl deadline
-            requires_verified_domain=True,
+            requires_verified_domain=settings.consent_app_require_verified_domain,
         )
     # The web profile is bounded by its PAGE limit, not by time: the old "pages x per-page timeout"
     # deadline stopped the crawl starting new pages after 150 s and aborted the whole scan at 330 s,

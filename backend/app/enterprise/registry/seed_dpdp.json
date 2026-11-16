@@ -1,0 +1,312 @@
+{
+ "registry": "DPDP Act 2023 and DPDP Rules 2025",
+ "source": "seeded from app/scoring/legal_map.py (each phrase is checked against the Act and Rules PDFs by tests/test_legal_map.py)",
+ "source_version": "2026.10.1",
+ "coverage_note": "38 provisions that the existing scanner's parameters relate to. This is NOT every section and rule of the Act and Rules: the full registry needs legal sign-off (GR-24) and is not built.",
+ "provisions": [
+  {
+   "instrument": "Act",
+   "ref": "s.5(1)",
+   "summary": "a notice accompanies or precedes every request for consent",
+   "relation": "source of the obligation",
+   "phrase": "accompanied or preceded by a notice",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.3(a)",
+   "summary": "the notice is presented and understandable independently of other information",
+   "relation": "source of the obligation",
+   "phrase": "understandable independently of any other information",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.3(b)(i)",
+   "summary": "an itemised description of the personal data",
+   "relation": "source of the obligation",
+   "phrase": "an itemised description of such personal data",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.3(b)(ii)",
+   "summary": "the specified purposes and the goods, services or uses they enable",
+   "relation": "source of the obligation",
+   "phrase": "the specified purpose or purposes of",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.5(1)(iii)",
+   "summary": "the notice says how to complain to the Board",
+   "relation": "source of the obligation",
+   "phrase": "the manner in which the Data Principal may make a complaint to the Board",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.3(c)(i)",
+   "summary": "how to withdraw consent, as easily as it was given",
+   "relation": "source of the obligation",
+   "phrase": "withdraw her consent, with the ease of doing so being comparable",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.3(c)(ii)",
+   "summary": "how to exercise rights under the Act",
+   "relation": "source of the obligation",
+   "phrase": "exercise her rights under the Act",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.3(c)(iii)",
+   "summary": "how to make a complaint to the Board",
+   "relation": "source of the obligation",
+   "phrase": "make a complaint to the Board",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.6(4)",
+   "summary": "consent can be withdrawn at any time, as easily as it was given",
+   "relation": "source of the obligation",
+   "phrase": "with the ease of doing so being comparable",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.5(3)",
+   "summary": "the notice can be read in English or an Eighth Schedule language",
+   "relation": "source of the obligation",
+   "phrase": "in English or any language specified in",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.4(1)",
+   "summary": "personal data is processed only on consent or for a legitimate use",
+   "relation": "related context",
+   "phrase": "only in accordance with the provisions of this Act",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.6(1)",
+   "summary": "consent is free, specific, informed, unconditional and unambiguous, by a clear affirmative action",
+   "relation": "source of the obligation",
+   "phrase": "free, specific, informed, unconditional and unambiguous with a clear affirmative action",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.6(6)",
+   "summary": "after withdrawal the Data Fiduciary and its processors cease processing",
+   "relation": "source of the obligation",
+   "phrase": "cease and cause its Data Processors to cease",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.8(9)",
+   "summary": "publish business contact information of a Data Protection Officer or a person who can answer",
+   "relation": "source of the obligation",
+   "phrase": "business contact information of a Data Protection Officer",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.9",
+   "summary": "prominently publish business contact information",
+   "relation": "source of the obligation",
+   "phrase": "business contact information of the Data Protection Officer",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.8(10)",
+   "summary": "an effective grievance redressal mechanism",
+   "relation": "source of the obligation",
+   "phrase": "effective mechanism to redress the grievances",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.13",
+   "summary": "right to readily available means of grievance redressal",
+   "relation": "source of the obligation",
+   "phrase": "readily available means of grievance redressal",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.14(3)",
+   "summary": "publish the grievance response period, not exceeding ninety days",
+   "relation": "source of the obligation",
+   "phrase": "not exceeding ninety days",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.11",
+   "summary": "right to information about personal data and its processing",
+   "relation": "source of the obligation",
+   "phrase": "right to obtain from the Data Fiduciary",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.12",
+   "summary": "right to correction, completion, updating and erasure",
+   "relation": "source of the obligation",
+   "phrase": "right to correction, completion, updating and erasure",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.14(1)",
+   "summary": "publish the means to request the exercise of rights and the identifier needed",
+   "relation": "source of the obligation",
+   "phrase": "the details of the means using which a Data Principal may make a request",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.14",
+   "summary": "right to nominate another individual",
+   "relation": "source of the obligation",
+   "phrase": "right to nominate",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.14(4)",
+   "summary": "how to nominate",
+   "relation": "source of the obligation",
+   "phrase": "nominate one or more individuals",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.9(3)",
+   "summary": "no tracking, behavioural monitoring or targeted advertising directed at children",
+   "relation": "source of the obligation",
+   "phrase": "tracking or behavioural monitoring of children",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.9(4)",
+   "summary": "prescribed classes and purposes are exempt from s.9(1) and (3)",
+   "relation": "related context",
+   "phrase": "shall not be applicable to processing of personal data of a child",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.12",
+   "summary": "exemptions for classes and purposes in the Fourth Schedule",
+   "relation": "related context",
+   "phrase": "Exemptions from certain obligations applicable to processing of personal data of child",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.9(1)",
+   "summary": "verifiable consent of the parent before processing a child's data",
+   "relation": "source of the obligation",
+   "phrase": "verifiable consent of the parent",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.10(1)",
+   "summary": "verifiable consent of the parent, with due diligence that the parent is an adult",
+   "relation": "source of the obligation",
+   "phrase": "verifiable consent of the parent is obtained",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.8(1)",
+   "summary": "the Data Fiduciary is responsible for its processors",
+   "relation": "related context",
+   "phrase": "on its behalf by a Data Processor",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.8(2)",
+   "summary": "a processor is engaged only under a valid contract",
+   "relation": "related context",
+   "phrase": "only under a valid contract",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.16",
+   "summary": "the Central Government may restrict transfers outside India",
+   "relation": "related context",
+   "phrase": "restrict the transfer of personal",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.15",
+   "summary": "transfers outside India are subject to requirements the Central Government specifies",
+   "relation": "related context",
+   "phrase": "Transfer of personal data outside the territory of India",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.8(5)",
+   "summary": "reasonable security safeguards",
+   "relation": "source of the obligation",
+   "phrase": "reasonable security safeguards to prevent personal data breach",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.6(1)(a)",
+   "summary": "security measures such as encryption",
+   "relation": "related context",
+   "phrase": "securing of personal data through encryption",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.8(7)",
+   "summary": "erase personal data when the purpose is no longer served",
+   "relation": "related context",
+   "phrase": "unless retention is necessary for compliance with any law",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.8",
+   "summary": "time for erasure and retention of logs",
+   "relation": "related context",
+   "phrase": "Time period for specified purpose to be deemed as no longer being served",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Act",
+   "ref": "s.8(6)",
+   "summary": "intimation of a personal data breach",
+   "relation": "related context",
+   "phrase": "intimation of such breach",
+   "commences": "2027-05-13"
+  },
+  {
+   "instrument": "Rules",
+   "ref": "r.7",
+   "summary": "intimation of a personal data breach",
+   "relation": "related context",
+   "phrase": "Intimation of personal data breach",
+   "commences": "2027-05-13"
+  }
+ ]
+}

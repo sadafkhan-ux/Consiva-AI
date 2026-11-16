@@ -28,6 +28,7 @@ from app.db.repositories import (
 )
 from app.db.session import get_db
 from app.llm.schemas import DpdpReference
+from app.scanner import scan_profiles
 from app.scoring import domain_score
 from app.scoring import requirements as requirements_reading
 from app.scoring.sector import SECTORS
@@ -552,7 +553,7 @@ class DpdpAssessment(BaseModel):
     scanned_at: str | None
     assessed_on: date
     pages_scanned: list[str]
-    page_limit: int
+    page_limit: int | None
     states_tested: list[str]
     states_not_tested: list[str]
     nature_note: str
@@ -1072,6 +1073,8 @@ async def get_scan_requirements(
     # while it opened seven more deadlocked the pool as soon as a handful ran together: every holder waited for connections the other holders were keeping.
     scan_url = scan.url
     when = scan.completed_at or scan.started_at or scan.created_at
+    # The page cap THIS scan ran under, from the profile stored on it: 5 for a standard scan, none for a whole-site scan.
+    page_limit = scan_profiles.profile_for_scan_options(scan.scan_options).max_pages
     await db.rollback()
     evidence = await scan_repository.get_scan_evidence_for_score(scan_id)
     result = requirements_reading.assess(
@@ -1079,7 +1082,7 @@ async def get_scan_requirements(
         requirements_reading.Applicability(processes_children_data, significant_data_fiduciary, consent_manager, erasure_class),
         scan_url=scan_url,
         scanned_at=when.isoformat() if when else None,
-        business_sector=business_sector,
+        business_sector=business_sector, page_limit=page_limit,
     )
     return DpdpRequirementsResponse(**asdict(result))
 

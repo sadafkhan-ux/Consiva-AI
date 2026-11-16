@@ -42,8 +42,8 @@ def check_scorecard(r: dict[str, Any]) -> list[str]:
     if pts.get("awarded") != awarded:
         problems.append(f"marks awarded: the rows give {awarded}, the result says {pts.get('awarded')}")
     cats = r.get("categories") or []
-    if sum(c["assessable"] for c in cats) != in_play:
-        problems.append(f"the categories assess {sum(c['assessable'] for c in cats)} marks, the rows {in_play}")
+    if sum(c["assessable"] for c in cats) != 100:
+        problems.append(f"the categories are worth {sum(c['assessable'] for c in cats)} marks, not 100")
     if sum(c["awarded"] for c in cats) != awarded:
         problems.append(f"the categories award {sum(c['awarded'] for c in cats)} marks, the rows {awarded}")
     if sum(x["marks"] for x in rows) != 100:
@@ -51,10 +51,10 @@ def check_scorecard(r: dict[str, Any]) -> list[str]:
     problems.extend(check_rows(r))
     score = r.get("score")
     if score is not None and in_play:
-        expected = int(100 * awarded / in_play + 0.5)
+        expected = int(awarded + 0.5)                  # the marks earned out of 100: a row not assessed or not applicable earns nothing
         held = r.get("band_notes") or []
         if score != expected and not (score == 99 and expected >= 100 and held):
-            problems.append(f"score {score}: {awarded} of {in_play} marks gives {expected}")
+            problems.append(f"score {score}: {awarded} marks earned gives {expected}")
     return problems
 
 

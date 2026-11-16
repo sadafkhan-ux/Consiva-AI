@@ -120,9 +120,11 @@ from app.scanner.url_inventory import (
     InventoryTracker,
     incomplete_extraction,
 )
+from app.scanner.progress import ProgressCallback, ProgressReporter
 from app.scanner.url_normalize import (
     category_of,
     effective_rank,
+    is_pagination_only,
     is_policy_page,
     normalize_url,
     path_without_query,
@@ -990,7 +992,9 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         if not browser_page.is_closed():
             await _close_quietly(browser_page, "a crawled page")
 
-    parsed = parse_page(html, url, checked_states)
+    # Links are resolved against the address the page actually ended at, not the one that was asked for: a site that redirects example.com to www.example.com has its relative links on www, and
+    # resolving them against the apex sent the crawl to addresses that answer 404 (xpenseai.in, 13 Nov 2026: eight of nine pages, the privacy policy among them).
+    parsed = parse_page(html, final_url or url, checked_states)
     # Read-only observations for the language and security sections of the report (scanner/page_signals.py); they change nothing about the scan.
     page_signals = {
         "indic": indic_script_counts(rendered_text or parsed.visible_text),
@@ -1024,6 +1028,7 @@ async def _crawl_full_site(
     profile: ScanProfile | None = None,
     deadline_monotonic: float | None = None,
     should_stop: Callable[[], Awaitable[bool]] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> tuple[list[PageRecord], list[FormRecord], list[CookieRecord], list[TrackerRecord],
            list[PolicyRecord], ConsentSignalRecord, dict]:
     """Pass 1 (pre_consent): the full multi-page crawl and main evidence-gathering pass.
@@ -1193,6 +1198,14 @@ async def _crawl_full_site(
         if via != "seed":
             consecutive_timeouts = consecutive_timeouts + 1 if result["status"] == "timeout" else 0
 
+        if via != "seed" and result["status"] == "failed" and "Download is starting" in (result.get("error") or ""):
+            # A link to a FILE (PDF, Office document, archive): the browser downloads it instead of showing a page, so it is not a page that failed to load.
+            # It is recorded as skipped with that reason; its text is not read by this scanner.
+            tracker.exclude(url, "document_download")
+            _skip(url, "document_download")
+            diagnostics["pages_attempted"] = max(0, diagnostics["pages_attempted"] - 1)      # a file is not a page that was attempted
+            return
+
         if result["status"] != "success":
             # Never silently skip: a secondary page that failed after bounded
             # retries still gets an explicit PageRecord, distinguishing "timeout"
@@ -1346,7 +1359,8 @@ async def _crawl_full_site(
                     covered_categories.add(kind)
                     category_of_url[url] = kind
             variant_of = query_variant_of(url) if via != "seed" else None
-            if variant_of is not None and variant_of in launched_paths:
+            # A whole-site scan (no page cap) still follows pagination (/blog?page=2: other posts); filters, sorting and tracking parameters stay skipped.
+            if variant_of is not None and variant_of in launched_paths and not (budget is None and is_pagination_only(url)):
                 # /blog?page=2 after /blog: the same page with another query string. It would spend one of the pages on content already seen.
                 tracker.exclude(url, "query_variant_of_known_page")
                 _skip(url, "query_variant_of_known_page")
@@ -1355,9 +1369,12 @@ async def _crawl_full_site(
             tracker.start(url)
             in_flight[asyncio.create_task(_launch_page(url))] = (url, via)
 
+    progress = ProgressReporter(on_progress)
+
     async def _check_stop() -> str | None:
         """Why no NEW page may start, or None. Checked between completions, never inside a navigation: a
         page already in flight finishes (each is bounded by its own navigation timeout) and none is launched."""
+        await progress.tick(diagnostics)             # live page counts for a long crawl (throttled; never raises)
         if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
             return "deadline"
         limit = settings.scanner_stop_after_consecutive_timeouts
@@ -1940,6 +1957,7 @@ async def _run_purposes(browser, root_url: str, settings: Settings) -> dict:
 async def run_scan(
     root_url: str, settings: Settings | None = None, profile: ScanProfile | None = None,
     should_stop: Callable[[], Awaitable[bool]] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> ScanResult:
     settings = settings or get_settings()
     safe_ips = await assert_safe_url(root_url)  # fail fast; _guard_navigation re-checks every hop below
@@ -1986,7 +2004,7 @@ async def run_scan(
                 )
                 pages, forms, cookies, trackers, policies, consent_signal, pre_consent_diagnostics = await _crawl_full_site(
                     context, root_url, settings, disallowed_prefixes, sitemap_urls=sitemap_urls,
-                    profile=profile, deadline_monotonic=crawl_deadline, should_stop=should_stop,
+                    profile=profile, deadline_monotonic=crawl_deadline, should_stop=should_stop, on_progress=on_progress,
                 )
             except BaseException:
                 # The crawl failed or the scan was cancelled: the passes beside it are no longer wanted.
@@ -2114,6 +2132,7 @@ CANCEL_FILE_ENV = "CONSIVA_SCAN_CANCEL_FILE"
 async def run_scan_isolated(
     root_url: str, settings: Settings | None = None, profile: ScanProfile | str | None = None,
     should_cancel: Callable[[], Awaitable[bool]] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> ScanResult:
     """The entrypoint services should call instead of `run_scan()` directly.
 
@@ -2151,6 +2170,8 @@ async def run_scan_isolated(
             kwargs["profile"] = profile_obj
         if should_cancel is not None:
             kwargs["should_stop"] = should_cancel
+        if on_progress is not None:
+            kwargs["on_progress"] = on_progress      # live page counts; the Windows subprocess path does not carry them
         try:
             return await asyncio.wait_for(run_scan(root_url, settings, **kwargs), timeout=budget)
         except TimeoutError as exc:

@@ -287,6 +287,9 @@ def _privacy_notice(ctx: ConsentContext) -> Outcome:
         return Outcome("met", ["A privacy policy page was found on the scanned pages." + _seen(ctx)])
     if (limit := _framed_limit(ctx)):
         return Outcome("unable_to_verify", [limit])      # a wrapper without a policy link says nothing about the framed site's notice
+    if ctx.unloaded_policy_urls:
+        # The site links to a privacy page, but it did not load in this scan: that is a gap in the scan, not a finding that the notice is missing.
+        return Outcome("unable_to_verify", [f"A privacy policy page was named at {ctx.unloaded_policy_urls[0]}, but it could not be loaded in this scan, so whether the notice exists and what it says was not established."])
     return Outcome("not_met", ["No privacy policy page was found within the pages scanned."])
 
 
@@ -804,7 +807,7 @@ class Assessment:
     scanned_at: str | None             # ISO timestamp the scan finished
     assessed_on: date                  # the date effective dates were judged against
     pages_scanned: list[str]
-    page_limit: int
+    page_limit: int | None             # None: the scan had no page cap (a whole-site scan)
     states_tested: list[str]
     states_not_tested: list[str]
     nature_note: str
@@ -1012,7 +1015,7 @@ def _attach_evidence_records(results: list[RequirementResult], ctx: ConsentConte
 
 
 
-def build_methodology() -> Methodology:
+def build_methodology(page_limit: int | None = MAX_WEB_PAGES) -> Methodology:
     groups: dict[str, list[str]] = {}
     for req in REQUIREMENTS:
         if req.dedup_group:
@@ -1021,7 +1024,8 @@ def build_methodology() -> Methodology:
         duplicate_rule=("Each requirement is listed once, however many requests, cookies or pages relate to it. Where two requirements describe the same "
                         "underlying gap, only the first is kept as a gap and the other is Not Applicable with the reason."),
         timing_rule="Requirements not yet in force are shown as Future Readiness, never as current violations.",
-        scope_rule=f"Only the entered main domain, up to {MAX_WEB_PAGES} pages. Other websites are not assessed.",
+        scope_rule=("Only the entered main domain, every page the scan could reach. Other websites are not assessed." if page_limit is None
+                    else f"Only the entered main domain, up to {page_limit} pages. Other websites are not assessed."),
         legal_mapping_version=LEGAL_MAPPING_VERSION,
         legal_sources=[{"name": n, "reference": r} for n, r in LEGAL_SOURCES],
         dedup=[MethodDedup(g, ids, DEDUP_GROUPS[g]) for g, ids in groups.items()],
@@ -1037,7 +1041,7 @@ def _main_domain(url: str | None) -> str | None:
     return host[4:] if host.startswith("www.") else (host or None)
 
 
-def build_assessment(ctx: ConsentContext, as_of: date, scan_url: str | None, scanned_at: str | None) -> Assessment:
+def build_assessment(ctx: ConsentContext, as_of: date, scan_url: str | None, scanned_at: str | None, page_limit: int | None = MAX_WEB_PAGES) -> Assessment:
     """The consent states the scan actually exercised. Before Consent is tested whenever pages were scanned with the three-state
     scanner; After Accept and After Reject only when the banner was clicked (Reject also had to be confirmed)."""
     tested, not_tested = [], []
@@ -1046,7 +1050,7 @@ def build_assessment(ctx: ConsentContext, as_of: date, scan_url: str | None, sca
     (tested if ctx.pages and ctx.reject_outcome == "clicked" and ctx.reject_confirmed else not_tested).append("After Reject")
     return Assessment(
         scan_url=scan_url, main_domain=_main_domain(scan_url), scanned_at=scanned_at, assessed_on=as_of,
-        pages_scanned=[p["url"] for p in ctx.pages if p.get("url")], page_limit=MAX_WEB_PAGES,
+        pages_scanned=[p["url"] for p in ctx.pages if p.get("url")], page_limit=page_limit,
         states_tested=tested, states_not_tested=not_tested, nature_note=NATURE_NOTE,
     )
 
@@ -1063,23 +1067,25 @@ def canonical_evidence(evidence: dict) -> dict:
 
 def assess(
     evidence: dict, as_of: date | None = None, applicability: Applicability | None = None, scan_url: str | None = None, scanned_at: str | None = None,
-    business_sector: str | None = None,
+    business_sector: str | None = None, page_limit: "int | None | object" = findings.STANDARD_LIMIT,
 ) -> RequirementsReading:
-    """`scan_url` and `scanned_at` only describe the scan in the result."""
+    """`scan_url` and `scanned_at` only describe the scan in the result. `page_limit` is the page cap the scan ran under (None: a whole-site scan with no cap); it only decides
+    whether the "pages beyond the limit were not assessed" finding applies and what the scope line says. It never changes a check or a score."""
     as_of = as_of or today_in_india()
     evidence = canonical_evidence(evidence)
     ctx = build_consent_context(evidence)
     results = evaluate_requirements(evidence, as_of, applicability, ctx)
-    human_review = review.build_human_review(ctx, results, as_of, MAX_WEB_PAGES)
+    limit = MAX_WEB_PAGES if page_limit is findings.STANDARD_LIMIT else page_limit
+    human_review = review.build_human_review(ctx, results, as_of, limit)
     return RequirementsReading(
         requirements_version=REQUIREMENTS_VERSION, as_of=as_of, requirements=results,
         status_counts={st: sum(1 for r in results if r.status == st) for st in STATUSES},
         evidence_summary=review.summarise_evidence(ctx),
         breakdown=review.build_breakdown(results, human_review.items),
         human_review=human_review,
-        finding_groups=findings.build_finding_groups(results, human_review.items, ctx, as_of),
-        methodology=build_methodology(),
-        assessment=build_assessment(ctx, as_of, scan_url, scanned_at),
+        finding_groups=findings.build_finding_groups(results, human_review.items, ctx, as_of, page_limit),
+        methodology=build_methodology(limit),
+        assessment=build_assessment(ctx, as_of, scan_url, scanned_at, limit),
         remediation_plan=findings.build_remediation_plan(results),
         ledger=build_ledger(results),
         sector=sector_analysis.assess_sector(evidence, scan_url, applicability, business_sector),

@@ -62,6 +62,7 @@ const SKIP_REASON: Record<string, string> = {
   robots_disallowed: "blocked by the site's robots.txt",
   slow_site: "not tried: the site's pages kept timing out",
   duplicate_url: "the same address as a page already queued",
+  document_download: "files (PDF or similar), not web pages: their text was not read",
   redirected_to_already_scanned_page: "redirected to a page already scanned",
   page_limit: "found after the page limit was reached",
   time_limit: "found but not reached before the time limit",
@@ -196,6 +197,8 @@ export function buildScanPages(
       ? "No page loaded, so no page contributed evidence."
       : overLimit
         ? `All ${loaded} scanned pages were included. This scan ran before the page limit was set to ${limit}; scans are now limited to ${limit} pages.`
+        : limit === null
+        ? `All ${loaded} scanned pages were included. Evidence from each of them feeds the checks and the score.${failedRows.length ? " Pages that failed contributed no evidence." : ""}`
         : allFive
         ? `All ${loaded} scanned pages were included. Evidence from each of them feeds the checks and the score.`
         : `${plural(loaded, "scanned page", "scanned pages")}${limit ? `, fewer than the limit of ${limit}` : ""}, ` +

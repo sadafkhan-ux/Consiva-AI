@@ -283,6 +283,8 @@ export interface SecuritySignals {
 }
 
 export interface WebsiteScanMetadata {
+  /** True while the crawl is still running: the page counts are live and will change (the finished scan's metadata replaces them). */
+  live?: boolean;
   pages_found?: number;
   cookies_found?: number;
   trackers_found?: number;
@@ -677,7 +679,7 @@ export interface DpdpAssessment {
   scanned_at: string | null;
   assessed_on: string;
   pages_scanned: string[];
-  page_limit: number;
+  page_limit: number | null;   // null: a whole-site scan, which has no page cap
   states_tested: string[];
   states_not_tested: string[];
   nature_note: string;

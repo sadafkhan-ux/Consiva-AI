@@ -36,10 +36,12 @@ WORKDIR /app
 COPY requirements.docker.lock.txt ./
 RUN pip install --no-cache-dir -r requirements.docker.lock.txt
 
+# tesseract-ocr (+ English and Hindi data): OCR for scanned PDF pages in the Enterprise document reader (app/enterprise/documents/ocr.py runs the binary; without it scanned pages are
+# recorded as not read). Packaged for amd64 and arm64.
 # libatomic1: the Node driver inside newer Playwright releases will not start without it, and the slim base image does not ship it. Installed on its own so that
 # `playwright install --with-deps` below can never be the first thing to find it missing.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libatomic1 \
+    && apt-get install -y --no-install-recommends libatomic1 tesseract-ocr tesseract-ocr-eng tesseract-ocr-hin \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium + every OS library it needs. `--with-deps` asks Playwright itself which

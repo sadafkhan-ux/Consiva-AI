@@ -374,3 +374,18 @@ describe("what the status tiles claim", () => {
     expect(screen.getByText("Errors / Warnings").previousElementSibling).toHaveTextContent("No");
   });
 });
+
+describe("a crawl that is still running shows its pages so far", () => {
+  it("labels the live count as 'so far' and says how many pages are found", () => {
+    const live: WebsiteScanMetadata = { live: true, pages_scanned: 37, pages_discovered: 162, pages_attempted: 40 };
+    render(<ScanStatusSection state={makeState({ phase: "scanning", websiteScanMeta: live })} />);
+    expect(screen.getByTestId("pages-scanned-label")).toHaveTextContent("Pages scanned so far (of 162 found)");
+    expect(screen.getByText("37")).toBeInTheDocument();
+  });
+
+  it("goes back to the plain label once the scan has finished", () => {
+    const done: WebsiteScanMetadata = { pages_scanned: 142, pages_discovered: 162, pages_attempted: 152 };
+    render(<ScanStatusSection state={makeState({ phase: "completed", websiteScanMeta: done })} />);
+    expect(screen.getByTestId("pages-scanned-label")).toHaveTextContent(/^Pages Scanned$/);
+  });
+});

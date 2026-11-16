@@ -35,3 +35,7 @@ Thumbs.db
 
 # Claude Code local session state
 .claude/
+
+# Database backups
+backups/
+*.dump

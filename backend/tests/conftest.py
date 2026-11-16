@@ -18,6 +18,8 @@ os.environ.setdefault("APP_ENV", "development")
 # LLM usage tracking (app/llm/usage_tracking.py): tests never write to the real usage log or to a database. Without this the unit tests that call the
 # shared client appended test-model rows to logs/llm_usage.jsonl, and they made up most of that file.
 os.environ["CONSIVA_DISABLE_USAGE_DB"] = "1"
+# Whole-site scans require a verified domain unless a deployment turns that off in backend/.env; the tests assert the default, so a machine's own .env must not change them.
+os.environ["CONSENT_APP_REQUIRE_VERIFIED_DOMAIN"] = "true"
 os.environ.setdefault("SCANNER_TLS_ASSESSMENT", "false")     # the tests never open a connection to a real site
 os.environ.setdefault("CONSIVA_LLM_USAGE_LOG", os.path.join(__import__("tempfile").gettempdir(), "consiva-test-llm-usage.jsonl"))
 

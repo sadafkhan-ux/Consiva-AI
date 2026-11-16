@@ -276,6 +276,9 @@ class ConsentContext:
     # The result of reading the site's privacy and cookie policy text (app/policy/analysis.py), when there is one. The consent rules never read it; the DPDP
     # score uses it for the checks that are answered by what the policy says (contact, means to exercise rights, grievance system).
     policy_analysis: dict | None = None
+    # Addresses of privacy or policy pages the scan found a link to but could not load (a 404, a timeout, a block). Such a page brought no evidence, so it is not a page scanned,
+    # but it is not proof that no policy exists either: the requirements reading says the notice could not be verified, not that it is missing.
+    unloaded_policy_urls: tuple[str, ...] = ()
 
 
 # How a page record ends when the attempt brought no page (scanner/schemas.py PageRecord.discovered_via).
@@ -296,6 +299,7 @@ def build_consent_context(evidence: dict) -> ConsentContext:
     # evidence, so they are not pages scanned: counting them overstated "pages scanned" and could hide a scan where nothing loaded.
     # A record with no recorded outcome (a scan stored before it was kept) is still counted, as before.
     pages = [p for p in evidence.get("pages", []) if p.get("discovered_via") not in _PAGE_NOT_LOADED]
+    unloaded_policy_urls = tuple(sorted({p["url"] for p in evidence.get("pages", []) if p.get("discovered_via") in _PAGE_NOT_LOADED and re.search(r"privacy|policy", p.get("url") or "", re.I)}))
     accept_outcome = interaction_evidence.get("accept_interaction")
     reject_outcome = interaction_evidence.get("reject_interaction")
     reject_confirmed = interaction_evidence.get("reject_click_confirmed") is True
@@ -310,7 +314,7 @@ def build_consent_context(evidence: dict) -> ConsentContext:
         interaction_evidence=interaction_evidence, accept_outcome=accept_outcome, reject_outcome=reject_outcome,
         reject_confirmed=reject_confirmed, interaction_page=interaction_evidence.get("interaction_page_url"),
         framed_sites=framed_sites, banner_not_displayed=banner_not_displayed, three_pass=three_pass,
-        policy_analysis=evidence.get("policy_analysis"),
+        policy_analysis=evidence.get("policy_analysis"), unloaded_policy_urls=unloaded_policy_urls,
     )
 
 

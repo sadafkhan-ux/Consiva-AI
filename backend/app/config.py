@@ -172,6 +172,9 @@ class Settings(BaseSettings):
     # set here, the scan as a whole still has a fixed ceiling (scan_profiles._APP_HARD_CEILING_SECONDS)
     # so a hung browser cannot hold a worker, and its job lease, forever.
     consent_app_max_seconds: int = Field(default=0, ge=0, le=86_400)
+    # Whether a whole-site (application) scan needs the domain to have passed DNS ownership verification. True (the default) keeps the original rule: always. False makes it follow the same
+    # deployment-wide policy as the 5-page scan (SCANNER_REQUIRE_DOMAIN_VERIFICATION). The `authorized` attestation, the administrator gate and the SSRF check apply either way.
+    consent_app_require_verified_domain: bool = True
     # ── Application-scan crawl controls (scanner/crawl_controls.py) ──────────────────────────────
     # What an authorized caller may ask for on POST /scans/application. Each value is a request clamped to the ceiling here; the public web profile
     # ignores all of them. The defaults apply when a request names nothing. Validated at start-up like the bounds above.
@@ -260,12 +263,6 @@ class Settings(BaseSettings):
     report_require_approval: bool = False
     # REPORT_QUALITY_OWNER -- the named person accountable for the quality of customer reports (shown in the approval record and the version route). Free text, e.g. "Name <email>".
     report_quality_owner: str = ""
-    # Purpose Classifier (Agent 6): an assessment request can carry a caller-supplied
-    # DSN/spec URL/CSV body that the worker will act on -- unbounded submissions let
-    # one org occupy every slot in the single shared worker pool (jobs/worker.py's
-    # fixed WORKER_CONCURRENCY) with requests that are slow to fail rather than
-    # queued. Same shape of problem as the scanner's own rate limit above.
-    purpose_max_assessments_per_org_per_day: int = 100
     # Bounded concurrent page fetching for the pre_consent crawl (moved here from a
     # hardcoded crawler.py constant so ops can tune it per deployment without a code
     # change). Default of 4 is the value already measured live against a real 25-page

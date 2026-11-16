@@ -36,6 +36,8 @@ const SKIP_REASONS: Record<string, string> = {
   robots_disallowed: "disallowed by robots.txt",
   duplicate_url: "duplicate of a page already found",
   redirected_to_already_scanned_page: "redirected to a page already scanned",
+  query_variant_of_known_page: "the same page with filter or tracking parameters",
+  document_download: "files (PDF or similar), not web pages: their text was not read",
   time_limit: "left unscanned: time limit",
   scan_cancelled: "left unscanned: scan cancelled",
 };
@@ -237,7 +239,7 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
           </div>
           <div className="l">Current Stage</div>
         </div>
-        <div className="stat"><div className="n">{pagesScanned ?? "—"}</div><div className="l">Pages Scanned</div></div>
+        <div className="stat"><div className="n">{pagesScanned ?? "—"}</div><div className="l" data-testid="pages-scanned-label">{state.websiteScanMeta?.live ? `Pages scanned so far${state.websiteScanMeta.pages_discovered != null ? ` (of ${state.websiteScanMeta.pages_discovered} found)` : ""}` : "Pages Scanned"}</div></div>
         <div className="stat"><div className="n">{hasErrorsOrWarnings ? "Yes" : "No"}</div><div className="l">Errors / Warnings</div></div>
       </div>
 

@@ -992,7 +992,7 @@ describe("the hero's words and facts, worked out once for the dashboard and the 
     expect(h.scored).toBe(true);
     expect(h.percentLabel).toBe("75/100");
     expect(h.scoreLabel).toBe("Privacy Readiness Score");
-    expect(h.headline).toContain("6 of 10 assessed checks passed");
+    expect(h.headline).toContain("6 of 10 checks passed");
     expect(JSON.stringify(h)).not.toMatch(/coverage/i);
     expect(["good", "warn", "mute"]).toContain(h.tone);
   });
@@ -1138,7 +1138,8 @@ describe("prioritised fixes, the dedicated sections and the cookie inventory in 
     const { summary } = await build();
     // A note can cross a page; the running header at the top of a page and the footer (the disclaimer and the page number) are not part of the note.
     const t = flat(summary).split(flat("x.testScanned 21 Oct 2026, 12:11 IST")).join("").split(flat(REPORT_DISCLAIMER)).join("").replace(/Page\d+of\d+/g, "");
-    const sections = buildInsightSections({ policy: POLICY, meta: META_SIGNALS, evidence: EVID, sector: buildRequirementsView(scoreWithImpact()).sector });
+    // The report is built with the scan's address (SCAN.url), and the security signals name that page in their summary, so the expectation is built with it too.
+    const sections = buildInsightSections({ policy: POLICY, meta: META_SIGNALS, evidence: EVID, sector: buildRequirementsView(scoreWithImpact()).sector, siteUrl: "https://x.test/" });
     expect(sections).toHaveLength(4);   // no sign of children on this site, so the children's section is left out
     for (const s of sections) {
       expect(t, `${s.title} status`).toContain(flat(s.status));

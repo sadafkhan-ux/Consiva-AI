@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { AUTH_BYPASSED, OPEN_ACCESS, autoLogin, getProfile, logout, type Profile } from "./api/auth";
 import { setUnauthorizedHandler } from "./api/client";
 import { ConsentAgentView } from "./ConsentAgentView";
+import { monitoringApi } from "./api/monitoring";
 import { LoginScreen } from "./components/LoginScreen";
 import { agentFromHash, writeHash } from "./components/dsrRoute";
 import { ReportPage } from "./report/print/ReportPage";
@@ -10,11 +11,13 @@ import { ReportPage } from "./report/print/ReportPage";
 // report page stays in the main chunk on purpose: the server prints it, and a separate chunk to fetch added about 0.3 s to every PDF (measured).
 const BreachConsole = lazy(() => import("./components/BreachConsole").then((m) => ({ default: m.BreachConsole })));
 const DsrConsole = lazy(() => import("./components/DsrConsole").then((m) => ({ default: m.DsrConsole })));
-const PurposeConsole = lazy(() => import("./components/PurposeConsole").then((m) => ({ default: m.PurposeConsole })));
 const RegWatchConsole = lazy(() => import("./components/RegWatchConsole").then((m) => ({ default: m.RegWatchConsole })));
 const RopaDashboard = lazy(() => import("./components/RopaDashboard").then((m) => ({ default: m.RopaDashboard })));
+const SystemHealth = lazy(() => import("./components/SystemHealth").then((m) => ({ default: m.SystemHealth })));
 
-type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch" | "purpose";
+const EnterpriseWorkspace = lazy(() => import("./enterprise/EnterpriseWorkspace").then((m) => ({ default: m.EnterpriseWorkspace })));
+
+type Agent = "consent" | "ropa" | "dsr" | "breach" | "regwatch" | "enterprise" | "dpdp" | "system";
 
 /**
  * Shell around the five agents. Agent 1's UI is unchanged -- it moved verbatim
@@ -51,6 +54,8 @@ function Console() {
   // flashes on every load before the token arrives.
   const [autoLoginError, setAutoLoginError] = useState<string | null>(null);
   const [autoLoginTried, setAutoLoginTried] = useState(false);
+  // How many system alerts are open, for the badge on the System health item. Only administrators can read it; for anyone else it stays null and the item is not shown.
+  const [openAlerts, setOpenAlerts] = useState<number | null>(null);
 
   useEffect(() => {
     // A 401 from any request means the token died mid-session; drop straight
@@ -76,6 +81,15 @@ function Console() {
       .catch((e) => setAutoLoginError(e instanceof Error ? e.message : String(e)));
   }, [profile, autoLoginTried]);
 
+  useEffect(() => {
+    if (!profile || profile.role !== "admin") return;
+    let alive = true;
+    const poll = () => monitoringApi.overview().then((o) => { if (alive) setOpenAlerts(o.open_count); }).catch(() => { /* the badge is a convenience */ });
+    void poll();
+    const t = window.setInterval(poll, 60_000);
+    return () => { alive = false; window.clearInterval(t); };
+  }, [profile]);
+
   if (!profile) {
     // Still waiting on the dev token: show nothing rather than a login form that is
     // about to be replaced.
@@ -98,7 +112,9 @@ function Console() {
     { id: "dsr", label: "DSR" },
     { id: "breach", label: "Breach" },
     { id: "regwatch", label: "Regulatory Watch" },
-    { id: "purpose", label: "Purpose" },
+    { id: "enterprise", label: "Enterprise" },
+    { id: "dpdp", label: "Enterprise DPDP" },
+    ...(profile.role === "admin" ? [{ id: "system" as const, label: "System health" }] : []),
   ];
 
   return (
@@ -118,6 +134,7 @@ function Console() {
             >
               <span className="dot" />
               {label}
+              {id === "system" && openAlerts ? <span className="pill pill-bad" data-testid="alert-badge" style={{ marginLeft: "auto" }}>{openAlerts}</span> : null}
             </button>
           ))}
         </nav>
@@ -160,12 +177,14 @@ function Console() {
 
         <div className="shell-content">
           {agent === "consent" && <ConsentAgentView />}
+          {agent === "enterprise" && <ConsentAgentView wholeSite />}
+          {agent === "system" && <Suspense fallback={<div className="muted" style={{ padding: 16 }}>Loading…</div>}><SystemHealth /></Suspense>}
           <Suspense fallback={<div className="muted" style={{ padding: 16 }}>Loading…</div>}>
             {agent === "ropa" && <RopaDashboard />}
             {agent === "dsr" && <DsrConsole onOpenRopa={() => setAgent("ropa")} />}
             {agent === "breach" && <BreachConsole />}
             {agent === "regwatch" && <RegWatchConsole />}
-            {agent === "purpose" && <PurposeConsole />}
+            {agent === "dpdp" && <EnterpriseWorkspace />}
           </Suspense>
         </div>
       </div>

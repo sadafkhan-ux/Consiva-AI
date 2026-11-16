@@ -1,0 +1,77 @@
+{
+  "register": "Enterprise DPDP legal source register",
+  "verified_on": "2026-11-13",
+  "how_verified": "The text of every document below was read from the copy kept in the repository folder knowledge_sources/, each of which is a scan or print of the Gazette of India. The gazette identifier was read from the document itself. These copies were NOT compared with the online official copies: the government sites (indiacode.nic.in, meity.gov.in, pib.gov.in) returned HTTP 403 to an automated download on this date. A named person should compare the fingerprints against a copy downloaded from the official site before the registry is approved.",
+  "status": "draft, awaiting a named legal sign-off",
+  "documents": [
+    {
+      "id": "ACT",
+      "title": "The Digital Personal Data Protection Act, 2023 (No. 22 of 2023)",
+      "published": "Gazette of India Extraordinary, Part II Section 1, No. 25, 11 August 2023",
+      "gazette_identifier": "CG-DL-E-12082023-248045",
+      "local_copy": "knowledge_sources/DPDP Act 2023.pdf",
+      "sha256": "4deb23981d3010c8225a2ff6149e7243dc2268455b299e283afebdd7b72a7d15",
+      "official_location": "https://www.indiacode.nic.in/bitstream/123456789/22037/2/a2023-22.pdf (named by a search result; not downloaded)",
+      "structure": "44 sections, one Schedule"
+    },
+    {
+      "id": "RULES",
+      "title": "The Digital Personal Data Protection Rules, 2025",
+      "published": "G.S.R. 846(E), 13 November 2025, Gazette of India Extraordinary, Part II Section 3(i)",
+      "gazette_identifier": "CG-DL-E-14112025-267650",
+      "local_copy": "knowledge_sources/DPDP Rules.pdf",
+      "sha256": "eabc7d05e013144615d78ddc0e8b9c9aac1920e814f4fad38ce6560951f5aa08",
+      "official_location": "https://www.meity.gov.in/static/uploads/2025/11/53450e6e5dc0bfa85ebd78686cadad39.pdf (named by a search result; not opened)",
+      "structure": "23 rules and schedules",
+      "note": "Corrected by G.S.R. 892(E) (CORRIGENDA)."
+    },
+    {
+      "id": "COMMENCEMENT",
+      "title": "Notification G.S.R. 843(E): dates on which the Act's provisions come into force",
+      "published": "13 November 2025, Gazette No. 757",
+      "gazette_identifier": "CG-DL-E-14112025-267647",
+      "local_copy": "knowledge_sources/DPDP Enforcement Timeline .pdf",
+      "sha256": "6df25cd8c76ac8eb18cae81835d51d51128ffbf2ed13262843395efddf0998e5",
+      "effect": {
+        "on_publication_2025-11-13": "section 1(2), section 2, sections 18 to 26, 35, 38 to 43, and sub-sections (1) and (3) of section 44",
+        "after_one_year_2026-11-13": "sub-section (9) of section 6 and clause (d) of sub-section (1) of section 27",
+        "after_eighteen_months_2027-05-13": "sections 3 to 5, sub-sections (1) to (8) and (10) of section 6, sections 7 to 10, 11 to 17, section 27 except clause (d) of sub-section (1), sections 28 to 34, 36, 37 and sub-section (2) of section 44"
+      }
+    },
+    {
+      "id": "RULES_COMMENCEMENT",
+      "title": "Rule 1 of the Rules: when the Rules come into force",
+      "text_read": "Rules 1, 2 and 17 to 21 on publication; Rule 4 one year after publication; Rules 3, 5 to 16, 22 and 23 eighteen months after publication.",
+      "dates": {
+        "on_publication": "2025-11-13",
+        "rule_4": "2026-11-13",
+        "rules_3_5_to_16_22_23": "2027-05-13"
+      }
+    },
+    {
+      "id": "CORRIGENDUM",
+      "title": "Corrigenda G.S.R. 892(E) to the Rules (G.S.R. 846(E))",
+      "published": "10 December 2025, Gazette No. 806 (11 December 2025)",
+      "gazette_identifier": "CG-DL-E-12122025-268455",
+      "local_copy": "knowledge_sources/DPDP CORRIGENDA 10th Dec 2025.pdf",
+      "sha256": "8f8d9526b511801889f8ae022b6d7c5db449283e90fe32792e5896314b32f994",
+      "effect": "Wording corrections in the Rules (G.S.R. 846(E)). It does not amend G.S.R. 843(E); some web summaries say it does, and the document itself shows it does not."
+    },
+    {
+      "id": "BOARD_ESTABLISHED",
+      "title": "G.S.R. 844(E): Data Protection Board of India established; head office in the National Capital Region",
+      "published": "13 November 2025, Gazette No. 758",
+      "gazette_identifier": "CG-DL-E-14112025-267648",
+      "local_copy": "knowledge_sources/DPDP Board Formation Update.pdf",
+      "sha256": "5cc76d1fedf9f93655ef92a297dd7e590a78a145ba0d25a40fe2190faecae65b"
+    },
+    {
+      "id": "BOARD_MEMBERS",
+      "title": "G.S.R. 845(E): the Board shall consist of four members",
+      "published": "13 November 2025",
+      "gazette_identifier": "CG-DL-E-14112025-267649",
+      "local_copy": "knowledge_sources/DPDP Board Members Update.pdf",
+      "sha256": "812fe0ce802fe78f0bcbb0c032f74a5110ce23417e9b78889d21a6b7b77ba6a7"
+    }
+  ]
+}

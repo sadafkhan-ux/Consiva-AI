@@ -15,7 +15,7 @@ export interface DsrRoute {
   caseId: string | null;
 }
 
-const AGENTS = ["consent", "ropa", "dsr", "breach", "regwatch", "purpose"] as const;
+const AGENTS = ["consent", "ropa", "dsr", "breach", "regwatch", "enterprise", "dpdp", "system"] as const;
 export type AgentId = (typeof AGENTS)[number];
 
 /** The agent named by `#/<agent>...`, or null for no/unknown hash. */

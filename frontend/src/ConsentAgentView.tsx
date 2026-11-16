@@ -37,7 +37,8 @@ import { ApiError } from "./api/types";
 const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
 
 /** The 10-check score for the scan on screen, from the same report model the PDF is drawn from; null when the scan has no evidence to score or the model cannot be built. */
-export function ConsentAgentView() {
+export function ConsentAgentView({ wholeSite = false }: { wholeSite?: boolean } = {}) {
+  // `wholeSite` is the Enterprise screen: the very same scan, results, score and report, but the scan covers every page it can reach instead of five, and the PDF is the detailed one.
   const { state, run, open, afterReviewDecision } = useConsentScan();
   const [url, setUrl] = useState("https://example.com");
   const [authorized, setAuthorized] = useState(true);
@@ -53,6 +54,10 @@ export function ConsentAgentView() {
   function handleScan() {
     if (!url.trim()) return;
     run(url.trim(), authorized);
+  }
+  function handleFullSiteScan() {
+    if (!url.trim()) return;
+    run(url.trim(), authorized, {});
   }
   function handleWholeSiteScan(crawl: CrawlConfig) {
     if (!url.trim()) return;
@@ -86,7 +91,7 @@ export function ConsentAgentView() {
       // network or server error, not "not found" or "not allowed") is the PDF drawn here in the browser instead, from the same report model.
       try {
         if (!state.scanId) throw new ApiError(0, "No scan is open.");
-        const { blob, filename } = await fetchReportPdf(state.scanId, "summary");
+        const { blob, filename } = await fetchReportPdf(state.scanId, wholeSite ? "long" : "summary");
         saveBlob(blob, filename);
       } catch (serverErr) {
         const status = serverErr instanceof ApiError ? serverErr.status : 0;
@@ -106,8 +111,12 @@ export function ConsentAgentView() {
     <div className="usage-layout">
       <div className="usage-main">
       <div className="agent-intro">
-        <h1>Privacy Policy Agent</h1>
-        <div className="tagline">Enter a public website address to scan it. We check its consent banner, cookies and trackers, and show what needs a human review.</div>
+        <h1>{wholeSite ? "Enterprise Scanner" : "Privacy Policy Agent"}</h1>
+        <div className="tagline">
+          {wholeSite
+            ? "Enter a website address. Every page that can be reached is scanned, not just five. You get the same checks, score and findings as the standard scan, and a detailed PDF report."
+            : "Enter a public website address to scan it. We check its consent banner, cookies and trackers, and show what needs a human review."}
+        </div>
       </div>
 
       <div className="scan-form">
@@ -122,11 +131,17 @@ export function ConsentAgentView() {
           <input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} disabled={busy} />
           I own / am authorized to scan this domain
         </label>
-        <button onClick={handleScan} disabled={busy || !url.trim()}>
-          {busy ? "Scanning…" : "Scan Website"}
-        </button>
+        {wholeSite ? (
+          <button onClick={handleFullSiteScan} disabled={busy || !url.trim() || !authorized} data-testid="scan-whole-website">
+            {busy ? "Scanning…" : "Scan Whole Website"}
+          </button>
+        ) : (
+          <button onClick={handleScan} disabled={busy || !url.trim()}>
+            {busy ? "Scanning…" : "Scan Website"}
+          </button>
+        )}
       </div>
-      <CrawlSettings disabled={busy || !url.trim()} onStart={handleWholeSiteScan} />
+      {!wholeSite && <CrawlSettings disabled={busy || !url.trim()} onStart={handleWholeSiteScan} />}
       <div className="hint">SSRF-protected — private/internal/loopback addresses are always rejected regardless of this checkbox.</div>
 
       {state.phase === "failed" && state.error && (
@@ -178,7 +193,7 @@ export function ConsentAgentView() {
           </div>
           {state.scanId && <a className="report-link" href={`/?report=${state.scanId}`} target="_blank" rel="noreferrer" data-testid="open-web-report">Open web report</a>}
           <button className="report-btn" onClick={handleDownloadReport} disabled={buildingReport}>
-            {buildingReport ? "Preparing…" : "Download Report (PDF)"}
+            {buildingReport ? "Preparing…" : wholeSite ? "Download Detailed Report (PDF)" : "Download Report (PDF)"}
           </button>
         </div>
       )}
@@ -189,7 +204,7 @@ export function ConsentAgentView() {
             <strong>Privacy report</strong>
             <span>The PDF report becomes available when the scan finishes.</span>
           </div>
-          <button className="report-btn" disabled>Download Report (PDF)</button>
+          <button className="report-btn" disabled>{wholeSite ? "Download Detailed Report (PDF)" : "Download Report (PDF)"}</button>
         </div>
       )}
 

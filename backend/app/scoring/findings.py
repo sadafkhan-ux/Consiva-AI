@@ -184,7 +184,11 @@ def _signal_based(res, rows_by_id: dict[str, dict]) -> bool:
     return any(i in rows_by_id for i in res.evidence_ids)
 
 
-def build_finding_groups(results: list, review_items: list[ReviewItem], ctx: ConsentContext, as_of: date) -> FindingGroups:
+#: The page cap of the standard (five-page) scan, looked up when the findings are built so it always follows MAX_WEB_PAGES. Anything else is the cap the scan really ran under; None is no cap.
+STANDARD_LIMIT: object = object()
+
+
+def build_finding_groups(results: list, review_items: list[ReviewItem], ctx: ConsentContext, as_of: date, page_limit: "int | None | object" = STANDARD_LIMIT) -> FindingGroups:
     rows_by_id = {r["id"]: r for r in (*ctx.trackers, *ctx.cookies)}
     by_id = {r.id: r for r in results}
 
@@ -235,14 +239,15 @@ def build_finding_groups(results: list, review_items: list[ReviewItem], ctx: Con
                 how_to_verify=_how_to_verify_missing(res, ctx), confidence="none",
             ))
 
-    if len(ctx.pages) >= MAX_WEB_PAGES:
+    page_limit = MAX_WEB_PAGES if page_limit is STANDARD_LIMIT else page_limit
+    if page_limit is not None and len(ctx.pages) >= page_limit:
         unable.append(FindingEntry(
-            id="page-limit", group="unable_to_verify", title=f"Pages beyond the first {MAX_WEB_PAGES} of the main domain were not assessed",
+            id="page-limit", group="unable_to_verify", title=f"Pages beyond the first {page_limit} of the main domain were not assessed",
             requirement_ids=[], legal_references=[], outcome="Unable to Verify", severity=None,
             severity_note="Not rated: it is neither passing nor failing, the evidence is missing.", pages=[], consent_states=[],
             observed=[f"{len(ctx.pages)} pages were scanned, which is the limit."], evidence_ids=[], rule_ids=[],
             effective_date=None, timing_note="", business_impact="Pages that were not scanned, such as sign-up or checkout, may behave differently.",
-            explanation=f"The scan covers at most {MAX_WEB_PAGES} pages of the main domain.",
+            explanation=f"The scan covers at most {page_limit} pages of the main domain.",
             missing=["Behaviour on pages that were not scanned."],
             how_to_verify="Scan the specific page directly, for example the one that collects personal data.",
         ))

@@ -165,7 +165,7 @@ def build_breakdown(results: list, review_items: list[ReviewItem]) -> Breakdown:
 _ORGANISATIONAL = frozenset({"DPDP-R9", "DPDP-R14A", "DPDP-R14B", "DPDP-S6", "DPDP-S7", "DPDP-X4", "DPDP-X8", "DPDP-X10", "DPDP-X13"})
 
 
-def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_pages: int) -> HumanReview:
+def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_pages: int | None) -> HumanReview:
     by_id = {r.id: r for r in results}
     items: list[ReviewItem] = []
 
@@ -287,7 +287,7 @@ def build_human_review(ctx: ConsentContext, results: list, as_of: date, max_page
             provisions=list(n1.provisions), requirement_ids=["DPDP-N1"],
         ))
 
-    if len(ctx.pages) >= max_pages:
+    if max_pages is not None and len(ctx.pages) >= max_pages:
         items.append(ReviewItem(
             id="page-limit", category="missing_evidence",
             topic=f"Only the first {max_pages} pages of the main domain are assessed",

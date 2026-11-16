@@ -202,3 +202,24 @@ class TestUpcomingDates:
 def test_the_whole_structure_serialises_through_the_api_model():
     m = DpdpRequirementsResponse(**asdict(assess(evidence(trackers=[t(1)], pages=5), TODAY)))
     assert m.finding_groups.future_readiness and m.finding_groups.needs_review and m.finding_groups.unable_to_verify
+
+
+class TestWholeSiteScanHasNoPageLimitFinding:
+    """A whole-site scan has no page cap, so 'pages beyond the first 5 were not assessed' must never be said of it (142 pages were scanned, and nothing is beyond a cap)."""
+
+    def test_no_cap_means_no_page_limit_finding_and_the_scope_line_says_so(self):
+        reading = assess(evidence(pages=142), TODAY, page_limit=None)
+        assert "page-limit" not in ids(reading.finding_groups.unable_to_verify)
+        assert reading.assessment.page_limit is None
+        assert "every page the scan could reach" in reading.methodology.scope_rule
+        assert "page-limit" not in [i.id for i in reading.human_review.items]
+
+    def test_a_capped_scan_still_gets_it_and_the_default_is_unchanged(self):
+        capped = assess(evidence(pages=5), TODAY, page_limit=5)
+        assert "page-limit" in ids(capped.finding_groups.unable_to_verify) and capped.assessment.page_limit == 5
+        assert "page-limit" in ids(assess(evidence(pages=5), TODAY).finding_groups.unable_to_verify)      # no page_limit given: the standard 5-page scan
+
+    def test_a_cap_other_than_five_is_named_as_it_is(self):
+        reading = assess(evidence(pages=20), TODAY, page_limit=20)
+        entry = next(f for f in reading.finding_groups.unable_to_verify if f.id == "page-limit")
+        assert "first 20 of the main domain" in entry.title

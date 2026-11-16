@@ -172,8 +172,8 @@ export interface RequirementsView {
   /** What was assessed and when: the main domain, the pages, the scan time and the consent states tested. */
   scopeLines: string[];
   scanTimeLine: string;
-  /** The most pages one scan covers, as the server reported it (never a number typed into the report). */
-  pageLimit: number;
+  /** The most pages one scan covers, as the server reported it (never a number typed into the report). null: a whole-site scan, which has no cap. */
+  pageLimit: number | null;
   /** "21 Oct 2026, 06:41 UTC", or "not recorded". */
   scanTime: string;
   /** "Legal mapping v2026.10.1". */
@@ -388,7 +388,7 @@ export function buildRequirementsView(reading: DpdpRequirementsResponse): Requir
     ],
     evidenceNote: ev.note,
     scopeLines: [
-      `Scope: the entered main domain${reading.assessment.main_domain ? ` (${reading.assessment.main_domain})` : ""} only. ${plural(reading.assessment.pages_scanned.length, "page", "pages")} scanned, of a limit of ${reading.assessment.page_limit}.`,
+      `Scope: the entered main domain${reading.assessment.main_domain ? ` (${reading.assessment.main_domain})` : ""} only. ${plural(reading.assessment.pages_scanned.length, "page", "pages")} scanned${reading.assessment.page_limit === null ? " (no page limit)" : `, of a limit of ${reading.assessment.page_limit}`}.`,
       ...(reading.assessment.pages_scanned.length ? [`Pages scanned: ${reading.assessment.pages_scanned.join(", ")}`] : []),
       `Consent states tested: ${reading.assessment.states_tested.length ? reading.assessment.states_tested.join(", ") : "none"}${reading.assessment.states_not_tested.length ? `. Not tested: ${reading.assessment.states_not_tested.join(", ")}` : ""}.`,
     ],

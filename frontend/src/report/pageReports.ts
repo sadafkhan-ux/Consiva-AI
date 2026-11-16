@@ -202,7 +202,7 @@ export function buildPageReport(model: ReportModel, variant: ReportVariant): Pag
     limits.push(`Accept and Reject were tested once, on the homepage only${vis.consent.acceptTested && vis.consent.rejectTested ? "" : "; at least one of them could not be tested"}.`);
   }
   limits.push("A request shows the browser contacted a service. It does not show that personal data was sent or that a rule was broken.");
-  if (a && a.counts.notAssessed) limits.push(`${a.counts.notAssessed} ${a.counts.notAssessed === 1 ? "check" : "checks"} could not be assessed from outside and ${a.counts.notAssessed === 1 ? "is" : "are"} left out, not counted as passed.`);
+  if (a && a.counts.notAssessed) limits.push(`${a.counts.notAssessed} ${a.counts.notAssessed === 1 ? "check" : "checks"} could not be assessed from outside and ${a.counts.notAssessed === 1 ? "earns" : "earn"} no marks, so ${a.counts.notAssessed === 1 ? "it is" : "they are"} not counted as passed.`);
 
   return {
     variant, domain: preview.domain, scanId: model.scanId, reportId: reportIdFor(variant, model.scanId, scannedAt), scannedAt,

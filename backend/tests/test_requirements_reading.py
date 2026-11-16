@@ -272,3 +272,26 @@ class TestDeterminism:
         assess(ev, TODAY)
         assert ev == before
 
+
+
+class TestAPrivacyPageThatWasLinkedButDidNotLoad:
+    """xpenseai.in, 13 Nov 2026: the homepage linked to /privacy-policy, the page answered 404 in the scan, and the reading said "No privacy policy page was found" (Not met, high) while the
+    scorecard said the notice was found. A policy that was named but not loaded is a gap in the scan, not a finding."""
+
+    def _ev(self, *, failed_policy):
+        ev = evidence(policies=())
+        ev["pages"].append({"id": "pf", "url": "https://x.test/privacy-policy", "title": None, "discovered_via": "failed"} if failed_policy else {"id": "pf", "url": "https://x.test/pricing", "title": None, "discovered_via": "failed"})
+        return ev
+
+    def test_a_policy_named_but_not_loaded_is_unable_to_verify_not_not_met(self):
+        n1 = by_id(assess(self._ev(failed_policy=True), TODAY), "DPDP-N1")
+        assert n1.status == "unable_to_verify" and "could not be loaded" in n1.observations[0] and "https://x.test/privacy-policy" in n1.observations[0]
+
+    def test_an_unrelated_page_that_failed_does_not_excuse_a_missing_policy(self):
+        assert by_id(assess(self._ev(failed_policy=False), TODAY), "DPDP-N1").status == "not_met"
+
+    def test_a_policy_that_loaded_is_still_met(self):
+        assert by_id(assess(evidence(), TODAY), "DPDP-N1").status == "met"
+
+    def test_no_policy_found_anywhere_is_still_not_met(self):
+        assert by_id(assess(evidence(policies=()), TODAY), "DPDP-N1").status == "not_met"

@@ -44,7 +44,7 @@ export function buildHeroView(a: TenAssessment | null): HeroView {
     ? "The score could not be loaded for this report."
     : scoreValue === null
       ? "A Privacy Readiness Score is not shown: no check could be assessed on the evidence available."
-      : `${a.counts.passed} of ${a.applicableMax} assessed checks passed (${a.totalText} marks).${a.counts.notAssessed ? ` ${a.counts.notAssessed} could not be assessed and ${a.counts.notAssessed === 1 ? "is" : "are"} left out.` : ""}`;
+      : `${a.counts.passed} of ${a.checks.length} checks passed (${a.totalText} marks).${a.counts.notAssessed ? ` ${a.counts.notAssessed} could not be assessed and ${a.counts.notAssessed === 1 ? "earns" : "earn"} no marks.` : ""}`;
   return {
     scored: !!a && scoreValue !== null,
     percent: scoreValue,

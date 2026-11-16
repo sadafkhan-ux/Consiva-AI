@@ -172,7 +172,7 @@ function Page1({ s, ten, model, fit, squeeze }: { s: SummaryView; ten: TenAssess
                     return (
                       <div key={c.category} className="sn-cat" data-testid="sn-category">
                         <div className="sn-cat-top"><b>{c.category}</b><span>{c.assessable > 0 ? <><strong>{c.awarded}</strong> of {c.assessable} marks{c.marks > c.assessable ? <small className="sn-cat-of"> assessed, {c.marks} in all</small> : null}</> : "Not assessed"}</span></div>
-                        <div className="sn-meter" role="img" aria-label={`${c.category}: ${pct} percent of the assessable marks`}><i style={{ width: `${pct}%` }} /></div>
+                        <div className="sn-meter" role="img" aria-label={`${c.category}: ${pct} percent of its marks`}><i style={{ width: `${pct}%` }} /></div>
                       </div>
                     );
                   })}

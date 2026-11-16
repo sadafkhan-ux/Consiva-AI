@@ -163,6 +163,11 @@ async def test_a_long_job_does_not_block_the_maintenance_loop(monkeypatch):
     # real database round trip per tick at a 10ms interval made it fail under load
     # while passing in isolation.
     monkeypatch.setattr(worker.regwatch_run_service, "sweep_due_sources", _noop_sweep)
+    # The system monitor's check round rides the same loop. Stubbed too: unstubbed it would call the real providers and the database on every 10ms tick.
+    async def _noop_round(force=False):
+        return []
+
+    monkeypatch.setattr("app.monitoring.service.run_round", _noop_round)
     monkeypatch.setattr(worker, "MAINTENANCE_INTERVAL_SECONDS", 0.01)
 
     stopping = asyncio.Event()

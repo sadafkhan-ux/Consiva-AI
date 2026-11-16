@@ -10,8 +10,8 @@ Per row, one of five outcomes (the workbook has four; the fifth is what keeps a 
   not_assessed    left out of the denominator: the check applies but could not be run
   not_applicable  left out of the denominator: the check does not apply (no consent tool is needed; no personal-data form)
 
-Score = marks awarded / marks in play x 100, a whole number. Bands by the workbook's thresholds (90, 75, 50) with neutral names; fewer than 60% of the marks assessable gives "Insufficient evidence"
-and no score; a Quick Scan is held at 99 and 100 needs a Deep Scan at full coverage and high confidence. There is no hard-fail cap: a failed row is the first finding, worded as a finding.
+Score = marks awarded / marks in play x 100, a whole number. Bands by the workbook's thresholds (90, 75, 50) with neutral names; the score is shown whatever the coverage (coverage is reported beside it, it never withholds it); "Insufficient evidence"
+and no score only when no row could be assessed at all; a Quick Scan is held at 99 and 100 needs a Deep Scan at full coverage and high confidence. There is no hard-fail cap: a failed row is the first finding, worded as a finding.
 """
 
 from __future__ import annotations
@@ -369,18 +369,17 @@ def _result(base: dict[str, Any], rows: list[dict[str, Any]], internal: dict[str
     na_marks = sum(r["marks"] for r in rows if r["outcome"] == NA)
     unassessed = sum(r["marks"] for r in rows if r["outcome"] == NOT_ASSESSED)
     coverage = round(100 * (100 - unassessed) / 100)
-    share = None if in_play == 0 else 100 * awarded / in_play
     level = base["confidence"]["level"]
     notes: list[str] = []
-    score: int | None = None if share is None else int(share + 0.5)
+    # Owner's decision, 16 Nov 2026: the score is the marks the website EARNED out of the 100 the rows are worth. A row that was not assessed, or does not apply, earns nothing: it is neither
+    # left out of the calculation nor given full marks. (There is a score whenever at least one row could be assessed.)
+    score: int | None = None if in_play == 0 else int(awarded + 0.5)
     band = INSUFFICIENT
     indicative = None
     if score is not None:
         band = next(name for name, floor in BANDS if score >= floor)
-        if coverage < 60:
-            band, indicative, score = INSUFFICIENT, score, None
-            notes.append(f"Fewer than 60% of the marks ({coverage}%) could be assessed, so no settled band and no score are given.")
-        elif level == "low":
+        # Whatever the coverage, the score is shown: it is what the checks that could be made came to. Coverage is reported beside it and never withholds it (owner's decision, 16 Nov 2026).
+        if level == "low":
             order = [b[0] for b in BANDS][::-1]
             band = order[max(0, order.index(band) - 1)]
             notes.append("Evidence confidence is low, so the band is held one level lower.")
@@ -405,11 +404,12 @@ def _result(base: dict[str, Any], rows: list[dict[str, Any]], internal: dict[str
         })
     n_na = sum(1 for r in rows if r["outcome"] == NA)
     n_un = sum(1 for r in rows if r["outcome"] == NOT_ASSESSED)
-    explanation = ("The score is the share of the assessable marks the website earned, expressed out of 100"
-                   + (f"; {n_na} row{'s' if n_na != 1 else ''} did not apply and {n_un} could not be assessed, and {'they are' if n_na + n_un != 1 else 'it is'} left out of the calculation" if (n_na or n_un) else "") + ".")
+    explanation = ("The score is the marks the website earned, out of 100"
+                   + (f"; {n_na} row{'s' if n_na != 1 else ''} did not apply and {n_un} could not be assessed, and {'they earn' if n_na + n_un != 1 else 'it earns'} no marks" if (n_na or n_un) else "") + ".")
     cats = [{"category": c, "marks": sum(r["marks"] for r in rows if r["category"] == c),
              "awarded": sum(r["awarded"] or 0 for r in rows if r["category"] == c and r["outcome"] in IN_PLAY),
-             "assessable": sum(r["marks"] for r in rows if r["category"] == c and r["outcome"] in IN_PLAY)} for c in CATEGORIES]
+             # what the category is worth: every row counts, so a row that was not assessed or does not apply is marks not earned (kept under the old key name for the readers of this field)
+             "assessable": sum(r["marks"] for r in rows if r["category"] == c)} for c in CATEGORIES]
     out = {k: v for k, v in base.items() if k not in ("parameters", "findings", "top_findings", "priority_actions", "more_actions", "remedies", "removed", "beyond_quick_scan", "domains", "points")}
     out.update({
         "version": SCORECARD_VERSION, "rules": RULES, "engine_detail": ds.SCORE_VERSION, "score": score, "indicative_score": indicative, "score_text": "No meaningful score" if score is None else f"{score}/100",

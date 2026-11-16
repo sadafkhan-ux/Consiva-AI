@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.core.exceptions import InvalidUrlError, RateLimitExceededError, ScanAuthorizationError
 from app.db.models import ConsentScan
-from app.db.repositories import scan_repository
+from app.db.repositories import scan_repository, stage_repository
 from app.db.session import async_session_factory
 from app.jobs import queue
 from app.lookup import repository as lookup_repository
@@ -173,7 +173,13 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
             lookup_entries = await lookup_repository.load_all(db)
 
         async with track_stage(scan_id, "website_scan") as meta:
-            scan_result = await run_scan_isolated(url, profile=profile, should_cancel=_cancelled)
+            async def _report_progress(snapshot: dict) -> None:
+                # Written into the running stage so the status API and the dashboard show page counts while the crawl is still going.
+                async with async_session_factory() as progress_db:
+                    await stage_repository.merge_running_stage_metadata(progress_db, scan_id, "website_scan", snapshot)
+                    await progress_db.commit()
+
+            scan_result = await run_scan_isolated(url, profile=profile, should_cancel=_cancelled, on_progress=_report_progress)
             meta["pages_found"] = len(scan_result.pages)
             meta["cookies_found"] = len(scan_result.cookies)
             meta["trackers_found"] = len(scan_result.trackers)

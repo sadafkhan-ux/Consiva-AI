@@ -78,7 +78,6 @@ from app.services import (
     consent_api_chain_service,
     dsr_run_service,
     incident_run_service,
-    purpose_run_service,
     monitoring_service,
     regwatch_run_service,
     report_cache_service,
@@ -195,11 +194,6 @@ async def _process_one(job: AgentJob) -> None:
             uuid.UUID(job.payload["org_id"]),
             job_id=job.id,
         )
-    elif job.job_type == "purpose_assessment":
-        # Agent 6 (Purpose Classifier). An async service pipeline like every agent
-        # except the Consent Agent -- no LangGraph, because nothing in this flow pauses
-        # for a human mid-run; review happens after the findings exist.
-        await purpose_run_service.execute_job(job.payload)
     elif job.job_type == "regwatch_collect":
         # Agent 5 (Regulatory Watch): fetch one approved source, compare it against
         # the accepted baseline, and raise a finding if anything moved -- including
@@ -218,6 +212,11 @@ async def _process_one(job: AgentJob) -> None:
             uuid.UUID(job.payload["org_id"]),
             job_id=job.id,
         )
+    elif job.job_type == "enterprise_scan":
+        # The Enterprise full-site crawl (app/enterprise): resumable, so a job re-run after a crash continues rather than starts over.
+        from app.enterprise.jobs import run_enterprise_scan
+
+        await run_enterprise_scan(job.payload)
     else:
         raise ValueError(f"Unknown job_type: {job.job_type}")
 
@@ -356,6 +355,15 @@ async def _maintenance_loop(stopping: asyncio.Event) -> None:
             logger.exception(
                 "Regulatory watch sweep failed; due sources were NOT enqueued this tick"
             )
+
+        # System monitoring: a round of automatic checks (Claude key, database, stuck jobs, failing AI calls) and the alert emails. A no-op until a round is due.
+        try:
+            # Imported under its own name: `monitoring_service` is already the Continuous Monitoring service (imported at the top of this file and used above).
+            from app.monitoring import service as system_monitor_service
+
+            await system_monitor_service.run_round()
+        except Exception:
+            logger.exception("System monitoring round failed; continuing")
 
         await _sleep_or_stop(stopping, MAINTENANCE_INTERVAL_SECONDS)
 

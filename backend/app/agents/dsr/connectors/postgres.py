@@ -131,7 +131,7 @@ class PostgresDsrConnector:
         else:
             user, password = self._config.read_user, self._config.read_password
 
-        # The same guard app.agents.purpose.connectors.structured.read_postgres uses
+        # The same address guard every database connector uses
         # before dialling a caller-supplied DSN: the host here is admin-configured
         # (ropa_data_sources.config), not a per-request caller value, but it is still
         # effectively caller-supplied from the platform's point of view -- any org

@@ -12,7 +12,7 @@ from app.services import report_qc as qc
 def _result(**over):
     rows = [{"id": f"P{i}", "marks": m, "outcome": o, "awarded": a, "evidence": [{"observed": "e"}], "found": "x", "blocked_by": None} for i, (m, o, a) in enumerate(
         [(8, "pass", 8), (8, "not_assessed", None), (12, "pass", 12), (12, "not_assessed", None), (8, "not_assessed", None), (6, "pass", 6), (10, "partial", 5), (10, "fail", 0), (10, "partial", 5), (8, "fail", 0), (4, "pass", 4), (4, "pass", 4)], start=1)]
-    r = {"rows": rows, "points": {"awarded": 44, "in_play": 72}, "categories": [{"assessable": 20, "awarded": 20}, {"assessable": 36, "awarded": 16}, {"assessable": 16, "awarded": 8}], "score": 61, "band_notes": []}
+    r = {"rows": rows, "points": {"awarded": 44, "in_play": 72}, "categories": [{"assessable": 48, "awarded": 20}, {"assessable": 36, "awarded": 16}, {"assessable": 16, "awarded": 8}], "score": 44, "band_notes": []}
     r.update(over)
     return r
 
@@ -29,11 +29,10 @@ def test_each_way_the_figures_can_disagree_is_named():
 
 def test_a_score_held_at_99_is_not_a_mismatch():
     r = _result(score=99, band_notes=["held at 99"])
-    r["points"] = {"awarded": 72, "in_play": 72}
     for x in r["rows"]:
-        if x["outcome"] in ("partial", "fail"):
-            x["outcome"], x["awarded"] = "pass", x["marks"]
-    r["categories"] = [{"assessable": 20, "awarded": 20}, {"assessable": 36, "awarded": 36}, {"assessable": 16, "awarded": 16}]
+        x["outcome"], x["awarded"] = "pass", x["marks"]        # every row earned in full: 100 marks, held at 99 by the rule
+    r["points"] = {"awarded": 100, "in_play": 100}
+    r["categories"] = [{"assessable": 48, "awarded": 48}, {"assessable": 36, "awarded": 36}, {"assessable": 16, "awarded": 16}]
     assert qc.check_scorecard(r) == []
 
 

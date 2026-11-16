@@ -27,7 +27,7 @@ export function TenChecksPanel({ ten }: { ten: TenAssessment | null }) {
           </div>
         )}
         <p className="small muted" data-testid="ten-summary" style={{ margin: "8px 0 4px" }}>{ten.summary}</p>
-        <p className="small muted" data-testid="ten-note" style={{ margin: "0 0 8px" }}>{sc ? "Points are earned parameter by parameter. The score is the share of the assessable points earned, expressed out of 100, as the server worked it out (the same figure the web page, the email and every PDF show). Parameters that are not applicable or could not be assessed are left out, with the reason." : "These marks are the Privacy Readiness Score, check by check: the score above is these marks added up, as the server worked them out (the same figure the web page, the email and every PDF show)."}</p>
+        <p className="small muted" data-testid="ten-note" style={{ margin: "0 0 8px" }}>{sc ? "Points are earned parameter by parameter. The score is the points earned, out of 100, as the server worked it out (the same figure the web page, the email and every PDF show). A parameter that is not applicable or could not be assessed earns no points, with the reason." : "These marks are the Privacy Readiness Score, check by check: the score above is these marks added up, as the server worked them out (the same figure the web page, the email and every PDF show)."}</p>
         <div style={{ overflowX: "auto" }}>
           <table className="data-table">
             <thead><tr><th>{sc ? "Ref" : "#"}</th><th>Assessment</th><th>Result</th><th>Marks</th><th>Evidence and source</th><th>Finding</th></tr></thead>

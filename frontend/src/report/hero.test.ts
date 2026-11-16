@@ -30,6 +30,6 @@ describe("the hero's band does not call a score strong when it rests on little",
     const h = buildHeroView(A.mixed);
     expect(h.percent).toBe(75);
     expect(h.percentLabel).toBe("75/100");
-    expect(h.headline).toContain("6 of 10 assessed checks passed");
+    expect(h.headline).toContain("6 of 10 checks passed");
   });
 });

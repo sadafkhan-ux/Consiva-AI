@@ -659,7 +659,7 @@ ${scoreContext(ten)?.text ?? `${ten.counts.notAssessed} not assessed · ${ten.co
       y = 74;
     }
     y = section("The checks behind the score", y + 8);
-    y = text(ten.scanner ? `Each parameter, its result and the points it earned. The score is the share of the assessable points earned, out of 100: ${ten.scoreText}.` : `Each check, its result and the marks it earned. The marks add up to ${ten.totalText}, which is the score ${ten.scoreText}.`, M, y + 1, { size: 6.8, color: MUTED, width: CW, lead: 8.2 }) + 3;
+    y = text(ten.scanner ? `Each parameter, its result and the points it earned. The score is the points earned, out of 100: ${ten.scoreText}. A parameter that was not assessed or does not apply earns no points.` : `Each check, its result and the marks it earned. The marks add up to ${ten.totalText}, which is the score ${ten.scoreText}.`, M, y + 1, { size: 6.8, color: MUTED, width: CW, lead: 8.2 }) + 3;
     const cols = [30, 330, 60, 95];
     const headRow = () => {
       fill(TINT);

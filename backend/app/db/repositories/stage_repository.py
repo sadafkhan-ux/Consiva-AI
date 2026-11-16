@@ -19,6 +19,20 @@ async def start_stage(
     return row
 
 
+async def merge_running_stage_metadata(db: AsyncSession, scan_id: uuid.UUID, stage: str, patch: dict) -> int:
+    """Add `patch` to the metadata of a stage that is still running (live progress). Only a running stage is touched, so a late report can never overwrite the final record that
+    `complete_stage` writes. Returns how many rows changed."""
+    import json
+
+    from sqlalchemy import text
+
+    result = await db.execute(
+        text("update agent_run_stages set metadata = coalesce(metadata, '{}'::jsonb) || cast(:patch as jsonb) "
+             "where scan_id = :scan_id and stage = :stage and status = 'running'"),
+        {"scan_id": scan_id, "stage": stage, "patch": json.dumps(patch)})
+    return result.rowcount or 0
+
+
 async def complete_stage(db: AsyncSession, stage_id: uuid.UUID, *, duration_ms: int, metadata: dict) -> None:
     row = await db.get(AgentRunStage, stage_id)
     if row:

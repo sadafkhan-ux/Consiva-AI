@@ -332,9 +332,11 @@ export function useConsentScan() {
   );
 
   /** Follows one scan to its end: waits for the crawl, then (for a scan the user just started) requests the analysis, waits for it and loads
-   *  what it produced. Reopening a scan runs the same code without requesting an analysis. */
+   *  what it produced. Reopening a scan runs the same code without requesting an analysis.
+   *  `chained` is a whole-site (application) scan: the server's one job crawls AND analyses it, so the analysis is already under way when the crawl is reported finished.
+   *  Asking for it again is refused (409), which used to end the run as "failed" with the results never loaded; the page just waits for the analysis the server is running. */
   const follow = useCallback(
-    async (scanId: string, myRunId: number, analyze: boolean) => {
+    async (scanId: string, myRunId: number, analyze: boolean, chained = false) => {
     const finalScan = await pollUntil(
       async () => {
         const [s, stages] = await Promise.all([api.getScan(scanId), api.getStages(scanId)]);
@@ -381,7 +383,7 @@ export function useConsentScan() {
       return;
     }
 
-    if (!analyze) {
+    if (!analyze && !chained) {
       const existing = await api.getStages(scanId);
       if (runIdRef.current !== myRunId) return;
       if (!existing.some((x) => ANALYSIS_STAGES.has(x.stage))) {
@@ -458,7 +460,7 @@ export function useConsentScan() {
         if (runIdRef.current !== myRunId) return;
         setState((s) => ({ ...s, scanId: scan.id, phase: "scanning" }));
 
-        await follow(scan.id, myRunId, true);
+        await follow(scan.id, myRunId, !wholeSite, !!wholeSite);
       } catch (err) {
         if (runIdRef.current !== myRunId) return;
         const message = readableError(err);

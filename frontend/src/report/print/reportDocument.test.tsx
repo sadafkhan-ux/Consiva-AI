@@ -58,7 +58,7 @@ describe("the printable report: the hero", () => {
     render(<ReportDocument model={model()} />);
     expect(screen.getByTestId("hero-percent").textContent).toBe("75");
     expect(screen.getByTestId("rpt-hero").textContent ?? "").not.toMatch(/coverage/i);
-    expect(screen.getByTestId("rpt-hero-headline")).toHaveTextContent("6 of 10 assessed checks passed");
+    expect(screen.getByTestId("rpt-hero-headline")).toHaveTextContent("6 of 10 checks passed");
   });
 
   it("says the score is unavailable, with no number and no coverage, when too few requirements could be assessed", () => {

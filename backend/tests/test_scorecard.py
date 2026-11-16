@@ -195,9 +195,33 @@ def test_marks_not_assessed_and_not_applicable_leave_the_denominator():
     assert r["coverage"] == 84
 
 
-def test_the_score_is_a_whole_number_out_of_100_and_a_quick_scan_is_held_at_99():
+def test_the_score_is_the_marks_earned_out_of_100_and_rows_not_assessed_or_not_applicable_earn_nothing():
+    """Owner's decision, 16 Nov 2026: the score is the marks the site earned out of the 100 the rows are worth. P5, P11 and P12 were not assessed and P10 does not apply (8 + 4 + 4 + 8 = 24 marks):
+    they earn nothing, so a site that passed every other row scores 76, not 100."""
     r = go(ev=banner_ev(), mode="quick")
-    assert isinstance(r["score"], int) and r["score_text"] == f"{r['score']}/100" and r["score"] == 99 and any("held at 99" in n for n in r["band_notes"])
+    assert isinstance(r["score"], int) and r["score_text"] == f"{r['score']}/100" and r["score"] == r["points"]["awarded"] == 76
+    assert {x["id"]: x["outcome"] for x in r["rows"] if x["outcome"] in ("not_assessed", "not_applicable")} == {"P5": "not_assessed", "P10": "not_applicable", "P11": "not_assessed", "P12": "not_assessed"}
+    assert not any("held at 99" in n for n in r["band_notes"])
+
+
+def _perfect(mode, level="high"):
+    """A result in which every row passed in full, built through the engine's own result function."""
+    import copy
+    base = go(ev=banner_ev(), mode="quick")
+    rows = copy.deepcopy(base["rows"])
+    for x in rows:
+        x["outcome"], x["awarded"], x["blocked_by"] = "pass", x["marks"], None
+        x["evidence"] = x["evidence"] or [{"observed": "e", "page": None, "at": None}]
+    b = copy.deepcopy(base)
+    b["confidence"] = {**b["confidence"], "level": level}
+    return sc._result(b, rows, {}, mode, None)
+
+
+def test_a_score_of_100_needs_every_row_earned_and_a_deep_scan_with_high_confidence_otherwise_it_is_held_at_99():
+    assert _perfect("deep")["score"] == 100
+    quick = _perfect("quick")
+    assert quick["score"] == 99 and any("held at 99" in n for n in quick["band_notes"])
+    assert _perfect("deep", "medium")["score"] == 99
 
 
 def test_the_workbook_thresholds_with_neutral_names_and_no_hard_fail_cap():
@@ -205,13 +229,18 @@ def test_the_workbook_thresholds_with_neutral_names_and_no_hard_fail_cap():
     after = {**GA, "consent_states": ["pre_consent", "post_accept", "post_reject"]}
     r = go(ev=banner_ev(trackers=[after]), visual=_consent(known=(1, 1, 1)))
     assert R(r, "P3")["outcome"] == "fail" and R(r, "P4")["outcome"] == "fail"
-    assert r["band"] == "Partially addressed" and r["score"] == 68                    # the number decides the band; a failed row is the first finding, not a cap on it
+    assert r["band"] == "Partially addressed" and r["score"] == 52                    # the marks earned decide the band (P5, P10, P11, P12 earn nothing too); a failed row is the first finding, not a cap on it
     assert [f["ref"] for f in r["findings"]][:2] == ["P3", "P4"]
 
 
-def test_fewer_than_sixty_percent_assessable_gives_insufficient_evidence_and_no_score():
+def test_the_score_is_shown_whatever_the_coverage_and_coverage_never_withholds_it():
+    """Owner's decision, 16 Nov 2026: a site checked on fewer than 60% of the marks still gets the score it earned; coverage is reported beside it."""
     r = go(policy={"status": "failed", "documents": [], "requirements": []}, ev=banner_ev(), visual=_consent(accept=False, reject=False), mode="quick")
-    assert r["band"] == ds.INSUFFICIENT and r["score"] is None and r["indicative_score"] is not None and r["coverage"] < 60
+    assert r["coverage"] < 60                                   # little could be assessed
+    assert r["score"] is not None and r["band"] != ds.INSUFFICIENT
+    assert r["score"] == r["points"]["awarded"]                 # the marks it earned, out of 100: the rows not assessed earned nothing
+    assert not any("60%" in n for n in r["band_notes"])          # no note about a minimum remains
+    assert r["coverage"] == 100 - sum(x["marks"] for x in r["rows"] if x["outcome"] == sc.NOT_ASSESSED)   # coverage is still worked out and reported
 
 
 def test_a_failed_row_is_worded_as_a_finding_with_severity_and_confidence_apart():

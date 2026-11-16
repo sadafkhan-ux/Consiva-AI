@@ -299,7 +299,7 @@ export function buildSecuritySection(meta: WebsiteScanMetadata | null | undefine
     status: !sig ? "Not recorded for this scan" : `${observed} of ${counted} signals observed`,
     tone: !sig ? "mute" : all ? "good" : "warn", knowledge: sig ? "Observed" : "Not verified",
     summary: sig
-      ? "What a visitor's browser can see of the site's transport and safeguards: whether pages are served over HTTPS, and which protective headers ${page.onThe} sends."
+      ? `What a visitor's browser can see of the site's transport and safeguards: whether pages are served over HTTPS, and which protective headers ${page.onThe} sends.`
       : "This scan was made before these signals were recorded, so nothing can be said about them.",
     facts, quote: null,
     legal: formatRefs(["DPDP Act s.8(5)", "DPDP Rules r.6"]),
