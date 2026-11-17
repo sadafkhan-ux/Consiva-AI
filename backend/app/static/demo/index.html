@@ -445,7 +445,7 @@ async function submitReview(findingId) {
     ? { edited_payload: { risk_level: document.getElementById(`risk-${findingId}`).value }, reason }
     : { reason };
 
-  const r = await fetch(`${API}/api/v1/consent/findings/${findingId}/${action}`, {
+  const r = await fetch(`${API}/api/v1/consent-agent/findings/${findingId}/${action}`, {
     method: "POST", headers: authHeaders(), body: JSON.stringify(body),
   });
   if (!r.ok) { showError(`${action} failed: ${await r.text()}`); return; }

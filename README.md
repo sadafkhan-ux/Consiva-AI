@@ -3,7 +3,7 @@
 DPDP (Digital Personal Data Protection Act, 2023) compliance platform. Two agents,
 one console.
 
-**Consent Agent** scans a website for consent/tracking evidence, reasons over it
+**Privacy Policy Agent** (called the Consent Agent in older code and docs; its API path is still `/api/v1/consent-agent`) scans a website for consent/tracking evidence, reasons over it
 against a RAG knowledge base built from the actual DPDP Act and Rules, and produces
 grounded, citation-validated findings a human reviews before they count.
 
@@ -102,7 +102,7 @@ cd ../frontend && npm install && npm run dev
 
 The worker is not optional — scans submitted without one running stay queued.
 
-See [backend/README.md](backend/README.md) for full setup, environment variables,
+See [docs/README_backend.md](docs/README_backend.md) for full setup, environment variables,
 migrations, API examples, and troubleshooting.
 
 ## Agent 2 without a running server
@@ -130,8 +130,26 @@ infrastructure. It reads their schema locally and pushes curated metadata to
 - Nothing leaves their system unless it's in the allow-list in their copy of
   `adapter.py`.
 
-`ropa_integration/prepmyevent/` is the first implementation, with a README, a data
-contract, and a security statement written for the customer's own reviewers.
+`ropa_integration/prepmyevent/` is the first implementation. Its README, data contract and
+security statement (written for the customer's own reviewers) are in
+[docs/ROPA_PREPMYEVENT_README.md](docs/ROPA_PREPMYEVENT_README.md),
+[docs/ROPA_PREPMYEVENT_DATA_CONTRACT.md](docs/ROPA_PREPMYEVENT_DATA_CONTRACT.md) and
+[docs/ROPA_PREPMYEVENT_SECURITY.md](docs/ROPA_PREPMYEVENT_SECURITY.md).
+
+## Documentation
+
+Every other `.md` file lives in [docs/](docs/); this README is the only one outside it.
+
+| Topic | File |
+|---|---|
+| Scan APIs (start to results, for the Consiva.io team) | [docs/SCAN_FLOW_API.md](docs/SCAN_FLOW_API.md) |
+| How a scan works, step by step | [docs/CONSENT_SCAN_END_TO_END.md](docs/CONSENT_SCAN_END_TO_END.md) |
+| Deployment | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| The score | [docs/SCORECARD.md](docs/SCORECARD.md) |
+| Backend and frontend setup | [docs/README_backend.md](docs/README_backend.md), [docs/README_frontend.md](docs/README_frontend.md) |
+| Frozen five-page agent: changes made after the freeze | [docs/FROZEN_FIVE_PAGE_AGENT_CHANGES.md](docs/FROZEN_FIVE_PAGE_AGENT_CHANGES.md) |
+| Enterprise scanner | [docs/ENTERPRISE_SCANNER.md](docs/ENTERPRISE_SCANNER.md) |
+| Error monitoring | [docs/ERROR_MONITORING.md](docs/ERROR_MONITORING.md) |
 
 ## Configuration
 

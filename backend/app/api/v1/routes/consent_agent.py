@@ -35,6 +35,8 @@ from app.api.v1.schemas.consent_agent import (
     SummaryResponse,
 )
 from app.api.v1.routes import consent_scans as _cs
+from app.api.v1.routes import consent_findings as _cf
+from app.api.v1.routes import websites as _ws
 from app.api.v1.routes.consent_scans import AssessmentResponse, get_scan_assessment as _console_assessment
 from app.config import get_settings
 from app.scoring.sector import SECTORS
@@ -46,7 +48,7 @@ from app.core.exceptions import ConsivaError, InvalidUrlError, NotFoundError, Ra
 # nobody could rotate. Both paths produce the same CurrentUser, so nothing below reads
 # the caller differently. See core/integration_auth.get_caller.
 from app.core.integration_auth import get_application_scan_caller, get_caller
-from app.core.security import CurrentUser
+from app.core.security import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.jobs import queue
 from app.scanner import scan_profiles
@@ -64,7 +66,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/consent-agent",
-    tags=["Privacy Policy Agent API"],
+    tags=["Privacy Scanner API"],
     responses={
         400: {"model": ApiError, "description": "Malformed request or unsafe URL"},
         401: {"model": ApiError, "description": "Missing or invalid credentials"},
@@ -629,3 +631,64 @@ async def get_scan_report_pdf(
     db: AsyncSession = Depends(get_db),
 ):
     return await _cs.get_scan_report_pdf(scan_id=scan_id, request=request, variant=variant, user=user, db=db)
+
+
+# ---- One door, continued: the console's remaining functions, under /consent-agent, answered by the console's own handlers (never copied) --------------------------------------------------------
+# Login token only, exactly as on the console. Same request and response bodies as the console route of the same name. `/usage/history` sits at /usage/history, not /scans/usage/history, so it cannot be
+# read as a scan id.
+
+@router.post("/scans/{scan_id}/analyze", response_model=_cs.AgentRunResponse, status_code=202, summary="Run the analysis of a scanned website")
+async def analyze_scan(scan_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await _cs.analyze_scan(scan_id=scan_id, user=user, db=db)
+
+
+@router.get("/scans/{scan_id}/usage", response_model=_cs.UsageResponse, summary="Model usage of one scan")
+async def get_scan_usage(scan_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await _cs.get_scan_usage(scan_id=scan_id, user=user, db=db)
+
+
+@router.get("/usage/history", response_model=list[_cs.UsageHistoryItem], summary="Model usage of the organisation's recent scans")
+async def get_usage_history(limit: int = 30, offset: int = 0, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await _cs.get_usage_history(limit=limit, offset=offset, user=user, db=db)
+
+
+@router.get("/scans/{scan_id}/url-inventory", response_model=_cs.UrlInventoryResponse, summary="Every URL the scan discovered and what became of it")
+async def get_scan_url_inventory(
+    scan_id: uuid.UUID,
+    status: Literal["PENDING", "IN_PROGRESS", "COMPLETED", "FAILED", "PARTIALLY_SCANNED", "EXCLUDED"] | None = Query(default=None),
+    http_status: int | None = Query(default=None, ge=100, le=599),
+    source: str | None = Query(default=None, max_length=40, description="A discovery source: seed, link or sitemap."),
+    depth: int | None = Query(default=None, ge=0, le=1000),
+    q: str | None = Query(default=None, max_length=300, description="Part of the URL."),
+    failure: str | None = Query(default=None, max_length=300, description="Part of the failure or exclusion reason."),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _cs.get_scan_url_inventory(scan_id=scan_id, status=status, http_status=http_status, source=source, depth=depth, q=q, failure=failure, limit=limit, offset=offset, user=user, db=db)
+
+
+@router.post("/findings/{finding_id}/approve", response_model=_cf.FindingDecisionResponse, summary="Approve a finding")
+async def approve_finding(finding_id: uuid.UUID, body: _cf.ReviewDecisionRequest, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await _cf.approve_finding(finding_id=finding_id, body=body, user=user, db=db)
+
+
+@router.post("/findings/{finding_id}/reject", response_model=_cf.FindingDecisionResponse, summary="Reject a finding")
+async def reject_finding(finding_id: uuid.UUID, body: _cf.RejectFindingRequest, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await _cf.reject_finding(finding_id=finding_id, body=body, user=user, db=db)
+
+
+@router.post("/findings/{finding_id}/edit", response_model=_cf.FindingDecisionResponse, summary="Edit a finding")
+async def edit_finding(finding_id: uuid.UUID, body: _cf.EditFindingRequest, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await _cf.edit_finding(finding_id=finding_id, body=body, user=user, db=db)
+
+
+@router.get("/websites/verification-token", response_model=_ws.VerificationTokenResponse, summary="The DNS record that proves you own a domain")
+async def get_verification_token(domain: str = Query(..., description="Domain (or URL) to generate the ownership token for"), user: CurrentUser = Depends(get_current_user)):
+    return await _ws.get_verification_token(domain=domain, user=user)
+
+
+@router.post("/websites/verify", response_model=_ws.VerifyDomainResponse, summary="Verify ownership of a domain")
+async def verify_domain(body: _ws.VerifyDomainRequest, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await _ws.verify_domain(body=body, user=user, db=db)

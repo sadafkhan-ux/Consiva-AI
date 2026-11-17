@@ -1,10 +1,8 @@
 from fastapi import APIRouter, Depends
 
 from app.api.v1.routes import (
-    actions,
     auth,
     consent_agent,
-    consent_findings,
     consent_scans,
     dev,
     dsr,
@@ -31,9 +29,7 @@ api_router.include_router(system.router)
 # else, so bind_request_scope above applies to it too -- an integration
 # endpoint that skipped org binding would read with no RLS scope at all.
 api_router.include_router(consent_agent.router)
-api_router.include_router(consent_findings.router)
 api_router.include_router(websites.router)
-api_router.include_router(actions.router)
 api_router.include_router(ropa.router)
 api_router.include_router(dsr.router)
 api_router.include_router(incidents.router)

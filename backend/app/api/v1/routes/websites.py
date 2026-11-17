@@ -16,7 +16,7 @@ from app.db.repositories import monitoring_repository
 from app.db.session import get_db
 from app.services import monitoring_service, verification_service
 
-router = APIRouter(prefix="/api/v1/consent/websites", tags=["websites"])
+router = APIRouter(prefix="/api/v1/consent/websites", tags=["Privacy Scanner API"])
 
 
 def _clean_domain(value: str) -> str:
@@ -50,7 +50,6 @@ class VerifyDomainResponse(BaseModel):
     verified_at: datetime
 
 
-@router.get("/verification-token", response_model=VerificationTokenResponse)
 async def get_verification_token(
     domain: str = Query(..., description="Domain (or URL) to generate the ownership token for"),
     user: CurrentUser = Depends(get_current_user),
@@ -63,12 +62,11 @@ async def get_verification_token(
         txt_record=txt_record,
         instructions=(
             f"Add a DNS TXT record on {cleaned} with the exact value '{txt_record}', "
-            "wait for propagation, then POST /api/v1/consent/websites/verify."
+            "wait for propagation, then POST /api/v1/consent-agent/websites/verify."
         ),
     )
 
 
-@router.post("/verify", response_model=VerifyDomainResponse)
 async def verify_domain(
     body: VerifyDomainRequest,
     user: CurrentUser = Depends(get_current_user),
@@ -111,60 +109,3 @@ class ScanDiffResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-@router.put("/{website_id}/monitoring", response_model=ScheduleResponse)
-async def set_monitoring_schedule(
-    website_id: uuid.UUID,
-    body: SetScheduleRequest,
-    user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    schedule = await monitoring_service.set_schedule(
-        db, org_id=uuid.UUID(user.org_id), website_id=website_id,
-        interval_hours=body.interval_hours, enabled=body.enabled,
-    )
-    await db.commit()
-    return ScheduleResponse.model_validate(schedule)
-
-
-@router.get("/{website_id}/monitoring", response_model=ScheduleResponse)
-async def get_monitoring_schedule(
-    website_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    schedule = await monitoring_repository.get_schedule_for_website(db, website_id, uuid.UUID(user.org_id))
-    if schedule is None:
-        raise NotFoundError(f"No monitoring schedule for website {website_id}")
-    return ScheduleResponse.model_validate(schedule)
-
-
-@router.post("/{website_id}/monitoring/promote-baseline", response_model=ScheduleResponse)
-async def promote_baseline(
-    website_id: uuid.UUID,
-    body: PromoteBaselineRequest,
-    user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    org_id = uuid.UUID(user.org_id)
-    schedule = await monitoring_repository.get_schedule_for_website(db, website_id, org_id)
-    if schedule is None:
-        raise NotFoundError(f"No monitoring schedule for website {website_id}")
-    updated = await monitoring_service.promote_baseline(
-        db, schedule_id=schedule.id, org_id=org_id, scan_id=body.scan_id
-    )
-    if updated is None:
-        raise NotFoundError(f"No completed scan {body.scan_id} of this website to use as the baseline")
-    await db.commit()
-    return ScheduleResponse.model_validate(updated)
-
-
-@router.get("/{website_id}/diffs", response_model=list[ScanDiffResponse])
-async def list_diffs(
-    website_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    diffs = await monitoring_repository.list_diffs_for_website(db, website_id, uuid.UUID(user.org_id))
-    return [ScanDiffResponse.model_validate(d) for d in diffs]

@@ -8,7 +8,7 @@ from app.core.security import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.services import review_service
 
-router = APIRouter(prefix="/api/v1/consent/findings", tags=["consent-findings"])
+router = APIRouter(prefix="/api/v1/consent/findings", tags=["Privacy Scanner API"])
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -47,7 +47,6 @@ class FindingDecisionResponse(BaseModel):
     status: str
 
 
-@router.post("/{finding_id}/approve", response_model=FindingDecisionResponse)
 async def approve_finding(
     finding_id: uuid.UUID,
     body: ReviewDecisionRequest,
@@ -61,7 +60,6 @@ async def approve_finding(
     return FindingDecisionResponse(id=finding.id, status=finding.status)
 
 
-@router.post("/{finding_id}/reject", response_model=FindingDecisionResponse)
 async def reject_finding(
     finding_id: uuid.UUID,
     body: RejectFindingRequest,
@@ -75,7 +73,6 @@ async def reject_finding(
     return FindingDecisionResponse(id=finding.id, status=finding.status)
 
 
-@router.post("/{finding_id}/edit", response_model=FindingDecisionResponse)
 async def edit_finding(
     finding_id: uuid.UUID,
     body: EditFindingRequest,

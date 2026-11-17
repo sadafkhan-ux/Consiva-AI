@@ -35,11 +35,16 @@ def _deps(router, path, method="GET"):
     return {d.call for d in r.dependant.dependencies}
 
 
-def test_the_integration_api_is_the_nine_original_routes_plus_eight_read_routes():
+def test_the_integration_api_is_the_nine_original_routes_plus_the_read_routes_and_the_console_functions():
     original = {("POST", AGENT + "/web"), ("POST", AGENT), ("GET", AGENT), ("POST", AGENT + "/application"), ("GET", AGENT + "/{scan_id}/status"), ("GET", AGENT + "/{scan_id}"),
                 ("GET", AGENT + "/{scan_id}/findings"), ("GET", AGENT + "/{scan_id}/summary"), ("POST", AGENT + "/{scan_id}/cancel")}
     added = {("GET", f"{AGENT}/{{scan_id}}/{name}") for name in MIRRORED}
-    assert _ops(consent_agent.router, "/api/v1/consent-agent") == original | added
+    console_functions = {("POST", f"{AGENT}/{{scan_id}}/analyze"), ("GET", f"{AGENT}/{{scan_id}}/usage"), ("GET", f"{AGENT}/{{scan_id}}/url-inventory"), ("GET", "/api/v1/consent-agent/usage/history"),
+                         ("POST", "/api/v1/consent-agent/findings/{finding_id}/approve"), ("POST", "/api/v1/consent-agent/findings/{finding_id}/reject"), ("POST", "/api/v1/consent-agent/findings/{finding_id}/edit"),
+                         ("GET", "/api/v1/consent-agent/websites/verification-token"), ("POST", "/api/v1/consent-agent/websites/verify")}
+    assert _ops(consent_agent.router, "/api/v1/consent-agent") == original | added | console_functions
+    for m, path in console_functions:
+        assert get_current_user in _deps(consent_agent.router, path, m) and get_caller not in _deps(consent_agent.router, path, m), (m, path)   # login token only, as on the console
 
 
 def test_every_added_route_is_read_only_and_uses_the_service_key_or_person_check():

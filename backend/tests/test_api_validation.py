@@ -74,7 +74,7 @@ def test_get_scan_rejects_non_uuid_path_param():
 
 def test_edit_finding_missing_edited_payload_is_rejected():
     response = client.post(
-        f"/api/v1/consent/findings/{uuid.uuid4()}/edit",
+        f"/api/v1/consent-agent/findings/{uuid.uuid4()}/edit",
         json={"reason": "typo"},
         headers=_auth_headers(),
     )

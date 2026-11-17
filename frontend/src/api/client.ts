@@ -135,7 +135,7 @@ export async function fetchReportPdf(scanId: string, variant: "free" | "full" | 
   }
   let res: Response;
   try {
-    res = await fetch(`${BASE_URL}/api/v1/consent/scans/${encodeURIComponent(scanId)}/report.pdf?variant=${variant}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/pdf" } });
+    res = await fetch(`${BASE_URL}/api/v1/consent-agent/scans/${encodeURIComponent(scanId)}/report.pdf?variant=${variant}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/pdf" } });
   } catch {
     throw new ApiError(0, "Network error -- could not reach the backend" + (BASE_URL ? ` at ${BASE_URL}` : "") + ". Check your connection and that the service is running.");
   }
@@ -179,16 +179,16 @@ const STATUS_FALLBACKS: Record<number, string> = {
 
 export const api = {
   getScreenshot(scanId: string): Promise<ScanScreenshot> {
-    return request(`/api/v1/consent/scans/${scanId}/screenshot`);
+    return request(`/api/v1/consent-agent/scans/${scanId}/screenshot`);
   },
   getPolicyAnalysis(scanId: string): Promise<PolicyAnalysis> {
-    return request(`/api/v1/consent/scans/${scanId}/policy-analysis`);
+    return request(`/api/v1/consent-agent/scans/${scanId}/policy-analysis`);
   },
   getScanUsage(scanId: string): Promise<ScanUsage> {
-    return request(`/api/v1/consent/scans/${scanId}/usage`);
+    return request(`/api/v1/consent-agent/scans/${scanId}/usage`);
   },
   getUsageHistory(limit = 20, offset = 0): Promise<UsageHistoryItem[]> {
-    return request(`/api/v1/consent/scans/usage/history?limit=${limit}${offset ? `&offset=${offset}` : ""}`);
+    return request(`/api/v1/consent-agent/usage/history?limit=${limit}${offset ? `&offset=${offset}` : ""}`);
   },
   listScans(limit = 15): Promise<ScanListItem[]> {
     return request(`/api/v1/consent/scans?limit=${limit}`);
@@ -204,7 +204,7 @@ export const api = {
   },
   /** The ten checks and the Privacy Readiness Score: the one score, worked out on the server (GET .../assessment). */
   async getAssessment(scanId: string): Promise<TenAssessment> {
-    return fromApiAssessment(await request(`/api/v1/consent/scans/${scanId}/assessment`));
+    return fromApiAssessment(await request(`/api/v1/consent-agent/scans/${scanId}/assessment`));
   },
   getUrlInventory(scanId: string, filters: UrlInventoryFilters = {}, limit = 100, offset = 0): Promise<UrlInventoryResponse> {
     const q = new URLSearchParams();
@@ -216,37 +216,37 @@ export const api = {
     if (filters.failure?.trim()) q.set("failure", filters.failure.trim());
     q.set("limit", String(limit));
     q.set("offset", String(offset));
-    return request(`/api/v1/consent/scans/${scanId}/url-inventory?${q.toString()}`);
+    return request(`/api/v1/consent-agent/scans/${scanId}/url-inventory?${q.toString()}`);
   },
   getScan(scanId: string): Promise<ScanStatusResponse> {
     return request(`/api/v1/consent/scans/${scanId}`);
   },
   getStages(scanId: string): Promise<StageResponse[]> {
-    return request(`/api/v1/consent/scans/${scanId}/stages`);
+    return request(`/api/v1/consent-agent/scans/${scanId}/stages`);
   },
   getEvidence(scanId: string): Promise<ScanEvidenceResponse> {
-    return request(`/api/v1/consent/scans/${scanId}/evidence`);
+    return request(`/api/v1/consent-agent/scans/${scanId}/evidence`);
   },
   getRequirements(scanId: string): Promise<DpdpRequirementsResponse> {
-    return request(`/api/v1/consent/scans/${scanId}/requirements`);
+    return request(`/api/v1/consent-agent/scans/${scanId}/requirements`);
   },
   analyze(scanId: string): Promise<AgentRunResponse> {
-    return request(`/api/v1/consent/scans/${scanId}/analyze`, { method: "POST" });
+    return request(`/api/v1/consent-agent/scans/${scanId}/analyze`, { method: "POST" });
   },
   getFindings(scanId: string): Promise<FindingResponse[]> {
     return request(`/api/v1/consent/scans/${scanId}/findings`);
   },
   getAudit(scanId: string): Promise<AuditLogResponse[]> {
-    return request(`/api/v1/consent/scans/${scanId}/audit`);
+    return request(`/api/v1/consent-agent/scans/${scanId}/audit`);
   },
   approveFinding(findingId: string, reason: string | null): Promise<{ id: string; status: string }> {
-    return request(`/api/v1/consent/findings/${findingId}/approve`, { method: "POST", body: JSON.stringify({ reason }) });
+    return request(`/api/v1/consent-agent/findings/${findingId}/approve`, { method: "POST", body: JSON.stringify({ reason }) });
   },
   rejectFinding(findingId: string, reason: string): Promise<{ id: string; status: string }> {
-    return request(`/api/v1/consent/findings/${findingId}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
+    return request(`/api/v1/consent-agent/findings/${findingId}/reject`, { method: "POST", body: JSON.stringify({ reason }) });
   },
   editFinding(findingId: string, editedPayload: Record<string, unknown>, reason: string): Promise<{ id: string; status: string }> {
-    return request(`/api/v1/consent/findings/${findingId}/edit`, {
+    return request(`/api/v1/consent-agent/findings/${findingId}/edit`, {
       method: "POST",
       body: JSON.stringify({ edited_payload: editedPayload, reason }),
     });

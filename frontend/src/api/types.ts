@@ -17,7 +17,7 @@ export interface ScanListItem {
   completed_at: string | null;
 }
 
-// ── Model usage of a scan (GET /api/v1/consent/scans/{id}/usage and .../usage/history; backend app/services/usage_service.py). Shown only in the console's
+// ── Model usage of a scan (GET /api/v1/consent-agent/scans/{id}/usage and .../usage/history; backend app/services/usage_service.py). Shown only in the console's
 // usage panel, never in the report or the PDF. A token field that is null is UNAVAILABLE (a model stage with no recorded usage), never zero.
 export interface UsageTotals {
   calls: number;
@@ -500,7 +500,7 @@ export interface PolicyAnalysis {
   model: Record<string, unknown> | null;
 }
 
-/** The DPDP requirements reading of one scan (GET /api/v1/consent/scans/{id}/requirements): the status of each requirement, with its evidence. It carries no score; the only score is the ten-check assessment (report/tenChecks.ts). */
+/** The DPDP requirements reading of one scan (GET /api/v1/consent-agent/scans/{id}/requirements): the status of each requirement, with its evidence. It carries no score; the only score is the ten-check assessment (report/tenChecks.ts). */
 export type DpdpStatus = "met" | "partially_met" | "not_met" | "unable_to_verify" | "not_applicable";
 
 export interface DpdpRequirementResult {
@@ -771,7 +771,7 @@ export class ApiError extends Error {
   }
 }
 
-/** The URL inventory of one scan (GET /api/v1/consent/scans/{id}/url-inventory): every URL discovered and what became of it. Discovered is not scanned. */
+/** The URL inventory of one scan (GET /api/v1/consent-agent/scans/{id}/url-inventory): every URL discovered and what became of it. Discovered is not scanned. */
 export type UrlStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "FAILED" | "PARTIALLY_SCANNED" | "EXCLUDED";
 export interface UrlInventorySummary {
   total: number;

@@ -115,8 +115,8 @@ export function siteHost(input: string): string {
 }
 
 export const enterpriseApi = {
-  verificationToken: (domain: string) => request<VerificationToken>(`/api/v1/consent/websites/verification-token?domain=${encodeURIComponent(domain)}`),
-  verifyDomain: (domain: string) => request<{ domain: string; verified_at: string }>("/api/v1/consent/websites/verify", { method: "POST", body: JSON.stringify({ domain }) }),
+  verificationToken: (domain: string) => request<VerificationToken>(`/api/v1/consent-agent/websites/verification-token?domain=${encodeURIComponent(domain)}`),
+  verifyDomain: (domain: string) => request<{ domain: string; verified_at: string }>("/api/v1/consent-agent/websites/verify", { method: "POST", body: JSON.stringify({ domain }) }),
   createScan: (websiteUrl: string, authorized: boolean) =>
     request<CreateEnterpriseScanResponse>("/api/v1/enterprise/scans", {
       method: "POST",

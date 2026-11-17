@@ -146,13 +146,13 @@ curl -X POST http://localhost:8000/api/v1/consent/scans/$SCAN_ID/analyze -H "Aut
 curl http://localhost:8000/api/v1/consent/scans/$SCAN_ID/findings -H "Authorization: Bearer $TOKEN"
 
 # Approve / reject / edit a finding
-curl -X POST http://localhost:8000/api/v1/consent/findings/$FINDING_ID/approve \
+curl -X POST http://localhost:8000/api/v1/consent-agent/findings/$FINDING_ID/approve \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"reason": "confirmed"}'
 
-curl -X POST http://localhost:8000/api/v1/consent/findings/$FINDING_ID/reject \
+curl -X POST http://localhost:8000/api/v1/consent-agent/findings/$FINDING_ID/reject \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"reason": "false positive"}'
 
-curl -X POST http://localhost:8000/api/v1/consent/findings/$FINDING_ID/edit \
+curl -X POST http://localhost:8000/api/v1/consent-agent/findings/$FINDING_ID/edit \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
     -d '{"edited_payload": {"risk_level": "low"}, "reason": "overstated"}'
 
@@ -235,7 +235,7 @@ columns `cookies.source`, `cookies.consent_states`, `trackers.source`,
 `trackers.consent_states`, `consent_findings.priority`.
 
 **APIs added**: none new in the hardening pass — the 8 routes from the initial build
-(`/api/v1/consent/scans[...]`, `/api/v1/consent/findings/{id}/...`) are unchanged;
+(`/api/v1/consent/scans[...]`, `/api/v1/consent-agent/findings/{id}/...`) are unchanged;
 `FindingResponse` gained `priority` and a richer `dpdp_reference` shape.
 
 **Future work** (explicitly deferred, not forgotten):

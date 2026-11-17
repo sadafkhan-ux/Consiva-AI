@@ -115,8 +115,8 @@ Playwright with Chromium runs several passes (`scanner/crawler.py`):
 | | P11 SSL certificate valid for more than 30 days | 4 |
 | | P12 Secure TLS version | 4 |
 
-- **Each check:** pass = full marks, partial = half, fail = 0. "Not assessed" (the check could not be run) and "not applicable" are left out of the total, so a check that could not run is never counted as a failure.
-- **Score = marks awarded / marks in play x 100**, a whole number (rounded half up). The score is shown whatever the coverage; coverage is reported beside it.
+- **Each check:** pass = full marks, partial = half, fail = 0. "Not assessed" (the check could not be run) earns 0 marks but is not called a failure; "not applicable" is left out.
+- **Score = the marks the website earned, out of 100** (`scorecard.py`: `score = int(awarded + 0.5)`). It is not divided by the marks in play, so checks that could not be assessed (for example P7 to P9 when the policy analysis did not run) lower the score. The score is shown whatever the coverage; coverage is reported beside it.
 - **Bands:** 90 and above "Substantially addressed", 75 "Largely addressed", 50 "Partially addressed", below that "Needs attention".
 - **Verified example:** swaransoft.com scored 94 (P5 partial 4 of 8, P12 partial 2 of 4, all others full). The same scan through both doors returned identical JSON.
 

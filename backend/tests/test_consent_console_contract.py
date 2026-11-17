@@ -46,7 +46,7 @@ def _headers() -> dict:
 def _console_calls() -> list[tuple[str, str]]:
     """(METHOD, path template) for each consent call in client.ts, with ${x} turned into {x}."""
     calls = []
-    for match in re.finditer(r"request\([`\"](/api/v1/consent/[^`\"]+)[`\"](?:,\s*\{\s*method:\s*\"(\w+)\")?", CLIENT_TS):
+    for match in re.finditer(r"request\([`\"](/api/v1/consent(?:-agent)?/[^`\"]+)[`\"](?:,\s*\{\s*method:\s*\"(\w+)\")?", CLIENT_TS):
         path = re.sub(r"\$\{(\w+)\}", r"{\1}", match.group(1)).split("?")[0]   # the query string is not part of the route
         calls.append(((match.group(2) or "GET").upper(), path))
     return calls
@@ -164,9 +164,9 @@ ENDPOINTS = [
     ("POST", f"/api/v1/consent/scans/{SCAN}/analyze", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/findings", None),
     ("GET", f"/api/v1/consent/scans/{SCAN}/audit", None),
-    ("POST", f"/api/v1/consent/findings/{SCAN}/approve", {"reason": None}),
-    ("POST", f"/api/v1/consent/findings/{SCAN}/reject", {"reason": "not a violation"}),
-    ("POST", f"/api/v1/consent/findings/{SCAN}/edit", {"edited_payload": {}, "reason": "x"}),
+    ("POST", f"/api/v1/consent-agent/findings/{SCAN}/approve", {"reason": None}),
+    ("POST", f"/api/v1/consent-agent/findings/{SCAN}/reject", {"reason": "not a violation"}),
+    ("POST", f"/api/v1/consent-agent/findings/{SCAN}/edit", {"edited_payload": {}, "reason": "x"}),
 ]
 
 

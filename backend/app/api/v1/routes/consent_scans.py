@@ -44,7 +44,7 @@ from app.services import (
     usage_service,
 )
 
-router = APIRouter(prefix="/api/v1/consent/scans", tags=["consent-scans"])
+router = APIRouter(prefix="/api/v1/consent/scans", tags=["Privacy Scanner API"])
 
 
 class CreateScanRequest(BaseModel):
