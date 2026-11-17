@@ -33,7 +33,7 @@ def test_only_the_two_registration_points_import_the_enterprise_package():
 
 SCORE_ENGINE_FILES = ("scorecard.py", "domain_score.py", "ten_checks.py", "ten_inputs.py", "disclosure.py")
 #: Changes to the 5-page score the OWNER asked for after the freeze (backend/frozen/CHANGES.md). Any other change to these files still fails here, and the frozen manifest test guards them all.
-OWNER_APPROVED = ("scorecard.py",)             # 16 Nov 2026: coverage no longer withholds the score
+OWNER_APPROVED = ("scorecard.py", "domain_score.py")   # scorecard.py 16 Nov 2026: coverage no longer withholds the score; scorecard.py and domain_score.py 17 Nov 2026: wording of a not-assessed reason only (owner: "approval hai, bas sahi karo")
 
 
 def test_the_existing_score_engines_are_not_changed():

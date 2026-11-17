@@ -101,3 +101,16 @@ No Python of the five-page agent was changed. The configured model is read from 
 | `backend/app/rag/topic_embeddings.json` (frozen data file) | regenerated with `python -m app.rag.topic_embeddings`: 7 stored topic vectors, model and width recorded in the file |
 
 Not changed: the scanner, P1-P12, scoring, prompts, report, any API. The frozen manifest was regenerated for the data file.
+
+## 17 Nov 2026: two deployed-vs-local differences on jambulogix.com (owner: "approval hai, bas sahi karo")
+
+The same site scored 86 on the owner's local stack and 42 on the deployed one. 44 marks: 24 from the Reject control not being read, 20 from the notice's AI reading not completing. From the two PDFs: the deployed screenshot had no banner although the Consiva Consent SDK was detected; the SDK's own 800 ms configuration timeout (see `_BANNER_PASS_RETRIES`) is the documented cause of exactly that. The deployed P7-P9 said "The notice could not be read" while P6 had read it (3,501 characters), which hid that the analysis step had not completed.
+
+| File | Change |
+|---|---|
+| `backend/app/scanner/crawler.py` | `_BANNER_PASS_RETRIES` 1 to 2: a page that loaded a known consent tool but drew no banner is looked at up to two more times in a fresh browser context |
+| `backend/app/scoring/domain_score.py` | `dependent()`: when the notice was found and the analysis status is `unavailable`, the reason reads "The notice was found, but its analysis could not be completed in this scan..." instead of "The notice text could not be read." |
+| `backend/app/scoring/scorecard.py` | `prereq_a1`: a not-assessed P7-P9 row uses the A2 reason before the generic wording |
+
+Not changed: marks, rules, bands, prompts, the analysis model call (no blind retry added: an earlier measurement found retries were 41% of tokens; the cause of the failed call on the deployed host is still unknown). Tests: `tests/test_scorecard.py` (new), `tests/test_consiva_cmp_scanning.py` (retry count is read from the constant).
+

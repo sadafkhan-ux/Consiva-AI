@@ -28,3 +28,16 @@ The `/policy-kb` endpoints never answer an empty list on failure: they answer 50
 
 ## Gateway
 The frontend nginx resolves `backend` per request (resolver 127.0.0.11), so recreating the backend no longer causes 502. After editing `nginx.conf`, rebuild the frontend image (a changed file without a reload is not applied).
+
+## Embedding model retired (HTTP 410): re-embed the knowledge base
+
+A 410 from the embedding provider means the configured model was retired. Retrieval then fails ("Regulatory provision retrieval: Error code: 410" on every scan) until the model is replaced, and changing `NVIDIA_EMBED_MODEL` in `.env` is only half of it: the stored vectors in `knowledge_chunks` came from the old model, so every chunk must be embedded again. Run on each environment (local, deployed), in the backend container from `/app`:
+
+1. Set `NVIDIA_EMBED_MODEL` and `NVIDIA_EMBED_DIMENSIONS` in `.env` (current: `nvidia/nemotron-3.5-embed-1b`, 1024) and recreate backend and worker.
+2. Dump the tables: `pg_dump -t knowledge_documents -t knowledge_chunks`.
+3. `python -m tools.reembed_knowledge_base` (dry run: model, width, chunk count, no API call, no write).
+4. `python -m tools.reembed_knowledge_base --apply --backup-file /tmp/knowledge_embeddings_before.json`. All vectors are computed and checked first and written in one transaction; the old ones are saved to the file. Copy the file out with `docker cp`.
+5. `--restore --backup-file ...` puts the old vectors back.
+
+`backend/app/rag/topic_embeddings.json` (7 topic vectors, a frozen data file) is made with `python -m app.rag.topic_embeddings` and travels with git.
+

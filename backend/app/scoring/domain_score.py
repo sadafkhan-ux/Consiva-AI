@@ -350,7 +350,7 @@ def assess_scanner(
         if a1["state"] == NOT_MET:
             put(r, PREREQ, BLOCKED, found="The notice this depends on was not found.", blocked_by="A1", ev_refs=a1["evidence"])
         elif a1["state"] == NOT_ASSESSABLE or not policy_ran or not notice_readable:
-            why = a1["reason"] if a1["state"] == NOT_ASSESSABLE else ("The policy analysis has not run, so what the notice says was not assessed." if not policy_ran else "The notice text could not be read.")
+            why = a1["reason"] if a1["state"] == NOT_ASSESSABLE else ("The policy analysis has not run, so what the notice says was not assessed." if not policy_ran else ("The notice was found, but its analysis could not be completed in this scan, so what it says was not assessed. Running the scan again usually completes it." if a.get("status") == "unavailable" and a1["state"] != NOT_ASSESSABLE else "The notice text could not be read."))
             put(r, NOT_ASSESSABLE, INCONCLUSIVE, reason=why)
         else:
             fn()

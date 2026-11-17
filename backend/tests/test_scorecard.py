@@ -291,3 +291,13 @@ def test_a_blocked_row_rests_on_the_evidence_of_the_row_that_blocks_it_and_withd
     assert R(quick, "P5")["outcome"] == "fail" and R(quick, "P5")["blocked_by"] == "P1" and R(quick, "P1")["outcome"] == "fail"       # withdrawal is tested on every scan (3.2.0): with no banner it is blocked by P1, as in a Deep Scan
     deep = go(ev=ev, visual=_consent(known=(1, 1, 0)), mode="deep")
     assert R(deep, "P5")["outcome"] == "fail" and R(deep, "P5")["blocked_by"] == "P1" and R(deep, "P5")["evidence"] and all(e in R(deep, "P1")["evidence"] for e in R(deep, "P5")["evidence"])
+
+
+def test_when_the_notice_was_found_but_its_analysis_failed_p7_to_p9_say_so_and_not_that_the_notice_could_not_be_read():
+    # 17 Nov 2026: a deployed scan read the notice page (P6 passed) but the analysis model call failed; P7-P9 then said "The notice could not be read", which was untrue and hid the real cause.
+    r = go(policy={"status": "unavailable", "reason": "The policy was read but the analysis model could not be reached (APIStatusError).", "documents": [], "requirements": []})
+    assert R(r, "P6")["outcome"] == "pass"
+    for rid in ("P7", "P8", "P9"):
+        assert R(r, rid)["outcome"] == "not_assessed"
+        assert "analysis could not be completed" in R(r, rid)["reason"], R(r, rid)["reason"]
+    assert "has not run" in R(go(policy={}), "P7")["reason"]

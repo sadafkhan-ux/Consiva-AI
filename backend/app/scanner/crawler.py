@@ -1723,8 +1723,8 @@ _BANNER_RETRY_WAIT_MS = 2_500
 #: whether to draw the banner, and some decide "no" when their configuration request is slow: the Consiva SDK gives a first-time visitor 800 ms and then shows nothing for that
 #: page view (swaransoft.com, 27 Oct 2026: its console says "Banner config request timed out after 800ms. No banner will be shown for this pageview." in every load that
 #: drew no banner; 0 of 36 loads run one at a time, 4 of 126 six at a time and 11 of 48 twelve at a time). Waiting longer cannot help: the decision is already made. A second page
-#: view usually is not slowed the same way. One retry only, so a site whose tool draws no banner for a visitor (a region rule) pays one more pass, not a loop.
-_BANNER_PASS_RETRIES = 1
+#: view usually is not slowed the same way. Two retries (it was one: on 17 Nov 2026 a deployed scan of jambulogix.com, whose Consiva SDK draws no banner when its configuration request is slow, saw the tool and no banner on both looks, so it could not read the Reject control and lost 24 marks that a second host scored). Never a loop, so a site whose tool draws no banner for a visitor (a region rule) pays two more passes at most.
+_BANNER_PASS_RETRIES = 2
 
 
 def _a_consent_tool_was_loaded(trackers: list[TrackerRecord]) -> bool:

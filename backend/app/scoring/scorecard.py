@@ -253,7 +253,7 @@ def assess_scorecard(
             row(rid, FAIL, "The privacy notice this depends on was not found.", [], blocked_by="P6")
             return True
         if unknown(st("A1")) or st("A2") == "not_assessable":
-            row(rid, NOT_ASSESSED, internal["A1"]["reason"] or "The notice could not be read, so what it says was not assessed.", [])
+            row(rid, NOT_ASSESSED, internal["A1"]["reason"] or (internal["A2"]["reason"] if st("A2") == "not_assessable" else None) or "The notice could not be read, so what it says was not assessed.", [])
             return True
         return False
 
