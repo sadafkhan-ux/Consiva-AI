@@ -146,9 +146,29 @@ def test_ordinary_controls_do_not_establish_a_consent_mechanism(controls):
     assert _detect(controls).mechanism_type == "none"
 
 
-@pytest.mark.parametrize("strong", ["accept all", "reject all", "cookie settings"])
+@pytest.mark.parametrize("strong", ["accept all", "reject all"])
 def test_a_strong_phrase_alone_does_establish_one(strong):
     assert _detect(strong).mechanism_type == "banner"
+
+
+# clyzo.com (16 Nov 2026): a footer "Cookie settings" / "Manage cookies" link on a site that shows no banner was reported as "Cookie banner detected, no reject-all, per-purpose
+# choices". A settings link alone is not a banner.
+@pytest.mark.parametrize("controls", [
+    "home about us contact us cookie settings privacy policy",
+    "home about manage cookies terms",
+    "home privacy preferences login",
+    "book a demo cookie settings",                  # "ok" inside "book" and "cookie" must not count as an accepting word
+])
+def test_a_lone_cookie_settings_link_is_not_a_banner(controls):
+    signal = _detect(controls)
+    assert signal.mechanism_type == "none"
+    assert signal.has_reject_all is None and signal.has_granular_choices is None
+    assert signal.evidence["cookie_settings_link_only"] is True
+
+
+@pytest.mark.parametrize("controls", ["we use cookies cookie settings accept", "cookie settings got it", "manage cookies allow", "cookie preferences ok"])
+def test_a_settings_link_beside_an_accepting_control_is_a_banner(controls):
+    assert _detect(controls).mechanism_type == "banner"
 
 
 def test_weak_words_refine_a_banner_once_one_is_established():
@@ -183,3 +203,65 @@ def test_visible_text_is_still_used_when_no_control_text_is_supplied():
     assert detect_consent_signal(
         scripts=[], visible_text="accept all reject all", detected_global_vars=[],
     ).mechanism_type == "banner"
+
+
+# A consent dialog that is in the markup but switched off is not something a visitor can accept or refuse.
+@pytest.mark.parametrize("html", [
+    '<html><body><div class="cookie-banner" style="display:none"><button>Accept all</button><button>Reject all</button></div></body></html>',
+    '<html><body><div id="cookie-consent" hidden><button>Accept all cookies</button></div></body></html>',
+    '<html><body><div style="visibility: hidden"><a href="#">Cookie settings</a> <button>Got it</button></div></body></html>',
+])
+def test_a_consent_dialog_that_is_hidden_in_the_markup_is_not_a_banner(html):
+    assert _detect(extract_control_text(BeautifulSoup(html, "lxml"))).mechanism_type == "none"
+
+
+def test_the_same_dialog_without_the_hiding_is_a_banner():
+    html = '<html><body><div class="cookie-banner"><button>Accept all</button><button>Reject all</button></div></body></html>'
+    assert _detect(extract_control_text(BeautifulSoup(html, "lxml"))).mechanism_type == "banner"
+
+
+def test_an_app_download_popup_that_uses_cookie_code_is_not_a_banner():
+    """clyzo.com: a first-visit 'Download our App' modal whose script calls getCookie/setCookie."""
+    html = ('<html><body><div id="welcomePopup" class="modal fade show"><h5>Download our App</h5><p>Available on Google Play and the App Store</p><a href="#">Google Play</a><a href="#">App Store</a></div>'
+            '<script>function getCookie(n){} function setCookie(n){} /* Only show if cookie doesn\'t exist */</script><footer><a href="/cookiepolicy">Cookies</a></footer></body></html>')
+    assert _detect(extract_control_text(BeautifulSoup(html, "lxml"))).mechanism_type == "none"
+
+
+# ── Pop-ups that use accept/reject words but are not about cookies (tested 17 Nov 2026) ───────────────────────────────────────────────────────
+
+def _page(html: str):
+    return _detect(extract_control_text(BeautifulSoup("<html><body>" + html + "</body></html>", "lxml")))
+
+
+@pytest.mark.parametrize("html", [
+    '<div class="push-popup"><p>Stay updated</p><button>Allow all notifications</button><button>Block</button></div>',
+    '<div class="email-preferences"><p>Marketing emails</p><button>Accept all</button><button>Reject all</button></div>',
+    '<div class="friends"><p>You have new friend requests</p><button>Accept all</button><button>Reject all</button></div>',
+    '<div class="privacy-wrapper"><button>Accept all friend requests</button></div>',
+    '<div class="subscribe-box"><p>Subscribe to our newsletter</p><button>Accept all</button><button>Decline all</button></div>',
+])
+def test_a_popup_that_is_not_about_cookies_is_not_a_cookie_banner(html):
+    assert _page(html).mechanism_type == "none"
+
+
+@pytest.mark.parametrize("html", [
+    '<div id="cookie-banner"><p>We use cookies.</p><button>Accept all</button><button>Reject all</button><a>Manage preferences</a></div>',
+    '<div class="notice"><p>We use cookies and tracking to show you ads.</p><button>Accept all</button><button>Reject all</button></div>',
+    '<div class="privacy-notice"><p>Your privacy matters. We use cookies.</p><button>Accept all</button><button>Reject all</button></div>',
+    '<div class="cookie-notice"><p>This site uses cookies to improve your experience.</p><button>Accept</button><button>Decline</button></div>',
+    '<div class="modal"><p>Manage your data</p><button>Accept all cookies</button><button>Reject non-essential</button></div>',
+])
+def test_real_cookie_banners_are_still_detected_after_the_context_check(html):
+    assert _page(html).mechanism_type == "banner"
+
+
+@pytest.mark.parametrize("phrase,text,expected", [
+    ("allow all", "allow all notifications", False),
+    ("allow all", "allow all cookies", True),
+    ("accept all", "accept all reject all", True),
+    ("accept all", "accept all e-mails", False),
+    ("reject all", "reject all", True),
+])
+def test_a_phrase_ending_in_all_is_refused_when_it_names_something_that_is_not_a_cookie(phrase, text, expected):
+    from app.scanner.consent_signal_detector import _has
+    assert _has(text, phrase) is expected

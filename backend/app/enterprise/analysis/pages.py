@@ -94,6 +94,7 @@ class PageFacts:
     title: str = ""
     headings: list[str] = field(default_factory=list)
     text: str = ""
+    slug_kinds: tuple[str, ...] = ()      # what the model suggested from the site's addresses: a hint that asks for a content check, never a classification by itself
 
 
 def _clean(s: str) -> str:
@@ -197,6 +198,10 @@ def classify_page(f: PageFacts) -> PageClass:
         return PageClass(ARTICLE, "medium", (f"{cues} article cues (byline, date, read time, related posts) and no policy structure",))
     if parents & PRODUCT_SEGMENTS or slug in PRODUCT_SEGMENTS:
         return PageClass(PRODUCT, "medium", ("a product or pricing path",))
+    hinted = [k for k in f.slug_kinds if k in (PRIVACY, COOKIE, TERMS, GRIEVANCE)]
+    if hinted:
+        # the address read like a policy to the model but nothing in the page settled it: the model reads the page itself and decides (a hint never classifies on its own)
+        return PageClass(OTHER, "ambiguous", (f"the address read like a {hinted[0].replace('_', ' ')} but no rule settled the page ({length} characters, {len(groups)} policy sections)",), (hinted[0], ARTICLE, OTHER))
     return PageClass(OTHER, "medium", ("no rule matched",))
 
 

@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { enterpriseApi, enterpriseErrorMessage, enterpriseScans, siteHost, type ScanListItem } from "../api/enterprise";
+import { enterpriseApi, enterpriseErrorMessage, siteHost } from "../api/enterprise";
 import { getProfile } from "../api/auth";
 import { writeHash } from "../components/dsrRoute";
-import { completionTone, dateOnly, percent, text } from "./format";
-import { usePaged } from "./hooks";
-import { PagedView, Pill } from "./ui";
+import { PolicyKbPanel } from "./PolicyKbPanel";
+import { ScanDashboard } from "./ScanDashboard";
 import { ScanPage } from "./ScanPage";
 
 function scanFromHash(): string | null {
@@ -89,7 +88,6 @@ export function EnterpriseWorkspace() {
   const [scanId, setScanId] = useState<string | null>(() => scanFromHash());
   const [nonce, setNonce] = useState(0);
   const canReview = getProfile()?.role === "admin";
-  const p = usePaged<ScanListItem>((offset, limit) => enterpriseScans.list({ offset, limit }), "list", 25, String(nonce));
 
   function open(id: string | null) {
     setScanId(id);
@@ -106,29 +104,9 @@ export function EnterpriseWorkspace() {
         Full-website DPDP readiness assessment. It reads the whole site, not five pages, and reports what it observed. It is a readiness assessment, not a certification.
       </p>
       <NewScan onStarted={open} />
-      <h3 style={{ marginTop: 20 }}>Your scans</h3>
-      <PagedView p={p} noun="scans" empty="No Enterprise scans yet. Start one above.">
-        {(items) => (
-          <table className="ropa-table" data-testid="scan-list">
-            <thead><tr><th>Website</th><th>Status</th><th>Score</th><th>Coverage</th><th>Started</th><th>Open</th></tr></thead>
-            <tbody>
-              {items.map((s) => {
-                const ct = completionTone(s.completion ?? s.status);
-                return (
-                  <tr key={s.scan_id}>
-                    <td className="mono" style={{ wordBreak: "break-all" }}>{s.website_url}</td>
-                    <td><Pill tone={ct.tone}>{ct.label}</Pill></td>
-                    <td>{s.score === null || s.score === undefined ? <span className="muted">no score</span> : s.score}</td>
-                    <td>{percent(s.coverage)}</td>
-                    <td>{dateOnly(s.created_at)}</td>
-                    <td><button type="button" className="secondary small" onClick={() => open(s.scan_id)} aria-label={`Open scan of ${text(s.website_url)}`}>Open</button></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </PagedView>
+      <div style={{ marginTop: 20 }}><ScanDashboard onOpen={open} refreshKey={String(nonce)} /></div>
+      <h3 style={{ marginTop: 24 }}>Policy knowledge base</h3>
+      <PolicyKbPanel />
     </div>
   );
 }

@@ -63,7 +63,14 @@ export interface CreateEnterpriseScanResponse {
 /** A scan in one of these states will not change again. */
 export const FINAL_STATES: ReadonlySet<EnterpriseScanState> = new Set(["completed", "failed", "cancelled"]);
 
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export /** What a gateway answers with no JSON body (an HTML error page from nginx): said in words instead of "Request failed with status 502". */
+const GATEWAY_MESSAGES: Record<number, string> = {
+  502: "The service is temporarily unreachable (bad gateway). It has been recorded; please try again in a moment.",
+  503: "The service is temporarily unavailable. It has been recorded; please try again in a moment.",
+  504: "The service took too long to answer (timeout). Please try again.",
+};
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   if (!token) {
     handleUnauthorized();
@@ -86,8 +93,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
         ? typeof body.detail === "string"
           ? body.detail
           : JSON.stringify(body.detail)
-        : `Request failed with status ${res.status}`;
-    throw new ApiError(res.status, detail);
+        : GATEWAY_MESSAGES[res.status] ?? `Request failed with status ${res.status}`;
+    const ref = res.headers.get("X-Error-ID") || res.headers.get("X-Request-ID");
+    throw new ApiError(res.status, ref && res.status >= 500 && !detail.includes(ref) ? `${detail} (reference ${ref})` : detail);
   }
   return body as T;
 }
@@ -332,6 +340,8 @@ export interface UrlItem {
   evidence_note?: string | null;
   category?: string | null;
   category_reason?: string | null;
+  also_categories?: string[];
+  slug_kinds?: string[];
   chunks_created?: number | null;
   chunks_analysed?: number | null;
   analysis_note?: string | null;
@@ -403,6 +413,79 @@ export interface PageOpts {
   offset?: number;
   limit?: number;
 }
+
+const DASH = "/api/v1/enterprise/dashboard";
+
+export type DashboardAgent = "five_page" | "enterprise";
+
+export interface DashboardScan {
+  agent: DashboardAgent;
+  scan_id: string;
+  website_url: string;
+  outcome: "completed" | "failed" | "pending" | "blocked";
+  detail: string;
+  reason: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  data_cleared: boolean;
+}
+
+export interface DashboardSummary {
+  kpis: { scans_total: number; scans_completed: number; scans_failed: number; scans_pending: number; scans_blocked: number; scans_five_page: number; scans_enterprise: number };
+  last_scan: DashboardScan | null;
+  history: { items: DashboardScan[]; total: number; offset: number; limit: number };
+  definitions: { completed: string; failed: string; pending: string; blocked: string };
+  cached: boolean;
+}
+
+export interface RetentionStatus {
+  grace_minutes: number;
+  keeps: string;
+  clears: string;
+  when: string;
+}
+
+export const enterpriseDashboard = {
+  summary: (o: { outcome?: string; agent?: string; q?: string; offset?: number; limit?: number; refresh?: boolean } = {}) =>
+    request<DashboardSummary>(`${DASH}/summary${query({ outcome: o.outcome && o.outcome !== "all" ? o.outcome : undefined, agent: o.agent && o.agent !== "all" ? o.agent : undefined, q: o.q, offset: o.offset ?? 0, limit: o.limit ?? 10, refresh: o.refresh ? "true" : undefined })}`),
+  retention: () => request<RetentionStatus>(`${DASH}/retention`),
+};
+
+const KB = "/api/v1/enterprise/policy-kb";
+
+export interface PolicyKbMetrics {
+  websites_monitored: number;
+  documents: { active: number; removed: number; stale: number; versions: number };
+  sync: { new: number; changed: number; unchanged: number; removed: number; url_changed: number; extraction_failed: number; sync_failed: number; marked_stale: number; awaiting_processing: number; failed_versions: number; partial_extractions: number; last_successful_sync: string | null };
+  embeddings: { chunks: number; active_chunks: number; generated: number; reused: number; missing: number };
+  retrieval: { queries: number; keyword_only_fallbacks: number };
+  llm: { passages_sent_to_model: number; calls_saved: number; characters_sent: number; characters_not_sent: number; tokens_sent_estimate: number; tokens_saved_estimate: number; token_figures_are: string };
+}
+
+export interface PolicyDocument {
+  id: string;
+  domain: string;
+  url: string;
+  doc_type: string;
+  status: "active" | "removed";
+  stale: boolean;
+  stale_reason: string | null;
+  current_version: number | null;
+  versions: number;
+  title: string | null;
+  text_chars: number | null;
+  chunk_count: number | null;
+  extraction_status: string | null;
+  extraction_note: string | null;
+  sync_status: string | null;
+  last_verified_at: string | null;
+  extracted_at: string | null;
+}
+
+export const policyKb = {
+  metrics: (domain?: string) => request<PolicyKbMetrics>(`${KB}/metrics${query({ domain })}`),
+  documents: (domain?: string) => request<{ items: PolicyDocument[]; total: number }>(`${KB}/documents${query({ domain })}`),
+};
 
 export const enterpriseScans = {
   list: (o: PageOpts = {}) => request<Page<ScanListItem>>(`${SCANS}${query({ offset: o.offset ?? 0, limit: o.limit ?? 25 })}`),

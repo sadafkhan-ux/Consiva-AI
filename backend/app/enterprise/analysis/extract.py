@@ -119,6 +119,17 @@ def verify(parsed: PageExtraction, chunk_text: str) -> tuple[list[dict], int]:
     return kept, dropped
 
 
+def extractor_key(provider_model: str) -> str:
+    """Identifies how a passage is read: the extraction prompt and the model. A passage's facts are reused only when this is identical, so changing the prompt or the model re-reads everything."""
+    import hashlib
+    return hashlib.sha256("|".join((SYSTEM, provider_model, "extract-v1")).encode("utf-8")).hexdigest()[:24]
+
+
+def text_hash(url: str, kind: str, chunk_text: str) -> str:
+    import hashlib
+    return hashlib.sha256("|".join((url, kind, chunk_text)).encode("utf-8")).hexdigest()
+
+
 async def extract_chunk(llm: LLMCallable, *, url: str, kind: str, chunk_text: str, index: int, count: int) -> Extraction:
     """Read one chunk. Raises llm.LLMFailure when the model cannot answer; the caller records the chunk as failed (never as a finding)."""
     answer = await call_structured(llm, SYSTEM, build_user(url, kind, chunk_text, index=index, count=count), PageExtraction)

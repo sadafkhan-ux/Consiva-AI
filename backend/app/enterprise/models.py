@@ -27,6 +27,8 @@ class EntScan(Base):
     options: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     stop_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     urls_not_recorded: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))      # migration 0057
+    text_cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)      # migration 0060
+    purge_summary: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
@@ -79,6 +81,9 @@ class EntFrontier(Base):
     chunks_created: Mapped[int | None] = mapped_column(Integer, nullable=True)
     chunks_analysed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     analysis_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    page_category_strength: Mapped[str | None] = mapped_column(Text, nullable=True)      # migration 0058
+    slug_kinds: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)      # migration 0059
+    also_categories: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
 
 class EntEvidence(Base):
@@ -214,6 +219,8 @@ class EntAnalysisChunk(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    text_hash: Mapped[str | None] = mapped_column(Text, nullable=True)            # migration 0058: the hash of what was read, for reuse by a later scan
+    extractor_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 

@@ -241,6 +241,11 @@ async def _run_job(job: AgentJob) -> None:
         await _process_one(job)
     except Exception as exc:  # a bad job must not kill the worker loop
         logger.exception("Job %s (%s) failed", job.id, job.job_type)
+        try:
+            from app.monitoring import events as error_events      # the error monitor: records the failure and, when it matters, emails an administrator
+            await error_events.record_job_failure(job.job_type, job.payload if isinstance(job.payload, dict) else None, exc)
+        except Exception:
+            logger.exception("Could not record the job failure as an error event")
         async with async_session_factory() as db:
             # A failure that running the job again cannot cure (ScanNotPossible) is not retried.
             await queue.mark_failed(db, job.id, str(exc), retryable=getattr(exc, "retryable", True))

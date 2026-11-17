@@ -59,8 +59,14 @@ def default_llm(*, scan_id: str | None = None, agent: str = "enterprise_analysis
         from app.llm.client import generate_structured_with_fallback         # imported here: building this module needs no keys or network
 
         deadline = time.time() + K.LLM_TIMEOUT_S
-        parsed, meta = await generate_structured_with_fallback(
-            system=system, user=user, schema=schema, max_attempts=K.LLM_CLIENT_ATTEMPTS, deadline_epoch=deadline, agent=agent, scan_id=scan_id, stage="analysis")
+        from app.monitoring import events as error_events      # the error monitor: a failing provider is recorded (and an administrator emailed once), a working one clears it
+        try:
+            parsed, meta = await generate_structured_with_fallback(
+                system=system, user=user, schema=schema, max_attempts=K.LLM_CLIENT_ATTEMPTS, deadline_epoch=deadline, agent=agent, scan_id=scan_id, stage="analysis")
+        except Exception as exc:
+            await error_events.record_error(agent="enterprise", module="enterprise.analysis.llm", exc=exc, service="llm", scan_id=scan_id)
+            raise
+        await error_events.record_success("llm", agent="enterprise")
         if meta.get("fallback_triggered") or not meta.get("primary_attempted"):
             return LLMResult(parsed, meta.get("fallback_provider"), meta.get("fallback_model"))
         return LLMResult(parsed, meta.get("primary_provider"), meta.get("primary_model"))

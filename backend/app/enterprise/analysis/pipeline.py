@@ -33,8 +33,9 @@ from app.enterprise.analysis import pages as pg
 from app.enterprise.analysis import sources as sr
 from app.enterprise.analysis.chunking import Chunk, chunk_text
 from app.enterprise.analysis.constants import CONCURRENCY
-from app.enterprise.analysis.extract import extract_chunk
+from app.enterprise.analysis.extract import extract_chunk, extractor_key, normalise, text_hash
 from app.enterprise.analysis.llm import Answer, LLMCallable, LLMFailure, call_structured, default_llm
+from app.enterprise.config import get_enterprise_settings
 from app.enterprise.analysis.repo import AnalysisRepo, ChunkRow, Key, SqlRepo, reconcile
 from app.enterprise.scoring.engine import Assessment
 
@@ -80,7 +81,7 @@ def _plan(loaded: sr.Loaded) -> list[_Work]:
     work: list[_Work] = []
     by_url: dict[str, list[sr.Src]] = {}
     for s in loaded.texts:
-        if s.category in pg.ANALYSED:
+        if s.category in pg.ANALYSED and not s.virtual:           # a policy held inside another page is read as part of that page
             by_url.setdefault(s.url, []).append(s)
     for url, srcs in sorted(by_url.items()):
         pieces = [(s, c) for s in sorted(srcs, key=lambda x: x.page_number) for c in chunk_text(s.text)]
@@ -178,12 +179,33 @@ async def _run(scan_id: uuid.UUID, repo: AnalysisRepo, llm: LLMCallable, as_of: 
         pass
 
     # ---- 3. level 1: read the chunks ----
+    # A passage already read, with the same prompt and the same model, by an earlier scan of this organisation is not sent to the model again: its facts were checked word for word against this
+    # same text then. Anything that changes (the text, the extraction prompt, the model) changes the key and the passage is read again.
+    finder = getattr(repo, "find_reusable_extraction", None) if get_enterprise_settings().reuse_analysis else None
+    try:
+        from app.llm.client import resolve_reasoning_provider_and_model
+        model_now = "/".join(resolve_reasoning_provider_and_model())
+    except Exception:                                   # no model configured: nothing can be reused safely
+        finder, model_now = None, ""
+    key = extractor_key(model_now) if finder else None
+
     async def read(w: _Work) -> None:
-        async def fn() -> tuple[dict, Answer]:
+        th = text_hash(w.src.url, w.src.kind, w.chunk.text)
+        answered: list[str | None] = []
+
+        async def fn() -> tuple[dict, Answer | None]:
+            if finder is not None and key:
+                hit = await finder(scan_id, th, key)
+                if hit is not None:
+                    return {"facts": hit.get("facts", []), "raw": hit.get("raw"), "discarded": hit.get("discarded", 0), "evidence_id": w.src.evidence_id, "page_number": w.src.page_number, "reused": True}, None
             ex = await extract_chunk(llm, url=w.src.url, kind=w.src.kind, chunk_text=w.chunk.text, index=w.row.chunk_index, count=w.row.chunk_count)
+            answered.append(f"{ex.answer.provider}/{ex.answer.model}")
             return {"facts": ex.facts, "raw": ex.raw, "discarded": ex.discarded, "evidence_id": w.src.evidence_id, "page_number": w.src.page_number}, ex.answer
 
-        await unit(w.row, fn, existing)
+        res = await unit(w.row, fn, existing)
+        if res is not None and finder is not None and key and (res.get("reused") or (answered and model_now.endswith(str(answered[0]).split("/", 1)[-1]))):
+            # remember what was read and how, so a later scan can reuse it; a passage answered by a fallback model is not offered for reuse
+            await repo.update_chunk(scan_id, w.row.key, text_hash=th, extractor_key=key)
 
     await asyncio.gather(*(read(w) for w in work))
     chunks_now = {c.key: c for c in await repo.load_chunks(scan_id)}
@@ -203,8 +225,13 @@ async def _run(scan_id: uuid.UUID, repo: AnalysisRepo, llm: LLMCallable, as_of: 
             if k in seen:
                 continue
             seen.add(k)
-            facts.append({**f, "id": len(facts), "evidence_id": w.src.evidence_id, "url": w.src.url, "page_number": w.src.page_number, "category": cat if cat != "forms" else w.src.category,
-                          "kind": w.src.kind})
+            base = {**f, "evidence_id": w.src.evidence_id, "url": w.src.url, "page_number": w.src.page_number, "kind": w.src.kind}
+            facts.append({**base, "id": len(facts), "category": cat if cat != "forms" else w.src.category})
+            # a fact whose quote lies inside a policy embedded in this page (the cookie section of a privacy page) also counts for that policy, with the same quote and source
+            page = loaded.pages.get(w.src.url)
+            for e in (page.also if page is not None and cat != "forms" else []):
+                if normalise(f["quote"]) in normalise(e.text):
+                    facts.append({**base, "id": len(facts), "category": e.kind, "embedded_in": cat})
     ctx = co.Ctx(loaded, facts, unread, as_of, unresolved=unresolved)
 
     # ---- 5. levels 2 to 4: interpret, compare, map ----
@@ -294,7 +321,7 @@ def _page_tracking(loaded: sr.Loaded, chunks: dict[Key, ChunkRow], work: list[_W
             why = f"{len(failed)} of {len(mine)} passages could not be analysed" + (f" ({failed[0].error[:120]})" if failed[0].error else "")
         elif done < len(mine):
             why = f"{len(mine) - done} of {len(mine)} passages were not analysed yet"
-        info = {"category": page.category, "reason": "; ".join(page.reasons)[:600], "created": len(mine), "analysed": done, "note": why or None}
+        info = {"also": [e.kind for e in page.also], "category": page.category, "strength": page.strength, "reason": "; ".join(page.reasons)[:600], "created": len(mine), "analysed": done, "note": why or None}
         for fid in page.frontier_ids:
             out[fid] = info
     return out

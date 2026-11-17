@@ -243,9 +243,15 @@ _CONTROL_SELECTORS = (
 # when the markup does not use a button element (plain <div onclick> banners are
 # common), which keeps the check from being defeated by sloppy markup.
 _CONSENT_CONTAINER_HINT = re.compile(
-    r"(cookie|consent|gdpr|ccpa|cmp|privacy)[-_]?(banner|bar|notice|dialog|modal|popup|consent)?",
+    r"(cookie|consent|gdpr|ccpa|(?<![a-z])cmp(?![a-z])|privacy[-_]?(?:banner|bar|notice|dialog|modal|popup))",
     re.IGNORECASE,
 )
+
+# A box that is clearly about something other than cookies. An "Accept all / Reject all" pair inside it (marketing e-mail choices, notification prompts, friend requests) is not a cookie banner.
+# Only when the box shows an unrelated topic AND nothing about cookies, consent, tracking or privacy: a real banner always says what it is for.
+_COOKIE_CONTEXT = re.compile(r"(cookie|consent|gdpr|ccpa|dpdp|tracking|tracker|analytics|advertis|privacy|personal (?:data|information)|third[- ]part)", re.IGNORECASE)
+_OTHER_TOPIC = re.compile(r"(e-?mail|newsletter|notification|friend request|invitation|subscri|your order|your cart|booking|reminder|alert)", re.IGNORECASE)
+_ACCEPT_REJECT_LABEL = re.compile(r"^(accept|allow|reject|decline|deny|refuse)( all)?$", re.IGNORECASE)
 
 
 # A cookie notice whose buttons say only "Accept" / "Decline" (greenply.com): no phrase such as "accept all" or "accept cookies" appears anywhere, so the wording search alone misses it. It is recognised by
@@ -257,13 +263,47 @@ _BARE_REJECT = frozenset({"decline", "decline all", "reject", "reject all", "den
 _DIALOG_MAX_CHARS = 700
 
 
+_HIDDEN_STYLE = re.compile(r"(display\s*:\s*none|visibility\s*:\s*hidden)", re.IGNORECASE)
+
+
+def _is_hidden(element) -> bool:
+    """True when the element, or any element around it, is hidden by the `hidden` attribute or by an inline display:none / visibility:hidden. A control a visitor cannot see is not a consent
+    control they can use: a cookie dialog that is in the page's markup but switched off must not count as a banner (clyzo.com, 16 Nov 2026). Only what the markup itself says: styles set by a
+    stylesheet are not visible here, so this can only ever remove a false positive, never invent one."""
+    for node in (element, *element.parents):
+        attrs = getattr(node, "attrs", None)
+        if not attrs:
+            continue
+        if "hidden" in attrs:
+            return True
+        if _HIDDEN_STYLE.search(str(attrs.get("style") or "")):
+            return True
+    return False
+
+
+def _about_something_else(element) -> bool:
+    """A bare Accept all / Reject all control whose surrounding box (the nearest short ancestor with text of its own) is about e-mail, notifications or the like and says nothing about cookies,
+    consent, tracking or privacy. Such a box is a preferences or requests panel, not a cookie banner."""
+    label = element.get_text(" ", strip=True)
+    if not _ACCEPT_REJECT_LABEL.match(label.strip().strip(".!")):
+        return False
+    for ancestor in element.parents:
+        text = ancestor.get_text(" ", strip=True)
+        if len(text) > 700:
+            return False
+        extra = text.lower().replace(label.lower(), " ")
+        if len(extra.strip()) > 25:
+            return bool(_OTHER_TOPIC.search(extra)) and not _COOKIE_CONTEXT.search(extra)
+    return False
+
+
 def cookie_dialog_controls(soup: BeautifulSoup) -> tuple[bool, bool]:
     """(has a bare accept control, has a bare decline control) in a short cookie or consent dialog."""
     accept = reject = False
     containers = list(soup.find_all(attrs={"class": _COOKIE_DIALOG_HINT})) + list(soup.find_all(attrs={"id": _COOKIE_DIALOG_HINT}))
     for box in containers:
         text = box.get_text(" ", strip=True).lower()
-        if not 15 <= len(text) <= _DIALOG_MAX_CHARS or "cookie" not in text:
+        if not 15 <= len(text) <= _DIALOG_MAX_CHARS or "cookie" not in text or _is_hidden(box):
             continue
         for control in box.select("button, a, input[type=button], input[type=submit], [role=button]"):
             label = (control.get_text(" ", strip=True) or str(control.get("value") or "") or str(control.get("aria-label") or "")).strip().lower().strip(".!")
@@ -289,15 +329,19 @@ def extract_control_text(soup: BeautifulSoup) -> str:
     """
     parts: list[str] = []
     for element in soup.select(", ".join(_CONTROL_SELECTORS)):
+        if _is_hidden(element) or _about_something_else(element):
+            continue
         parts.append(element.get_text(separator=" ", strip=True))
         # <input type="button" value="Accept all"> carries its label in an attribute.
         for attr in ("value", "aria-label", "title"):
             if element.get(attr):
                 parts.append(str(element[attr]))
     for element in soup.find_all(attrs={"class": _CONSENT_CONTAINER_HINT}):
-        parts.append(element.get_text(separator=" ", strip=True))
+        if not _is_hidden(element):
+            parts.append(element.get_text(separator=" ", strip=True))
     for element in soup.find_all(attrs={"id": _CONSENT_CONTAINER_HINT}):
-        parts.append(element.get_text(separator=" ", strip=True))
+        if not _is_hidden(element):
+            parts.append(element.get_text(separator=" ", strip=True))
     text = " ".join(p for p in parts if p).lower()[:5000]
     # Markers for a cookie dialog recognised by its structure (see cookie_dialog_controls); the detector reads them like any other consent wording.
     has_accept, has_reject = cookie_dialog_controls(soup)

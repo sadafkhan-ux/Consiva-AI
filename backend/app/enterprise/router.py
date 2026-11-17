@@ -2,8 +2,10 @@
 
 from fastapi import APIRouter
 
-from app.enterprise.api import results, scans
+from app.enterprise.api import dashboard, policy_kb, results, scans
 
 router = APIRouter(prefix="/api/v1/enterprise")
+router.include_router(dashboard.router)
 router.include_router(scans.router)
 router.include_router(results.router)
+router.include_router(policy_kb.router)

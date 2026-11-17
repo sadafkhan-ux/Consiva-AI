@@ -213,7 +213,7 @@ def _url_item(r: EntFrontier) -> dict:
             "status_reason": r.status_reason, "last_error": r.last_error, "discovery_sources": list(r.discovery_sources or []),
             "is_document": bool(re.search(DOCUMENT_PATTERN, r.normalized_url.lower())), "extraction_status": r.extraction_status,
             "title": r.page_title, "text_chars": r.text_chars, "content_hash": r.content_hash, "extracted_at": r.extracted_at, "evidence_note": r.evidence_note,
-            "category": r.page_category, "category_reason": r.category_reason, "chunks_created": r.chunks_created, "chunks_analysed": r.chunks_analysed, "analysis_note": r.analysis_note}
+            "category": r.page_category, "also_categories": list(r.also_categories or []), "slug_kinds": list(r.slug_kinds or []), "category_reason": r.category_reason, "chunks_created": r.chunks_created, "chunks_analysed": r.chunks_analysed, "analysis_note": r.analysis_note}
 
 
 @router.get("/{scan_id}/urls", summary="The URL inventory")

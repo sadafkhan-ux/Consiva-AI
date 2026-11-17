@@ -127,3 +127,56 @@ async def acknowledge(alert_id: uuid.UUID, user: CurrentUser = Depends(get_curre
         alert.status, alert.acknowledged_by, alert.acknowledged_at = "acknowledged", user.user_id, alerts.utcnow()
         await db.commit()
     return AlertRow(**service.alert_dict(alert))
+
+
+# ---- error events (both agents) ----------------------------------------------------------------------------------------------------------------------------------------
+
+from fastapi import Query  # noqa: E402
+
+from app.monitoring import events  # noqa: E402
+
+
+@router.get("/errors/summary", summary="Counts for the Error Monitoring cards")
+async def errors_summary(user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> dict:
+    _admin(user)
+    return await events.summary(db)
+
+
+@router.get("/errors", summary="Error events, filtered")
+async def errors_list(agent: Literal["enterprise", "five_page", "platform"] | None = None, grouping: str | None = Query(default=None, max_length=40), category: str | None = Query(default=None, max_length=60),
+                      status: Literal["open", "acknowledged", "resolved"] | None = None, severity: Literal["info", "warning", "critical"] | None = None, website: str | None = Query(default=None, max_length=200),
+                      since: datetime | None = None, until: datetime | None = None, include_info: bool = False, offset: int = Query(0, ge=0), limit: int = Query(25, ge=1, le=100),
+                      user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> dict:
+    _admin(user)
+    return await events.list_events(db, agent=agent, grouping=grouping, category=category, status=status, severity=severity, website=website, since=since, until=until, include_info=include_info, offset=offset, limit=limit)
+
+
+@router.get("/errors/{ident}", summary="One error event with its details")
+async def errors_detail(ident: str, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> dict:
+    _admin(user)
+    ev = await events.get_event(db, ident)
+    if ev is None:
+        raise NotFoundError("Error event not found")
+    return ev
+
+
+@router.post("/errors/{ident}/acknowledge", summary="Acknowledge: it stays listed but stops reminding")
+async def errors_acknowledge(ident: str, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> dict:
+    _admin(user)
+    await events.acknowledge(db, ident, user.user_id)
+    await db.commit()
+    ev = await events.get_event(db, ident)
+    if ev is None:
+        raise NotFoundError("Error event not found")
+    return ev
+
+
+@router.post("/errors/{ident}/resolve", summary="Mark resolved by hand")
+async def errors_resolve(ident: str, user: CurrentUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)) -> dict:
+    _admin(user)
+    await events.resolve(db, ident, user.user_id)
+    await db.commit()
+    ev = await events.get_event(db, ident)
+    if ev is None:
+        raise NotFoundError("Error event not found")
+    return ev

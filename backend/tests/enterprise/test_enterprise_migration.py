@@ -8,7 +8,7 @@ from app.enterprise.models import EntEvidence, EntFrontier, EntScan
 
 SQL = (Path(__file__).resolve().parents[2] / "migrations" / "0050_enterprise_foundation.sql").read_text(encoding="utf-8")
 TABLES = ("ent_scans", "ent_frontier", "ent_evidence")
-LATER = "\n".join((Path(__file__).resolve().parents[2] / "migrations" / f).read_text(encoding="utf-8") for f in ("0055_enterprise_assessment.sql", "0056_enterprise_frontier_priority.sql", "0057_enterprise_page_tracking.sql"))
+LATER = "\n".join((Path(__file__).resolve().parents[2] / "migrations" / f).read_text(encoding="utf-8") for f in ("0055_enterprise_assessment.sql", "0056_enterprise_frontier_priority.sql", "0057_enterprise_page_tracking.sql", "0058_enterprise_policy_kb.sql", "0059_enterprise_slug_triage.sql", "0060_enterprise_retention.sql"))
 
 
 def _added_later(table: str) -> set[str]:

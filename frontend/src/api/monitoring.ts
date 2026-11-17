@@ -54,6 +54,43 @@ export interface MonitoringOverview {
   open_count: number;
 }
 
+export interface ErrorEvent {
+  id: string;
+  error_id: string;
+  agent: "enterprise" | "five_page" | "platform";
+  module: string;
+  service: string | null;
+  grouping: string;
+  category: string;
+  severity: "info" | "warning" | "critical";
+  http_status: number | null;
+  message: string;
+  detail: string | null;
+  scan_id: string | null;
+  website_url: string | null;
+  request_id: string | null;
+  temporary: boolean;
+  suggested_steps: string | null;
+  status: "open" | "acknowledged" | "resolved";
+  occurrences: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  resolved_at: string | null;
+  last_recovery_at: string | null;
+  acknowledged_by: string | null;
+  notify_status: string | null;
+  notify_count: number;
+}
+
+export interface ErrorSummary {
+  total: number; critical: number; api: number; rag: number; database: number; bot_blocked: number;
+  open: number; acknowledged: number; resolved: number;
+  latest_error_at: string | null; last_recovery_at: string | null;
+  latest: { error_id: string; agent: string; service: string | null; category: string; last_seen_at: string; status: string } | null;
+}
+
+export interface ErrorFilters { agent?: string; grouping?: string; status?: string; website?: string; since?: string; until?: string; offset?: number; limit?: number }
+
 export interface TestEmailResult {
   status: "sent" | "not_configured" | "failed";
   reason: string | null;
@@ -85,6 +122,14 @@ export const monitoringApi = {
   runNow: () => request<MonitoringOverview>("/api/v1/system/monitoring/run", { method: "POST" }),
   testEmail: () => request<TestEmailResult>("/api/v1/system/monitoring/test-email", { method: "POST" }),
   acknowledge: (id: string) => request<AlertRow>(`/api/v1/system/monitoring/alerts/${encodeURIComponent(id)}/acknowledge`, { method: "POST" }),
+  errorSummary: () => request<ErrorSummary>("/api/v1/system/monitoring/errors/summary"),
+  errors: (f: ErrorFilters = {}) => {
+    const q = new URLSearchParams();
+    Object.entries(f).forEach(([k, v]) => { if (v !== undefined && v !== "") q.set(k, String(v)); });
+    return request<{ items: ErrorEvent[]; total: number; offset: number; limit: number }>(`/api/v1/system/monitoring/errors?${q.toString()}`);
+  },
+  errorAcknowledge: (id: string) => request<ErrorEvent>(`/api/v1/system/monitoring/errors/${encodeURIComponent(id)}/acknowledge`, { method: "POST" }),
+  errorResolve: (id: string) => request<ErrorEvent>(`/api/v1/system/monitoring/errors/${encodeURIComponent(id)}/resolve`, { method: "POST" }),
 };
 
 /** "3 minutes ago", "2 hours ago", "4 days ago". Falls back to the date for anything that does not parse. */

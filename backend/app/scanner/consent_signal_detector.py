@@ -6,6 +6,8 @@ one finds the interactive consent *mechanism* — `consent_signals` is explicitl
 of the required scan output shape.
 """
 
+import re
+
 from app.rules.tracker_catalog import match_cmp
 from app.scanner.page_parser import ParsedScript
 from app.scanner.schemas import ConsentSignalRecord
@@ -26,6 +28,26 @@ _GRANULAR_HINTS = ("manage preferences", "cookie settings", "cookie preferences"
 # has_granular_choices once a strong phrase has established the banner exists.
 _WEAK_GRANULAR_HINTS = ("customize", "preferences")
 _WEAK_ACCEPT_HINTS = ("agree", "got it", "ok")
+
+# A whole word that names an accepting action. With a settings link it shows a banner (not a bare footer link) is on the page. Whole words only: "ok" must not match "book" or "cookie".
+_CONSENT_ACTION_WORD = re.compile(r"\b(accept|allow|agree|got it|okay|ok|understood|i understand)\b")
+
+
+# "Accept all" / "Allow all" / "Reject all" ... are consent wording only when the phrase ends there or is followed by something about cookies. "Allow all notifications", "Accept all friend requests" or
+# "Reject all invitations" are the same words on pop-ups that have nothing to do with cookies, and used to be reported as a cookie banner (tested 17 Nov 2026).
+_NON_COOKIE_OBJECT = ("notifications?", "notices?", "friends?", "requests?", "invit(?:e|es|ations?)", "e-?mails?", "newsletters?", "messages?", "alerts?", "updates?", "changes", "orders?", "payments?", "bookings?",
+                      "suggestions?", "permissions?", "downloads?", "items?", "files?", "terms", "offers?", "subscriptions?", "reminders?", "tasks?", "comments?", "reviews?", "photos?", "contacts?")
+_OBJECT_AFTER = r"(?!\s+(?:" + "|".join(_NON_COOKIE_OBJECT) + r")\b)"
+
+
+def _has(text: str, phrase: str) -> bool:
+    """The phrase as whole words. A phrase that ends in "all" is refused when it goes on to name something that is not a cookie ("allow all notifications")."""
+    pattern = "(?<![a-z0-9])" + re.escape(phrase) + "(?![a-z0-9])" + (_OBJECT_AFTER if phrase.endswith(" all") else "")
+    return re.search(pattern, text) is not None
+
+
+def _any(text: str, phrases) -> bool:
+    return any(_has(text, h) for h in phrases)
 
 
 def detect_consent_signal(
@@ -73,14 +95,14 @@ def detect_consent_signal(
         if cmp_match:
             detection_source = "global_var"
 
-    has_reject_all = any(h in text for h in _REJECT_HINTS)
-    has_accept = any(h in text for h in _ACCEPT_HINTS)
+    has_reject_all = _any(text, _REJECT_HINTS)
+    has_accept = _any(text, _ACCEPT_HINTS)
     # Wording that only a displayed banner carries. A footer "Manage cookies" link (granular wording) is on pages
     # whose banner is not showing, so it does not count: cnn.com and bbc.com have one and showed no banner.
     banner_wording_seen = has_reject_all or has_accept
     # A strong granular phrase stands alone; a weak one only counts once something
     # else has already established that a consent mechanism is present.
-    has_strong_granular = any(h in text for h in _GRANULAR_HINTS)
+    has_strong_granular = _any(text, _GRANULAR_HINTS)
     established = has_reject_all or has_accept or has_strong_granular
     has_granular = has_strong_granular or (
         established and any(h in text for h in _WEAK_GRANULAR_HINTS)
@@ -112,14 +134,18 @@ def detect_consent_signal(
                 "text_has_reject_all": has_reject_all, "text_has_granular_choices": has_granular,
             },
         )
-    if established:
+    # A footer "Cookie settings" / "Manage cookies" link is on pages that show no banner at all (clyzo.com, 16 Nov 2026: reported "Cookie banner detected, no reject-all, per-purpose choices"
+    # for a site a visitor sees no banner on). A banner is something you accept or refuse, so a settings link counts only beside an Accept-type control; on its own it is recorded as a
+    # link seen, not as a banner.
+    banner_established = banner_wording_seen or (has_strong_granular and bool(_CONSENT_ACTION_WORD.search(text)))
+    if banner_established:
         return ConsentSignalRecord(
             mechanism_type="banner",
             has_reject_all=has_reject_all,
             has_granular_choices=has_granular,
             evidence={
                 "matched_keywords": [
-                    h for h in _ACCEPT_HINTS + _REJECT_HINTS + _GRANULAR_HINTS if h in text
+                    h for h in _ACCEPT_HINTS + _REJECT_HINTS + _GRANULAR_HINTS if _has(text, h)
                 ],
                 "confidence": 0.5, "detection_source": "control_text_keywords",
                 # Said plainly in the record, because a 0.5 signal was being read
@@ -133,5 +159,5 @@ def detect_consent_signal(
         )
     return ConsentSignalRecord(
         mechanism_type="none", has_reject_all=None, has_granular_choices=None,
-        evidence={"confidence": 0.0, "detection_source": None},
+        evidence={"confidence": 0.0, "detection_source": None, "cookie_settings_link_only": has_strong_granular},
     )

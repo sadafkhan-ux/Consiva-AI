@@ -299,6 +299,9 @@ services:
       # because the API sees a secret, and every delivery then goes out unsigned from
       # a process that has none.
       WEBHOOK_SIGNING_SECRET: "${WEBHOOK_SIGNING_SECRET:-}"
+      # The Enterprise pipeline asks for a cleanup pass when a scan ends; it only runs against the database named here (see the cleanup service).
+      CLEANUP_CONFIRM_DATABASE: "consiva@db"
+      CLEANUP_GRACE_MINUTES: "${CLEANUP_GRACE_MINUTES:-15}"
     networks:
       - consiva
     depends_on:
@@ -330,6 +333,35 @@ services:
     # pass. Left enabled it reported a perfectly healthy worker as "unhealthy"
     # indefinitely. Liveness for this process is simply "did it exit" -- which
     # restart: unless-stopped already handles.
+    healthcheck:
+      disable: true
+
+  # Local scan-data cleanup, for BOTH scanning agents. Every few minutes it clears what finished scans produced (extracted text and HTML, evidence, findings, assessments, embeddings, stored
+  # reports) and keeps each scan's history: id, website, status, times, failure reason. It never drops a table or column, and it STOPS if the database is not the one named in
+  # CLEANUP_CONFIRM_DATABASE below. Run it once by hand with scripts/cleanup_scan_data.sh. See docs/SCAN_DATA_CLEANUP.md.
+  cleanup:
+    image: consiva-backend:latest
+    restart: unless-stopped
+    command: ["python", "-m", "app.cleanup", "--loop", "${CLEANUP_INTERVAL_SECONDS:-300}", "--history-dir", "/backups"]
+    init: true
+    env_file:
+      - ./backend/.env
+    environment:
+      APP_ENV: "${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}"
+      DATABASE_URL: *database_url
+      CLEANUP_CONFIRM_DATABASE: "consiva@db"
+      CLEANUP_GRACE_MINUTES: "${CLEANUP_GRACE_MINUTES:-15}"
+      DB_POOL_SIZE: "3"
+      DB_MAX_OVERFLOW: "2"
+    volumes:
+      - ./backups:/backups
+    networks:
+      - consiva
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       disable: true
 

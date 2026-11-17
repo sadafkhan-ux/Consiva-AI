@@ -72,6 +72,7 @@ export function UrlsTab({ scanId, refresh }: { scanId: string; refresh: string }
                           {it.chunks_created != null ? `, ${it.chunks_analysed ?? 0} of ${it.chunks_created} passages analysed` : ""}
                         </div>
                       ) : null}
+                      {it.also_categories && it.also_categories.length > 0 ? <div className="small" data-testid="url-also">Also holds: {it.also_categories.map((c) => words(c)).join(", ")} (as sections of this page)</div> : null}
                       {it.evidence_note ? <div className="small" data-testid="url-evidence-note">Read limited: {it.evidence_note}</div> : null}
                       {it.analysis_note ? <div className="small" data-testid="url-analysis-note">{it.analysis_note}</div> : null}
                     </td>

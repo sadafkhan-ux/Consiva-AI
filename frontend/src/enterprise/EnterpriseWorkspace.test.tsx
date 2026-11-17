@@ -57,6 +57,11 @@ async function openScan() {
   await screen.findByTestId("overview");
 }
 
+const dashScan = (o: object = {}) => ({ agent: "enterprise", scan_id: ID, website_url: "https://example.com/", outcome: "completed", detail: "completed, limited", reason: null,
+  started_at: "2026-11-13T09:00:00Z", finished_at: "2026-11-13T09:04:00Z", data_cleared: false, ...o });
+const dashboard = (items: object[]) => ({ kpis: { scans_total: items.length, scans_completed: items.length, scans_failed: 0, scans_pending: 0, scans_five_page: 0, scans_enterprise: items.length }, last_scan: items[0] ?? null,
+  history: { items, total: items.length, offset: 0, limit: 10 }, definitions: { completed: "done", failed: "failed", pending: "pending" }, cached: false });
+
 beforeEach(() => {
   routes = [];
   calls.length = 0;
@@ -65,6 +70,7 @@ beforeEach(() => {
   window.sessionStorage.setItem("consiva.profile", JSON.stringify({ user_id: "u", org_id: "o", role: "admin", email: "a@b.c" }));
   window.history.replaceState(null, "", "/#/dpdp");
   on(/\/summary$/, () => summary());
+  on(/\/enterprise\/dashboard\/summary/, () => dashboard([dashScan()]));
   vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
     const url = String(input);
     calls.push({ url, init });
@@ -77,7 +83,7 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); saved.sa
 describe("Enterprise DPDP workspace", () => {
   it("lists scans with status, score, coverage and date, and opens one", async () => {
     await openScan();
-    expect(calls.some((c) => /\/enterprise\/scans\?offset=0&limit=25/.test(c.url))).toBe(true);
+    expect(calls.some((c) => /\/enterprise\/dashboard\/summary/.test(c.url))).toBe(true);
     expect(calls.every((c) => (c.init?.headers as Record<string, string>)?.Authorization === "Bearer tok")).toBe(true);
   });
 
@@ -309,13 +315,13 @@ describe("Enterprise DPDP workspace", () => {
   });
 
   it("requires the attestation before a scan can be started", async () => {
-    on(/\/enterprise\/scans\?/, page([]));
+    on(/\/enterprise\/dashboard\/summary/, () => dashboard([]));
     await mount();
     const start = screen.getByRole("button", { name: "Start scan" });
     fireEvent.change(screen.getByLabelText("Website address"), { target: { value: "example.com" } });
     expect(start).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox"));
     expect(start).toBeEnabled();
-    expect(await screen.findByText(/No Enterprise scans yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No scans yet/)).toBeInTheDocument();
   });
 });

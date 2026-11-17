@@ -17,6 +17,20 @@ class EnterpriseSettings(BaseSettings):
 
     #: The whole Enterprise product is off until this is true. Nothing in it runs, and no route is served, while it is false.
     enabled: bool = False
+    #: Keep each website's policy documents as a versioned, searchable knowledge base after every scan (migration 0058).
+    policy_kb_enabled: bool = True
+    #: Reuse the facts an earlier scan of the same organisation extracted from exactly the same passage (same text, same extraction prompt, same model) instead of calling the model again.
+    reuse_analysis: bool = True
+    #: Clear the temporary data of finished scans (see enterprise/retention.py). Reports, findings, scores, history and policy text are never cleared.
+    retention_enabled: bool = True
+    #: Hours after a scan has been analysed before its temporary data is cleared. 0 = as soon as the scan finishes.
+    temp_retention_hours: int = Field(default=24, ge=0, le=24 * 365)
+    #: Days a reusable analysis result may go unused before it is removed from the cache.
+    fact_cache_days: int = Field(default=90, ge=1, le=3650)
+    #: Ask the model, from the site's addresses alone, which of them probably hold a privacy, cookie, terms or grievance document, so a policy at an address no pattern knows (/p/12, /trust/dp) is read early.
+    slug_triage: bool = True
+    #: Most addresses sent to the model for this, per scan (400 to a call).
+    slug_triage_max_urls: int = Field(default=1200, ge=0, le=20_000)
     #: Most distinct URLs recorded for one scan. 0 = no cap. The default is a ceiling, not a target: a scan that reaches it says so (`stop_reason` = url_limit) and lists the rest as pending.
     max_urls: int = Field(default=100_000, ge=0, le=10_000_000)
     #: Deepest link level crawled (the entry address is 0). 0 is valid: the entry page only.

@@ -39,6 +39,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Consiva — Privacy Policy Agent", lifespan=lifespan)
 app.include_router(api_router)
 
+from app.monitoring.middleware import ErrorMonitorMiddleware  # noqa: E402  (records HTTP errors as events and gives every request an id; changes no response but adds X-Request-ID)
+
+app.add_middleware(ErrorMonitorMiddleware)
+
 # Local dev only: the separate Vite frontend (frontend/) runs on its own origin
 # (localhost, some port Vite picks -- not assumed fixed), so its fetch() calls to this
 # API are genuinely cross-origin, unlike the static demo page which is same-origin.

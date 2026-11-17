@@ -22,12 +22,31 @@ SETTLE_MS = 1200
 LOAD_WAIT_MS = 5000
 
 
+async def _block_verdict(page, response, status: int):
+    """Is this error answer the site's bot protection or access control (as opposed to a server error)? Looks at the status, the headers and the short page that came back. Recognises only; never answers a challenge."""
+    from app.monitoring import blocks
+    try:
+        headers = await response.all_headers()
+    except Exception:
+        headers = {}
+    try:
+        title = await page.title()
+    except Exception:
+        title = ""
+    try:
+        body = await page.inner_text("body", timeout=2000)
+    except Exception:
+        body = ""
+    return blocks.detect_block(status, headers, title, body)
+
+
 class RenderFailed(Exception):
     """The page could not be rendered. `retryable` says whether trying again can help (a timeout or a 5xx), `http_status` carries the answer if there was one."""
 
-    def __init__(self, message: str, *, retryable: bool, http_status: int | None = None) -> None:
+    def __init__(self, message: str, *, retryable: bool, http_status: int | None = None, block=None) -> None:
         super().__init__(message)
         self.retryable, self.http_status = retryable, http_status
+        self.block = block                  # a monitoring.blocks.BlockVerdict when the site's protection refused the scanner (then retrying cannot help and is not done)
 
 
 @dataclass
@@ -88,7 +107,10 @@ async def render(context: BrowserContext, url: str, *, timeout_ms: int = 30_000,
             raise RenderFailed(str(exc).splitlines()[0][:300] or type(exc).__name__, retryable=True) from exc
         status = response.status if response else None
         if status is not None and status >= 400:
-            raise RenderFailed(f"HTTP {status}", retryable=status >= 500 or status == 429, http_status=status)
+            verdict = await _block_verdict(page, response, status)
+            if verdict:
+                raise RenderFailed(f"HTTP {status}: {verdict.signal}", retryable=False, http_status=status, block=verdict)
+            raise RenderFailed(f"HTTP {status}", retryable=status >= 500, http_status=status)
         try:
             await page.wait_for_load_state("load", timeout=LOAD_WAIT_MS)
         except PlaywrightTimeout:

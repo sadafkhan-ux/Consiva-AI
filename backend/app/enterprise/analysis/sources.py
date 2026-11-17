@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
+from app.enterprise.analysis import embedded as emb
 from app.enterprise.analysis import pages as pg
 from app.enterprise.analysis.repo import EvRow, FrontierRow
 
@@ -27,6 +28,7 @@ class Src:
     text: str
     frontier_id: str | None = None
     category: str = pg.OTHER
+    virtual: bool = False           # a policy found inside another page: read as part of that page, counted for its own category, never sent to the model a second time
 
 
 @dataclass
@@ -41,6 +43,7 @@ class Page:
     frontier_ids: set[str] = field(default_factory=set)
     is_document: bool = False
     unresolved: bool = False        # ambiguous and the model could not settle it
+    also: list = field(default_factory=list)       # policies embedded in this page as sections (analysis.embedded.Embedded), each in addition to the page's own category
 
 
 @dataclass
@@ -87,6 +90,11 @@ def form_signature(content: dict) -> str:
 def build(evidence: list[EvRow], frontier: list[FrontierRow]) -> Loaded:
     """Group the stored evidence. Classification here is the deterministic part only; ambiguous pages are settled by the pipeline."""
     out = Loaded(frontier=frontier)
+    hints: dict[str, tuple[str, ...]] = {}
+    for fr in frontier:
+        if fr.slug_kinds:
+            hints[fr.final_url or fr.url] = fr.slug_kinds
+            hints.setdefault(fr.url, fr.slug_kinds)
     text_rows: dict[tuple[str, int], EvRow] = {}
     html: dict[str, str] = {}
     form_rows: dict[str, EvRow] = {}
@@ -112,9 +120,14 @@ def build(evidence: list[EvRow], frontier: list[FrontierRow]) -> Loaded:
         page = out.pages.get(url)
         if page is None:
             title, heads = pg.title_and_headings(html.get(url, "")) if r.kind == "page_text" else ("", [])
-            facts = pg.PageFacts(url, title, heads, r.content if r.kind == "page_text" else r.content)
+            hint = hints.get(url, ())
+            facts = pg.PageFacts(url, title, heads, r.content if r.kind == "page_text" else r.content, hint)
             c = pg.classify_page(facts)
             page = out.pages[url] = Page(url, c.category, c.strength, c.reasons, title, heads, c.candidates, is_document=r.kind == "document_text", unresolved=c.ambiguous)
+            if r.kind == "page_text" and c.category not in (pg.ARTICLE, pg.PRODUCT):
+                _embedded(page, html.get(url), r.content)
+                for e in page.also:
+                    out.texts.append(Src(r.id, url, r.kind, number, e.text, r.frontier_id, e.kind, virtual=True))
         if r.frontier_id:
             page.frontier_ids.add(r.frontier_id)
         out.texts.append(Src(r.id, url, r.kind, number, r.content, r.frontier_id, page.category))
@@ -136,6 +149,23 @@ def build(evidence: list[EvRow], frontier: list[FrontierRow]) -> Loaded:
         seen[sig] = url
         out.forms.append(Src(r.id, url, "form_text", 0, text, r.frontier_id, page.category))
     return out
+
+
+def _embedded(page: Page, html: str | None, text: str) -> None:
+    """Find the policies this page holds as sections. A page with no category of its own that holds some (a "Legal" hub) takes the first as its category."""
+    try:
+        found = emb.detect(html, text, page.category)
+    except Exception:                                   # a page the parser cannot read is not a reason to lose the page
+        return
+    if not found:
+        return
+    if page.category == pg.OTHER and not page.unresolved:
+        first, found = found[0], found[1:]
+        page.category, page.strength = first.kind, "medium"
+        page.reasons = page.reasons + (f"no policy title, but its heading \"{first.heading}\" names a {first.kind.replace('_', ' ')} with {len(first.text):,} characters under it",)
+    page.also = found
+    if found:
+        page.reasons = page.reasons + (f"it also holds {', '.join(e.kind.replace('_', ' ') for e in found)} as sections",)
 
 
 def apply_category(loaded: Loaded, url: str, category: str, reason: str) -> None:

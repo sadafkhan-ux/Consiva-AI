@@ -13,12 +13,18 @@ import httpx
 from sqlalchemy import func, select, text
 
 from app.db.session import async_session_factory
-from app.monitoring import alerts, checks, mailer
+from app.monitoring import alerts, checks, events, mailer
 from app.monitoring.config import MonitoringSettings, get_monitoring_settings
 from app.monitoring.models import SystemAlert, SystemHealth
 from app.monitoring.scrub import scrub
 
 logger = logging.getLogger(__name__)
+
+
+def get_gateway_url() -> str:
+    """The address people reach the application through, probed each round (ALERT_GATEWAY_URL, for example http://frontend:8080/health). Empty = not probed."""
+    import os
+    return os.environ.get("ALERT_GATEWAY_URL", "").strip()
 LOCK_KEY = 7_240_053          # arbitrary, fixed: "the monitoring round"
 
 
@@ -56,23 +62,37 @@ async def run_round(force: bool = False) -> list[dict]:
                     db_result,
                     await checks.guarded("anthropic_api", "Claude API key", lambda: checks.check_anthropic(client)),
                     await checks.guarded("nvidia_api", "NVIDIA API key", lambda: checks.check_nvidia(client)),
+                    await checks.guarded("embedding_api", "Embedding model (RAG)", lambda: checks.check_embedding_api(client)),
                 ]
             async def inside_savepoint(fn):
                 # a check whose query fails must not poison the transaction the other checks and the recording share
                 async with db.begin_nested():
                     return await fn()
 
+            gateway = get_gateway_url()
+            if gateway:
+                async with httpx.AsyncClient(timeout=15) as gclient:
+                    results.append(await checks.guarded("gateway", "Gateway to the backend", lambda: checks.check_gateway(gateway, gclient)))
             if db_result.ok:
                 results += [
+                    await checks.guarded("vector_db", "Vector search (pgvector)", lambda: inside_savepoint(lambda: checks.check_vector_db(db))),
                     await checks.guarded("job_queue", "Background jobs", lambda: inside_savepoint(lambda: checks.check_job_queue(db))),
                     await checks.guarded("llm_calls", "Recent AI calls", lambda: inside_savepoint(lambda: checks.check_llm_calls(db))),
                     await checks.guarded("scan_failures", "Scan failures", lambda: inside_savepoint(lambda: checks.check_scan_failures(db))),
                 ]
             for result in results:
+                try:
+                    await events.mirror_check_result(result)           # the same outcome, shown beside the other errors (no second email)
+                except Exception:
+                    logger.exception("monitoring: could not mirror a check result")
                 notice = await alerts.record_result(db, result, settings)
                 if notice is not None:
                     notices.append(notice)
             await db.commit()
+        try:
+            await events.record_agent_run_failures()                   # five-page analyses that ended failed (RAG retrieval, model calls), read from their own run records
+        except Exception:
+            logger.exception("monitoring: could not read failed agent runs")
     except Exception as exc:                                           # the database itself is unreachable: nothing can be recorded, so say it by email directly
         logger.exception("monitoring: the check round could not run")
         status, reason = await mailer.send(

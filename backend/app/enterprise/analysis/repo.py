@@ -35,6 +35,7 @@ class FrontierRow:
     final_url: str | None
     status: str
     content_type: str | None
+    slug_kinds: tuple[str, ...] = ()        # what the address suggested when the model read the site's addresses (a hint only; the page's content decides)
 
 
 @dataclass
@@ -116,8 +117,8 @@ class SqlRepo:
     async def load_frontier(self, scan_id) -> list[FrontierRow]:
         from sqlalchemy import text
         async with await self._session() as db:
-            rows = (await db.execute(text("select id, original_url, final_url, status, content_type from ent_frontier where scan_id = :s"), {"s": scan_id})).all()
-        return [FrontierRow(str(r.id), r.original_url, r.final_url, r.status, r.content_type) for r in rows]
+            rows = (await db.execute(text("select id, original_url, final_url, status, content_type, slug_kinds from ent_frontier where scan_id = :s"), {"s": scan_id})).all()
+        return [FrontierRow(str(r.id), r.original_url, r.final_url, r.status, r.content_type, tuple(r.slug_kinds or ())) for r in rows]
 
     async def load_chunks(self, scan_id) -> list[ChunkRow]:
         from sqlalchemy import select
@@ -174,6 +175,22 @@ class SqlRepo:
                 await db.execute(update(F).where(F.scan_id == scan_id, F.id == uuid.UUID(fid)).values(analysis_status=status))
             await db.commit()
 
+    async def find_reusable_extraction(self, scan_id, text_hash: str, extractor_key: str) -> dict | None:
+        """The result of an earlier scan of this organisation that read exactly this passage with exactly this prompt and model, or None."""
+        from sqlalchemy import text
+        async with await self._session() as db:
+            cached = (await db.execute(text(
+                "update ent_fact_cache f set last_used_at = now(), use_count = f.use_count + 1 from ent_scans me "
+                "where me.id = :me and f.org_id = me.org_id and f.text_hash = :h and f.extractor_key = :k returning f.result"), {"me": scan_id, "h": text_hash, "k": extractor_key})).first()
+            if cached is not None:
+                await db.commit()
+                return cached[0]
+            row = (await db.execute(text(
+                "select c.result from ent_analysis_chunks c join ent_scans s on s.id = c.scan_id join ent_scans me on me.id = :me and me.org_id = s.org_id "
+                "where c.text_hash = :h and c.extractor_key = :k and c.level = 'page' and c.status = 'done' and c.result is not null and c.scan_id <> :me order by c.updated_at desc limit 1"),
+                {"me": scan_id, "h": text_hash, "k": extractor_key})).first()
+        return row[0] if row else None
+
     async def set_frontier_tracking(self, scan_id, tracking: dict[str, dict]) -> None:
         """Keep, on each page's frontier row, how it was classified and how much of it was analysed."""
         from sqlalchemy import update
@@ -182,7 +199,7 @@ class SqlRepo:
         async with await self._session() as db:
             for fid, t in tracking.items():
                 await db.execute(update(F).where(F.scan_id == scan_id, F.id == uuid.UUID(fid)).values(
-                    page_category=t["category"], category_reason=t["reason"], chunks_created=t["created"], chunks_analysed=t["analysed"], analysis_note=t["note"]))
+                    page_category=t["category"], page_category_strength=t.get("strength"), category_reason=t["reason"], also_categories=t.get("also") or None, chunks_created=t["created"], chunks_analysed=t["analysed"], analysis_note=t["note"]))
             await db.commit()
 
     async def save_assessments(self, scan_id, assessments, *, assessor, provider, model) -> int:

@@ -59,6 +59,11 @@ _LEGAL = __import__("re").compile(r"(privacy|cookie|terms|policy|policies|grieva
 _ARTICLE = __import__("re").compile(r"/(blog|blogs|news|article|articles|insights|press|stories|magazine|post|posts)(/|$)", __import__("re").I)
 
 
+def is_article_path(url: str) -> bool:
+    """An address under a blog, news or press section: not asked about when the site's addresses are read for policy pages."""
+    return bool(_ARTICLE.search(urlparse(url).path))
+
+
 def legal_priority(url: str) -> int:
     """0 for a page a privacy assessment needs first (by its address: it names a policy, terms, grievance or contact page and is not an article), else 1. An article that mentions the law is not
     the policy, so a blog address never earns priority."""

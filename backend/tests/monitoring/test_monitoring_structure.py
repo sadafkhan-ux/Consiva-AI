@@ -49,13 +49,17 @@ def test_monitoring_imports_no_scoring_and_no_scan_logic():
 
 def test_only_the_router_and_the_worker_know_about_monitoring():
     importers = {p.relative_to(APP).as_posix() for p in APP.rglob("*.py") if "monitoring" not in p.parts and any(m.startswith("app.monitoring") for m in _imports(p))}
-    assert importers <= {"api/v1/router.py", "jobs/worker.py"}, importers
+    # The error monitor (16 Nov 2026) is called from the places that know about a failure: the middleware that sees HTTP errors, and the Enterprise modules that call a model, an embedding API, the vector
+    # store or a website. Each is listed here on purpose: a new caller has to be added to this list by a person who knows why.
+    allowed = {"api/v1/router.py", "jobs/worker.py", "main.py", "enterprise/analysis/llm.py", "enterprise/api/policy_kb.py", "enterprise/crawl/renderer.py", "enterprise/crawl/runner.py", "enterprise/pipeline.py",
+               "enterprise/policykb/retrieve.py", "enterprise/policykb/sync.py"}
+    assert importers <= allowed, importers - allowed
 
 
 def test_every_monitoring_route_is_admin_only():
     src = (APP / "monitoring" / "api.py").read_text(encoding="utf-8")
     handlers = re.findall(r"@router\.(?:get|post)\([^\n]*\)\nasync def (\w+)\(", src)
-    assert len(handlers) == 4
+    assert len(handlers) == 4 + 5          # the health screen's four, and the five error-event routes (summary, list, detail, acknowledge, resolve)
     for name in handlers:
         body = src.split(f"async def {name}(")[1].split("\n@router")[0]
         assert "_admin(user)" in body, f"{name} does not check for an administrator"

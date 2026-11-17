@@ -7,6 +7,7 @@ import pytest
 from app.enterprise.models import EntAnalysisChunk, EntAssessment, EntAuditEvent, EntFinding, EntReport, EntScoreResult
 
 SQL = (Path(__file__).resolve().parents[2] / "migrations" / "0055_enterprise_assessment.sql").read_text(encoding="utf-8")
+LATER = (Path(__file__).resolve().parents[2] / "migrations" / "0058_enterprise_policy_kb.sql").read_text(encoding="utf-8")
 NEW = ("ent_assessments", "ent_score_results", "ent_findings", "ent_analysis_chunks", "ent_reports", "ent_audit_events")
 
 
@@ -20,7 +21,8 @@ def _block(table: str) -> str:
 def test_every_model_column_is_in_the_migration(model):
     block = _block(model.__tablename__)
     for col in model.__table__.columns:
-        assert re.search(rf"^\s+{col.name}\s", block, re.M), f"{model.__tablename__}.{col.name} missing from the migration"
+        later = [c for m in re.findall(rf"alter table {model.__tablename__}\s+(.*?);", LATER, re.S) for c in re.findall(r"add column if not exists (\w+)", m)]
+        assert re.search(rf"^\s+{col.name}\s", block, re.M) or col.name in later, f"{model.__tablename__}.{col.name} missing from the migration"
 
 
 def test_the_migration_creates_only_the_new_ent_tables_and_only_adds_to_the_old_ones():

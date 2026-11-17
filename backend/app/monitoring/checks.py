@@ -158,3 +158,63 @@ async def guarded(source: str, label: str, call: Callable[[], Awaitable[CheckRes
     except Exception as exc:
         return CheckResult(source, label, False, f"The check could not run: {scrub(type(exc).__name__ + ' ' + str(exc), 160)}", severity="warning",
                            title=f"The {label} check could not run", action="Look at the worker log for the error.")
+
+
+async def check_vector_db(db: AsyncSession) -> CheckResult:
+    """The vector search the policy knowledge base relies on: the pgvector extension is installed and can compare two vectors. Reads nothing of anyone's."""
+    started = time.monotonic()
+    ext = await db.scalar(text("select extversion from pg_extension where extname = 'vector'"))
+    if ext is None:
+        return CheckResult("vector_db", "Vector search (pgvector)", False, "The pgvector extension is not installed in this database.", _ms(started), definitive=True, severity="critical",
+                           title="Vector database (pgvector) is missing", action="Install the pgvector extension (create extension vector) or use the pgvector image, then run python migrate.py.")
+    await db.scalar(text("select cast('[1,2,3]' as vector) <=> cast('[1,2,4]' as vector)"))
+    return CheckResult("vector_db", "Vector search (pgvector)", True, f"pgvector {ext} answers.", _ms(started))
+
+
+async def check_gateway(url: str, client: httpx.AsyncClient) -> CheckResult:
+    """The address people reach the application through (the frontend's proxy): it must pass /api requests on to the backend. A 502, 503 or 504 here is a gateway that cannot reach the backend, which the
+    backend itself can never see."""
+    started = time.monotonic()
+    try:
+        r = await client.get(url, timeout=10)
+    except Exception as exc:
+        return CheckResult("gateway", "Gateway to the backend", False, f"The gateway could not be reached: {scrub(type(exc).__name__ + ' ' + str(exc), 160)}", _ms(started), severity="critical",
+                           title="The gateway is unreachable", action="Check that the frontend container is running (docker compose ps frontend).")
+    if r.status_code in (502, 503, 504):
+        return CheckResult("gateway", "Gateway to the backend", False, f"The gateway answered HTTP {r.status_code}: it cannot reach the backend.", _ms(started), severity="critical",
+                           title=f"The gateway cannot reach the backend (HTTP {r.status_code})", action="Check that the backend container is running and healthy; restart the frontend container if the backend was recreated.")
+    return CheckResult("gateway", "Gateway to the backend", True, f"The gateway answered HTTP {r.status_code}.", _ms(started))
+
+
+async def check_embedding_api(client: httpx.AsyncClient) -> CheckResult:
+    """The embedding model that RAG retrieval (five-page) and the policy knowledge base (Enterprise) need: one tiny embedding request. A 404 or 410 means the provider retired the configured model, which
+    the key check (a free model-list call) can never show, and which makes every analysis fail at RAG retrieval until someone changes the model."""
+    s = get_settings()
+    label, source = "Embedding model (RAG)", "embedding_api"
+    if not s.nvidia_api_key:
+        return CheckResult(source, label, False, "No NVIDIA API key is set, so embeddings cannot be generated.", None, definitive=True, severity="critical", title="Embedding API key is missing",
+                           action="Set NVIDIA_API_KEY in backend/.env and restart the backend and worker.")
+    started = time.monotonic()
+    try:
+        r = await client.post(f"{s.nvidia_api_base_url.rstrip('/')}/embeddings", headers={"Authorization": f"Bearer {s.nvidia_api_key}"},
+                              json={"model": s.nvidia_embed_model, "input": ["ping"], "input_type": "query", "truncate": "END", "dimensions": s.nvidia_embed_dimensions}, timeout=20)   # the same request the application makes (dimensions included): without it the model answers at its own default size and the check would report a mismatch that is not real
+    except Exception as exc:
+        return CheckResult(source, label, False, f"The embedding service could not be reached: {scrub(type(exc).__name__ + ' ' + str(exc), 160)}", _ms(started), severity="critical",
+                           title="The embedding service is unreachable", action="Check the network and NVIDIA_API_BASE_URL; it may be a passing outage.")
+    ms = _ms(started)
+    if r.status_code == 200:
+        dims = len(((r.json().get("data") or [{}])[0].get("embedding")) or [])
+        if dims != s.nvidia_embed_dimensions:
+            return CheckResult(source, label, False, f"The embedding model returned {dims}-dimensional vectors but the knowledge base stores {s.nvidia_embed_dimensions}.", ms, definitive=True, severity="critical",
+                               title="Embedding size does not match the knowledge base", action="Use a model (or a dimensions setting) that returns the stored vector size, or re-index the knowledge base.")
+        return CheckResult(source, label, True, f"{s.nvidia_embed_model} answers ({dims} dimensions).", ms)
+    if r.status_code in (404, 410):
+        return CheckResult(source, label, False, f"{s.nvidia_embed_model} answered HTTP {r.status_code}: the provider no longer serves this model.", ms, definitive=True, severity="critical",
+                           title=f"Embedding model retired by the provider (HTTP {r.status_code})",
+                           action="Choose a current embedding model in backend/.env (NVIDIA_EMBED_MODEL). It must return the stored vector size, and the knowledge base must be re-embedded with it. "
+                                  "Until then RAG retrieval fails and analyses end incomplete.")
+    if r.status_code in (401, 403):
+        return CheckResult(source, label, False, f"The embedding service answered HTTP {r.status_code}: the key is not accepted for embeddings.", ms, definitive=True, severity="critical",
+                           title=f"Embedding API key rejected (HTTP {r.status_code})", action="Create a new key with the provider and set NVIDIA_API_KEY in backend/.env.")
+    return CheckResult(source, label, False, f"The embedding service answered HTTP {r.status_code}: {scrub(r.text, 160)}", ms, severity="critical" if r.status_code >= 500 else "warning",
+                       title=f"The embedding service is failing (HTTP {r.status_code})", action="Usually passes by itself; if it keeps failing check the provider's status.")

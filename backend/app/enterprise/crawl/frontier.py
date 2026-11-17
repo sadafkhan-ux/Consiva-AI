@@ -21,8 +21,6 @@ from app.enterprise.models import EntFrontier
 from app.enterprise.crawl.scope import legal_priority
 from app.scanner.url_normalize import normalize_url
 
-#: A page is judged a duplicate by its text only when it has at least this much of it.
-DUPLICATE_MIN_CHARS = 400
 
 ADDED, DUPLICATE, DEPTH_LIMIT, URL_LIMIT, EXCLUDED = "added", "duplicate", "depth_limit", "url_limit", "excluded"
 
@@ -119,21 +117,6 @@ async def record_page(db: AsyncSession, row_id: uuid.UUID, *, title: str | None,
     """What was extracted from the page: its title, how much text, the hash of that text, when, and anything that limited the read (a section not opened, a size limit, an iframe from another site)."""
     await db.execute(update(EntFrontier).where(EntFrontier.id == row_id).values(
         page_title=(title or "")[:500] or None, text_chars=text_chars, content_hash=content_hash, extracted_at=func.now(), evidence_note=(evidence_note or "")[:1500] or None))
-
-
-async def find_duplicate(db: AsyncSession, scan_id: uuid.UUID, row_id: uuid.UUID, *, final_url: str, content_hash: str | None, text_chars: int) -> str | None:
-    """The address of a page of this scan that was already read and is this same page: it ended at the same final address, or (for a page with real text) its text is identical.
-    A short shell page is never judged by its text, because every empty single-page-app shell has the same text."""
-    row = (await db.execute(select(EntFrontier.original_url).where(
-        EntFrontier.scan_id == scan_id, EntFrontier.id != row_id, EntFrontier.status == "done", EntFrontier.final_url == final_url).limit(1))).first()
-    if row:
-        return row[0]
-    if content_hash and text_chars >= DUPLICATE_MIN_CHARS:
-        row = (await db.execute(select(EntFrontier.original_url).where(
-            EntFrontier.scan_id == scan_id, EntFrontier.id != row_id, EntFrontier.status == "done", EntFrontier.content_hash == content_hash).limit(1))).first()
-        if row:
-            return row[0]
-    return None
 
 
 async def add_not_recorded(db: AsyncSession, scan_id: uuid.UUID, count: int) -> None:

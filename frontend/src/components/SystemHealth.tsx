@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ago, monitoringApi, type AlertRow, type MonitoringOverview } from "../api/monitoring";
 import { ApiError } from "../api/types";
+import { ErrorMonitoring } from "./ErrorMonitoring";
 
 /**
  * System health: whether the things the scanner depends on are working, which problems are open, and who is emailed about them.
@@ -134,6 +135,8 @@ export function SystemHealth() {
           ))}
         </div>
       )}
+
+      <ErrorMonitoring />
 
       <h3>Checks</h3>
       <div className="check-table-wrap">

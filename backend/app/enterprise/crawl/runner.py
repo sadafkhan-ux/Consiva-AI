@@ -25,7 +25,7 @@ from app.db.session import async_session_factory, set_org_scope
 from app.enterprise import scans
 from app.enterprise.config import get_enterprise_settings
 from app.enterprise.consent.run import make_session_tools, run_consent_suite
-from app.enterprise.crawl import discovery, frontier, limits, page_inspect, scope
+from app.enterprise.crawl import discovery, frontier, limits, page_inspect, scope, slug_triage
 from app.enterprise.crawl.renderer import RenderFailed, render
 from app.enterprise.documents import extract as doc_extract
 from app.enterprise.documents import fetch as doc_fetch
@@ -37,12 +37,24 @@ from app.scanner.crawler import _guard_navigation, _host_resolver_pin_args, _new
 from app.scanner.failures import RobotsUnreadable
 from app.scanner.url_safety import assert_safe_url
 from app.scanner.withdrawal import non_essential_requests
+from app.monitoring import blocks, events as error_events
 
 logger = logging.getLogger(__name__)
 
 WORKER_ID = f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
 #: How long a runner waits for pages another worker still holds before it checks again.
 IDLE_POLL_SECONDS = 2.0
+#: Pages the website's protection refused, per running scan: {scan_id: {"first": BlockVerdict, "url": str, "seed": bool, "count": int}}. Read by the crawl loop to stop at once instead of retrying.
+_BLOCKS: dict = {}
+#: Blocked pages (at least this many, and at least half of the pages tried) end the scan as blocked: the rest of the site would be refused too, and what was read is not enough to assess.
+BLOCKED_STOP_MIN = 3
+
+
+def _note_block(scan_id, claimed, verdict) -> None:
+    b = _BLOCKS.setdefault(scan_id, {"first": verdict, "url": claimed.url, "seed": False, "count": 0})
+    b["count"] += 1
+    if claimed.depth == 0:
+        b.update(first=verdict, url=claimed.url, seed=True)
 
 
 async def _is_cancelled(scan_id: uuid.UUID, org_id: uuid.UUID) -> bool:
@@ -68,6 +80,11 @@ async def _process(claimed: frontier.Claimed, *, scan_id, root_url, rules, conte
             try:
                 page = await render(page_context, claimed.url, timeout_ms=timeout_ms, site_url=root_url)
             except RenderFailed as exc:
+                if exc.block:
+                    _note_block(scan_id, claimed, exc.block)
+                    new = await frontier.mark_failed(db, claimed.id, f"BLOCKED ({exc.block.kind}): {exc.block.signal}", retryable=False, http_status=exc.http_status)
+                    await db.commit()
+                    return new
                 new = await frontier.mark_failed(db, claimed.id, str(exc), retryable=exc.retryable, http_status=exc.http_status)
                 await db.commit()
                 return new
@@ -77,6 +94,13 @@ async def _process(claimed: frontier.Claimed, *, scan_id, root_url, rules, conte
                 await frontier.mark_excluded(db, claimed.id, "redirected_to_another_site")
                 await db.commit()
                 return "excluded"
+            # A challenge or CAPTCHA page that was served with a normal status is not the site's content: it must not be stored, classified or analysed as if it were.
+            verdict = blocks.detect_block(page.http_status, page.headers, page.title, page.text)
+            if verdict:
+                _note_block(scan_id, claimed, verdict)
+                new = await frontier.mark_failed(db, claimed.id, f"BLOCKED ({verdict.kind}): {verdict.signal}", retryable=False, http_status=page.http_status)
+                await db.commit()
+                return new
             if page_inspect.is_soft_404(page.title, page.text, page.http_status):
                 await frontier.mark_excluded(db, claimed.id, "soft_404: the page answered 200 but reads as not found")
                 await db.commit()
@@ -84,13 +108,8 @@ async def _process(claimed: frontier.Claimed, *, scan_id, root_url, rules, conte
             text_hash = hashlib.sha256(page.text.encode("utf-8")).hexdigest() if page.text else None
             added = await discovery.add_links(db, scan_id, root_url, page.links, parent_depth=claimed.depth, max_urls=max_urls, max_depth=max_depth)
             await frontier.add_not_recorded(db, scan_id, added["limit"])
-            # The same page reached by two addresses (a redirect, a canonical, a tracking variant) is read once: a second copy would be stored, chunked and sent to the model again.
-            # Its links were still recorded above, because a duplicate page can link to pages the first did not.
-            twin = await frontier.find_duplicate(db, scan_id, claimed.id, final_url=page.final_url, content_hash=text_hash, text_chars=len(page.text or ""))
-            if twin:
-                await frontier.mark_excluded(db, claimed.id, f"duplicate_page: the same page as {twin}, which was already read")
-                await db.commit()
-                return "excluded"
+            # No page is dropped as a "duplicate": two addresses that serve the same text are both kept, each read under its own address, and the analysis reuses what it already read (identical evidence is
+            # stored once, and an identical passage is not sent to the model twice). A page that merely looks like another one is never discarded.
             notes = _inspection_notes(page, root_url)
             for kind, content in (("page_text", page.text), ("page_html", page.html)):
                 if content:
@@ -99,6 +118,8 @@ async def _process(claimed: frontier.Claimed, *, scan_id, root_url, rules, conte
             await frontier.record_page(db, claimed.id, title=page.title, text_chars=len(page.text or ""), content_hash=text_hash, evidence_note="; ".join(notes))
             await frontier.mark_done(db, claimed.id, http_status=page.http_status, final_url=page.final_url, content_type=page.content_type)
             await db.commit()
+            if claimed.depth == 0:                         # the entry page's links are now recorded: ask the model which addresses look like policies
+                await slug_triage.triage_safe(scan_id)
             return "done"
         except Exception as exc:                       # a bug or a database error must not take the whole crawl down with it
             await db.rollback()
@@ -259,6 +280,7 @@ async def run(scan_id: uuid.UUID, org_id: uuid.UUID, *, worker_id: str = WORKER_
     limiter = DomainRateLimiter(rps)
     guard = limits.LimitGuard(memory_budget_mb=int(options.get("memory_budget_mb", 0)), max_runtime_seconds=int(options.get("max_runtime_seconds", 0)))
     limit_hit: str | None = None
+    block_stop = None                                  # set when the website's protection refused the scanner and the crawl was stopped for it
 
     try:
         safe_ips = await assert_safe_url(root_url)
@@ -279,6 +301,7 @@ async def run(scan_id: uuid.UUID, org_id: uuid.UUID, *, worker_id: str = WORKER_
                         seeded = await discovery.seed(db, scan_id, context, root_url, rules, max_urls=recorded, max_depth=max_depth)
                         await frontier.add_not_recorded(db, scan_id, seeded.get("not_recorded", 0))
                     await db.commit()
+                await slug_triage.triage_safe(scan_id)                   # the sitemap's addresses, if there were any
 
                 while True:
                     if await _is_cancelled(scan_id, org_id):
@@ -309,8 +332,15 @@ async def run(scan_id: uuid.UUID, org_id: uuid.UUID, *, worker_id: str = WORKER_
                     await asyncio.gather(*(
                         _process(c, scan_id=scan_id, root_url=root_url, rules=rules, context=context, browser=browser, settings=settings, limiter=limiter,
                                  max_urls=recorded, max_depth=max_depth, timeout_ms=timeout_ms) for c in batch))
+                    b = _BLOCKS.get(scan_id)
+                    if b and (b["seed"] or b["count"] >= BLOCKED_STOP_MIN):
+                        async with async_session_factory() as db:
+                            c = await frontier.counts(db, scan_id)
+                        if b["seed"] or b["count"] * 2 >= (c["done"] + c["failed"]):
+                            block_stop = b                          # stop now: more attempts only add load on a site that is refusing us
+                            break
                 # The crawl is finished (a cancelled scan returned above): now the consent tests, in fresh sessions of their own. A crawl that hit a limit does not start more work.
-                if limit_hit not in (limits.MEMORY_LIMIT, limits.TIME_LIMIT):          # a page limit is a normal end; a memory or time limit means stop starting work
+                if block_stop is None and limit_hit not in (limits.MEMORY_LIMIT, limits.TIME_LIMIT):          # a page limit is a normal end; a memory or time limit means stop starting work
                     await _keep_consent(scan_id, root_url, browser, settings)
             finally:
                 await browser.close()
@@ -322,6 +352,14 @@ async def run(scan_id: uuid.UUID, org_id: uuid.UUID, *, worker_id: str = WORKER_
 
     async with async_session_factory() as db:
         c = await frontier.counts(db, scan_id)
+    block = _BLOCKS.pop(scan_id, None)
+    if block_stop is not None or (block and c["done"] == 0):
+        b = block_stop or block
+        v = b["first"]
+        await error_events.record_block(agent="enterprise", website_url=b["url"] or root_url, verdict=v, module="enterprise.crawl", scan_id=scan_id, wait=True)
+        return await _finish(scan_id, org_id, "failed", error=f"{v.kind}: {blocks.USER_MESSAGE} {v.signal[:1].upper() + v.signal[1:]}. {blocks.EXPLANATION}"[:500], stop_reason=v.kind.lower())
+    if block:                                              # some pages were refused but the scan went on: say so, once
+        await error_events.record_block(agent="enterprise", website_url=block["url"] or root_url, verdict=block["first"], module="enterprise.crawl", scan_id=scan_id, wait=True)
     if c["done"] == 0:
         return await _finish(scan_id, org_id, "failed", error="no page could be scanned (every URL failed or was excluded)")
     stop = limit_hit

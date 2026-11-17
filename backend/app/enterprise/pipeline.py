@@ -87,6 +87,32 @@ def _text_analysis():
     return run_text_analysis
 
 
+async def _sync_policy_kb(scan_id: uuid.UUID, org_id: uuid.UUID) -> None:
+    """Bring the website's policy knowledge base up to date from this scan. A failure here is logged and audited; it is a processing failure of the knowledge base, never a finding about the website,
+    and it never changes the scan's own status or score."""
+    from app.enterprise.config import get_enterprise_settings
+    if not get_enterprise_settings().policy_kb_enabled:
+        return
+    try:
+        from app.enterprise.policykb import history, sync
+        result = await sync.sync_scan(scan_id, org_id)
+        async with async_session_factory() as db:
+            await store.audit(db, scan_id, "system", "policy_kb_synced", {
+                "counts": result.counts, "embeddings_generated": result.embeddings_generated, "embeddings_reused": result.embeddings_reused, "errors": result.errors[:5],
+                "parameters_to_reassess": history.affected_parameters(result.changed_types)})
+            await db.commit()
+    except Exception as exc:
+        logger.exception("enterprise scan %s: the policy knowledge base could not be synchronised", scan_id)
+        from app.monitoring import events as error_events
+        await error_events.record_error(agent="enterprise", module="enterprise.pipeline.policy_kb_sync", exc=exc, service="policy_kb", scan_id=scan_id)
+        try:
+            async with async_session_factory() as db:
+                await store.audit(db, scan_id, "system", "policy_kb_sync_failed", {"error": f"{type(exc).__name__}: {str(exc)[:300]}"})
+                await db.commit()
+        except Exception:
+            logger.exception("enterprise scan %s: the failed synchronisation could not be audited", scan_id)
+
+
 async def run_analysis_phase(scan_id: uuid.UUID, org_id: uuid.UUID, *, as_of: date | None = None, llm=None) -> str:
     """Run the whole analysis phase for a scan whose crawl has finished. Returns the scan's analysis status."""
     set_org_scope(org_id)
@@ -118,6 +144,8 @@ async def run_analysis_phase(scan_id: uuid.UUID, org_id: uuid.UUID, *, as_of: da
             logger.exception("enterprise scan %s: the text analysis failed", scan_id)
             problems.append(f"text analysis: {type(exc).__name__}: {exc}"[:300])
 
+    await _sync_policy_kb(scan_id, org_id)
+
     try:
         async with async_session_factory() as db:
             if await apply_crawl_completeness_guard(db, scan_id):
@@ -137,4 +165,6 @@ async def run_analysis_phase(scan_id: uuid.UUID, org_id: uuid.UUID, *, as_of: da
         await set_analysis_status(db, scan_id, final, error="; ".join(problems) or None)
         await store.audit(db, scan_id, "system", "analysis_finished", {"status": final, "problems": problems})
         await db.commit()
+    from app.cleanup import core as cleanup
+    await cleanup.after_scan()          # clears the scan data of finished scans (both agents) once their grace period has passed; never changes the result
     return final
