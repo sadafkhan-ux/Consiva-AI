@@ -309,7 +309,10 @@ _MAX_IFRAMES_FOR_SIGNAL_DETECTION = 5
 _SHADOW_DOM_CONTROL_TEXT_JS = """() => {
     const SEL = 'button, a, input, summary, label, [role=button], [role=dialog],' +
                 '[role=alertdialog], [aria-modal=true]';
-    const HINT = /(cookie|consent|gdpr|ccpa|cmp|privacy)/i;
+    // A consent UI is short. The text of a container named as cookie/consent/privacy UI counts only when it is short: a privacy or cookie POLICY page names its whole article that way (clyzo.com, 17 Nov 2026:
+    // 35,000 characters of policy prose were read as "controls", and a sentence about "your privacy preferences" then looked like a banner). `cmp` is a whole word; `privacy` needs banner/notice/dialog/popup.
+    const HINT = /(cookie|consent|gdpr|ccpa|(^|[^a-z])cmp([^a-z]|$)|privacy[-_ ]?(banner|bar|notice|dialog|modal|popup))/i;
+    const CONTAINER_MAX = 1200;
     const BARE_ACCEPT = new Set(['accept', 'accept all', 'accept & close', 'accept and close', 'i accept', 'agree', 'i agree', 'allow', 'allow all', 'ok', 'okay', 'got it', 'accept cookies', 'allow cookies']);
     const BARE_REJECT = new Set(['decline', 'decline all', 'reject', 'reject all', 'deny', 'refuse', 'no thanks', 'i decline', 'decline cookies', 'reject cookies']);
     // Only what a visitor can see. A consent tool renders its second layer (the preference centre, with "Reject All Cookies") into the page hidden, so reading hidden controls
@@ -332,7 +335,9 @@ _SHADOW_DOM_CONTROL_TEXT_JS = """() => {
         }
         for (const el of root.querySelectorAll('[class], [id]')) {
             const key = (el.className || '') + ' ' + (el.id || '');
-            if (HINT.test(key) && shown(el)) out.push(el.innerText || el.textContent || '');
+            if (!HINT.test(key) || !shown(el)) continue;
+            const t = el.innerText || el.textContent || '';
+            if (t.length <= CONTAINER_MAX) out.push(t);
         }
         // A cookie notice whose buttons say only "Accept" / "Decline" (greenply.com) is recognised by structure: a short, visible container named as cookie or consent UI, that speaks of
         // cookies, holding a button whose whole label is a bare accept (or decline) word. The same rule as page_parser.cookie_dialog_controls.

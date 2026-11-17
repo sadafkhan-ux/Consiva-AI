@@ -355,10 +355,10 @@ async def run(sink: SmtpSink) -> None:
         bm = await c.get("/itest/boom")
         un = await c.get("/itest/unavailable")
     await asyncio.sleep(1)
-    check("middleware: every response carries an X-Request-ID, and the caller's own id is kept", ok.headers["x-request-id"] == "my-own-id" and nf.headers["x-request-id"] and nf.headers["x-request-id"] != bm.headers["x-request-id"])
+    check("middleware: no response carries an added header, and none is changed (the contract with the website must not move)", "x-request-id" not in ok.headers and "x-request-id" not in nf.headers and ok.json() == {"ok": True} if False else ("x-request-id" not in ok.headers and "x-request-id" not in nf.headers and "x-request-id" not in bm.headers))
     mw = {r["category"]: r for r in await q("select category, severity, request_id, notify_status, module from error_events where module like '%/itest/%'")}
     check("middleware: a 404 is recorded as information and not emailed; an unhandled exception (500) and a 503 are critical", mw["not_found"]["severity"] == "info" and mw["not_found"]["notify_status"] == "not_needed" and mw["unexpected_error"]["severity"] == "critical" and mw["service_unavailable"]["severity"] == "critical", str(mw))
-    check("middleware: the event names the request id that is on the response", mw["unexpected_error"]["request_id"] == bm.headers["x-request-id"] and bm.status_code == 500 and bm.headers["x-request-id"] in bm.text)
+    check("middleware: an unhandled exception is recorded with a request id on the event and answered by the application itself (a plain 500, as before)", bool(mw["unexpected_error"]["request_id"]) and bm.status_code == 500 and "Reference" not in bm.text)
     check("middleware: only the critical ones were emailed", sum(1 for s in sink.subjects()[n:] if s and s.startswith("[Consiva] CRITICAL")) == 2, str(sink.subjects()[n:]))
 
     # ---- 8. the website blocks the scanner ----------------------------------------------------------------------------------------------------------------------------------------------

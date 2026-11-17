@@ -265,3 +265,29 @@ def test_real_cookie_banners_are_still_detected_after_the_context_check(html):
 def test_a_phrase_ending_in_all_is_refused_when_it_names_something_that_is_not_a_cookie(phrase, text, expected):
     from app.scanner.consent_signal_detector import _has
     assert _has(text, phrase) is expected
+
+
+# ── clyzo.com (17 Nov 2026): the privacy-policy ARTICLE was read as control text ───────────────────────────────────────────────────────────────────
+
+POLICY_PROSE = ("We collect your name and email address. To manage your privacy preferences and to ensure you only receive communications that you have requested, we may share data. "
+                "You agree that we may contact you. Please read this policy carefully and click OK to continue. ") * 12
+
+
+def test_a_policy_page_named_privacy_is_not_read_as_a_banner():
+    html = f'<html><body><div id="privacypolicy" class="privacy-policy-content"><p>{POLICY_PROSE}</p></div></body></html>'
+    assert len(POLICY_PROSE) > 1200
+    assert _page_from(html).mechanism_type == "none"
+
+
+def test_a_cookie_policy_page_named_cookiepolicy_is_not_read_as_a_banner():
+    html = f'<html><body><section id="cookiepolicy"><p>{POLICY_PROSE} You can use cookie settings in your browser to manage cookies.</p></section></body></html>'
+    assert _page_from(html).mechanism_type == "none"
+
+
+def test_a_short_container_named_cookie_is_still_read():
+    html = '<html><body><div class="cookie-banner"><p>We use cookies.</p><span onclick="x()">Accept all cookies</span> <span onclick="y()">Reject all</span></div></body></html>'
+    assert _page_from(html).mechanism_type == "banner"
+
+
+def _page_from(html: str):
+    return _detect(extract_control_text(BeautifulSoup(html, "lxml")))

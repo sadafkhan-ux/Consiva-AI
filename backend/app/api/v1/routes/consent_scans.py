@@ -19,6 +19,7 @@ from app.core.exceptions import (
     ReviewerRequiredError,
     ScanNotReadyError,
 )
+from app.core.integration_auth import get_caller
 from app.core.security import CurrentUser, get_current_user
 from app.db.repositories import (
     audit_repository,
@@ -900,7 +901,7 @@ async def create_scan(
 @router.get("/{scan_id}", response_model=ScanStatusResponse)
 async def get_scan(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
@@ -939,7 +940,7 @@ async def analyze_scan(
 @router.get("/{scan_id}/findings", response_model=list[FindingResponse])
 async def list_findings(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
@@ -965,7 +966,7 @@ async def list_findings(
 @router.get("/{scan_id}/evidence", response_model=ScanEvidenceResponse)
 async def get_scan_evidence(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     """Per-item evidence (real cookie/tracker/form/policy rows), for a frontend table
@@ -1014,7 +1015,7 @@ async def get_scan_url_inventory(
 @router.get("/{scan_id}/assessment", response_model=AssessmentResponse)
 async def get_scan_assessment(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     """The ten checks and the Privacy Readiness Score for one scan, worked out on request from its stored evidence and policy analysis (nothing new is stored). Same scan, same answer,
@@ -1058,7 +1059,7 @@ async def get_scan_requirements(
     consent_manager: bool | None = None,
     erasure_class: bool | None = None,
     business_sector: str | None = Query(None, pattern="^(" + "|".join(k for k in SECTORS if k != "general") + ")$"),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     """The DPDP requirements reading of one scan (statuses, evidence, findings, remediation), computed on demand from its persisted evidence (nothing new is
@@ -1117,7 +1118,7 @@ _NO_PREVIEW = {
 @router.get("/{scan_id}/screenshot", response_model=ScreenshotResponse)
 async def get_scan_screenshot(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
@@ -1201,7 +1202,7 @@ async def get_scan_report_pdf(
     variant: Literal["free", "full", "long", "summary"] = Query(
         "summary", description="summary (default): the two-page report; long: the full evidence report, opening with the Free report's front page; free: the two-page Free Scan report; full: the eight-page Full Scan report with its evidence appendix.",
     ),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     """The PDF report of one completed scan: the same report the web page /?report=<scan id> shows, printed by headless Chromium
@@ -1301,7 +1302,7 @@ async def revoke_report_approval(scan_id: uuid.UUID, user: CurrentUser = Depends
 @router.get("/{scan_id}/policy-analysis", response_model=PolicyAnalysisResponse)
 async def get_scan_policy_analysis(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))
@@ -1318,7 +1319,7 @@ async def get_scan_policy_analysis(
 @router.get("/{scan_id}/stages", response_model=list[StageResponse])
 async def get_scan_stages(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     """Live pipeline view for the demo UI — one row per stage per attempt (a retried
@@ -1339,7 +1340,7 @@ async def get_scan_stages(
 @router.get("/{scan_id}/audit", response_model=list[AuditLogResponse])
 async def get_scan_audit(
     scan_id: uuid.UUID,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ):
     scan = await scan_repository.get_scan(db, scan_id, uuid.UUID(user.org_id))

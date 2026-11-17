@@ -1,7 +1,7 @@
 """Records every HTTP error our API answers, and every exception it did not handle, as an error event, and gives each request an id.
 
-It changes nothing about the response except one header, X-Request-ID, so a person who sees an error on screen (or in an email) can find the log line of that request. An exception is recorded and then
-raised again exactly as before. Expected client mistakes (400, 401, 403, 404, 409, 422) are recorded as information for the dashboard and never emailed (see monitoring.classify).
+It changes NOTHING about any response: no body, no status, no header (the API contract with the website must not move). The request id is kept only inside the server, on the event and in the log.
+An exception is recorded and then raised again exactly as before. Expected client mistakes (400, 401, 403, 404, 409, 422) are recorded as information for the dashboard and never emailed (see monitoring.classify).
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import uuid
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 from app.monitoring import events
 from app.monitoring.context import request_id_var
@@ -54,9 +53,7 @@ class ErrorMonitorMiddleware(BaseHTTPMiddleware):
                 if not skip:
                     await events.record_error(agent=agent_of(request.url.path), module=module_of(request), exc=exc, status=500, service=service_of(request.url.path), upstream=False, request_id=rid)
                 logger.exception("Unhandled exception in %s (request %s)", module_of(request), rid)
-                # Answered here, not raised again, so the response can carry the request id: a person who sees "Internal server error" can quote it, and it is the id on the error event.
-                return JSONResponse({"detail": f"Internal server error. Reference {rid}."}, status_code=500, headers={"X-Request-ID": rid})
-            response.headers["X-Request-ID"] = rid
+                raise                      # exactly as before: the response is the application's own, unchanged. Monitoring only records.
             if response.status_code >= 400 and not skip:
                 await events.record_error(agent=agent_of(request.url.path), module=module_of(request), status=response.status_code, service=service_of(request.url.path), upstream=False,
                                           message=f"HTTP {response.status_code} from {request.method} {_ID.sub(':id', request.url.path)}", request_id=rid)

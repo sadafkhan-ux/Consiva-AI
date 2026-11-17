@@ -257,6 +257,7 @@ _ACCEPT_REJECT_LABEL = re.compile(r"^(accept|allow|reject|decline|deny|refuse)( 
 # A cookie notice whose buttons say only "Accept" / "Decline" (greenply.com): no phrase such as "accept all" or "accept cookies" appears anywhere, so the wording search alone misses it. It is recognised by
 # STRUCTURE instead: a short container named as cookie or consent UI, that speaks of cookies, with a button whose whole label is a bare accept word. A policy page does not qualify (it is long), and neither does
 # a forum comment (it is not a container named as consent UI holding a button).
+_CONSENT_CONTAINER_MAX_CHARS = 1200
 _COOKIE_DIALOG_HINT = re.compile(r"(cookie|consent|gdpr|ccpa)", re.IGNORECASE)
 _BARE_ACCEPT = frozenset({"accept", "accept all", "accept & close", "accept and close", "i accept", "agree", "i agree", "allow", "allow all", "ok", "okay", "got it", "accept cookies", "allow cookies"})
 _BARE_REJECT = frozenset({"decline", "decline all", "reject", "reject all", "deny", "refuse", "no thanks", "i decline", "decline cookies", "reject cookies"})
@@ -336,12 +337,13 @@ def extract_control_text(soup: BeautifulSoup) -> str:
         for attr in ("value", "aria-label", "title"):
             if element.get(attr):
                 parts.append(str(element[attr]))
-    for element in soup.find_all(attrs={"class": _CONSENT_CONTAINER_HINT}):
-        if not _is_hidden(element):
-            parts.append(element.get_text(separator=" ", strip=True))
-    for element in soup.find_all(attrs={"id": _CONSENT_CONTAINER_HINT}):
-        if not _is_hidden(element):
-            parts.append(element.get_text(separator=" ", strip=True))
+    for attr in ("class", "id"):
+        for element in soup.find_all(attrs={attr: _CONSENT_CONTAINER_HINT}):
+            if _is_hidden(element):
+                continue
+            text = element.get_text(separator=" ", strip=True)
+            if len(text) <= _CONSENT_CONTAINER_MAX_CHARS:        # a consent UI is short; a policy page names its whole article "privacy" or "cookie"
+                parts.append(text)
     text = " ".join(p for p in parts if p).lower()[:5000]
     # Markers for a cookie dialog recognised by its structure (see cookie_dialog_controls); the detector reads them like any other consent wording.
     has_accept, has_reject = cookie_dialog_controls(soup)

@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, Query, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.schemas.consent_agent import (
@@ -33,7 +34,10 @@ from app.api.v1.schemas.consent_agent import (
     ScanStatusResponse,
     SummaryResponse,
 )
+from app.api.v1.routes import consent_scans as _cs
+from app.api.v1.routes.consent_scans import AssessmentResponse, get_scan_assessment as _console_assessment
 from app.config import get_settings
+from app.scoring.sector import SECTORS
 from app.core.exceptions import ConsivaError, InvalidUrlError, NotFoundError, RateLimitExceededError
 
 # `get_caller`, not `get_current_user`: these endpoints accept either a signed-in
@@ -543,3 +547,85 @@ async def cancel_scan(
             "finishes its current step and is then discarded."
         ),
     )
+
+
+@router.get(
+    "/scans/{scan_id}/assessment",
+    response_model=AssessmentResponse,
+    summary="Privacy Readiness Score and the 12 checks",
+    description=(
+        "The same score and checks the console shows (GET /api/v1/consent/scans/{scan_id}/assessment), served on the integration API so a website needs only this API for a scan. It is the same "
+        "function, not a copy: one scan, one score, for every caller. Additive: no other route of this API changes. The PDF report stays at GET /api/v1/consent/scans/{scan_id}/report.pdf."
+    ),
+)
+async def get_scan_assessment(
+    scan_id: uuid.UUID,
+    user: CurrentUser = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _console_assessment(scan_id=scan_id, user=user, db=db)      # the console's own handler, reused as it is and never duplicated
+
+
+# ---- One door: the rest of what a scan screen and its PDF use, served here through the console's own handlers (never copied) -------------------------------------------------------------------
+# Each route below calls the console handler of the same name, so the answer is identical to /api/v1/consent/scans/{scan_id}/<same path>. Read-only. The console routes are unchanged for a person's login
+# token; they now also accept a service key holding `consent:scan` (the PDF's print page reads them with the caller's own token). Decisions that change a scan (analyze, report approval, finding review) stay on the console.
+
+def _console_model(suffix: str):
+    return next((r.response_model for r in _cs.router.routes if getattr(r, "path", "") == "/api/v1/consent/scans/{scan_id}/" + suffix and "GET" in r.methods), None)
+
+
+@router.get("/scans/{scan_id}/stages", response_model=_console_model("stages"), summary="Stages of the scan and their status")
+async def get_scan_stages(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)):
+    return await _cs.get_scan_stages(scan_id=scan_id, user=user, db=db)
+
+
+@router.get("/scans/{scan_id}/evidence", response_model=_console_model("evidence"), summary="Evidence collected by the scan")
+async def get_scan_evidence(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)):
+    return await _cs.get_scan_evidence(scan_id=scan_id, user=user, db=db)
+
+
+@router.get("/scans/{scan_id}/policy-analysis", response_model=_console_model("policy-analysis"), summary="The reading of the privacy notice")
+async def get_scan_policy_analysis(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)):
+    return await _cs.get_scan_policy_analysis(scan_id=scan_id, user=user, db=db)
+
+
+@router.get("/scans/{scan_id}/requirements", response_model=_console_model("requirements"), summary="DPDP requirements reading of the scan")
+async def get_scan_requirements(
+    scan_id: uuid.UUID,
+    as_of: date | None = None,
+    processes_children_data: bool | None = None,
+    significant_data_fiduciary: bool | None = None,
+    consent_manager: bool | None = None,
+    erasure_class: bool | None = None,
+    business_sector: str | None = Query(None, pattern="^(" + "|".join(k for k in SECTORS if k != "general") + ")$"),
+    user: CurrentUser = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _cs.get_scan_requirements(scan_id=scan_id, as_of=as_of, processes_children_data=processes_children_data, significant_data_fiduciary=significant_data_fiduciary,
+                                           consent_manager=consent_manager, erasure_class=erasure_class, business_sector=business_sector, user=user, db=db)
+
+
+@router.get("/scans/{scan_id}/screenshot", response_model=_console_model("screenshot"), summary="Homepage screenshot")
+async def get_scan_screenshot(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)):
+    return await _cs.get_scan_screenshot(scan_id=scan_id, user=user, db=db)
+
+
+@router.get("/scans/{scan_id}/audit", response_model=_console_model("audit"), summary="Audit trail of the scan")
+async def get_scan_audit(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)):
+    return await _cs.get_scan_audit(scan_id=scan_id, user=user, db=db)
+
+
+@router.get(
+    "/scans/{scan_id}/report.pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}, "description": "The PDF report for the scan."}},
+    summary="The PDF report",
+)
+async def get_scan_report_pdf(
+    scan_id: uuid.UUID,
+    request: Request,
+    variant: Literal["free", "full", "long", "summary"] = Query("summary", description="summary (default): the two-page report; long: the full evidence report; free: the two-page Free Scan report; full: the full report."),
+    user: CurrentUser = Depends(get_caller),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _cs.get_scan_report_pdf(scan_id=scan_id, request=request, variant=variant, user=user, db=db)

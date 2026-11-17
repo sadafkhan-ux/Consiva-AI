@@ -2,6 +2,20 @@
 
 Each entry is a change the owner asked for after the freeze. The manifest (`five_page_agent.manifest.json`) was regenerated after it, and the full backend suite was run.
 
+## 17 Nov 2026 (third change, the verified root cause of the clyzo.com false banner): a policy page's whole article was read as control text
+
+Found by scanning clyzo.com again on the owner's instruction: the scan reproduced the report exactly (banner "found" on the home page, no reject-all, per-purpose choices, score 19). Its stored consent signal said `matched_keywords: ["privacy preferences"]`, source `control_text_keywords`. Running the scanner's own collectors on the five pages showed where the phrase was: the sentence "To manage your privacy preferences and to ensure you only receive communications that you have requested..." in the privacy policy page, inside 35,256 characters of "rendered control text" for that one page (10,043 for the cookie policy page).
+
+Root cause: `_SHADOW_DOM_CONTROL_TEXT_JS` added the whole text of ANY visible element whose class or id contained cookie, consent, gdpr, ccpa, cmp or privacy, with no length limit. The scanner always opens the privacy and cookie policy pages, and their main container is named that way, so the entire policy article became "controls". The detector then found a strong settings phrase ("privacy preferences") in the prose and an accepting word ("agree", "ok") elsewhere in it, across all pages joined together. This is likely the main source of false banners on any site, not only clyzo.com.
+
+| File | Change |
+|---|---|
+| `backend/app/scanner/crawler.py` | `_SHADOW_DOM_CONTROL_TEXT_JS`: a container named as consent UI counts only when its text is at most 1,200 characters; `cmp` is matched as a whole word and `privacy` only as privacy-banner/notice/dialog/popup |
+| `backend/app/scanner/page_parser.py` | `extract_control_text`: the same 1,200-character limit for the serialized-HTML fallback |
+
+Not changed: the CMP path, the score and its formula, any rule, the report layout. Short banners named cookie/consent are read as before (tests cover both).
+Tests: `tests/test_consent_banner_false_positive.py` (a 'privacypolicy' article and a 'cookiepolicy' section are not banners; a short cookie container still is).
+
 ## 17 Nov 2026 (second change): pop-ups that use accept/reject words but are not about cookies
 
 Asked by the owner after the clyzo.com review: "any pop-up with accept or reject buttons may be falsely detected as a banner". Tested through the real detector with 11 pages: generic wording ("Subscribe / No thanks", "I agree / Decline", an app-download modal, an age gate) was already not detected, but four non-cookie pop-ups were reported as a cookie banner: "Allow all notifications / Block", "Accept all / Reject all" for friend requests, for marketing e-mail choices, and an "Accept all" button inside any element whose class contained "privacy".
