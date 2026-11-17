@@ -33,11 +33,11 @@ if (state() === 'accepted') beacon();
 FOOTER = '<footer><button id="s" onclick="reopen()">Cookie settings</button></footer>'
 
 
-def _page(mode: str, title: str, reopen: bool = True, footer: str | None = None) -> str:
-    return PAGE.format(title=title, mode=mode, beacon=BEACON, footer=footer if footer is not None else (FOOTER if reopen else "<footer><a href='/privacy'>Privacy</a></footer>"), banner_hidden="")
+def _page(mode: str, title: str, reopen: bool = True, footer: str | None = None, banner_hidden: str = "") -> str:
+    return PAGE.format(title=title, mode=mode, beacon=BEACON, footer=footer if footer is not None else (FOOTER if reopen else "<footer><a href='/privacy'>Privacy</a></footer>"), banner_hidden=banner_hidden)
 
 
-async def _run(mode: str, reopen: bool = True, footer: str | None = None) -> dict:
+async def _run(mode: str, reopen: bool = True, footer: str | None = None, views_without_banner: int = 0) -> dict:
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         context = await browser.new_context()
@@ -52,7 +52,17 @@ async def _run(mode: str, reopen: bool = True, footer: str | None = None) -> dic
                 return await route.fulfill(status=200, content_type="text/html", body=_page(mode, title, reopen, footer))
             return await route.abort()
 
-        await context.route("**/*", handle)
+        home_views = {"n": 0}
+
+        async def handle_with_late_banner(route):
+            # A consent tool that decides per page view: the first `views_without_banner` loads of the home page draw no banner at all (the Consiva SDK's 800 ms configuration timeout).
+            if route.request.url.split("?")[0] == "https://site.test/":
+                home_views["n"] += 1
+                if home_views["n"] <= views_without_banner:
+                    return await route.fulfill(status=200, content_type="text/html", body=_page(mode, "Home", reopen, footer, banner_hidden='style="display:none"'))
+            return await handle(route)
+
+        await context.route("**/*", handle_with_late_banner)
 
         async def goto(page, url):
             await page.goto(url)
@@ -136,3 +146,17 @@ def test_an_icon_only_reopen_control_in_a_shadow_root_at_the_end_of_a_long_page_
     assert r["tested"] is True and r["reason"] is None, r
     assert "cookie preferences" in r["reopen_control"].lower() and r["after_withdrawal"] == []
     assert time.monotonic() - start < 40, "one pass over the page, not a browser call per element"
+
+
+def test_an_accept_that_cannot_be_clicked_because_the_first_page_view_drew_no_banner_is_retried_on_a_reloaded_page():
+    r = run_with_browser(lambda: _run("honours", views_without_banner=1))
+    assert r["tested"] is True and r["reason"] is None, r
+    assert r["accepted_non_essential"], "the retry is the test: Accept started analytics"
+    assert r["after_withdrawal"] == []
+
+
+def test_two_retries_is_all_the_test_makes_before_it_says_accept_could_not_be_clicked():
+    r = run_with_browser(lambda: _run("honours", views_without_banner=2))
+    assert r["tested"] is True, r                       # the second retry (third view) drew the banner
+    r = run_with_browser(lambda: _run("honours", views_without_banner=3))
+    assert r["tested"] is False and r["reason"] == "accept_not_clicked", r

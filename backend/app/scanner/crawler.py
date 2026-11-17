@@ -896,6 +896,29 @@ async def _settled_text(page: Page, url: str) -> str:
     return best
 
 
+#: A consent banner is drawn by a script and its buttons can arrive after its first line of text: on 17 Nov 2026 the same jambulogix.com banner was read once with "Reject all" and "Manage preferences" in
+#: it (per-purpose choices found, 86) and twice without them (not found, 82), and the Reject control was then found by the interaction pass anyway. The home page's visible control text is therefore read
+#: again until it stops growing, the same way a policy page's text is: a few short rereads, bounded, longest reading kept, and only on the entered address, where the banner is.
+_CONTROL_REREADS = 3
+_CONTROL_REREAD_WAIT_MS = 700
+_CONTROL_STABLE_READS = 2
+
+
+async def _settled_control_text(page: Page) -> str | None:
+    """The page's visible control text (_SHADOW_DOM_CONTROL_TEXT_JS), the longest of a few readings, taken until its length has not grown for two readings in a row (at most three rereads)."""
+    best = await page.evaluate(_SHADOW_DOM_CONTROL_TEXT_JS)
+    stable = 0
+    for _ in range(_CONTROL_REREADS):
+        await page.wait_for_timeout(_CONTROL_REREAD_WAIT_MS)
+        again = await page.evaluate(_SHADOW_DOM_CONTROL_TEXT_JS)
+        grew = len(again or "") > len(best or "")
+        stable = 0 if grew else stable + 1
+        best = again if grew else best
+        if stable >= _CONTROL_STABLE_READS:
+            break
+    return best
+
+
 async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, settings: Settings) -> dict:
     """Fetches and parses exactly one page. ALWAYS returns a dict describing the
     outcome -- a secondary page that fails to load (after bounded retries) is recorded
@@ -980,7 +1003,7 @@ async def _fetch_one_page(context: BrowserContext, url: str, root_url: str, sett
         iframe_scripts, iframe_text, iframe_control_text = await _collect_iframe_signal_evidence(browser_page)
         try:
             rendered_text = await _settled_text(browser_page, url)
-            rendered_control_text = await browser_page.evaluate(_SHADOW_DOM_CONTROL_TEXT_JS)
+            rendered_control_text = await _settled_control_text(browser_page) if is_seed else await browser_page.evaluate(_SHADOW_DOM_CONTROL_TEXT_JS)
         except PlaywrightError as exc:
             logger.debug("Could not collect shadow-DOM text for %s: %s", url, exc)
             rendered_text = ""

@@ -52,6 +52,7 @@ WITHDRAW_HINTS = (
 _LOADER = re.compile(r"googletagmanager\.com/(gtm\.js|gtag/js)", re.IGNORECASE)
 _SETTLE_MS = 2500
 _FURTHER_PAGES = 2
+_ACCEPT_RETRIES = 2
 _GRACE_MS = 500
 
 #: Why the test stopped short, in the words shown to a site owner.
@@ -176,7 +177,24 @@ async def run_withdrawal_test(context, root_url: str, further_urls: list[str], *
             pass
         await page.wait_for_timeout(settle_ms)
         await pass_consent_gate(page)
-        if await click_accept(page) != "clicked":
+        clicked = await click_accept(page) == "clicked"
+        # A consent tool decides per page view whether to draw its banner, and some decide "no" when their configuration request is slow (the Consiva SDK waits 800 ms). A fresh page view
+        # usually is not slowed the same way, so a failed Accept is tried again on a reloaded page, twice at most, before the test is given up as "accept_not_clicked" (17 Nov 2026: it failed on
+        # the first attempt in 1 of 8 runs with nothing else running, and a retry in a fresh session passed). What was recorded before the retry is dropped: the retry is the test.
+        for _ in range(_ACCEPT_RETRIES):
+            if clicked:
+                break
+            records.clear()
+            if not await goto(page, root_url):
+                return {**result, "reason": "homepage_not_loaded"}
+            try:
+                await page.wait_for_load_state("load", timeout=15_000)
+            except PlaywrightError:
+                pass
+            await page.wait_for_timeout(settle_ms)
+            await pass_consent_gate(page)
+            clicked = await click_accept(page) == "clicked"
+        if not clicked:
             return {**result, "reason": "accept_not_clicked"}
         await page.wait_for_timeout(2000)
         await confirm_interaction_completed(page, accept=True)

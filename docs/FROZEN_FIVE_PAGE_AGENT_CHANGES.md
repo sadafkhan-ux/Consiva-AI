@@ -114,3 +114,14 @@ The same site scored 86 on the owner's local stack and 42 on the deployed one. 4
 
 Not changed: marks, rules, bands, prompts, the analysis model call (no blind retry added: an earlier measurement found retries were 41% of tokens; the cause of the failed call on the deployed host is still unknown). Tests: `tests/test_scorecard.py` (new), `tests/test_consiva_cmp_scanning.py` (retry count is read from the constant).
 
+## 17 Nov 2026 (later): two flakes of the same site's score, both caused by a consent banner drawn late (owner: "bana do ache sai")
+
+jambulogix.com scored 86, 82, 78, 50 on consecutive scans with the same code. Read from the databases and the reports: (1) the withdrawal test (P5, 8 marks) says "Accept could not be clicked" when the Consiva SDK draws no banner on that page view (its 800 ms configuration timeout), and the test had no retry (a probe: first attempt failed 1 of 8 times alone, a retry in a fresh session fixed it); (2) the home page's control text was read once, and "Reject all" and "Manage preferences" were in it in one scan and not in two others, which flips per-purpose choices and P1 between 8 and 4 marks (has_granular_choices true or false across the last nine scans).
+
+| File | Change |
+|---|---|
+| `backend/app/scanner/withdrawal.py` | `run_withdrawal_test`: when Accept cannot be clicked, reload the home page and try again, at most `_ACCEPT_RETRIES = 2` times; what was recorded before the retry is dropped; only then "accept_not_clicked" |
+| `backend/app/scanner/crawler.py` | new `_settled_control_text`: on the entered address only, the visible control text is read again until it has not grown for two readings in a row (at most three rereads, 700 ms apart), longest reading kept; other pages are read once as before |
+
+Not changed: marks, rules, P1 to P12, bands, the banner passes (`_BANNER_PASS_RETRIES` stays 2), the API. Cost: up to about 1.4 s more on the entered address of a scan; up to two more page loads only when Accept failed. Tests: `tests/test_withdrawal_browser.py` (two new, real browser, offline site that draws no banner on its first one, two or three page views), `tests/test_banner_control_text_settles.py` (new, real browser).
+
