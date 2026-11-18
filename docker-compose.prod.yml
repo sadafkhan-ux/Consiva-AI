@@ -250,7 +250,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: consiva-backend:latest
-    cpus: 0.35          # 2026-11-18: cap scan/PDF load (Hostinger 30% CPU fair-use limit)
+    cpus: 1.0           # 2026-11-18: cap scan/PDF load on the 2-CPU host. 0.35 starved Chromium: a scan took 200 s instead of about 45 s and the consent banner's late-drawn buttons were missed (62 and 70 instead of 86-89). One scan runs at a time.
     cpu_shares: 512
     restart: unless-stopped
     command: ["python", "-m", "app.jobs.worker"]
