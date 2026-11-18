@@ -308,7 +308,7 @@ def test_a_model_failure_never_raises_and_says_so(monkeypatch):
         raise TimeoutError("model unreachable")
 
     out = asyncio.run(pa.run(uuid.uuid4(), extractor=broken))
-    assert out["status"] == "unavailable" and "could not be reached" in out["reason"] and out["documents"]
+    assert out["status"] == "analysed" and out["model"]["unavailable"] is True and any("could not be reached" in n for n in out["notes"]) and out["documents"]
 
 
 def test_a_successful_run_returns_the_requirements_the_documents_the_model_and_the_limits(monkeypatch):

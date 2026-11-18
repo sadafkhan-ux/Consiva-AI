@@ -32,7 +32,9 @@ export type ScanPhase =
   // llm_analysis stage was treated as a failed scan. Nor is it "completed", which
   // would imply the findings carry the narrative and citations they normally do.
   | "degraded"
-  | "failed";
+  | "failed"
+  // The user stopped the scan. What was collected is partial and is never shown as a finished result or score.
+  | "cancelled";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -192,6 +194,10 @@ export interface ConsentScanState {
   screenshot?: ScanScreenshot | null;
   /** The ten checks and the Privacy Readiness Score from the server: the one score. Null until loaded, and when it could not be (nothing is worked out here instead). */
   assessment?: TenAssessment | null;
+  /** True from the click on "Stop Scan" until the server has answered. */
+  stopping?: boolean;
+  /** A short message when the scan could not be stopped (it is still running, or had already finished). */
+  stopNote?: string | null;
   error: string | null;
   /** Which pipeline stage failed, when one did. The status panel showed "—" for
    *  "Current Stage" while the failing stage was known and displayed further down
@@ -228,6 +234,10 @@ export function useConsentScan() {
   // the user starts a new scan -- React state closures alone won't stop an in-flight
   // while-loop from a prior invocation.
   const runIdRef = useRef(0);
+  // True while a stop request is in flight, so a double click sends one request.
+  const stoppingRef = useRef(false);
+  // The arguments of the last scan this hook started, for "Scan again".
+  const lastRunRef = useRef<{ url: string; authorized: boolean; wholeSite?: CrawlConfig } | null>(null);
 
   const refreshFindingsAuditEvidence = useCallback(async (scanId: string, myRunId: number) => {
     // Each settles on its own. Previously `Promise.all` with only the evidence call
@@ -364,6 +374,7 @@ export function useConsentScan() {
 
     if (finalScan.status === "cancelled") {
       await loadEvidenceRegardless(scanId, myRunId);
+      if (runIdRef.current !== myRunId) return;     // the user stopped this scan meanwhile: the stop has already shown it as stopped
       setState((s) => ({ ...s, phase: "failed", error: "The scan was cancelled.", completedAt: Date.now() }));
       return;
     }
@@ -452,6 +463,7 @@ export function useConsentScan() {
   const run = useCallback(
     async (url: string, authorized: boolean, wholeSite?: CrawlConfig) => {
       const myRunId = ++runIdRef.current;
+      lastRunRef.current = { url, authorized, wholeSite };
       setState({ ...INITIAL_STATE, phase: "starting", startedAt: Date.now() });
 
       try {
@@ -484,6 +496,54 @@ export function useConsentScan() {
     },
     [follow]
   );
+
+  /** Stops the scan on screen. The server stops a running crawl after the page it is on, so this is not instant, and an analysis step already running finishes and is
+   *  discarded. On success polling ends and the phase becomes "cancelled". A 409 means the scan had already finished: its real state is read and shown, not an error. Any
+   *  other failure leaves the scan running with a short message. */
+  const stop = useCallback(async () => {
+    const scanId = state.scanId;
+    if (!scanId || stoppingRef.current) return;
+    stoppingRef.current = true;
+    const myRunId = runIdRef.current;
+    setState((s) => ({ ...s, stopping: true, stopNote: null }));
+    // Ends this run's polling at once (its updates are ignored from here on), so the poll cannot overwrite the stopped state, and shows the stop. `scan` is the latest read of the
+    // scan, best effort: the crawl may still be finishing the page it was on, so its counts are as they stand now.
+    const finishStop = async () => {
+      const stoppedRunId = ++runIdRef.current;
+      const latest = await api.getScan(scanId).catch(() => null);
+      if (runIdRef.current !== stoppedRunId) return;
+      setState((s) => ({ ...s, phase: "cancelled", scan: latest ?? s.scan, stopping: false, stopNote: null, error: null, completedAt: Date.now() }));
+    };
+    try {
+      await api.cancelScan(scanId);
+      if (runIdRef.current !== myRunId) return;
+      await finishStop();
+    } catch (err) {
+      if (runIdRef.current !== myRunId) return;
+      if (err instanceof ApiError && err.status === 409) {
+        // Already completed, failed or cancelled: show what it really is.
+        const latest = await api.getScan(scanId).catch(() => null);
+        if (runIdRef.current !== myRunId) return;
+        if (latest?.status === "cancelled") {
+          await finishStop();
+        } else {
+          setState((s) => ({ ...s, scan: latest ?? s.scan, stopping: false, stopNote: "This scan had already finished, so it could not be stopped. Its final state is shown." }));
+        }
+      } else {
+        setState((s) => ({ ...s, stopping: false, stopNote: `The scan could not be stopped (${readableError(err)}). It is still running.` }));
+      }
+    } finally {
+      stoppingRef.current = false;
+    }
+  }, [state.scanId]);
+
+  /** Starts the same scan again (the same address and settings as the last one started here; for a reopened scan, its own address). */
+  const scanAgain = useCallback(async () => {
+    const last = lastRunRef.current;
+    const url = last?.url ?? state.scan?.url;
+    if (!url) return;
+    await run(url, last?.authorized ?? true, last?.wholeSite);
+  }, [run, state.scan?.url]);
 
   // After a human decision (approve/reject/edit), the LangGraph checkpointer resumes
   // the paused run server-side on its own -- this just keeps polling so the UI
@@ -523,5 +583,5 @@ export function useConsentScan() {
     }
   }, [state.scanId, refreshFindingsAuditEvidence, pollStagesUntilAuditOrPending]);
 
-  return { state, run, open, afterReviewDecision };
+  return { state, run, open, afterReviewDecision, stop, scanAgain };
 }

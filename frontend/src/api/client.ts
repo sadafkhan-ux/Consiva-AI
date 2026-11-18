@@ -65,6 +65,13 @@ export function handleUnauthorized(): void {
   onUnauthorized?.();
 }
 
+/** The answer to stopping a scan. */
+export interface CancelScanResponse {
+  scan_id: string;
+  status: string;
+  message: string;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   if (!token) {
@@ -232,6 +239,10 @@ export const api = {
   },
   analyze(scanId: string): Promise<AgentRunResponse> {
     return request(`/api/v1/consent-agent/scans/${scanId}/analyze`, { method: "POST" });
+  },
+  /** Stops a queued or running scan (POST .../cancel). A queued scan leaves the queue; a running crawl stops after the page it is on, so the stop is not instant. 409: already finished; 404: not this caller's scan. */
+  cancelScan(scanId: string): Promise<CancelScanResponse> {
+    return request(`/api/v1/consent-agent/scans/${scanId}/cancel`, { method: "POST" });
   },
   getFindings(scanId: string): Promise<FindingResponse[]> {
     return request(`/api/v1/consent/scans/${scanId}/findings`);

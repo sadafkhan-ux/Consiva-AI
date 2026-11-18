@@ -250,6 +250,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     image: consiva-backend:latest
+    cpus: 0.35          # 2026-11-18: cap scan/PDF load (Hostinger 30% CPU fair-use limit)
+    cpu_shares: 512
     restart: unless-stopped
     command: ["python", "-m", "app.jobs.worker"]
     # Every scan starts Chromium, and a browser that is killed or crashes leaves child processes behind. As PID 1 the worker does not reap them, so over days of

@@ -14,6 +14,7 @@ const PHASE_LABELS: Record<string, string> = {
   completed: "Completed",
   degraded: "Findings ready — explanations unavailable",
   failed: "Failed",
+  cancelled: "Scan stopped",
 };
 
 const PHASE_TONE: Record<string, string> = {
@@ -27,6 +28,7 @@ const PHASE_TONE: Record<string, string> = {
   // the findings are unexplained and every one needs a person.
   degraded: "warn",
   failed: "bad",
+  cancelled: "warn",
 };
 
 // Why a discovered page was not scanned. Only pages the scanner navigated to are "scanned"; everything else it found is
@@ -86,7 +88,10 @@ const STAGE_LABELS: Record<string, string> = {
   audit_saved: "Audit Saved",
 };
 
-export function ScanStatusSection({ state }: { state: ConsentScanState }) {
+/** The scan states in which the server can still stop it. A finished scan (completed, failed or cancelled) cannot be stopped. */
+const FINISHED_SCAN_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+export function ScanStatusSection({ state, onStop, onScanAgain }: { state: ConsentScanState; onStop?: () => void; onScanAgain?: () => void }) {
   // The clock the "still scanning" hint reads, refreshed on a timer so it stays true between polls.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -107,6 +112,11 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
   const degradedNoFindings = state.phase === "degraded" && state.findings.length === 0;
   const label = state.phase === "failed" && hasPartialResults(state) ? "Failed — Partial Results Available" : failureReason ? `Failed — ${failureReason}` : degradedNoFindings ? "Scan complete — analysis incomplete" : PHASE_LABELS[state.phase];
   const tone = PHASE_TONE[state.phase] ?? "progress";
+  // "Stop Scan" is offered from the moment the scan exists (queued or running) until it has finished.
+  const canStop = Boolean(onStop) && state.scanId != null && ["starting", "scanning", "analyzing"].includes(state.phase)
+    && !FINISHED_SCAN_STATUSES.has(state.scan?.status ?? "");
+  // What a stopped scan collected is partial: it is never shown as a finished result or score.
+  const stoppedPages = state.scan?.evidence_counts.pages ?? 0;
 
   const byStage = summariseStages(state.stages);
   const browserMs = state.durationMs ?? (state.startedAt && state.completedAt ? state.completedAt - state.startedAt : null);
@@ -144,6 +154,33 @@ export function ScanStatusSection({ state }: { state: ConsentScanState }) {
         <span className="dot" />
         {label}
       </div>
+      {canStop && (
+        <div style={{ marginBottom: 14 }} data-testid="stop-scan">
+          <button type="button" className="stop-btn" onClick={onStop} disabled={state.stopping === true}>
+            {state.stopping ? "Stopping..." : "Stop Scan"}
+          </button>
+          <p className="muted small" style={{ marginTop: 6 }}>
+            Stopping takes a few seconds, not an instant: a crawl stops after the page it is on. An analysis step that is already running finishes and its result is discarded.
+          </p>
+        </div>
+      )}
+      {state.stopNote && (
+        <div className="status-banner warn" role="status" style={{ marginBottom: 14 }} data-testid="stop-note">
+          {state.stopNote}
+        </div>
+      )}
+      {state.phase === "cancelled" && (
+        <div style={{ marginBottom: 14 }} data-testid="scan-stopped">
+          <p className="muted small" role="status">
+            The scan was stopped before it finished, so there is no result or score for it.
+            {stoppedPages > 0
+              ? ` Partial evidence was collected (${stoppedPages} page${stoppedPages === 1 ? "" : "s"} so far); it is incomplete and is not a finished result.`
+              : " Nothing was collected yet."}
+            {" "}An analysis step that was already running finishes and its result is discarded.
+          </p>
+          {onScanAgain && <button type="button" onClick={onScanAgain}>Scan again</button>}
+        </div>
+      )}
       {runningLong && (
         <p className="muted small" role="status">
           Still scanning — large or slow sites can take several minutes. The scan has not failed; this page

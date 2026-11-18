@@ -2,6 +2,39 @@
 
 Each entry is a change the owner asked for after the freeze. The manifest (`five_page_agent.manifest.json`) was regenerated after it, and the full backend suite was run.
 
+## 18 Nov 2026 (third change): every topic match is considered for the officer and grievance contact, and a model failure no longer hides the policy (owner-approved 2026-11-18)
+
+Problem: (A) the earlier contact-passage step used `locate_by_pattern`, which returns only the first match. A generic sentence with its contact just outside its own passage was therefore returned, and the named passage later in the text never replaced the model's weak quote. (B) when the model call failed, the policy text that had been read was reported as unavailable.
+
+| File | Change |
+|---|---|
+| `backend/app/policy/analysis.py` | New `locate_contact_passage`, next to `locate_by_pattern` (which is unchanged): for `grievance_contact` and `dpo_contact` it walks every match of the topic in document order, builds the same passage slice and returns the first one that itself holds an email or phone and is an exact slice of the page. `analyse()` uses it for the preferred-contact step; a model quote that already has an email or phone is never replaced and, with nothing better, the model's quote is kept. `run()`: when the model call fails and there is readable policy text, `analyse(None, ...)` is returned as status `analysed` with `model.unavailable = True`, `input_hash = None`, a note that only fixed-pattern passages are shown, and not-found requirements worded as not established. It is never stored (`store_shared` is not called) and cannot be reused (`find_reusable` and `find_shared` match a hash string, never a `None`). With no readable text the existing `unavailable(...)` result is unchanged. |
+
+Not changed: `locate_by_pattern`, any other requirement, the score and its formula, any rule, the report layout, the cache table and its contents.
+Tests: `tests/test_policy_pattern_rescue.py` (the named passage wins over a weak first sentence; a model quote with its own email is unchanged; no better passage leaves the quote unchanged; with the model unreachable a named contact is verified by pattern, a text with none stays not found with the unavailable flag set, nothing is stored; a successful model run is unchanged).
+
+## 18 Nov 2026 (second change): the policy is still searched by fixed patterns when the analysis model cannot be reached (owner-approved 2026-11-18)
+
+Problem: when the model call failed, `run()` returned `unavailable(...)`, although the policy text had been read. Every policy-based check (notice contents, officer and grievance contact, rights) then became "Not Assessed", even though `analyse()` can work without a model and run the fixed-pattern search.
+
+| File | Change |
+|---|---|
+| `backend/app/policy/analysis.py` | `run()`, in the branch where the model call fails: the existing warning is kept; `analyse(None, docs, sector, child)` is run and returned with status `analysed`, a `model` entry `{provider: None, model: None, reused: False, tokens_in: 0, tokens_out: 0, unavailable: True, error_type}`, a note saying only fixed-pattern passages are shown and anything else is not established, and `input_hash: None`. Requirements the patterns do not find stay `not_found`, and their detail says the model could not be reached rather than that the policy was read and nothing was found. The result is not stored: `store_shared` is not called, and `find_reusable` / `find_shared` match on a hash that a `None` never equals. With no readable policy text the existing `unavailable(...)` result is unchanged. |
+
+Not changed: the successful-model path, any other requirement, the score and its formula, any rule, the report layout, the cache table and its contents.
+Tests: `tests/test_policy_model_unavailable.py` (a named contact and email is verified by pattern; a policy with none stays not found with the unavailable flag set; nothing is written to the shared cache; a successful model run is unchanged). `tests/test_policy_analysis.py::test_a_model_failure_never_raises_and_says_so` was updated to the new result.
+
+## 18 Nov 2026: a generic quote for the grievance or officer contact no longer wins over a passage that carries a contact detail (owner-approved 2026-11-18)
+
+Problem: for `grievance_contact` and `dpo_contact`, `analyse()` accepted the model's quote whenever it was verbatim in the page, even when that quote was a generic sentence with no email or phone while the same page had a better passage naming a contact person with an email or phone. The weaker answer was then stored in `policy_analysis_cache` and reused by every later scan of any page with that text.
+
+| File | Change |
+|---|---|
+| `backend/app/policy/analysis.py` | `analyse()`: for `grievance_contact` and `dpo_contact` only, when the model's verified quote has no email or phone itself, `locate_by_pattern` is asked for a passage; if that passage has an email or phone, it replaces the model's quote (status and detail from `judge`, quote, source, contacts, `found_by = "pattern"`, and the sentence "A passage with a contact detail was preferred over the model's passage." added to the detail). A model quote that already has an email or phone is never replaced; with nothing better the model's quote is kept. `ANALYSIS_VERSION` 2 to 3, so answers cached by the older version are not reused (no cache rows were deleted). |
+
+Not changed: any other requirement, the score and its formula, any rule, the report layout, the cache table and its contents.
+Tests: `tests/test_policy_pattern_rescue.py` (a generic quote is replaced by a named officer's passage with a phone; the same for the officer contact; a model quote that already has an email is unchanged; no better passage leaves the quote unchanged; another requirement is untouched).
+
 ## 17 Nov 2026 (third change, the verified root cause of the clyzo.com false banner): a policy page's whole article was read as control text
 
 Found by scanning clyzo.com again on the owner's instruction: the scan reproduced the report exactly (banner "found" on the home page, no reject-all, per-purpose choices, score 19). Its stored consent signal said `matched_keywords: ["privacy preferences"]`, source `control_text_keywords`. Running the scanner's own collectors on the five pages showed where the phrase was: the sentence "To manage your privacy preferences and to ensure you only receive communications that you have requested..." in the privacy policy page, inside 35,256 characters of "rendered control text" for that one page (10,043 for the cookie policy page).

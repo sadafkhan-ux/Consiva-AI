@@ -55,7 +55,7 @@ from app.scanner.consent_interactor import (
     confirm_interaction_completed,
     pass_consent_gate,
 )
-from app.scanner.consent_signal_detector import detect_consent_signal
+from app.scanner.consent_signal_detector import _ACCEPT_HINTS, _GRANULAR_HINTS, _REJECT_HINTS, _any, detect_consent_signal
 from app.scanner.cookie_detector import (
     attribute_new_cookies,
     cookie_key,
@@ -902,6 +902,13 @@ async def _settled_text(page: Page, url: str) -> str:
 _CONTROL_REREADS = 3
 _CONTROL_REREAD_WAIT_MS = 700
 _CONTROL_STABLE_READS = 2
+_CONTROL_EXTRA_REREADS = 6
+
+
+def _banner_without_choices(control_text: str | None) -> bool:
+    """Accept or Reject wording is on the controls but no preferences / settings wording: the case where a late-drawn control may still be missing."""
+    text = (control_text or "").lower()
+    return (_any(text, _ACCEPT_HINTS) or _any(text, _REJECT_HINTS)) and not _any(text, _GRANULAR_HINTS)
 
 
 async def _settled_control_text(page: Page) -> str | None:
@@ -916,6 +923,15 @@ async def _settled_control_text(page: Page) -> str | None:
         best = again if grew else best
         if stable >= _CONTROL_STABLE_READS:
             break
+    # A banner that shows Accept or Reject but no preferences control may simply not have drawn it yet (slow machine, slow consent-tool script). Keep looking a little longer, bounded;
+    # a banner that really has none costs only these few extra readings.
+    for _ in range(_CONTROL_EXTRA_REREADS):
+        if not _banner_without_choices(best):
+            break
+        await page.wait_for_timeout(_CONTROL_REREAD_WAIT_MS)
+        again = await page.evaluate(_SHADOW_DOM_CONTROL_TEXT_JS)
+        if len(again or "") > len(best or ""):
+            best = again
     return best
 
 
@@ -1883,9 +1899,17 @@ async def _recheck_pre_consent(
     return {"checked_at": _now_iso(), "crawl_hits": crawl_hits, "pages": results, "reproduced": any(r["fired"] for r in results), "complete": bool(results) and all(r["loaded"] for r in results)}
 
 
-def _reconcile_banner_presence(signal: ConsentSignalRecord, accept_status: str, reject_status: str) -> None:
+def _reconcile_banner_presence(signal: ConsentSignalRecord, accept_status: str, reject_status: str, withdrawal: dict | None = None) -> None:
     """A consent tool's page text only counts as a fact about its banner when banner wording was seen (consent_signal_detector). If an Accept or Reject control was then
-    CLICKED, the banner was demonstrably on screen, so what its text said (no reject-all, per-purpose choices) is restored. Without a click it stays unknown."""
+    CLICKED, the banner was demonstrably on screen, so what its text said (no reject-all, per-purpose choices) is restored. Without a click it stays unknown.
+
+    `withdrawal` is the withdrawal test's result (scanner/withdrawal.py). A banner whose buttons were drawn after the home page was read can be recorded as having no per-purpose choices;
+    if that test then found and reopened a control worded as a preferences control (the same words consent_signal_detector counts as per-purpose choices), the choices exist and are recorded."""
+    if signal.mechanism_type in ("cmp", "banner") and signal.has_granular_choices is not True and withdrawal:
+        reopened = withdrawal.get("reopen_control") or {}
+        if _any(str(reopened.get("text") or "").lower(), _GRANULAR_HINTS):
+            signal.has_granular_choices = True
+            signal.evidence = {**(signal.evidence or {}), "granular_control_seen_via": "withdrawal_test"}
     if signal.mechanism_type != "cmp" or "clicked" not in (accept_status, reject_status):
         return
     ev = signal.evidence or {}
@@ -2097,7 +2121,7 @@ async def run_scan(
         **({"consent_gate": {"post_accept": accept_gate, "post_reject": reject_gate}} if (accept_gate or reject_gate) else {}),
     }
 
-    _reconcile_banner_presence(consent_signal, accept_status, reject_status)
+    _reconcile_banner_presence(consent_signal, accept_status, reject_status, withdrawal)
     _reconcile_reject_presence(consent_signal, reject_status, reject_confirmed)
 
     scan_diagnostics = {

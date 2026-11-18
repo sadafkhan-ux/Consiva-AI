@@ -124,6 +124,8 @@ def _window(quote: str, doc_text: str) -> str:
 
 _URL = re.compile(r"https?://[^\s)\]>\"']+", re.IGNORECASE)
 _CONTACT_REQS = ("grievance_contact", "dpo_contact", "rights_means")
+#: The requirements whose passage must itself carry an email or phone to be the best evidence (see `analyse`).
+_PREFER_CONTACT_PASSAGE = ("grievance_contact", "dpo_contact")
 
 
 def _raw_window(quote: str, doc_text: str) -> str:
@@ -411,6 +413,25 @@ def locate_by_pattern(req_id: str, docs: list[PolicyDocument]) -> tuple[str, Pol
     return None
 
 
+def locate_contact_passage(req_id: str, docs: list[PolicyDocument]) -> tuple[str, PolicyDocument] | None:
+    """Like `locate_by_pattern` for the officer and grievance contact, but it walks EVERY match of the topic in document order and returns the first passage that itself holds an email
+    or phone (not merely one near it). `locate_by_pattern` stops at the first match, which can be a generic sentence with the contact only just outside it. Same passage slice, always an exact
+    slice of the document; None when no passage carries a contact."""
+    topic = _RESCUE_TOPIC.get(req_id)
+    if topic is None:
+        return None
+    for doc in docs:
+        text = doc.text
+        for m in topic.finditer(text):
+            before = text[max(0, m.start() - 200): m.start()]
+            last = [s.end() for s in _SENTENCE_START.finditer(before)]
+            start = max(0, m.start() - 200) + last[-1] if last else max(0, m.start() - 100)
+            quote = _slice_at_words(text, start, min(len(text), start + MAX_QUOTE_CHARS))
+            if has_contact(quote, allow_form=False) and verify_quote(quote, text):
+                return quote, doc
+    return None
+
+
 def analyse(
     extraction: PolicyExtraction | None, docs: list[PolicyDocument], sector: str | None, child_signal: bool,
 ) -> dict:
@@ -439,6 +460,15 @@ def analyse(
                     row["quote"], row["source_url"] = res.quote.strip(), doc.url
                     if req.id in _CONTACT_REQS:
                         row["contacts"] = extract_contacts(_raw_window(res.quote, doc.text))
+                    if req.id in _PREFER_CONTACT_PASSAGE and not has_contact(res.quote, allow_form=False):
+                        # The model's passage is genuine but carries no email or phone itself. If the policy also has a passage on the same topic that does, that one is the better evidence.
+                        better = locate_contact_passage(req.id, docs)
+                        if better is not None:
+                            quote, doc = better
+                            row["status"], row["detail"] = judge(req, quote, doc)
+                            row["detail"] += " A passage with a contact detail was preferred over the model's passage."
+                            row["quote"], row["source_url"], row["found_by"] = quote, doc.url, "pattern"
+                            row["contacts"] = extract_contacts(_raw_window(quote, doc.text))
                     if req.id == "grievance_timeline":
                         row["response_days"] = response_days(res.quote)
         if ok and row["status"] == NOT_FOUND:
@@ -484,7 +514,7 @@ def _child_signal(evidence: dict) -> bool:
 
 
 #: Bump when the analysis of a model answer changes (a stored result made by an older version is then not reused).
-ANALYSIS_VERSION = 2
+ANALYSIS_VERSION = 3
 
 
 def reuse_prompt(docs: list[PolicyDocument], reqs: list[PolicyRequirement]) -> str:
@@ -601,7 +631,20 @@ async def run(scan_id: uuid.UUID, *, extractor=None, fetcher=fetch_policy_text) 
             extraction, meta = await extractor(SYSTEM_PROMPT, prompt)
         except Exception as exc:
             logger.warning("Policy analysis model call failed for %s: %s", scan_id, exc)
-            return unavailable(f"The policy was read but the analysis model could not be reached ({type(exc).__name__}).", docs, notes)
+            # The policy text WAS read, so the fixed-pattern search still runs. This degraded result is never stored or reused: it has no input hash (find_reusable and find_shared
+            # match on a hash, which a None never equals) and store_shared is not called.
+            error_type = type(exc).__name__
+            if not docs:
+                return unavailable(f"The policy was read but the analysis model could not be reached ({error_type}).", docs, notes)
+            out = analyse(None, docs, sector, child)
+            for r in out["requirements"]:
+                if r["status"] == NOT_FOUND:
+                    r["detail"] = "Not established: the analysis model could not be reached and no passage was found by the fixed patterns; the policy was not read by the model."
+            return {"status": ANALYSED, "reason": None, "sector": sector, "documents": _doc_rows(docs),
+                    "notes": [*notes, f"The analysis model could not be reached ({error_type}), so only passages found by fixed patterns are shown; anything not found this way is not established."],
+                    **out, "limitations": list(LIMITATIONS),
+                    "model": {"provider": None, "model": None, "reused": False, "tokens_in": 0, "tokens_out": 0, "unavailable": True, "error_type": error_type},
+                    "input_hash": None}
 
         out = analyse(extraction, docs, sector, child)
         result = {"status": ANALYSED, "reason": None, "sector": sector, "documents": _doc_rows(docs), "notes": notes,

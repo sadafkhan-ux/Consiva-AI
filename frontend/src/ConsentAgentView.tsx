@@ -39,7 +39,7 @@ const RULE_STAGES = new Set(["findings_generated", "rule_findings_generated"]);
 /** The 10-check score for the scan on screen, from the same report model the PDF is drawn from; null when the scan has no evidence to score or the model cannot be built. */
 export function ConsentAgentView({ wholeSite = false }: { wholeSite?: boolean } = {}) {
   // `wholeSite` is the Enterprise screen: the very same scan, results, score and report, but the scan covers every page it can reach instead of five, and the PDF is the detailed one.
-  const { state, run, open, afterReviewDecision } = useConsentScan();
+  const { state, run, open, afterReviewDecision, stop, scanAgain } = useConsentScan();
   const [url, setUrl] = useState("https://example.com");
   const [authorized, setAuthorized] = useState(true);
   const [buildingReport, setBuildingReport] = useState(false);
@@ -48,7 +48,7 @@ export function ConsentAgentView({ wholeSite = false }: { wholeSite?: boolean } 
   // Every terminal phase, not just the happy ones. Omitting "degraded" here left
   // the Scan button disabled forever after a run that produced findings without a
   // narrative -- a finished run that the page still treated as in flight.
-  const TERMINAL_PHASES = ["idle", "completed", "degraded", "failed", "awaiting_review"];
+  const TERMINAL_PHASES = ["idle", "completed", "degraded", "failed", "awaiting_review", "cancelled"];
   const busy = !TERMINAL_PHASES.includes(state.phase);
 
   function handleScan() {
@@ -210,8 +210,8 @@ export function ConsentAgentView({ wholeSite = false }: { wholeSite?: boolean } 
 
       {hasRun && (
         <>
-          <ScanStatusSection state={state} />
-          {notScanned ? (
+          <ScanStatusSection state={state} onStop={() => void stop()} onScanAgain={() => void scanAgain()} />
+          {state.phase === "cancelled" ? null : notScanned ? (
             <section className="section" data-testid="not-scanned">
               <h2>Results</h2>
               <div className="error-box">
