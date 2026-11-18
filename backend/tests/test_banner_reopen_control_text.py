@@ -32,9 +32,12 @@ def test_a_dict_shaped_reopen_control_is_still_read():
     assert signal.has_granular_choices is True
 
 
-def test_the_banner_text_that_is_given_extra_time_is_accept_or_reject_wording_without_a_preferences_control():
-    assert crawler._banner_without_choices("accept all reject all") is True
-    assert crawler._banner_without_choices("accept all manage preferences") is False
+def test_the_banner_text_that_is_given_extra_time_is_one_where_a_control_may_still_be_missing():
+    assert crawler._banner_without_choices("accept all reject all") is True                       # no preferences control yet
+    assert crawler._banner_without_choices("reject all") is True                                  # Reject only, no preferences control
+    assert crawler._banner_without_choices("accept all manage preferences") is True               # an Accept with no Reject: the Reject may not be drawn yet
+    assert crawler._banner_without_choices("accept all reject all manage preferences") is False   # complete
+    assert crawler._banner_without_choices("reject all manage preferences") is False
     assert crawler._banner_without_choices("subscribe to our newsletter") is False
     assert crawler._banner_without_choices("") is False and crawler._banner_without_choices(None) is False
 

@@ -906,9 +906,14 @@ _CONTROL_EXTRA_REREADS = 6
 
 
 def _banner_without_choices(control_text: str | None) -> bool:
-    """Accept or Reject wording is on the controls but no preferences / settings wording: the case where a late-drawn control may still be missing."""
+    """Accept or Reject wording is on the controls but one of them may still be missing: no preferences / settings wording, or an Accept with no Reject. The buttons of a consent tool are
+    drawn one after another, so a late-drawn control may simply not be there yet. The Reject test is the one consent_signal_detector uses for `has_reject_all`, so this waits exactly when the
+    reading would otherwise record "no reject-all option" (the same live banner was read with Reject all on 10 Nov 2026 and without it on 18 Nov, under CPU starvation)."""
     text = (control_text or "").lower()
-    return (_any(text, _ACCEPT_HINTS) or _any(text, _REJECT_HINTS)) and not _any(text, _GRANULAR_HINTS)
+    has_accept, has_reject = _any(text, _ACCEPT_HINTS), _any(text, _REJECT_HINTS)
+    if not (has_accept or has_reject):
+        return False
+    return not _any(text, _GRANULAR_HINTS) or not has_reject
 
 
 async def _settled_control_text(page: Page) -> str | None:
@@ -923,8 +928,8 @@ async def _settled_control_text(page: Page) -> str | None:
         best = again if grew else best
         if stable >= _CONTROL_STABLE_READS:
             break
-    # A banner that shows Accept or Reject but no preferences control may simply not have drawn it yet (slow machine, slow consent-tool script). Keep looking a little longer, bounded;
-    # a banner that really has none costs only these few extra readings.
+    # A banner that shows Accept or Reject but no preferences control, or an Accept but no Reject, may simply not have drawn it yet (slow machine, slow consent-tool script). Keep looking
+    # a little longer, bounded (at most _CONTROL_EXTRA_REREADS x _CONTROL_REREAD_WAIT_MS, about 4 s); a banner that really lacks one costs only these few extra readings.
     for _ in range(_CONTROL_EXTRA_REREADS):
         if not _banner_without_choices(best):
             break

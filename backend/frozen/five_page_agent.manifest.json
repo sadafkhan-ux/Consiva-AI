@@ -32,7 +32,7 @@
   "backend/app/scanner/consent_signal_detector.py": "3e40a015c0bd4a844f0fddf493c33d96cc0dd85d363950edc2e582bfc0c752e6",
   "backend/app/scanner/cookie_detector.py": "76ada13647f74123252277bc9963871d135e8477da2923d30dcc95443abafa34",
   "backend/app/scanner/crawl_controls.py": "611222bee1e2995914300fdb57da2028a2baf5bd54bb602d84fc9f766a694e6f",
-  "backend/app/scanner/crawler.py": "785cd29658341ec72931b563052db258d7ee6c64be7593d7f35ec31dbe1a616c",
+  "backend/app/scanner/crawler.py": "f96e244de72bc3647681c2c9272e03e465f09d19848f57f9c7e08b3fa4f559a7",
   "backend/app/scanner/failure_catalog.py": "036ee6d1903fdf3bf37d260cfd391f8abe73ab192b2e60e513321f4b754df5d8",
   "backend/app/scanner/failures.py": "4ae9b32f581df0f851098df065fe52b6dd36dcc685fa9ec55c6c3b7421a9143b",
   "backend/app/scanner/form_detector.py": "f1fdafe41536eb469a653505e02dca067c2ed70574faf388df76b2280f9597c8",

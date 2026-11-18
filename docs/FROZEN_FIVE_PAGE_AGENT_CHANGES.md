@@ -2,6 +2,17 @@
 
 Each entry is a change the owner asked for after the freeze. The manifest (`five_page_agent.manifest.json`) was regenerated after it, and the full backend suite was run.
 
+## 18 Nov 2026 (sixth change): a banner with Accept and Manage preferences but no Reject yet is waited on for the Reject (owner-approved 2026-11-18)
+
+Problem: the live scan of 18 Nov 2026 (score 70) read a consent banner with Accept and Manage preferences but not yet its Reject button (drawn a moment later, on a host starved of CPU) and recorded "no reject-all option": check 2 Failed (0 of 8) and check 4 not assessed, for a banner that offers Reject (the 10 Nov report of the same site said so). `_banner_without_choices` only extended the wait when the preferences control was missing, so this banner was read once, as complete.
+
+| File | Change |
+|---|---|
+| `backend/app/scanner/crawler.py` | `_banner_without_choices`: the extra rereads (at most `_CONTROL_EXTRA_REREADS` x 700 ms, about 4 s, unchanged) now also run while the text has an Accept but no Reject, using the same Reject wording `consent_signal_detector` uses for `has_reject_all`. A banner with Accept, Reject and preferences stops at once; one that really has no Reject costs only the bounded extra readings. Only the entered address is read this way, as before. |
+
+Not changed: the extra-reread limit, the scoring rules (a banner whose Reject is still absent after the wait is still reported as having none, as for a banner that genuinely lacks one), the marks, the report.
+Tests: `tests/test_banner_control_text_settles.py` (a Reject drawn 3.2 s late is in the text; a banner with no Reject is read after a bounded wait) and `tests/test_banner_reopen_control_text.py` (which texts are given extra time).
+
 ## 18 Nov 2026 (fifth change): a cancel that arrives after the page loop is not undone (owner-approved 2026-11-18, audit item A)
 
 Found in the pre-production audit. `should_stop` is polled only between batches of the page crawl. A scan cancelled later (the Accept and Reject passes, the withdrawal test of about 50 s, the button comparison) ran to its end and returned a full result whose `stop_reason` was not "cancelled"; `save_scan_result` then marked it "completed", and `scan_service` restored "cancelled" only when `stop_reason == "cancelled"`. The cancel was silently undone and the scan was analysed.
