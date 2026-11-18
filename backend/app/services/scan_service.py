@@ -253,6 +253,9 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
         raise
 
     try:
+        # Read BEFORE saving: save_scan_result marks the scan "completed". The crawl only stops early between pages, so a scan cancelled during its later phases (the Accept and
+        # Reject passes, the withdrawal test, the button comparison) still returns a full result with a stop_reason that is not "cancelled"; the cancel has to be recognised from the status.
+        cancelled_before_save = await _cancelled()
         async with track_stage(scan_id, "data_structuring") as meta:
             async with async_session_factory() as db:
                 written = await scan_repository.save_scan_result(
@@ -290,7 +293,7 @@ async def execute_scan_and_persist(scan_id: uuid.UUID, url: str) -> None:
         # evidence is kept (the cancel contract), but save_scan_result marks the scan
         # "completed", which would quietly undo the cancel -- and the chain job would then
         # analyse it. Put the status back.
-        if scan_result.scan_diagnostics.get("stop_reason") == "cancelled":
+        if scan_result.scan_diagnostics.get("stop_reason") == "cancelled" or cancelled_before_save:
             async with async_session_factory() as db:
                 row = await db.get(ConsentScan, scan_id)
                 if row is not None:

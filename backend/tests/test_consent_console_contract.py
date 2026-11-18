@@ -69,7 +69,9 @@ def test_the_console_calls_the_eighteen_documented_endpoints():
     # 17 before the URL inventory; Phase 2 added GET /consent/scans/{id}/url-inventory; GET /assessment (the one score) was added and the weighted /dpdp-score and its /compare
     # were removed, which nets one fewer than the nineteen of the day before. (The whole-site scan, POST /consent-agent/scans/application, is outside
     # the /consent/ prefix this contract covers; it is tested with the scan profiles.) Each endpoint is also checked below to exist on the backend with that method.
-    assert len(_console_calls()) == 18, _console_calls()
+    # 18 Nov 2026: the Stop Scan button added the nineteenth, POST /consent-agent/scans/{scanId}/cancel (an existing route; only the console now calls it).
+    assert len(_console_calls()) == 19, _console_calls()
+    assert ("POST", "/api/v1/consent-agent/scans/{scanId}/cancel") in _console_calls()
 
 
 @pytest.mark.parametrize("method,path", _console_calls())

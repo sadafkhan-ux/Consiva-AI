@@ -2,6 +2,35 @@
 
 Each entry is a change the owner asked for after the freeze. The manifest (`five_page_agent.manifest.json`) was regenerated after it, and the full backend suite was run.
 
+## 18 Nov 2026 (fifth change): a cancel that arrives after the page loop is not undone (owner-approved 2026-11-18, audit item A)
+
+Found in the pre-production audit. `should_stop` is polled only between batches of the page crawl. A scan cancelled later (the Accept and Reject passes, the withdrawal test of about 50 s, the button comparison) ran to its end and returned a full result whose `stop_reason` was not "cancelled"; `save_scan_result` then marked it "completed", and `scan_service` restored "cancelled" only when `stop_reason == "cancelled"`. The cancel was silently undone and the scan was analysed.
+
+| File | Change |
+|---|---|
+| `backend/app/services/scan_service.py` | `execute_scan_and_persist`: the cancel status is read once more just BEFORE `save_scan_result` (`cancelled_before_save`), and the existing restore of "cancelled" after the save now also runs when it is true. Nothing else changed: the crawl, the evidence kept, the analysis guard. |
+
+Not changed: the crawler (a late cancel still lets the running phase finish; its result is kept as partial evidence and discarded), the marks, rules, the report.
+Tests: `tests/test_scan_cancelled_after_crawl.py` (a cancel after the page loop stays cancelled, which fails on the code before this change; a cancel during the page loop and a cancel before the start behave as before; a scan nobody cancelled completes).
+
+## 18 Nov 2026 (record, owner-confirmed 2026-11-18): the two banner changes made on the production host, now documented and tested
+
+Two changes to `crawler.py` arrived in the 9e08733 commit without an entry here, and are kept as they run on the server:
+- `_CONTROL_EXTRA_REREADS` / `_banner_without_choices`: on the entered address, a banner showing Accept or Reject wording but no preferences wording is read again up to 6 more times (700 ms apart, about 4 s at most), because the preferences control may not be drawn yet.
+- `_reconcile_banner_presence(..., withdrawal)`: when the banner was recorded without per-purpose choices, and the withdrawal test then found and reopened a control worded as a preferences control, the per-purpose choices are recorded as present (`evidence.granular_control_seen_via = "withdrawal_test"`). This can raise a score where a banner's preference control was drawn late; it is limited to the `cmp` and `banner` mechanisms.
+Tests: `tests/test_banner_reopen_control_text.py`.
+
+## 18 Nov 2026 (fourth change): a scan no longer fails when the withdrawal test's reopened control is recorded as text (owner-approved 2026-11-18)
+
+Problem: `_reconcile_banner_presence` read `withdrawal["reopen_control"]` as a dict (`.get("text")`), but the withdrawal test records the control as a string (the control's text), or None. Whenever a banner without per-purpose choices was followed by a withdrawal test that reopened a control, the call raised `AttributeError: 'str' object has no attribute 'get'` at the very end of the crawl and the whole scan was marked failed at the `website_scan` stage ("Not scanned - no result"). A site-independent crash, found when a scan of a site with a consent banner failed after the 18 Nov crawler change was pulled.
+
+| File | Change |
+|---|---|
+| `backend/app/scanner/crawler.py` | `_reconcile_banner_presence`: the reopened control is read as text whether it is a string or a dict with a `text` key; None or missing is unchanged. Nothing else in the function or the file changed. |
+
+Not changed: the marks, rules, P1 to P12, the withdrawal test, the report.
+Tests: `tests/test_banner_reopen_control_text.py` (a string control no longer raises and counts as a preferences control; a non-preferences control changes nothing; a dict is still read; None, `{}` and no result are fine).
+
 ## 18 Nov 2026 (third change): every topic match is considered for the officer and grievance contact, and a model failure no longer hides the policy (owner-approved 2026-11-18)
 
 Problem: (A) the earlier contact-passage step used `locate_by_pattern`, which returns only the first match. A generic sentence with its contact just outside its own passage was therefore returned, and the named passage later in the text never replaced the model's weak quote. (B) when the model call failed, the policy text that had been read was reported as unavailable.

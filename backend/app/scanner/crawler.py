@@ -1906,8 +1906,9 @@ def _reconcile_banner_presence(signal: ConsentSignalRecord, accept_status: str, 
     `withdrawal` is the withdrawal test's result (scanner/withdrawal.py). A banner whose buttons were drawn after the home page was read can be recorded as having no per-purpose choices;
     if that test then found and reopened a control worded as a preferences control (the same words consent_signal_detector counts as per-purpose choices), the choices exist and are recorded."""
     if signal.mechanism_type in ("cmp", "banner") and signal.has_granular_choices is not True and withdrawal:
-        reopened = withdrawal.get("reopen_control") or {}
-        if _any(str(reopened.get("text") or "").lower(), _GRANULAR_HINTS):
+        reopened = withdrawal.get("reopen_control")
+        reopened_text = reopened.get("text") if isinstance(reopened, dict) else reopened   # the withdrawal test records the control's text as a string
+        if _any(str(reopened_text or "").lower(), _GRANULAR_HINTS):
             signal.has_granular_choices = True
             signal.evidence = {**(signal.evidence or {}), "granular_control_seen_via": "withdrawal_test"}
     if signal.mechanism_type != "cmp" or "clicked" not in (accept_status, reject_status):
