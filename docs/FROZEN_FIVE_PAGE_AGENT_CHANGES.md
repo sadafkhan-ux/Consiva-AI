@@ -2,6 +2,17 @@
 
 Each entry is a change the owner asked for after the freeze. The manifest (`five_page_agent.manifest.json`) was regenerated after it, and the full backend suite was run.
 
+## 18 Nov 2026 (eighth change): full marks show 100 on a Quick Scan (owner's decision, 2026-11-18; scorecard 3.6.0)
+
+Owner's rule: when every row earns its full marks the score is 100. A scan of a site that earned 48 + 36 + 16 = 100 marks showed 99/100 because a Quick Scan was held at 99 (100 needed a Deep Scan at full coverage and high confidence).
+
+| File | Change |
+|---|---|
+| `backend/app/scoring/scorecard.py` | `_result`: the hold of a score of 100 at 99 is removed; `SCORECARD_VERSION` 3.5.0 to 3.6.0; the module note is updated |
+
+Not changed: the formula (marks earned out of 100, round half up), rows not assessed or not applicable earn nothing (so 100 needs all twelve rows in full; one mark short is 99), the bands, the low-confidence band rule, coverage reporting, the report layout, the older parameter engine (`domain_score.py`, only used if `SCORING_ENGINE` is switched) and the Enterprise engine. Recorded in `docs/GR24_SIGNOFF_PACK.md` as change 9.
+Tests: `tests/test_scorecard.py` (100 in every mode and confidence when every row is full; one mark short stays 99).
+
 ## 18 Nov 2026 (seventh change): TLS 1.2 earns the full marks on P12 (owner's decision, 2026-11-18; scorecard 3.5.0)
 
 Owner's rule: any site on TLS 1.2 or higher passes the TLS check with all 4 marks; only TLS 1.1 and below fail. Before, TLS 1.2 earned 2 of 4 ("Partially Passed": "The server negotiates TLS 1.2 but not TLS 1.3"), although TLS 1.2 is a currently supported version.

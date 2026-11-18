@@ -63,7 +63,7 @@
   "backend/app/scoring/legal_map.py": "3a258236bc1a97c9d706c3b7e25fb46e4487e341b0b831f351eed8a6907a2980",
   "backend/app/scoring/requirements.py": "e46aec22f609efcb2e708351a7d3b61612293360a3c3307da38d2c629a29d34b",
   "backend/app/scoring/review.py": "956a1196168ee5ea048e1d30344c29c2a150081f50cc9d24a5ba4e2cd8ea5f97",
-  "backend/app/scoring/scorecard.py": "ac66d42780e9393fe04da8446ebbbd0ca36a04c8fbdcbe384696849c22f4a75a",
+  "backend/app/scoring/scorecard.py": "5d6b6f7573e0615c1788f8debd4758ae1508f20586e31025c7e86e77f7cdaa7c",
   "backend/app/scoring/sector.py": "14aa38600fcec648ce0492a7107afc9a313c42a9e941ecf5dcbab6e8fc56b429",
   "backend/app/scoring/ten_checks.py": "306942a207ae098af72b3af8be8645b71b1ca95cdc1c760bd1118b93046c06a9",
   "backend/app/scoring/ten_inputs.py": "960adece670831b4ab3222c58fff573672ea92971ea27643fbac394f3f465b72",

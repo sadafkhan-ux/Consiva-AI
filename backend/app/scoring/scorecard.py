@@ -11,7 +11,7 @@ Per row, one of five outcomes (the workbook has four; the fifth is what keeps a 
   not_applicable  left out of the denominator: the check does not apply (no consent tool is needed; no personal-data form)
 
 Score = marks awarded / marks in play x 100, a whole number. Bands by the workbook's thresholds (90, 75, 50) with neutral names; the score is shown whatever the coverage (coverage is reported beside it, it never withholds it); "Insufficient evidence"
-and no score only when no row could be assessed at all; a Quick Scan is held at 99 and 100 needs a Deep Scan at full coverage and high confidence. There is no hard-fail cap: a failed row is the first finding, worded as a finding.
+and no score only when no row could be assessed at all; 100 is shown whenever every row earned its full marks, Quick Scan or Deep Scan (owner's decision, 18 Nov 2026; before it a Quick Scan was held at 99). There is no hard-fail cap: a failed row is the first finding, worded as a finding.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from app.scoring import domain_score as ds
 from app.scoring import legal_map
 from app.scoring.ten_checks import _find, _is_verified
 
-SCORECARD_VERSION = "3.5.0"
+SCORECARD_VERSION = "3.6.0"
 RULES = {**ds.RULES, "scoring_rules": SCORECARD_VERSION, "scorecard": "DPDP_Website_Readiness_Scorecard.xlsx"}
 
 PASS, PARTIAL, FAIL, NOT_ASSESSED, NA = "pass", "partial", "fail", "not_assessed", "not_applicable"
@@ -383,9 +383,8 @@ def _result(base: dict[str, Any], rows: list[dict[str, Any]], internal: dict[str
             order = [b[0] for b in BANDS][::-1]
             band = order[max(0, order.index(band) - 1)]
             notes.append("Evidence confidence is low, so the band is held one level lower.")
-        if score is not None and score >= 100 and not (mode == "deep" and coverage == 100 and level == "high"):
-            score = 99
-            notes.append("A score of 100 needs a Deep Scan at full coverage with high evidence confidence, so it is held at 99.")
+        # Owner's decision, 18 Nov 2026: when every row earned its full marks the score is 100. Rows not assessed or not applicable earn nothing, so 100 can only come from all twelve rows earned in full;
+        # the old hold of a Quick Scan at 99 is removed.
     else:
         notes.append("No row could be assessed.")
     findings = []

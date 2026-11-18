@@ -63,7 +63,7 @@ Errors: 401; 404; 409 (scan not completed yet, or an analysis is already running
 **Console:** `GET /api/v1/consent/scans/{scan_id}/assessment`. **Website:** `GET /api/v1/consent-agent/scans/{scan_id}/assessment`. The same JSON from both.
 Response 200 fields: `scan_id`, `methodology_version`, `scan_status`, `policy_analysis` (`not_run`, `pending`, `running`, `done`, `failed`), `final` (boolean), `score` (integer or null), `score_text`, `total_text`, `awarded`, `applicable_max`, `counts`, `incomplete`, `limited_basis`, `summary`, `formula`, `checks`, `recommendations`, `pages`, `limitations`, `engine`, `scanner`.
 ```json
-{ "scan_id": "uuid", "methodology_version": "scorecard-3.5.0", "scan_status": "completed", "policy_analysis": "done", "final": true, "score": 94, "score_text": "94/100", "awarded": 94, "applicable_max": 100,
+{ "scan_id": "uuid", "methodology_version": "scorecard-3.6.0", "scan_status": "completed", "policy_analysis": "done", "final": true, "score": 94, "score_text": "94/100", "awarded": 94, "applicable_max": 100,
   "counts": { "passed": 10, "partial": 2, "failed": 0, "not_assessed": 0, "not_applicable": 0, "beyond_scan_type": 0 }, "incomplete": 0,
   "checks": [ { "id": 1, "ref": "P1", "category": "Cookie Consent", "name": "Consent banner shown on first visit", "result": "Passed", "awarded": 8, "max": 8, "marks_text": "8 of 8 pts", "evidence": "Consent mechanism detected on the home page (Consiva Consent SDK)", "source_url": "https://swaransoft.com/", "explanation": "A consent banner was shown on first visit and on every inner page read.", "legal": "DPDP Act s.4(1), s.6(1)", "completed": true, "limitation": null, "basis": "Verified", "quality": "Specific" } ] }
 ```

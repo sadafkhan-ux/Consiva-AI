@@ -217,11 +217,25 @@ def _perfect(mode, level="high"):
     return sc._result(b, rows, {}, mode, None)
 
 
-def test_a_score_of_100_needs_every_row_earned_and_a_deep_scan_with_high_confidence_otherwise_it_is_held_at_99():
-    assert _perfect("deep")["score"] == 100
-    quick = _perfect("quick")
-    assert quick["score"] == 99 and any("held at 99" in n for n in quick["band_notes"])
-    assert _perfect("deep", "medium")["score"] == 99
+def test_a_score_of_100_is_shown_whenever_every_row_earned_its_full_marks():
+    """Owner's decision, 18 Nov 2026: full marks show 100, on a Quick Scan too; the old hold at 99 is gone."""
+    for mode, level in (("deep", "high"), ("quick", "high"), ("quick", "medium"), ("deep", "medium"), ("quick", "low")):
+        r = _perfect(mode, level)
+        assert r["score"] == 100 and r["score_text"] == "100/100", (mode, level)
+        assert not any("held at 99" in n for n in r["band_notes"]), (mode, level)
+
+
+def test_a_site_that_loses_any_row_is_never_shown_as_100():
+    import copy
+    r = _perfect("quick")
+    rows = copy.deepcopy(r["rows"])
+    lost = next(x for x in rows if x["id"] == "P12")
+    lost["outcome"], lost["awarded"], lost["found"] = "fail", 0, "The best TLS version the server offers is 1.1, which is retired."       # the smallest row, 4 marks
+    base = go(ev=banner_ev(), mode="quick")
+    b = copy.deepcopy(base)
+    b["confidence"] = {**b["confidence"], "level": "high"}
+    out = sc._result(b, rows, {}, "quick", None)
+    assert out["score"] == 100 - lost["marks"] == 96 and out["score_text"] == "96/100"
 
 
 def test_the_workbook_thresholds_with_neutral_names_and_no_hard_fail_cap():
