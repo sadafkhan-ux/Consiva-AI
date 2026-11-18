@@ -2,6 +2,17 @@
 
 Each entry is a change the owner asked for after the freeze. The manifest (`five_page_agent.manifest.json`) was regenerated after it, and the full backend suite was run.
 
+## 18 Nov 2026 (seventh change): TLS 1.2 earns the full marks on P12 (owner's decision, 2026-11-18; scorecard 3.5.0)
+
+Owner's rule: any site on TLS 1.2 or higher passes the TLS check with all 4 marks; only TLS 1.1 and below fail. Before, TLS 1.2 earned 2 of 4 ("Partially Passed": "The server negotiates TLS 1.2 but not TLS 1.3"), although TLS 1.2 is a currently supported version.
+
+| File | Change |
+|---|---|
+| `backend/app/scoring/scorecard.py` | P12: TLS 1.2 is `PASS` (was `PARTIAL`), evidence "TLS 1.2 detected."; the sub-row "TLS 1.3 is offered" is removed so a passed row never shows an unmet part; `SCORECARD_VERSION` 3.4.0 to 3.5.0 |
+
+Not changed: TLS 1.3 (still full), TLS 1.1 and below (still zero), http (still zero, blocked by P11), "not assessed" when the version cannot be read, P11, the other ten rows, the total of 100 marks, the report layout. A site on TLS 1.2 gains 2 marks. Recorded in `docs/GR24_SIGNOFF_PACK.md` as change 8 (awaiting named legal sign-off) and in `docs/SCORECARD.md`.
+Tests: `tests/test_scorecard_tls.py` (TLS 1.2 passes with 4 marks, 1.1 and 1.0 fail, no P12 finding and the same score as TLS 1.3).
+
 ## 18 Nov 2026 (sixth change): a banner with Accept and Manage preferences but no Reject yet is waited on for the Reject (owner-approved 2026-11-18)
 
 Problem: the live scan of 18 Nov 2026 (score 70) read a consent banner with Accept and Manage preferences but not yet its Reject button (drawn a moment later, on a host starved of CPU) and recorded "no reject-all option": check 2 Failed (0 of 8) and check 4 not assessed, for a banner that offers Reject (the 10 Nov report of the same site said so). `_banner_without_choices` only extended the wait when the preferences control was missing, so this banner was read once, as complete.

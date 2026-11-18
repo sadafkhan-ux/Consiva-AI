@@ -98,7 +98,7 @@ Playwright with Chromium runs several passes (`scanner/crawler.py`):
 
 ### Step 8: The score (computed when asked, never stored separately)
 - **API:** `GET /consent/scans/{id}/assessment` (website: `GET /consent-agent/scans/{id}/assessment`). Same JSON from both. `final` is true once the scan is completed and the policy analysis is done or failed.
-- **The 12 checks and their marks (total 100)** (`scoring/scorecard.py`, version 3.4.0):
+- **The 12 checks and their marks (total 100)** (`scoring/scorecard.py`, version 3.5.0):
 
 | | Check | Marks |
 |---|---|---|

@@ -23,7 +23,7 @@ from app.scoring import domain_score as ds
 from app.scoring import legal_map
 from app.scoring.ten_checks import _find, _is_verified
 
-SCORECARD_VERSION = "3.4.0"
+SCORECARD_VERSION = "3.5.0"
 RULES = {**ds.RULES, "scoring_rules": SCORECARD_VERSION, "scorecard": "DPDP_Website_Readiness_Scorecard.xlsx"}
 
 PASS, PARTIAL, FAIL, NOT_ASSESSED, NA = "pass", "partial", "fail", "not_assessed", "not_applicable"
@@ -346,8 +346,8 @@ def assess_scorecard(
         row("P11", FAIL, "The site was reached over http and no SSL certificate is in use.", subs11, evidence_override=tls_ev("The site was served over http, with no SSL certificate."))
     else:
         row("P11", FAIL, "The SSL certificate is not valid for this site (" + (cert.get("reason") or "it is not trusted") + ").", subs11, evidence_override=tls_ev("SSL certificate not trusted: " + (cert.get("reason") or "not valid for the host") + "."))
-    subs12 = [("P12.1", "TLS 1.2 or higher is offered", "not recorded" if not version else "met" if version in ("1.2", "1.3") else "not met"),
-              ("P12.2", "TLS 1.3 is offered", "not recorded" if not version else "met" if version == "1.3" else "not met")]
+    # Owner's decision, 18 Nov 2026: TLS 1.2 or higher earns the full marks. TLS 1.2 is a currently supported version and 1.3 is preferred, not required; only TLS 1.1 and below fail.
+    subs12 = [("P12.1", "TLS 1.2 or higher is offered", "not recorded" if not version else "met" if version in ("1.2", "1.3") else "not met")]
     if not tls or (not version and cstatus != "no_https"):
         row("P12", NOT_ASSESSED, "The TLS version was not checked in this scan." if not tls else "The TLS version could not be determined: " + (tver.get("reason") or "the handshake did not complete") + ".", subs12)
     elif cstatus == "no_https":
@@ -355,7 +355,7 @@ def assess_scorecard(
     elif version == "1.3":
         row("P12", PASS, "The server negotiates TLS 1.3.", subs12, evidence_override=tls_ev("TLS 1.3 detected."))
     elif version == "1.2":
-        row("P12", PARTIAL, "The server negotiates TLS 1.2 but not TLS 1.3.", subs12, evidence_override=tls_ev("TLS 1.2 detected; TLS 1.3 not offered."))
+        row("P12", PASS, "The server negotiates TLS 1.2, which is accepted (TLS 1.3 is preferred but not required).", subs12, evidence_override=tls_ev("TLS 1.2 detected."))
     else:
         row("P12", FAIL, f"The best TLS version the server offers is {version}, which is retired.", subs12, evidence_override=tls_ev(f"Best TLS version offered: {version}."))
 

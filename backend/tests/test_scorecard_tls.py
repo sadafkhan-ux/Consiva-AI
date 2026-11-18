@@ -48,10 +48,19 @@ def test_missing_invalid_or_expired_certificate_earns_zero(status):
     assert p11["outcome"] == "fail" and p11["awarded"] == 0 and p11["evidence"]
 
 
-def test_tls_versions_1_3_full_1_2_half_1_1_and_below_zero():
+def test_tls_versions_1_3_and_1_2_full_1_1_and_below_zero():
+    """Owner's decision, 18 Nov 2026: TLS 1.2 or higher earns all 4 marks; only TLS 1.1 and below fail."""
     got = {v: rows(version=v)[1] for v in ("1.3", "1.2", "1.1", "1.0")}
-    assert [(v, x["outcome"], x["awarded"]) for v, x in got.items()] == [("1.3", "pass", 4), ("1.2", "partial", 2), ("1.1", "fail", 0), ("1.0", "fail", 0)]
+    assert [(v, x["outcome"], x["awarded"]) for v, x in got.items()] == [("1.3", "pass", 4), ("1.2", "pass", 4), ("1.1", "fail", 0), ("1.0", "fail", 0)]
     assert "TLS 1.3" in got["1.3"]["evidence"][0]["observed"] and "TLS 1.2" in got["1.2"]["evidence"][0]["observed"]
+    assert "not offered" not in got["1.2"]["evidence"][0]["observed"]
+
+
+def test_a_site_on_tls_1_2_has_no_tls_finding_and_the_same_score_as_one_on_1_3():
+    _, p12_12, r12 = rows(version="1.2")
+    _, p12_13, r13 = rows(version="1.3")
+    assert p12_12["outcome"] == "pass" and not [f for f in r12["findings"] if f["ref"] == "P12"]
+    assert r12["score"] == r13["score"]
 
 
 def test_an_expired_certificate_does_not_hide_the_tls_version():
