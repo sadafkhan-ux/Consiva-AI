@@ -55,7 +55,7 @@ async def recalculate(db: AsyncSession, scan_id: uuid.UUID, as_of: date | None =
     result = score(current, as_of=as_of)
     score_id = await store.save_score(db, scan_id, result)
     rows = await store.load_current_rows(db, scan_id)
-    n = await store.replace_findings(db, scan_id, await build_findings(db, rows))
+    n = await store.replace_findings(db, scan_id, await build_findings(db, rows, result))
     await store.audit(db, scan_id, actor, "score_calculated", {"score_result_id": str(score_id), "score": result.score, "coverage": result.coverage, "basis": result.basis, "findings": n})
     return result
 

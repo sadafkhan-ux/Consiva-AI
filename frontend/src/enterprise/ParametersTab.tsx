@@ -5,7 +5,8 @@ import { useLoaded } from "./hooks";
 import { stripRef } from "./ListTabs";
 import { Empty, ErrorNote, Pill, Skeleton } from "./ui";
 
-const REVIEW_STATES: ParameterState[] = ["met", "partly_met", "not_met", "not_assessed", "not_applicable"];
+/** A reviewer decides one of the three results (method version 2: Pass, Partially Pass, Fail). */
+const REVIEW_STATES: ParameterState[] = ["met", "partly_met", "not_met"];
 
 function History({ scanId, pid, onClose }: { scanId: string; pid: string; onClose: () => void }) {
   const h = useLoaded<ParameterHistoryItem[]>(async () => asList(await enterpriseScans.parameterHistory(scanId, pid)), `${scanId}|${pid}`);
@@ -32,7 +33,7 @@ function History({ scanId, pid, onClose }: { scanId: string; pid: string; onClos
 }
 
 function ReviewForm({ scanId, p, onDone }: { scanId: string; p: ParameterView; onDone: () => void }) {
-  const [state, setState] = useState<ParameterState>(REVIEW_STATES.includes(p.state) ? p.state : "not_assessed");
+  const [state, setState] = useState<ParameterState>(REVIEW_STATES.includes(p.state) ? p.state : "not_met");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -52,7 +53,7 @@ function ReviewForm({ scanId, p, onDone }: { scanId: string; p: ParameterView; o
   return (
     <form onSubmit={submit} data-testid={`review-form-${p.id}`} style={{ marginTop: 8 }}>
       <div className="inline-row">
-        <label htmlFor={`rs-${p.id}`}>New state</label>
+        <label htmlFor={`rs-${p.id}`}>New result</label>
         <select id={`rs-${p.id}`} value={state} onChange={(e) => setState(e.target.value as ParameterState)}>
           {REVIEW_STATES.map((s) => <option key={s} value={s}>{paramState(s).label}</option>)}
         </select>
@@ -79,6 +80,7 @@ function ParameterCard({ scanId, p, canReview, onChanged, onEvidence }: { scanId
         {!p.in_force_on_as_of && p.in_force && <Pill tone="info">Not yet in force</Pill>}
       </div>
       {!st.assessed && p.state !== "not_applicable" && <p className="muted small">No result: this parameter has not been judged met or not met. It is not counted as a pass or a fail.</p>}
+      {typeof p.adjustment === "string" && p.adjustment && <p className="small" data-testid={`param-why-${p.id}`}>Why this result: {p.adjustment}</p>}
       <p className="small">
         Points earned {points(p.earned)} of {points(p.in_play)} in play ({points(p.points)} available).
         {p.legal_refs.length > 0 && <> Legal references: {p.legal_refs.join(", ")}.</>}

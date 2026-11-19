@@ -45,6 +45,9 @@ async def store(
         raise ValueError("page_number is 1-based, or 0 for a source with no pages")
     if not source_url or not detection_method:
         raise ValueError("evidence always names its source and how it was detected")
+    # A NUL character cannot be stored in a Postgres text column; text extracted from some PDFs contains them (two documents on swaransoft.com failed this way in the 19 Nov 2026
+    # end-to-end scan). It carries no meaning in text, so it is removed before the content is hashed and stored.
+    content = content.replace("\x00", "")
     size = len(content.encode("utf-8"))
     limit = get_enterprise_settings().max_evidence_bytes
     if size > limit:

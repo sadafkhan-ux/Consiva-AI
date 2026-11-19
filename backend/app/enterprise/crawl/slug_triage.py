@@ -66,7 +66,7 @@ async def triage(scan_id: uuid.UUID, *, llm=None) -> dict:
     while remaining > 0:
         async with async_session_factory() as db:
             rows = (await db.execute(text(
-                "select id, original_url from ent_frontier where scan_id = :s and status = 'pending' and priority = 1 and slug_kinds is null order by depth, discovered_at limit :n"),
+                "select id, original_url from ent_frontier where scan_id = :s and status = 'pending' and priority = 2 and slug_kinds is null order by depth, discovered_at limit :n"),
                 {"s": scan_id, "n": min(BATCH, remaining)})).all()
             if not rows:
                 break
@@ -87,8 +87,10 @@ async def triage(scan_id: uuid.UUID, *, llm=None) -> dict:
             for i, r in enumerate(ask, start=1):
                 h = hits.get(i)
                 useful = h is not None and bool(h.kinds) and h.confidence != "low"
-                await db.execute(text("update ent_frontier set slug_kinds = :k, priority = case when :u then 0 else priority end where id = :i and status = 'pending'"),
-                                 {"k": list(h.kinds) if useful else [], "u": bool(useful), "i": r.id})
+                # A flagged privacy policy is read with the privacy policies (0); a flagged cookie, terms or grievance page with the other legal pages (1).
+                new_priority = (0 if "privacy_policy" in h.kinds else 1) if useful else None
+                await db.execute(text("update ent_frontier set slug_kinds = :k, priority = coalesce(:p, priority) where id = :i and status = 'pending'"),
+                                 {"k": list(h.kinds) if useful else [], "p": new_priority, "i": r.id})
                 out["flagged"] += 1 if useful else 0
             for rid in skip:
                 await db.execute(text("update ent_frontier set slug_kinds = '{}' where id = :i"), {"i": rid})

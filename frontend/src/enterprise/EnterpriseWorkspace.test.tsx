@@ -227,7 +227,9 @@ describe("Enterprise DPDP workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
     const save = screen.getByRole("button", { name: "Save review" });
     expect(save).toBeDisabled(); // a reason is required
-    fireEvent.change(screen.getByLabelText("New state"), { target: { value: "met" } });
+    const select = screen.getByLabelText("New result") as HTMLSelectElement;
+    expect([...select.options].map((o) => o.text)).toEqual(["Pass", "Partially Pass", "Fail"]); // a reviewer decides one of the three results only
+    fireEvent.change(select, { target: { value: "met" } });
     fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: "Checked the banner by hand" } });
     fireEvent.click(save);
     await waitFor(() => expect(posted).toEqual({ state: "met", reason: "Checked the banner by hand" }));

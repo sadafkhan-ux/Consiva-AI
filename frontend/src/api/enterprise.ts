@@ -236,7 +236,11 @@ export interface Declaration {
   documents: { discovered: number | null; extracted: number | null; partly_extracted: number | null; unreadable: number | null; extraction_not_recorded: number | null };
   evidence: { records: number | null; sources: number | null; analysed: number | null };
   analysis_tasks?: { done: number | null; failed: number | null; pending: number | null };
-  parameters: { total: number | null; assessed: number | null; not_assessed: number | null; not_applicable: number | null; awaiting_human_review: number | null; needs_records: number | null; recorded: number | null };
+  parameters: {
+    total: number | null; assessed: number | null; not_assessed: number | null; not_applicable: number | null; awaiting_human_review: number | null; needs_records: number | null; recorded: number | null;
+    /** Method version 2: the scored result of every parameter. Absent on a scan scored before it. */
+    pass?: number; partially_pass?: number; fail?: number; fail_not_verified?: number;
+  };
 }
 
 export interface ScanSummary {
@@ -284,6 +288,12 @@ export interface ParameterView {
   evidence_refs: string[];
   adjustment: unknown;
   assessed_at: string | null;
+  /** Method version 2: "Pass", "Partially Pass" or "Fail" for `state`. */
+  status?: string;
+  /** What the assessor recorded before it was resolved to one of the three (for example "not_applicable"). */
+  assessed_state?: string;
+  /** False when the result rests on "could not be verified" or "needs records", not on collected evidence. */
+  on_evidence?: boolean;
 }
 
 export interface ParameterHistoryItem {

@@ -110,7 +110,7 @@ def build(evidence: list[EvRow], frontier: list[FrontierRow]) -> Loaded:
             out.networks.append((r.id, _json(r.content)))
         elif r.kind == "cookie":
             out.cookies.append((r.id, _json(r.content)))
-        elif r.kind == "header" and r.detection_method != "tls_probe":
+        elif r.kind == "header" and r.detection_method not in ("tls_probe", "five_page_inspection"):
             out.headers.append((r.id, _json(r.content)))
         elif r.kind == "consent":
             out.consent[r.detection_method.removeprefix("consent_test:")] = (r.id, _json(r.content))

@@ -59,6 +59,7 @@ class AnalysisOutcome:
     chunks_skipped: int = 0
     facts_kept: int = 0
     facts_discarded: int = 0                    # facts whose quote was not found in the text: never used
+    chunks_shared_in_scan: int = 0              # passages identical to one already read in this scan: their facts were shared, the model was not asked again
     parameters_assessed: int = 0
     assessments: list[Assessment] = field(default_factory=list)
     observations: dict = field(default_factory=dict)
@@ -188,9 +189,15 @@ async def _run(scan_id: uuid.UUID, repo: AnalysisRepo, llm: LLMCallable, as_of: 
     except Exception:                                   # no model configured: nothing can be reused safely
         finder, model_now = None, ""
     key = extractor_key(model_now) if finder else None
+    # The same passage at two addresses of THIS scan (a policy served at /privacy and /privacy-policy, a block repeated on every page) is read by the model once: the first reader shares its
+    # facts with the others, keyed by the kind and the exact text (never the address). The facts were checked word for word against that same text, so they hold for every copy; each copy
+    # keeps its own page and evidence record. If the first reading fails, every other copy is read on its own.
+    same_text: dict[str, asyncio.Future] = {}
+    out.chunks_shared_in_scan = 0
 
     async def read(w: _Work) -> None:
         th = text_hash(w.src.url, w.src.kind, w.chunk.text)
+        content_key = text_hash("", w.src.kind, w.chunk.text)
         answered: list[str | None] = []
 
         async def fn() -> tuple[dict, Answer | None]:
@@ -198,7 +205,23 @@ async def _run(scan_id: uuid.UUID, repo: AnalysisRepo, llm: LLMCallable, as_of: 
                 hit = await finder(scan_id, th, key)
                 if hit is not None:
                     return {"facts": hit.get("facts", []), "raw": hit.get("raw"), "discarded": hit.get("discarded", 0), "evidence_id": w.src.evidence_id, "page_number": w.src.page_number, "reused": True}, None
-            ex = await extract_chunk(llm, url=w.src.url, kind=w.src.kind, chunk_text=w.chunk.text, index=w.row.chunk_index, count=w.row.chunk_count)
+            owner = content_key not in same_text
+            if not owner:
+                shared = await same_text[content_key]
+                if shared is not None:
+                    out.chunks_shared_in_scan += 1
+                    return {"facts": shared["facts"], "raw": shared.get("raw"), "discarded": shared.get("discarded", 0), "evidence_id": w.src.evidence_id, "page_number": w.src.page_number,
+                            "reused": True, "reused_from": "same_text_in_scan"}, None
+            else:
+                same_text[content_key] = asyncio.get_running_loop().create_future()
+            try:
+                ex = await extract_chunk(llm, url=w.src.url, kind=w.src.kind, chunk_text=w.chunk.text, index=w.row.chunk_index, count=w.row.chunk_count)
+            except BaseException:
+                if owner and not same_text[content_key].done():
+                    same_text[content_key].set_result(None)          # the others read it themselves
+                raise
+            if owner and not same_text[content_key].done():
+                same_text[content_key].set_result({"facts": ex.facts, "raw": ex.raw, "discarded": ex.discarded})
             answered.append(f"{ex.answer.provider}/{ex.answer.model}")
             return {"facts": ex.facts, "raw": ex.raw, "discarded": ex.discarded, "evidence_id": w.src.evidence_id, "page_number": w.src.page_number}, ex.answer
 

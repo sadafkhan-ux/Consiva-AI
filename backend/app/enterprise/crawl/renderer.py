@@ -67,6 +67,9 @@ class Rendered:
     dom: dict = field(default_factory=dict)
     scroll: dict = field(default_factory=dict)
     expanded: dict = field(default_factory=dict)
+    #: What the 5-page agent's first-page sequence observed on this page (crawl/inspect.py): Set-Cookie events, storage keys, consent-tool globals and failed consent-tool scripts,
+    #: form controls that start ticked, iframe signals, insecure requests, language signals, and for the homepage its screenshot. Empty for a page read by `render` alone.
+    five_page: dict = field(default_factory=dict)
 
 
 def _links(html: str, base_url: str) -> list[str]:

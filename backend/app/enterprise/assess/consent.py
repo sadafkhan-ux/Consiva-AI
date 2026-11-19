@@ -19,7 +19,15 @@ the Open Cookie Database; neither is judged by a model.
       found after Accept. not assessed: Accept could not be given, or the page did not load.
   C8  After withdrawal, processing stops. Watch the page after withdrawing, then up to two more pages.
       not met: analytics or advertising is contacted after withdrawal. partly met: only on a later page. met: nothing is, and Accept had started something to stop.
-      not assessed: withdrawal was not tested, or Accept started nothing, so there was nothing to stop.
+      not applicable: Accept started nothing, so there was nothing to stop. not assessed: withdrawal was not tested.
+  C10 A consent mechanism wherever analytics or advertising runs. met: a banner was found (Accept or Reject could be given). not met: analytics or advertising was observed and no
+      banner was found. not applicable: no analytics or advertising was observed. not assessed: the entry page did not load.
+  C11 Consent for each purpose separately (the purposes test). met: the preferences offer a choice per purpose. partly met: a banner, but no choice per purpose. not met: analytics or
+      advertising runs with no banner at all. not applicable: no analytics or advertising was observed and no banner was found.
+
+Method version 2 (owner, 19 Nov 2026): where no analytics or advertising was observed at all and no banner was found, C5 to C8, C10 and C11 do not apply (a site with nothing that needs
+consent needs no banner) and are recorded as not applicable, which the engine reports as Pass with that reason. Where analytics or advertising runs with no banner, there is no way to
+refuse or withdraw, so C5, C7 and C8 are not met on the evidence of what ran.
 """
 
 from __future__ import annotations
@@ -27,7 +35,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from app.enterprise.assess.technical import MAX_REFS, Ev
-from app.enterprise.scoring.engine import MET, NOT_ASSESSED, NOT_MET, PARTLY, Assessment
+from app.enterprise.scoring.engine import MET, NOT_APPLICABLE, NOT_ASSESSED, NOT_MET, PARTLY, Assessment
 
 REASONS = {
     "homepage_not_loaded": "the entry page did not load", "page_not_loaded": "the entry page did not load", "accept_not_clicked": "Accept could not be given",
@@ -114,7 +122,7 @@ def _c8(tests: dict[str, Ev]) -> Assessment:
     d = ev[1]
     started = d.get("accepted_non_essential", [])
     if not started:
-        return Assessment("C8", NOT_ASSESSED, note="Accept started no analytics or advertising, so there was nothing for withdrawal to stop")
+        return Assessment("C8", NOT_APPLICABLE, _refs(ev), note="Accept started no analytics or advertising, so there was nothing for withdrawal to stop")
     after, later = d.get("after_withdrawal", []), [x for p in d.get("further_pages", []) for x in p.get("non_essential", [])]
     refs = _refs(ev)
     if after:
@@ -124,6 +132,73 @@ def _c8(tests: dict[str, Ev]) -> Assessment:
     return Assessment("C8", MET, refs, note=f"Accept started {len(started)} services ({_vendors(started)}); after withdrawal none was contacted, on the page or on {len(d.get('further_pages', []))} further pages")
 
 
+_NOT_LOADED = ("page_not_loaded", "homepage_not_loaded", "error")
+
+
+def _banner_seen(tests: dict[str, Ev]) -> bool | None:
+    """True when Accept or Reject could be given (a banner exists); False when both tests ran and found no control; None when the entry page did not load or the tests did not run."""
+    results = [tests[n][1] for n in ("accept", "reject") if n in tests]
+    if any(r.get("tested") for r in results):
+        return True
+    if not results or all((r.get("reason") or "") in _NOT_LOADED for r in results):
+        return None
+    return False
+
+
+def _consent_dependent(networks: list[Ev], tests: dict[str, Ev]) -> list[tuple[str, list[dict]]]:
+    """(evidence id, the analytics or advertising services) wherever such services ran: before any choice on a crawled page, or after Accept."""
+    hits = [(i, n["non_essential"]) for i, n in networks if n.get("non_essential")]
+    acc = tests.get("accept")
+    if acc and acc[1].get("non_essential"):
+        hits.append((acc[0], acc[1]["non_essential"]))
+    return hits
+
+
+def _c10(networks: list[Ev], tests: dict[str, Ev]) -> Assessment:
+    banner, hits = _banner_seen(tests), _consent_dependent(networks, tests)
+    if banner:
+        return Assessment("C10", MET, _refs(tests.get("accept"), tests.get("reject")), note="a consent banner was found: Accept or Reject could be given on the entry page")
+    if hits:
+        refs = tuple(dict.fromkeys(f"ev:{i}" for i, _ in hits))[:MAX_REFS]
+        return Assessment("C10", NOT_MET, refs, note=f"analytics or advertising ran ({_vendors([v for _, vs in hits for v in vs])}) and no consent banner was found")
+    if banner is None:
+        return Assessment("C10", NOT_ASSESSED, note="the entry page did not load in the consent sessions, so whether a banner exists could not be verified")
+    return Assessment("C10", NOT_APPLICABLE, tuple(f"ev:{i}" for i, _ in networks[:MAX_REFS]), note="no analytics or advertising was observed, so no consent mechanism is needed")
+
+
+def _c11(networks: list[Ev], tests: dict[str, Ev]) -> Assessment:
+    banner, hits = _banner_seen(tests), _consent_dependent(networks, tests)
+    ev = tests.get("purposes")
+    d = ev[1] if ev else {}
+    if d.get("tested") and d.get("purposes"):
+        kinds = ", ".join(sorted({p.get("label") or p.get("kind") or "?" for p in d["purposes"]}))[:200]
+        return Assessment("C11", MET, _refs(ev), note=f"the consent preferences offer a choice per purpose ({kinds})")
+    if banner:
+        why = {"no_preferences_control": "no preferences control was found", "no_purpose_choices": "the preferences offer no choice per purpose"}.get(d.get("reason") or "", _why(d) if d else "the purposes test did not run")
+        return Assessment("C11", PARTLY, _refs(ev, tests.get("accept"), tests.get("reject")), note=f"a consent banner was found, but no choice per purpose: {why}")
+    if hits:
+        refs = tuple(dict.fromkeys(f"ev:{i}" for i, _ in hits))[:MAX_REFS]
+        return Assessment("C11", NOT_MET, refs, note="analytics or advertising ran with no consent banner, so no choice of any purpose was offered")
+    if banner is None:
+        return Assessment("C11", NOT_ASSESSED, note="the entry page did not load in the consent sessions, so the choices offered could not be verified")
+    return Assessment("C11", NOT_APPLICABLE, tuple(f"ev:{i}" for i, _ in networks[:MAX_REFS]), note="no analytics or advertising was observed, so there is no purpose to choose")
+
+
+def _no_banner_needed(networks: list[Ev], tests: dict[str, Ev], a: Assessment) -> Assessment:
+    """C5 to C8 when no banner was found: they do not apply if nothing needs consent; if analytics or advertising ran, there was no way to refuse or withdraw."""
+    if a.state != NOT_ASSESSED or _banner_seen(tests) is not False:
+        return a
+    hits = _consent_dependent(networks, tests)
+    if not hits:
+        return Assessment(a.parameter_id, NOT_APPLICABLE, tuple(f"ev:{i}" for i, _ in networks[:MAX_REFS]),
+                          note="no analytics or advertising was observed and no consent banner exists, so there is nothing to refuse or withdraw")
+    if a.parameter_id == "C6":
+        return a                                                # the buttons cannot be compared; C10 records the missing banner
+    refs = tuple(dict.fromkeys(f"ev:{i}" for i, _ in hits))[:MAX_REFS]
+    return Assessment(a.parameter_id, NOT_MET, refs, note=f"analytics or advertising ran ({_vendors([v for _, vs in hits for v in vs])}) with no consent banner, so it could not be refused or withdrawn")
+
+
 def assess_consent(*, networks: list[Ev], cookies: list[Ev], tests: dict[str, Ev], classify: Classifier) -> list[Assessment]:
     """`networks` and `cookies` are the per-page pre-consent records of the crawl; `tests` the consent suite's results by name."""
-    return [_c4(networks, cookies, classify), _c5(tests), _c6(tests), _c7(tests), _c8(tests)]
+    adjusted = [_no_banner_needed(networks, tests, a) for a in (_c5(tests), _c6(tests), _c7(tests), _c8(tests))]
+    return [_c4(networks, cookies, classify), *adjusted, _c10(networks, tests), _c11(networks, tests)]

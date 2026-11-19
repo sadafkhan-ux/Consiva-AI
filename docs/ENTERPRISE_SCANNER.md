@@ -132,22 +132,20 @@ Cover with score, scan summary, scan transparency, what was and was not tested, 
 5. A row is written to `ent_scans` (status `queued`, the limits stored on it) and a job `enterprise_scan` is queued. Answer: 202 with `scan_id`.
 6. A bare domain such as `consiva.ai` is accepted and stored as `https://consiva.ai`. `localhost`, `ftp://` and half addresses are refused with a plain message.
 
-### 5.2 Run (`enterprise/crawl/runner.py`)
-1. The worker picks the job (`jobs/worker.py` has one extra branch) and calls `runner.run`.
-2. The scan moves `queued → running`. A scan already `completed`, `failed` or `cancelled` is returned as is (so re-running is safe).
-3. Chromium is started with the existing scanner's own setup: host pinning against DNS rebinding, the navigation guard, locale and user agent.
-4. **Robots**: `discovery.read_robots` reuses the existing robots reader. If robots.txt cannot be read and the deployment says not to guess, the scan fails with that reason.
-5. **Resume step**: `frontier.reclaim_stale` takes back any URL a dead worker had claimed more than 300 s ago.
-6. **Seed** (only if the frontier is empty): the entry page at depth 0 (`seed`), then every same-site sitemap URL at depth 1 (`sitemap`).
-7. **Loop**:
-   - stop if the scan was cancelled;
-   - claim a batch of pending URLs (shallowest first, `FOR UPDATE SKIP LOCKED`, so two workers never take the same row);
-   - for each URL: robots check, rate limit (default 2 navigations per second per domain), then render or read:
-     - a document (PDF or DOCX) is fetched safely and read page by page;
-     - any other URL is rendered in Chromium (DOMContentLoaded, a bounded wait for the load event, a 1.2 s settle for single-page apps);
-   - store evidence, record the links found one level deeper, mark the row done, failed or excluded;
-   - if nothing is claimable and nothing is in progress, the crawl is finished. If another worker still holds rows, wait 2 s and look again.
-8. **Finish**: no page done → `failed` ("no page could be scanned"). Otherwise `completed`, with `stop_reason=url_limit` if the URL cap was reached. A scan cancelled meanwhile stays cancelled.
+### 5.2 Run (`enterprise/crawl/runner.py`): strictly one URL at a time (owner's sequence, 19 Nov 2026)
+1. The worker picks the job and calls `runner.run`. The scan moves `queued → running`; a scan already `completed`, `failed` or `cancelled` is returned as is.
+2. Chromium starts with the 5-page scanner's host pinning, locale and user agent. Every browser context (shared, per page, discovery, each consent session) gets `crawl/guard.py`'s `host_guard`: a top-level navigation to any host other than the submitted one is aborted, then the existing SSRF guard runs. Embedded iframes and scripts load as for a normal visitor (they are the banner and tracker evidence); their links are never followed.
+3. **Robots**, **resume** (`reclaim_stale`) and **seed** (homepage at depth 0, sitemap URLs at depth 1; off-host sitemap entries recorded as excluded, off-host sitemap files never fetched).
+4. **Phase 1, discovery** (`_discover_inventory`): every pending page on the submitted host is visited once, one at a time (5-page navigation, settle, progressive scroll), only to read its links. Links are normalised, de-duplicated and recorded; subdomains and other websites are recorded as `excluded_subdomain` / `excluded_external_domain`. Redirects are read hop by hop before navigation (`crawl/redirects.py`, HEAD with no redirect following); an off-host hop excludes the URL with the original and destination. A same-host redirect is inspected at its destination once. Ends with audit event `url_discovery_completed` (not repeated on resume). The blocking rule applies here too.
+5. If the submitted homepage redirects to another host (including `example.com → www.example.com`), the scan stops: `failed`, with a message naming the destination. Only the exact submitted host is scanned.
+6. **Slug triage**: the model reads the complete inventory's addresses for policies the patterns miss (they get priority 0).
+7. **Homepage** deep inspection (`crawl/inspect.py`: the 5-page first-page sequence plus the Enterprise extras), then the **consent tests** on it, one session at a time.
+8. **Phase 2**: the privacy policies (priority 0), one at a time. When none is left, `_privacy_review` runs the text analysis on them (facts with exact quotes, compared to the DPDP parameters) through `_InterimRepo`, which keeps the readings but writes no final status or assessment; the result is audit event `privacy_policy_reviewed`.
+9. **Phase 3**: the other legal pages (1), then every other page (2), one at a time (`claim_next(limit=1)`). Each page is checked before navigation (robots, exact host, redirect chain), deeply inspected in a fresh context, checked after loading (final host; duplicate destination), its evidence stored and committed, and the stored evidence checked in the database (`missing_evidence`) before the next URL opens.
+10. **Blocking**: before 10 pages inspected, the first refusal (401/403/429/451, CAPTCHA, challenge) stops the scan; after that a website-wide refusal (429, challenge) or 3 refusals in a row stop it. The blocked URL and reason are recorded; unreached URLs stay pending with "not inspected: …"; `POST /resume` reopens a blocked scan.
+11. **Finish**: blocked → `failed` with `stop_reason=bot_blocked|access_blocked`, yet the inspected pages are still analysed and reported, labelled "Blocked, incomplete". A limit → `completed` with `stop_reason`, labelled partial. No page done → `failed`. Score and PDF are produced only after the crawl and the analysis.
+
+Evidence dedup: a cookie is `name|domain (no leading dot, lowercase)|path`, a script is its URL without the query string. Each page's cookie and network records list what is `new_in_scan` and which cookies `changed_in_scan` (other flags or lifetime class); every page keeps its full record, and the report shows each identity once with its pages. The same text at two addresses is read by the model once.
 
 ### 5.3 Frontier state machine (`ent_frontier`)
 ```
@@ -158,11 +156,14 @@ pending ──claim──► in_progress ──ok──────────�
 ```
 Added directly as `excluded` (with the reason): URLs beyond the depth limit, and query variants that are not pagination.
 
-### 5.4 What the crawler may follow (`crawl/scope.py`)
+### 5.4 What the crawler may follow (`crawl/scope.py`, `crawl/host.py`)
+Only the exact submitted hostname (case, trailing dot, default port and IDN form normalised; never a suffix test).
+
 | Link | Decision |
 |---|---|
 | `mailto:`, `tel:`, `javascript:` | skip |
-| Another registered domain | external, ignored |
+| Another host of the submitted site (subdomain, `www.` twin, parent domain, another port) | recorded as `excluded_subdomain`, never opened |
+| Another website | recorded as `excluded_external_domain`, never opened |
 | Images, scripts, styles, fonts, media, archives | skip |
 | `.pdf .doc .docx .odt .rtf .xls .xlsx .ppt .pptx` | document: fetched and read |
 | `?page=2`, `?paged=3&p=3` (pagination only) | page: followed |

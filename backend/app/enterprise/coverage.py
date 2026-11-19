@@ -25,6 +25,7 @@ _URLS = text(f"""
         count(*) filter (where status = 'excluded')                                                   as excluded,
         count(*) filter (where status = 'failed')                                                     as failed,
         count(*) filter (where status = 'failed' and http_status in (401, 403))                       as inaccessible,
+        count(*) filter (where status = 'failed' and last_error like 'BLOCKED%')                      as blocked,
         count(*) filter (where status = 'done' and final_url is not null
                          and regexp_replace(lower(final_url), '/+$', '') <> regexp_replace(lower(original_url), '/+$', ''))  as redirected,
         coalesce(sum(greatest(coalesce(array_length(discovery_sources, 1), 1) - 1, 0)), 0)            as duplicates_merged,
@@ -55,9 +56,11 @@ _CHUNKS = text("""
 """)
 _SCAN = text("select status, analysis_status, stop_reason, urls_not_recorded from ent_scans where id = :scan_id")
 _ASSESS = text("select state, count(*) as n from ent_assessments where scan_id = :scan_id and status = 'current' group by state")
+_LATEST_SCORE = text("select result from ent_score_results where scan_id = :scan_id order by created_at desc limit 1")
 
 
 LIMIT_STOPS = ("url_limit", "memory_limit", "time_limit")
+BLOCK_STOPS = ("bot_blocked", "access_blocked")
 
 
 def completion_state(crawl: str, analysis: str, *, pending_urls: int, failed_chunks: int, pending_chunks: int, awaiting_analysis: int, stop_reason: str | None = None) -> str:
@@ -90,13 +93,22 @@ async def coverage_declaration(db: AsyncSession, scan_id: uuid.UUID) -> dict:
     excluded = {r["reason"] or "unspecified": r["n"] for r in (await db.execute(_EXCLUDED, {"scan_id": scan_id})).mappings().all()}
     assessed = sum(states.get(k, 0) for k in ("met", "partly_met", "not_met"))
     started = scan["analysis_status"] != "not_started"
+    latest = (await db.execute(_LATEST_SCORE, {"scan_id": scan_id})).scalar()
+    lines = (latest or {}).get("lines") or []
+    scored = {"pass": sum(1 for x in lines if x.get("state") == "met"), "partially_pass": sum(1 for x in lines if x.get("state") == "partly_met"),
+              "fail": sum(1 for x in lines if x.get("state") == "not_met"),
+              "fail_not_verified": sum(1 for x in lines if x.get("state") == "not_met" and x.get("on_evidence") is False)}
     return {
         "crawl_status": scan["status"], "analysis_status": scan["analysis_status"], "stop_reason": scan["stop_reason"],
+        # True when the crawl was stopped because the website blocked the scanner: whatever was analysed covers only the pages inspected before that, never the whole site.
+        "blocked": scan["status"] == "failed" and (scan["stop_reason"] or "") in BLOCK_STOPS,
         "completion": completion_state(scan["status"], scan["analysis_status"], pending_urls=u["pending"], failed_chunks=ch["failed"], pending_chunks=ch["pending"], awaiting_analysis=u["awaiting_analysis"], stop_reason=scan["stop_reason"]),
         "urls": {
             "discovered": u["discovered"], "eligible": u["eligible"], "crawled": u["crawled"], "analysed": u["analysed"], "pending": u["pending"], "excluded": u["excluded"],
             "failed": u["failed"], "redirected": u["redirected"], "inaccessible": u["inaccessible"], "unsupported": u["unsupported"], "duplicates_merged": int(u["duplicates_merged"]),
             "awaiting_analysis": u["awaiting_analysis"], "analysis_failed": u["analysis_failed"], "excluded_by_reason": excluded,
+            # Main-domain coverage (owner's exact-host rule, 19 Nov 2026): pages the site's protection refused, and URLs on another host recorded and not scanned.
+            "blocked": u["blocked"], "excluded_subdomain": excluded.get("excluded_subdomain", 0), "excluded_external_domain": excluded.get("excluded_external_domain", 0),
             # URLs found but dropped at the record cap (link occurrences, so a URL linked from many pages counts more than once), and pages whose read or analysis was limited in some way.
             "not_recorded": int(scan["urls_not_recorded"] or 0), "pages_with_limits": u["pages_with_limits"], "pages_not_fully_analysed": u["pages_not_fully_analysed"], "pages_not_sent_to_model": u["pages_not_sent_to_model"],
         },
@@ -109,5 +121,7 @@ async def coverage_declaration(db: AsyncSession, scan_id: uuid.UUID) -> dict:
         "parameters": {
             "total": len(PARAMETERS), "assessed": assessed, "not_assessed": states.get("not_assessed", 0), "not_applicable": states.get("not_applicable", 0),
             "awaiting_human_review": states.get("human_review", 0), "needs_records": states.get("needs_records", 0), "recorded": sum(states.values()),
+            # The scored result (method version 2): every parameter is Pass, Partially Pass or Fail; "fail_not_verified" counts the Fails that rest on "could not be verified".
+            **scored,
         },
     }

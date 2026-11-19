@@ -25,7 +25,8 @@ from app.enterprise.config import get_enterprise_settings
 from app.enterprise.coverage import coverage_declaration
 from app.enterprise.jobs import JOB_TYPE
 from app.enterprise.models import EntEvidence, EntFrontier, EntScan
-from app.enterprise.scoring.catalogue import GROUP_LABELS, LEGAL_REVIEW_STATUS, PARAMETERS, STATUTORY, Parameter
+from app.enterprise.scoring.catalogue import DUTY_KINDS, GROUP_LABELS, LEGAL_REVIEW_STATUS, PARAMETERS, Parameter
+from app.enterprise.scoring.engine import status_label
 from app.jobs import queue
 
 router = APIRouter(prefix="/scans", tags=["Enterprise results"])
@@ -109,9 +110,12 @@ def _parameter_view(p: Parameter, row, line: dict | None, as_of: date) -> dict:
     return {
         "id": p.id, "name": p.name, "group": p.group, "group_label": GROUP_LABELS[p.group], "kind": p.kind, "points": p.points, "partial_allowed": p.partial_allowed,
         "human_review_required": p.human_review, "conditional": p.conditional, "legal_refs": list(p.legal_refs), "in_force": p.in_force.isoformat() if p.in_force else None,
-        "in_force_on_as_of": None if p.in_force is None else p.in_force <= as_of, "penalty_ceiling_cr": p.penalty_ceiling_cr if p.kind == STATUTORY else None,
-        "schedule_item": p.schedule_item if p.kind == STATUTORY else None,
-        "state": row.state if row else "not_assessed", "earned": line["earned"] if line else 0.0, "in_play": line["in_play"] if line else 0.0, "note": row.note if row else "",
+        "in_force_on_as_of": None if p.in_force is None else p.in_force <= as_of, "penalty_ceiling_cr": p.penalty_ceiling_cr if p.kind in DUTY_KINDS else None,
+        "schedule_item": p.schedule_item if p.kind in DUTY_KINDS else None,
+        # `state` is the scored result (met / partly_met / not_met), `status` its label (Pass / Partially Pass / Fail); `assessed_state` is what the assessor recorded before that.
+        "state": line["state"] if line else "not_met", "status": status_label(line["state"]) if line else "Fail", "assessed_state": row.state if row else "not_assessed",
+        "on_evidence": line.get("on_evidence", True) if line else False,
+        "earned": line["earned"] if line else 0.0, "in_play": line["in_play"] if line else 0.0, "note": row.note if row else "",
         "confidence": row.confidence if row else None, "assessor": row.assessor if row else None, "model": row.model if row else None, "reviewed_by": row.reviewed_by if row else None,
         "review_reason": row.review_reason if row else None, "evidence_refs": list(row.evidence_refs or []) if row else [], "adjustment": line.get("adjustment") if line else None,
         "assessed_at": row.created_at if row else None}

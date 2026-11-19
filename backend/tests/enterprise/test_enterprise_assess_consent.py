@@ -1,7 +1,7 @@
 """The consent parameters C4 to C8: each rule, at its boundaries, on plain observations."""
 from app.enterprise.assess.consent import assess_consent
 from app.enterprise.scoring import engine as eng
-from app.enterprise.scoring.engine import MET, NOT_ASSESSED, NOT_MET, PARTLY
+from app.enterprise.scoring.engine import MET, NOT_APPLICABLE, NOT_ASSESSED, NOT_MET, PARTLY
 
 GA = {"vendor": "Google Analytics", "category": "analytics", "host": "www.google-analytics.com"}
 META = {"vendor": "Meta Pixel", "category": "marketing", "host": "connect.facebook.net"}
@@ -89,12 +89,12 @@ def test_c7_boundaries():
         assert run(consent=docs(withdrawal={"tested": False, "reason": reason}))["C7"].state == NOT_ASSESSED
 
 
-def test_c7_no_reopen_control_is_not_met_only_with_low_confidence_so_a_person_decides():
+def test_c7_no_reopen_control_is_not_met_with_low_confidence_so_a_reviewer_confirms():
     a = run(consent=docs(withdrawal={"tested": False, "reason": "no_reopen_control"}))["C7"]
     assert a.state == NOT_MET and a.confidence == "low"
     scored = eng.score([a], as_of=__import__("datetime").date(2027, 6, 1))
     line = scored.lines[[x.parameter_id for x in scored.lines].index("C7")]
-    assert line.state == "human_review" and line.in_play == 0           # the engine sends a low-confidence reading to a person
+    assert line.state == NOT_MET and line.status == "Fail" and "reviewer" in line.adjustment        # method version 2: the result stands, marked for a reviewer
 
 
 # ---- C8 -----------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -106,9 +106,48 @@ def test_c8_boundaries():
     assert run(consent=docs(withdrawal={**base, "further_pages": [{"url": "u", "loaded": True, "non_essential": [META]}]}))["C8"].state == PARTLY
 
 
-def test_c8_if_accept_started_nothing_there_was_nothing_to_stop_so_it_is_not_assessed_not_passed():
+def test_c8_if_accept_started_nothing_there_was_nothing_to_stop_so_it_does_not_apply():
     r = run(consent=docs(withdrawal={"tested": True, "accepted_non_essential": [], "after_withdrawal": [], "further_pages": []}))["C8"]
-    assert r.state == NOT_ASSESSED and "nothing for withdrawal to stop" in r.note
+    assert r.state == NOT_APPLICABLE and "nothing for withdrawal to stop" in r.note and r.evidence_refs
+
+
+# ---- C10, C11 and the site with no banner -------------------------------------------------------------------------------------------------------------------------
+
+BANNER = {"accept": {"tested": True, "non_essential": [GA]}, "reject": {"tested": True, "non_essential": []}}
+NO_BANNER = {"accept": {"tested": False, "reason": "control_not_found"}, "reject": {"tested": False, "reason": "control_not_found"}}
+
+
+def test_c10_met_when_a_banner_was_found():
+    a = run(consent=docs(**BANNER))["C10"]
+    assert a.state == MET and a.evidence_refs
+
+
+def test_c10_not_met_when_analytics_runs_and_no_banner_exists():
+    a = run(networks=[net(1, [GA])], consent=docs(**NO_BANNER))["C10"]
+    assert a.state == NOT_MET and "Google Analytics" in a.note and a.evidence_refs == ("ev:n1",)
+
+
+def test_with_nothing_that_needs_consent_and_no_banner_the_consent_duties_do_not_apply():
+    r = run(networks=[net(1), net(2)], consent=docs(**NO_BANNER))
+    assert {p: r[p].state for p in ("C5", "C6", "C7", "C8", "C10", "C11")} == {p: NOT_APPLICABLE for p in ("C5", "C6", "C7", "C8", "C10", "C11")}
+
+
+def test_with_analytics_and_no_banner_refusal_and_withdrawal_fail_on_what_ran():
+    r = run(networks=[net(1, [META])], consent=docs(**NO_BANNER))
+    assert {p: r[p].state for p in ("C5", "C7", "C8", "C10", "C11")} == {p: NOT_MET for p in ("C5", "C7", "C8", "C10", "C11")}
+    assert all(r[p].evidence_refs for p in ("C5", "C7", "C8")) and r["C6"].state == NOT_ASSESSED      # C6 cannot compare buttons that do not exist; C10 records the missing banner
+
+
+def test_when_the_entry_page_did_not_load_whether_a_banner_exists_could_not_be_verified():
+    r = run(consent=docs(accept={"tested": False, "reason": "page_not_loaded"}, reject={"tested": False, "reason": "page_not_loaded"}))
+    assert r["C10"].state == NOT_ASSESSED and r["C11"].state == NOT_ASSESSED
+
+
+def test_c11_per_purpose_choices_pass_and_a_banner_without_them_partly_passes():
+    full = run(consent=docs(**BANNER, purposes={"tested": True, "purposes": [{"kind": "analytics", "label": "Analytics"}, {"kind": "marketing", "label": "Marketing"}]}))["C11"]
+    assert full.state == MET and "Analytics" in full.note
+    part = run(consent=docs(**BANNER, purposes={"tested": False, "reason": "no_preferences_control"}))["C11"]
+    assert part.state == PARTLY and "no preferences control" in part.note
 
 
 def test_c8_untested_withdrawal_is_not_assessed():
@@ -129,7 +168,7 @@ def test_the_assessments_flow_into_the_scoring_engine_with_the_approved_points()
     good = docs(reject_persistence={"tested": True, "non_essential_after_reject": [], "further_pages": []}, button_comparison={"comparable": True, "why": "x"},
                 withdrawal={"tested": True, "reopen_control": "a", "withdraw_control": "b", "accepted_non_essential": [GA], "after_withdrawal": [], "further_pages": []})
     r = eng.score(list(run(consent=good).values()), as_of=datetime.date(2027, 6, 1))
-    assert r.points_in_play == 19 and r.points_earned == 19            # C4 5 + C5 5 + C7 5 + C8 3 + C6 1
+    assert r.points_earned == 14            # method version 2: C4 4 + C5 4 + C7 3 + C8 2 + C6 1 (C10 and C11 were not tested here, so they Fail and earn nothing)
     bad = docs(reject_persistence={"tested": True, "non_essential_after_reject": [GA], "further_pages": []}, button_comparison={"comparable": True, "why": "x"},
                withdrawal={"tested": True, "reopen_control": "a", "withdraw_control": "b", "accepted_non_essential": [GA], "after_withdrawal": [], "further_pages": []})
-    assert eng.score(list(run(consent=bad).values()), as_of=datetime.date(2027, 6, 1)).points_earned == 14          # C5 not met loses its 5
+    assert eng.score(list(run(consent=bad).values()), as_of=datetime.date(2027, 6, 1)).points_earned == 10          # C5 Fail loses its 4

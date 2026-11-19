@@ -106,9 +106,9 @@ async def _comparison(make_context, goto, root_url: str) -> dict:
     return result if result is not None else {"tested": False, "reason": "banner_or_controls_not_found"}
 
 
-async def run_consent_suite(make_context, goto, root_url: str, further_urls: list[str]) -> dict[str, dict]:
-    """All the consent tests of one site, at most MAX_PARALLEL sessions at a time. Returns {test name: its result}. Never raises."""
-    gate = asyncio.Semaphore(MAX_PARALLEL)
+async def run_consent_suite(make_context, goto, root_url: str, further_urls: list[str], *, max_parallel: int = MAX_PARALLEL) -> dict[str, dict]:
+    """All the consent tests of one site, at most `max_parallel` sessions at a time (the crawl runner passes 1: one browser session at a time). Returns {test name: its result}. Never raises."""
+    gate = asyncio.Semaphore(max(1, max_parallel))
 
     async def guarded(name: str, coro_fn) -> tuple[str, dict]:
         async with gate:

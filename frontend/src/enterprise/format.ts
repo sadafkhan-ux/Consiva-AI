@@ -58,11 +58,11 @@ export interface Tone {
   tone: "ok" | "warn" | "bad" | "info" | "muted";
 }
 
-/** How a parameter state looks. Only met, partly met and not met read as a result; the rest are visibly "no result yet" (dashed outline, neutral colour). */
+/** How a parameter state looks. Since method version 2 (19 Nov 2026) every scored result is Pass, Partially Pass or Fail; the other states can still appear in an older scan's history. */
 export const PARAM_STATE: Record<ParameterState, Tone & { assessed: boolean }> = {
-  met: { label: "Met", tone: "ok", assessed: true },
-  partly_met: { label: "Partly met", tone: "warn", assessed: true },
-  not_met: { label: "Not met", tone: "bad", assessed: true },
+  met: { label: "Pass", tone: "ok", assessed: true },
+  partly_met: { label: "Partially Pass", tone: "warn", assessed: true },
+  not_met: { label: "Fail", tone: "bad", assessed: true },
   not_assessed: { label: "Not assessed", tone: "muted", assessed: false },
   needs_records: { label: "Needs records", tone: "muted", assessed: false },
   human_review: { label: "Human review", tone: "info", assessed: false },

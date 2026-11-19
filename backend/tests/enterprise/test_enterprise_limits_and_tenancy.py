@@ -66,7 +66,7 @@ def test_a_zero_budget_or_deadline_means_none():
 
 def test_the_defaults_are_bounded_and_documented():
     s = EnterpriseSettings(_env_file=None)
-    assert s.memory_budget_mb == 4096 and s.max_runtime_seconds == 43_200 and s.max_urls == 100_000
+    assert s.memory_budget_mb == 8192 and s.concurrency == 8 and s.max_runtime_seconds == 43_200 and s.max_urls == 100_000
 
 
 # ---- tenancy: every route is authenticated and loads its scan through the organisation-scoped lookup ---------------------------------------------------------------------

@@ -31,8 +31,8 @@ async def test_a_full_run_completes_and_assesses_the_text_parameters():
     a = repo.assessments()
     assert a["N1"].state == MET and a["N6"].state == MET and a["G2"].state == MET and a["G4"].state == MET and a["N7"].state == MET
     assert a["G1"].state == MET and a["G3"].state == MET and a["N5"].state == MET
-    assert a["K1"].state == "not_applicable" and a["S1"].state == "needs_records" and a["E1"].state == HUMAN_REVIEW
-    assert out.parameters_assessed == 28 and out.facts_kept >= 15
+    assert a["K1"].state == "not_applicable" and a["S1"].state == "not_applicable" and a["E1"].state == "not_applicable"      # method version 2: nothing shows these apply
+    assert out.parameters_assessed == 38 and out.facts_kept >= 15
     assert [s for s, _ in repo.scan_history] == ["running", "completed"]
     assert repo.scan_history[0][1]["started"] is True and repo.scan_history[-1][1]["completed"] is True
 
@@ -135,7 +135,7 @@ async def test_resume_skips_chunks_that_are_done_and_finishes_the_rest(monkeypat
     assert 1 <= len(reread) < total                                          # only the chunks that had not finished were read again
     assert out2.status == "completed" and out2.chunks_failed == 0
     assert done_before <= {k for k, c in repo.chunks.items() if c.status == "done"}
-    assert repo.assessments()["G7"].state == MET                         # the chunk that failed first time is now read
+    assert repo.assessments()["G7"].state in (MET, "partly_met")         # the chunk that failed first time is now read: its security statement counts
 
 
 async def test_a_second_run_with_everything_done_calls_the_model_for_nothing_extra():
@@ -191,14 +191,14 @@ async def test_low_confidence_readings_flow_to_human_review_in_the_engine():
     assert a["N2"].confidence == "low"
     res = eng.score(out.assessments, as_of=AS_OF)
     states = {x.parameter_id: x.state for x in res.lines}
-    assert states["N2"] == HUMAN_REVIEW and states["N3"] == HUMAN_REVIEW
+    assert states["N2"] in (MET, "partly_met") and states["N3"] in (MET, "partly_met") and {"N2", "N3"} <= set(res.needs_attention["review_recommended"])     # the result stands, marked for a reviewer
 
 
 async def test_the_assessments_are_accepted_by_the_scoring_engine_and_no_unassessed_parameter_is_invented():
     repo = fresh()
     out = await go(repo, FakeLLM())
     res = eng.score(out.assessments, as_of=AS_OF)
-    assert len(res.lines) == 39
+    assert len(res.lines) == 51
     assert {a.parameter_id for a in out.assessments}.isdisjoint({"TS1", "C4", "C8"})
     assert all(a.evidence_refs for a in out.assessments if a.state in (MET, "partly_met", NOT_MET))
     assert all(r.startswith("ev:e") for a in out.assessments for r in a.evidence_refs)

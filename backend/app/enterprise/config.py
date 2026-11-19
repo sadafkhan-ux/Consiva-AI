@@ -35,12 +35,12 @@ class EnterpriseSettings(BaseSettings):
     max_urls: int = Field(default=100_000, ge=0, le=10_000_000)
     #: Deepest link level crawled (the entry address is 0). 0 is valid: the entry page only.
     max_depth: int = Field(default=50, ge=0, le=1_000)
-    #: Pages in flight at once for one scan.
-    concurrency: int = Field(default=4, ge=1, le=256)
+    #: Pages in flight at once for one scan. 8 since 19 Nov 2026 (the host now has 16 cores; per_domain_rps still limits the load on the scanned site).
+    concurrency: int = Field(default=8, ge=1, le=256)
     #: Navigation starts per second against one domain.
     per_domain_rps: float = Field(default=2.0, gt=0, le=1_000)
     #: Pause launching pages while the scan (this process and its browsers) uses more memory than this; if it stays over for five minutes the crawl stops with `memory_limit`. 0 = no budget.
-    memory_budget_mb: int = Field(default=4096, ge=0, le=1_048_576)
+    memory_budget_mb: int = Field(default=8192, ge=0, le=1_048_576)
     #: Longest a crawl may run before it stops with `time_limit` (the pages it did not reach stay pending and it can be resumed). 0 = no deadline.
     max_runtime_seconds: int = Field(default=43_200, ge=0, le=2_592_000)
     #: A claimed URL not finished within this many seconds is taken back (a crashed worker's pages), which is what makes a scan resumable.

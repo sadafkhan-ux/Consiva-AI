@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -23,6 +24,28 @@ from app.scanner.url_normalize import normalize_url
 
 
 ADDED, DUPLICATE, DEPTH_LIMIT, URL_LIMIT, EXCLUDED = "added", "duplicate", "depth_limit", "url_limit", "excluded"
+
+
+def key_of(url: str) -> str:
+    """The frontier's identity for a URL: the 5-page normaliser's key (fragment, case, default port, tracking parameters, trailing slash), EXCEPT that the host is kept exactly as it is.
+    The 5-page normaliser folds `www.` away because it scans the whole registered domain; the Enterprise scan treats `www.example.com` as another host (crawl/host.py), so
+    `https://www.example.com/x` and `https://example.com/x` must stay two rows: one excluded, one scanned."""
+    key = normalize_url(url)
+    try:
+        original, normalised = urlsplit(url.strip()), urlsplit(key)
+        host = (original.hostname or "").lower()
+        if host and normalised.hostname and normalised.hostname != host:
+            netloc = host + (f":{normalised.port}" if normalised.port else "")
+            return urlunsplit(normalised._replace(netloc=netloc))
+    except ValueError:
+        pass
+    return key
+
+
+async def find_row(db: AsyncSession, scan_id: uuid.UUID, url: str):
+    """The frontier row (id, status, original_url) for this URL's key in this scan, or None."""
+    return (await db.execute(select(EntFrontier.id, EntFrontier.status, EntFrontier.original_url).where(
+        EntFrontier.scan_id == scan_id, EntFrontier.normalized_url == key_of(url)))).first()
 
 
 def record_cap(max_urls: int) -> int:
@@ -52,9 +75,9 @@ async def add_url(
     settings = get_enterprise_settings()
     max_urls = settings.max_urls if max_urls is None else max_urls
     max_depth = settings.max_depth if max_depth is None else max_depth
-    key = normalize_url(url)
+    key = key_of(url)
 
-    known = await db.scalar(select(EntFrontier.id).where(EntFrontier.scan_id == scan_id, EntFrontier.normalized_url == key))
+    known =await db.scalar(select(EntFrontier.id).where(EntFrontier.scan_id == scan_id, EntFrontier.normalized_url == key))
     if known is not None:
         # the same page named by another link or sitemap: keep every source, change nothing else
         await db.execute(
@@ -103,6 +126,55 @@ async def claim_next(db: AsyncSession, scan_id: uuid.UUID, worker: str, limit: i
     """Take up to `limit` pending URLs of one scan, shallowest first. Two workers never receive the same row."""
     rows = (await db.execute(_CLAIM_SQL, {"scan_id": scan_id, "worker": worker, "n": max(1, limit)})).all()
     return [Claimed(id=r.id, url=r.original_url, depth=r.depth, attempts=r.attempts) for r in rows]
+
+
+_CLAIM_SEED_SQL = text("""
+    update ent_frontier f
+       set status = 'in_progress', claimed_by = :worker, claimed_at = now(), attempts = f.attempts + 1, updated_at = now()
+     where f.id in (select id from ent_frontier where scan_id = :scan_id and status = 'pending' and depth = 0 order by discovered_at limit 1 for update skip locked)
+ returning f.id, f.original_url, f.depth, f.attempts
+""")
+
+
+async def claim_seed(db: AsyncSession, scan_id: uuid.UUID, worker: str) -> Claimed | None:
+    """The homepage (depth 0), if it is still waiting: it is inspected before any other page, whatever the priorities of the rest."""
+    r = (await db.execute(_CLAIM_SEED_SQL, {"scan_id": scan_id, "worker": worker})).first()
+    return Claimed(id=r.id, url=r.original_url, depth=r.depth, attempts=r.attempts) if r else None
+
+
+#: The evidence a done web page must have before the next page is opened (a document has its `document_text` pages instead, which may legitimately be none).
+REQUIRED_PAGE_EVIDENCE = ("cookie", "network", "header")
+
+
+async def missing_evidence(db: AsyncSession, row_id: uuid.UUID) -> list[str]:
+    """The required evidence kinds that are NOT stored for this frontier row (checked from the database itself, after the commit), or [] when everything is there."""
+    have = {r.kind for r in (await db.execute(text("select distinct kind from ent_evidence where frontier_id = :f"), {"f": row_id})).all()}
+    return [k for k in REQUIRED_PAGE_EVIDENCE if k not in have]
+
+
+async def demote_unverified(db: AsyncSession, row_id: uuid.UUID, missing: list[str]) -> str:
+    """A page marked done whose required evidence is not in the database: it is NOT done. Back to pending while attempts remain, else failed with the reason. Returns the new status."""
+    attempts = await db.scalar(select(EntFrontier.attempts).where(EntFrontier.id == row_id)) or 0
+    new = "pending" if attempts < get_enterprise_settings().max_attempts else "failed"
+    await db.execute(update(EntFrontier).where(EntFrontier.id == row_id, EntFrontier.status == "done").values(
+        status=new, last_error=f"evidence not stored: {', '.join(missing)}", claimed_by=None, claimed_at=None, updated_at=func.now()))
+    return new
+
+
+async def mark_unreached(db: AsyncSession, scan_id: uuid.UUID, reason: str) -> int:
+    """Give every URL still waiting when the crawl stopped a recorded outcome: it stays pending (it can be resumed) and says why it was not inspected. Returns how many."""
+    res = await db.execute(text("update ent_frontier set status_reason = :r, updated_at = now() where scan_id = :s and status = 'pending'"),
+                           {"r": f"not inspected: {reason}"[:1000], "s": scan_id})
+    return res.rowcount or 0
+
+
+async def reopen_blocked(db: AsyncSession, scan_id: uuid.UUID) -> int:
+    """For a resumed scan that had stopped because the site blocked the scanner: the pages that were refused go back to pending, with their attempts reset. Pages already done are kept."""
+    res = await db.execute(text(
+        "update ent_frontier set status = 'pending', attempts = 0, last_error = null, status_reason = null, claimed_by = null, claimed_at = null, updated_at = now() "
+        "where scan_id = :s and status = 'failed' and last_error like 'BLOCKED%'"), {"s": scan_id})
+    await db.execute(text("update ent_frontier set status_reason = null where scan_id = :s and status = 'pending' and status_reason like 'not inspected:%'"), {"s": scan_id})
+    return res.rowcount or 0
 
 
 async def mark_done(db: AsyncSession, row_id: uuid.UUID, *, http_status: int | None, final_url: str | None, content_type: str | None, note: str | None = None) -> None:

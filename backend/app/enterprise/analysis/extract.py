@@ -20,7 +20,9 @@ from app.enterprise.analysis.llm import Answer, LLMCallable, call_structured
 Topic = Literal[
     "data_category", "purpose", "sharing_recipient", "retention", "right_access", "right_correction", "right_erasure", "right_nominate", "withdraw_consent", "exercise_channel",
     "grievance_mechanism", "grievance_period", "board_complaint", "dpo_contact", "children_directed", "children_not_directed", "children_consent", "children_no_tracking",
-    "security", "breach", "language_option", "consent_language", "notice_link", "cross_border", "consent_manager", "policy_date", "cookie_declared"]
+    "security", "breach", "language_option", "consent_language", "notice_link", "cross_border", "consent_manager", "policy_date", "cookie_declared",
+    "legal_ground", "processor_contract", "data_accuracy", "consent_record", "request_identifier", "identity_verification", "log_retention", "sdf_duty",
+    "disability_guardian", "inactivity_erasure", "rights_waiver", "exemption_claim"]
 TOPICS: tuple[str, ...] = Topic.__args__           # type: ignore[attr-defined]
 
 TOPIC_HELP = {
@@ -51,6 +53,18 @@ TOPIC_HELP = {
     "consent_manager": "a mention of a Consent Manager registered under the DPDP Rules (value: the name)",
     "policy_date": "the date the policy was issued, updated or took effect (value: the date as written)",
     "cookie_declared": "a cookie or tracker the page names or lists (value: its name, vendor or purpose)",
+    "legal_ground": "the basis the company relies on to process personal data: consent, or a legitimate use such as data the person provided voluntarily, a legal obligation, employment (value: the ground and the purpose it covers)",
+    "processor_contract": "processors, vendors or service providers act under a contract or agreement with the company, or are bound to protect or delete the data (value: what they are bound to)",
+    "data_accuracy": "the company keeps personal data accurate, complete, up to date or consistent (value: how)",
+    "consent_record": "the company records, logs or keeps proof of consent given or withdrawn (value: what is recorded)",
+    "request_identifier": "the identifier or particulars a person must give to make a rights request, such as a registered email, mobile number, account or customer ID (value: the identifier)",
+    "identity_verification": "how the company verifies the identity of a person making a request (value: the method)",
+    "log_retention": "how long logs (access, activity, server or audit logs) are kept (value: the period as written)",
+    "sdf_duty": "the company says it is a Significant Data Fiduciary, or names an independent data auditor, a data protection impact assessment, a periodic audit, or a DPO based in India (value: what is said)",
+    "disability_guardian": "consent of a lawful guardian for a person with disability is described (value: how)",
+    "inactivity_erasure": "data is erased after a period of inactivity, or the person is told before their data is erased (value: the period or notice as written)",
+    "rights_waiver": "a term asking the person to give up or waive a right, for example not to complain to a regulator or the Data Protection Board, or to waive claims (value: the right waived)",
+    "exemption_claim": "the company says an exemption from data protection law applies to it or to some processing (value: the exemption claimed)",
 }
 
 
@@ -122,7 +136,7 @@ def verify(parsed: PageExtraction, chunk_text: str) -> tuple[list[dict], int]:
 def extractor_key(provider_model: str) -> str:
     """Identifies how a passage is read: the extraction prompt and the model. A passage's facts are reused only when this is identical, so changing the prompt or the model re-reads everything."""
     import hashlib
-    return hashlib.sha256("|".join((SYSTEM, provider_model, "extract-v1")).encode("utf-8")).hexdigest()[:24]
+    return hashlib.sha256("|".join((SYSTEM, provider_model, "extract-v2")).encode("utf-8")).hexdigest()[:24]
 
 
 def text_hash(url: str, kind: str, chunk_text: str) -> str:

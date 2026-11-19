@@ -72,3 +72,25 @@ async def transition(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID, to
     await db.execute(update(EntScan).where(EntScan.id == scan_id, EntScan.org_id == org_id).values(**values))
     await db.refresh(scan)
     return scan
+
+
+#: The stop reasons of a crawl the website's protection stopped (BlockVerdict.kind, lower-cased). Only such a failed scan can be resumed: nothing it collected was wrong, it was refused.
+BLOCK_STOPS = ("bot_blocked", "access_blocked")
+
+
+def is_blocked_stop(scan: EntScan) -> bool:
+    return scan.status == "failed" and (scan.stop_reason or "").lower() in BLOCK_STOPS
+
+
+async def reopen_blocked(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID) -> EntScan:
+    """Resume a scan the website blocked: it becomes queued again with its error cleared, and its frontier keeps every page already inspected (crawl/frontier.reopen_blocked puts the refused
+    pages back). This is the one way out of `failed`, and only for a block; every other final state stays final."""
+    scan = await get_scan(db, scan_id, org_id)
+    if scan is None:
+        raise LookupError(f"Enterprise scan {scan_id} not found")
+    if not is_blocked_stop(scan):
+        raise InvalidTransition(f"a {scan.status} scan that was not stopped by blocking cannot be reopened")
+    await db.execute(update(EntScan).where(EntScan.id == scan_id, EntScan.org_id == org_id).values(
+        status="queued", error=None, stop_reason=None, completed_at=None, analysis_status="not_started", analysis_error=None, updated_at=func.now()))
+    await db.refresh(scan)
+    return scan

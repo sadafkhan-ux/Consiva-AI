@@ -8,8 +8,8 @@ ROOT = "https://www.example.com/"
 
 @pytest.mark.parametrize("url,expected", [
     ("https://www.example.com/about", scope.PAGE),
-    ("https://example.com/privacy", scope.PAGE),                         # same registered domain
-    ("https://shop.example.com/", scope.PAGE),                           # a subdomain is the same site, as in the 5-page scanner
+    ("https://example.com/privacy", scope.SUBDOMAIN),                    # the bare domain is another host than the submitted www. host (owner's exact-host rule, 19 Nov 2026)
+    ("https://shop.example.com/", scope.SUBDOMAIN),                      # a subdomain is NOT scanned (it was, under the 5-page registered-domain rule)
     ("https://other.org/", scope.EXTERNAL),
     ("mailto:a@example.com", scope.SKIP), ("tel:+911234", scope.SKIP), ("javascript:void(0)", scope.SKIP),
     ("https://www.example.com/logo.png", scope.SKIP), ("https://www.example.com/app.js", scope.SKIP),

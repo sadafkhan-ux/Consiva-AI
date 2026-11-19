@@ -86,7 +86,8 @@ from app.enterprise.scoring.engine import (
 
 PRIVACY, COOKIE, GRIEVANCE, CONTACT, ABOUT, TERMS = pg.PRIVACY, pg.COOKIE, pg.GRIEVANCE, pg.CONTACT, pg.ABOUT, pg.TERMS
 #: Parameters whose state rests on the model's extraction or interpretation (saved with assessor "llm"). The rest are decided by code from stored evidence ("rule:text").
-LLM_PARAMS = frozenset({"N2", "N3", "N4", "N5", "N6", "C1", "C9", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "K1", "M1"})
+LLM_PARAMS = frozenset({"N2", "N3", "N4", "N5", "N6", "C1", "C9", "C12", "C13", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10", "L1", "P1", "P2", "K1", "K2", "S1",
+                        "M1", "R1", "T1", "E1"})
 RANK = {"low": 0, "medium": 1, "high": 2}
 Runner = Callable[[str, int, int, Callable[[], Awaitable[tuple[dict, "Answer | None"]]]], Awaitable["dict | None"]]
 
@@ -700,16 +701,122 @@ def g4(ctx: Ctx) -> Assessment:
     return _statement(ctx, "G4", "right_nominate", r"nominat", "the right to nominate another person", (PRIVACY, GRIEVANCE, TERMS, CONTACT))
 
 
+def _parts(ctx: Ctx, pid: str, what: str, parts: list[tuple[str, list[dict]]], *, met_at: int | None = None, cats: tuple[str, ...] = (PRIVACY, GRIEVANCE, TERMS)) -> Assessment:
+    """A duty with several components, judged from the published policy (method version 2): Pass when at least `met_at` (default: all) are stated, Partially Pass when some are,
+    Fail when none is. Every result names which components were found and quotes the first passage of each."""
+    found = [(label, f) for label, f in parts if f]
+    need = len(parts) if met_at is None else met_at
+    note = "; ".join(f"{label}: {'yes, ' + _cite(f[0]) if f else 'not stated'}" for label, f in parts)
+    refs = tuple(dict.fromkeys(r for _, f in found for r in _refs(f)))[:MAX_REFS]
+    if len(found) >= need:
+        return Assessment(pid, MET, refs, "high", note)
+    if found:
+        return _settle(ctx, pid, PARTLY, refs, "medium", note, *cats)
+    return _absent(ctx, pid, what, *cats)
+
+
 def g5(ctx: Ctx) -> Assessment:
-    return _statement(ctx, "G5", "retention", r"retain|retention|stored|kept|keep|delet|erase|period|as long as|no longer", "retention or erasure")
+    cats = (PRIVACY, GRIEVANCE, TERMS)
+    return _parts(ctx, "G5", "how long data is kept or when it is erased", [
+        ("retention period", ctx.of("retention", *cats, pattern=r"\d|period|year|month|day|as long as|no longer|until")),
+        ("erasure", ctx.of("retention", *cats, pattern=r"delet|eras|destroy|anonymi|purg|dispos")),
+    ])
+
+
+_SEC_PARTS = (
+    ("encryption or masking", r"encrypt|mask|tokeni|pseudonym|hash|ssl|tls|https|cryptograph"),
+    ("access control", r"access control|restrict\w* access|authori[sz]ed (personnel|staff|employees|persons)|need[- ]to[- ]know|role[- ]based|least privilege|password|authenticat"),
+    ("logging and monitoring", r"\blog|monitor|audit|detect|intrusion|alert"),
+    ("backups and continuity", r"back[- ]?up|recover|continu|redundan|disaster|resilien"),
+)
 
 
 def g7(ctx: Ctx) -> Assessment:
-    return _statement(ctx, "G7", "security", r"secur|encrypt|safeguard|protect|firewall|access control", "a security safeguards statement")
+    cats = (PRIVACY, GRIEVANCE, TERMS)
+    return _parts(ctx, "G7", "the security safeguards used", [(label, ctx.of("security", *cats, pattern=rx)) for label, rx in _SEC_PARTS], met_at=3)
 
 
 def g8(ctx: Ctx) -> Assessment:
-    return _statement(ctx, "G8", "breach", r"breach|incident|notify|intimat|compromis", "a breach process")
+    cats = (PRIVACY, GRIEVANCE, TERMS)
+    breach = ctx.of("breach", *cats, pattern=r"breach|incident|compromis|unauthori[sz]ed")
+    people = [f for f in breach if re.search(r"\b(you|affected|users?|individuals?|data principals?|customers?|persons?)\b", f["quote"] + " " + f["value"], re.I)
+              and re.search(r"notif|inform|intimat|tell|communicat|alert", f["quote"] + " " + f["value"], re.I)]
+    board = [f for f in breach if re.search(r"\bboard\b|authorit|regulator|cert-in|government", f["quote"] + " " + f["value"], re.I)]
+    timing = [f for f in breach if re.search(r"72|seventy[- ]two|without (undue )?delay|promptly|immediately|within \d+", f["quote"] + " " + f["value"], re.I)]
+    return _parts(ctx, "G8", "a breach intimation process", [("affected people are told", people), ("the Board is told", board), ("timing (without delay, 72 hours)", timing)], met_at=2)
+
+
+def g9(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, GRIEVANCE, TERMS)
+    logs = ctx.of("log_retention", *cats) + [f for f in ctx.of("security", *cats) + ctx.of("retention", *cats) if re.search(r"\blogs?\b", f["quote"], re.I)]
+    year = [f for f in logs if any(d >= 365 for d in (tr.parse_days(f["value"]) or tr.parse_days(f["quote"]) or []))
+            or re.search(r"\b(one|1|two|2|three|3|five|5|seven|7|ten|10)\s*\(?\d*\)?\s*years?\b|12 months|365 days", f["quote"] + " " + f["value"], re.I)]
+    if year:
+        return Assessment("G9", MET, _refs(year), "high", f"logs are kept for at least one year: {_cite(year[0])}")
+    if logs:
+        return _settle(ctx, "G9", PARTLY, _refs(logs), "medium", f"logs are mentioned, but no period of at least one year is stated: {_cite(logs[0])}", *cats)
+    return _absent(ctx, "G9", "how long logs are kept (at least one year is required)", *cats)
+
+
+def g10(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, GRIEVANCE, TERMS, CONTACT)
+    return _parts(ctx, "G10", "the identifiers needed for a rights request or how the requester is verified", [
+        ("identifier to give", ctx.of("request_identifier", *cats)), ("how the requester is verified", ctx.of("identity_verification", *cats))], cats=cats)
+
+
+def l1(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, TERMS)
+    f = ctx.of("legal_ground", *cats, pattern=r"consent|legitimate|legal|law|obligation|contract|voluntar|employ|necessary|court|emergenc")
+    if f:
+        grounds = sorted({x["value"][:60] for x in f})
+        return Assessment("L1", MET, _refs(f), "high", f"the policy states the ground(s) relied on ({'; '.join(grounds[:4])}): {_cite(f[0])}")
+    return _absent(ctx, "L1", "the ground relied on for processing (consent or a legitimate use)", *cats)
+
+
+def p1(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, TERMS)
+    bound = ctx.of("processor_contract", *cats)
+    if bound:
+        safe = [f for f in bound if re.search(r"secur|protect|safeguard|confidential|delet|eras|return", f["quote"] + " " + f["value"], re.I)]
+        if safe:
+            return Assessment("P1", MET, _refs(safe), "high", f"processors are bound by contract to protect the data: {_cite(safe[0])}")
+        return _settle(ctx, "P1", PARTLY, _refs(bound), "medium", f"processors act under a contract, but its security or erasure terms are not stated: {_cite(bound[0])}", *cats)
+    if ctx.loaded.networks and not third_party_hosts(ctx) and not ctx.of("sharing_recipient", PRIVACY):
+        return Assessment("P1", NOT_APPLICABLE, (), None, "the browser contacted no third-party host and the policy names no processor or recipient")
+    return _absent(ctx, "P1", "that processors act under a contract with security safeguards", *cats)
+
+
+def p2(ctx: Ctx) -> Assessment:
+    return _statement(ctx, "P2", "data_accuracy", r"accura|complete|up[- ]to[- ]date|correct|consisten|updat", "keeping personal data accurate and complete", (PRIVACY, TERMS))
+
+
+def c12(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, TERMS)
+    waiver = ctx.of("rights_waiver", *cats, pattern=r"waiv|give up|relinquish|not (to )?(file|make|lodge|bring)|forgo")
+    waiver = [f for f in waiver if re.search(r"complain|board|regulator|authorit|right|claim", f["quote"] + " " + f["value"], re.I)]
+    if waiver:
+        return Assessment("C12", NOT_MET, _refs(waiver), "medium", f"a term asks the person to give up a right, which is invalid under the Act: {_cite(waiver[0])}")
+    if not ctx.src(PRIVACY, TERMS):
+        return _fail("C12", "no privacy policy or terms were found to read for terms that waive a right")
+    if not ctx.read_in_full(TERMS):
+        return _fail("C12", ctx.why_not(TERMS))
+    return Assessment("C12", MET, ctx.refs(PRIVACY, TERMS), "high", "no term asking the person to waive a right (such as the right to complain to the Board) was found in the policy and terms read")
+
+
+_CONSENT_STORE_COOKIE = re.compile(r"optanon|onetrust|cookieconsent|cookie_consent|cmplz|euconsent|didomi|_iub_cs|cky-consent|cookieyes|borlabs|usercentrics|uc_settings|"
+                                   r"consentmanager|__cmpcc|klaro|osano|termly|truste|notice_preferences|cookielawinfo|wpl_user_preference", re.I)
+
+
+def c13(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, COOKIE, TERMS)
+    rec = ctx.of("consent_record", *cats)
+    if rec:
+        return Assessment("C13", MET, _refs(rec), "high", f"the policy says consent is recorded: {_cite(rec[0])}")
+    stored = [c for c in observed_cookies(ctx).values() if _CONSENT_STORE_COOKIE.search(c["name"])]
+    if stored:
+        refs = tuple(dict.fromkeys(f"ev:{i}" for c in stored for i in c["evidence"]))[:MAX_REFS]
+        return _settle(ctx, "C13", PARTLY, refs, "medium", f"a consent tool stores the choice ({', '.join(sorted({c['name'] for c in stored})[:4])}), but the policy does not say consent records are kept", *cats)
+    return _absent(ctx, "C13", "that consent records are kept", *cats)
 
 
 def g6(ctx: Ctx) -> Assessment:
@@ -749,7 +856,8 @@ def k1(ctx: Ctx) -> Assessment:
         return tuple(dict.fromkeys(f"ev:{s.evidence_id}" for s in ctx.loaded.texts if s.url in urls))[:MAX_REFS]
     if not (directed or consent or strong or form_hits):
         if weak:
-            return Assessment("K1", HUMAN_REVIEW, page_refs(weak), None, f"{len(weak)} page(s) mention students, schools or parents (e.g. {weak[0].url}); whether the site serves children is for a person to decide")
+            return Assessment("K1", NOT_APPLICABLE, page_refs(weak), "low",
+                              f"no page, form or statement shows the site serves children; {len(weak)} page(s) mention students, schools or parents (e.g. {weak[0].url}), so a reviewer should confirm")
         if not ctx.loaded.texts:
             return _fail("K1", "no page text was read")
         note = "the site states it is not directed at children" if not_directed else "no page, form or statement shows the site serves children"
@@ -766,13 +874,65 @@ def k1(ctx: Ctx) -> Assessment:
     return _settle(ctx, "K1", NOT_MET, refs, "medium", note, *cats)
 
 
+_DISABILITY = re.compile(r"persons? with (a )?disabilit|differently[- ]abled|divyang|lawful guardian|legal guardian of (a |an )?(adult|person)", re.I)
+_IS_CONSENT_MANAGER = re.compile(r"\b(we are|is|as) a (registered )?consent manager\b|registered (with the (data protection )?board )?as a consent manager", re.I)
+_SDF_SELF = re.compile(r"significant data fiduciary", re.I)
+
+
 def m1(ctx: Ctx) -> Assessment:
     f = ctx.of("consent_manager", pattern=r"consent manager")
     if f:
-        return Assessment("M1", HUMAN_REVIEW, _refs(f), None, f"a Consent Manager is mentioned ({_cite(f[0])}); whether it is registered with the Board cannot be seen from the website")
+        reg = [x for x in f if re.search(r"regist", x["quote"] + " " + x["value"], re.I)]
+        if reg:
+            return Assessment("M1", MET, _refs(reg), "medium", f"the Consent Manager is stated to be registered: {_cite(reg[0])}")
+        return Assessment("M1", NOT_MET, _refs(f), "low", f"a Consent Manager is mentioned ({_cite(f[0])}) but not stated to be registered with the Board; a reviewer should confirm its registration")
     if not ctx.loaded.texts:
         return _fail("M1", "no page text was read")
     return Assessment("M1", NOT_APPLICABLE, (), None, "no Consent Manager integration appears in the pages read")
+
+
+def m2(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, ABOUT, TERMS, CONTACT)
+    text = ctx.text(*cats)
+    if not ctx.loaded.texts:
+        return _fail("M2", "no page text was read")
+    if not _IS_CONSENT_MANAGER.search(text):
+        return Assessment("M2", NOT_APPLICABLE, (), None, "the site does not say the organisation is a Consent Manager")
+    parts = [("promoters, directors, key managerial personnel or shareholders above 2%", re.search(r"shareholding|shareholders?|promoters?|directors?|key managerial", text, re.I)),
+             ("Data Principals' access to their consent records", re.search(r"(access|download|view)[^.]{0,80}(record|history)|machine[- ]readable", text, re.I))]
+    got = [label for label, m in parts if m]
+    note = "the site says the organisation is a Consent Manager; " + "; ".join(f"{label}: {'published' if m else 'not published'}" for label, m in parts)
+    refs = ctx.refs(*cats)
+    if len(got) == len(parts):
+        return Assessment("M2", MET, refs, "medium", note)
+    return Assessment("M2", PARTLY if got else NOT_MET, refs, "medium", note)
+
+
+def k2(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, TERMS)
+    if not ctx.loaded.texts:
+        return _fail("K2", "no page text was read")
+    guardian = ctx.of("disability_guardian", *cats)
+    if guardian:
+        return Assessment("K2", MET, _refs(guardian), "high", f"consent of a lawful guardian of a person with disability is described: {_cite(guardian[0])}")
+    if not _DISABILITY.search(ctx.text(*cats)):
+        return Assessment("K2", NOT_APPLICABLE, (), None, "the policy does not indicate the site serves persons with disability who have a lawful guardian")
+    return _absent(ctx, "K2", "how a lawful guardian's consent is obtained for a person with disability (the policy mentions persons with disability)", *cats)
+
+
+def s1(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, ABOUT, TERMS)
+    duty = ctx.of("sdf_duty", *cats)
+    if not ctx.loaded.texts:
+        return _fail("S1", "no page text was read")
+    if not (_SDF_SELF.search(ctx.text(*cats)) or [f for f in duty if _SDF_SELF.search(f["quote"])]):
+        return Assessment("S1", NOT_APPLICABLE, _refs(duty), "low", "the site does not say the organisation is a Significant Data Fiduciary; whether it has been notified as one is not visible on a "
+                                                                    "website, so a reviewer should confirm")
+    return _parts(ctx, "S1", "the Significant Data Fiduciary duties", [
+        ("DPO based in India", [f for f in duty if re.search(r"officer|dpo", f["quote"], re.I)] + ctx.of("dpo_contact", *cats, pattern=r"india")),
+        ("independent data auditor or audit", [f for f in duty if re.search(r"audit", f["quote"], re.I)]),
+        ("data protection impact assessment", [f for f in duty if re.search(r"impact assessment|dpia", f["quote"], re.I)]),
+    ], cats=cats)
 
 
 def x1(ctx: Ctx) -> Assessment:
@@ -828,25 +988,55 @@ def x3(ctx: Ctx) -> Assessment:
     return Assessment("X3", state, refs, "high" if state == MET else "medium", f"forms collect {n} kind(s) of data ({', '.join(sorted(kinds))}); the policy itemises {d}" + (f"; not itemised: {', '.join(miss)}" if miss else ""))
 
 
-def s1(ctx: Ctx) -> Assessment:
-    return Assessment("S1", NEEDS_RECORDS, (), None, "whether the organisation is a Significant Data Fiduciary, and its DPO, audit and impact assessment, are not visible on a public website; they need the organisation's records")
-
-
 def t1(ctx: Ctx) -> Assessment:
-    f = ctx.of("cross_border")
-    return Assessment("T1", NEEDS_RECORDS, _refs(f), None, "whether a transfer outside India meets a restriction the Central Government has notified needs the organisation's records" + (f"; the notice says: {_cite(f[0])}" if f else ""))
+    cats = (PRIVACY, TERMS, COOKIE)
+    f = ctx.of("cross_border", *cats)
+    if f:
+        specific = [x for x in f if x["specific"]]
+        if specific:
+            return Assessment("T1", MET, _refs(specific), "high", f"the policy says where data goes outside India or on what terms: {_cite(specific[0])}")
+        return _settle(ctx, "T1", PARTLY, _refs(f), "medium", f"the policy mentions transfers outside India but not where or on what terms: {_cite(f[0])}", *cats)
+    hosts = third_party_hosts(ctx)
+    if ctx.loaded.networks and not hosts and not ctx.of("sharing_recipient", PRIVACY):
+        return Assessment("T1", NOT_APPLICABLE, (), None, "the browser contacted no third-party host and the policy names no recipient, so no transfer outside India is indicated")
+    return _absent(ctx, "T1", "whether personal data is transferred outside India" + (f" ({len(hosts)} third-party host(s) were contacted)" if hosts else ""), *cats)
+
+
+_PLATFORM = re.compile(r"add to (cart|bag)|checkout|shopping cart|buy now|online (game|gaming)|play (now|online)|fantasy (sports|league)|social (network|media platform)|"
+                       r"followers|news ?feed|create (a )?post", re.I)
+
+
+def r1(ctx: Ctx) -> Assessment:
+    cats = (PRIVACY, TERMS)
+    f = ctx.of("inactivity_erasure", *cats)
+    if f:
+        notice = [x for x in f if re.search(r"48|forty[- ]eight|before|notify|inform|notice", x["quote"] + " " + x["value"], re.I)]
+        if notice:
+            return Assessment("R1", MET, _refs(f), "high", f"erasure after inactivity, with notice before it, is described: {_cite(notice[0])}")
+        return _settle(ctx, "R1", PARTLY, _refs(f), "medium", f"erasure after inactivity is described, but not the 48 hours' notice before it: {_cite(f[0])}", *cats)
+    if not ctx.loaded.texts:
+        return _fail("R1", "no page text was read")
+    looks = [p.url for p in ctx.loaded.pages.values() if _PLATFORM.search(" ".join([p.title, " ".join(p.headings[:8])]))]
+    if looks:
+        return Assessment("R1", NOT_APPLICABLE, (), "low", f"the site looks like an e-commerce, gaming or social platform (e.g. {looks[0]}); the Third Schedule applies only from 2 crore registered users "
+                                                          "(50 lakh for online gaming), which a website does not show, so a reviewer should confirm")
+    return Assessment("R1", NOT_APPLICABLE, (), None, "the site does not appear to be an e-commerce, online gaming or social media platform of the Third Schedule")
 
 
 def e1(ctx: Ctx) -> Assessment:
-    return Assessment("E1", HUMAN_REVIEW, (), None, "whether an exemption (research, State, a notified class) applies is a decision for a person, not an observation of the website")
+    f = ctx.of("exemption_claim", PRIVACY, TERMS)
+    if f:
+        return Assessment("E1", MET, _refs(f), "low", f"an exemption is claimed ({_cite(f[0])}); whether it applies is for a person to decide (E1 earns or loses no points)")
+    return Assessment("E1", NOT_APPLICABLE, (), None, "no exemption from the Act is claimed in the policy or terms")
 
 
 def assess_all(ctx: Ctx) -> list[Assessment]:
     """Every parameter this package owns, in catalogue order. Never raises for one parameter: a rule that fails is reported as that parameter being not assessed."""
     rules: list[tuple[str, Callable[[Ctx], Assessment]]] = [
         ("N1", n1), ("N2", lambda c: _data_or_purpose(c, "N2", "data_category", 3, "kinds of personal data")), ("N3", lambda c: _data_or_purpose(c, "N3", "purpose", 2, "purposes")), ("N4", n4),
-        ("N5", n5), ("N6", n6), ("N7", n7), ("N8", n8), ("C1", c1), ("C2", c2), ("C3", c3), ("C9", c9), ("G1", g1), ("G2", g2), ("G3", g3), ("G4", g4), ("G5", g5), ("G6", g6), ("G7", g7),
-        ("G8", g8), ("K1", k1), ("S1", s1), ("M1", m1), ("T1", t1), ("E1", e1), ("X1", x1), ("X2", x2), ("X3", x3)]
+        ("N5", n5), ("N6", n6), ("N7", n7), ("N8", n8), ("C1", c1), ("C2", c2), ("C3", c3), ("C9", c9), ("C12", c12), ("C13", c13), ("G1", g1), ("G2", g2), ("G3", g3), ("G4", g4),
+        ("G5", g5), ("G6", g6), ("G7", g7), ("G8", g8), ("G9", g9), ("G10", g10), ("L1", l1), ("P1", p1), ("P2", p2), ("K1", k1), ("K2", k2), ("S1", s1), ("M1", m1), ("M2", m2),
+        ("R1", r1), ("T1", t1), ("E1", e1), ("X1", x1), ("X2", x2), ("X3", x3)]
     out = []
     for pid, fn in rules:
         try:

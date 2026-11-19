@@ -18,6 +18,14 @@ class DocumentFetchFailed(Exception):
         self.retryable, self.http_status = retryable, http_status
 
 
+class DocumentOffHost(Exception):
+    """The document redirects to a subdomain or another website: not fetched from there. `str(exc)` is the recorded exclusion reason."""
+
+    def __init__(self, reason: str, *, http_status: int | None = None) -> None:
+        super().__init__(reason)
+        self.http_status = http_status
+
+
 class DocumentTooLarge(Exception):
     """Larger than ENTERPRISE_MAX_DOCUMENT_MB. Refused whole, never cut: a finding built on half a policy would be wrong."""
 
@@ -35,7 +43,8 @@ async def fetch(context: BrowserContext, url: str, root_url: str, *, max_bytes: 
         if 300 <= status < 400 and (location := (response.headers or {}).get("location")):
             current = urljoin(current, location)
             if not scope.same_site(current, root_url):
-                raise DocumentFetchFailed("the document redirects to another site", retryable=False, http_status=status)
+                # not followed (owner's exact-host rule): the caller records the URL as excluded, with where it redirects
+                raise DocumentOffHost(scope.exclusion_reason(current, root_url, context=f"{url} redirects to {current}") or "the document redirects to another host", http_status=status)
             continue
         if status >= 400:
             raise DocumentFetchFailed(f"HTTP {status}", retryable=status >= 500 or status == 429, http_status=status)

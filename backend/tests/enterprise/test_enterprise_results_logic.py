@@ -21,8 +21,8 @@ def test_every_parameter_has_a_recommendation():
 
 
 @pytest.mark.parametrize("pid,state,expected", [
-    ("C4", NOT_MET, "high"), ("C4", PARTLY, "medium"), ("N1", NOT_MET, "medium"), ("N1", PARTLY, "low"),
-    ("TS4", NOT_MET, "low"), ("TS4", PARTLY, "low"), ("S1", NEEDS_RECORDS, "info"), ("N4", HUMAN_REVIEW, "info"),
+    ("C4", NOT_MET, "high"), ("C4", PARTLY, "medium"), ("N1", NOT_MET, "high"), ("C1", NOT_MET, "medium"), ("C1", PARTLY, "low"),
+    ("C12", NOT_MET, "low"), ("TS4", NOT_MET, "low"), ("TS4", PARTLY, "low"),
 ])
 def test_severity_follows_the_parameters_points_and_kind(pid, state, expected):
     assert findings.severity_for(cat.BY_ID[pid], state) == expected
@@ -47,11 +47,15 @@ def test_a_supporting_signal_is_never_given_a_penalty_ceiling_or_called_a_duty()
     assert d.penalty_ceiling_cr is None and d.schedule_item is None and "not a duty" in d.expected
 
 
-def test_human_review_and_needs_records_are_info_findings_that_say_a_person_decides():
-    h = findings.draft_for(cat.BY_ID["C7"], HUMAN_REVIEW, "no reopen control found", "low", ["ev:9"], ["https://x.test/"])
-    assert h.severity == "info" and h.human_review is True and "person" in h.reason
-    r = findings.draft_for(cat.BY_ID["S1"], NEEDS_RECORDS, "", None, [], [])
-    assert r.human_review is True and "records" in r.reason
+def test_a_fail_that_could_not_be_verified_says_so_and_is_marked_for_a_person():
+    h = findings.draft_for(cat.BY_ID["C5"], NOT_MET, "could not be verified: Reject could not be given", None, [], [], on_evidence=False)
+    assert h.title.startswith("Fail:") and h.human_review is True and "could not be verified" in h.reason
+    low = findings.draft_for(cat.BY_ID["C7"], NOT_MET, "no reopen control found", "low", ["ev:9"], ["https://x.test/"])
+    assert low.human_review is True and low.severity == "high"                     # C7 is 3 points; a low-confidence reading is flagged for a person
+
+
+def test_e1_never_raises_a_finding():
+    assert findings.draft_for(cat.BY_ID["E1"], NOT_MET, "x", None, [], []) is None
 
 
 @pytest.mark.asyncio
@@ -60,9 +64,23 @@ async def test_findings_are_ordered_most_serious_first_and_one_per_parameter(mon
         return ["https://x.test/a"]
     monkeypatch.setattr(findings, "_urls_for", no_urls)
     rows = [SimpleNamespace(parameter_id=p, state=s, note="n", confidence=None, evidence_refs=["ev:1"]) for p, s in
-            [("TS4", PARTLY), ("N4", HUMAN_REVIEW), ("C4", NOT_MET), ("N1", NOT_MET), ("C5", MET), ("X1", NOT_ASSESSED)]]
+            [("TS4", PARTLY), ("C1", NOT_MET), ("C4", NOT_MET), ("N1", NOT_MET), ("C5", MET), ("X1", NOT_ASSESSED)]]
     drafts = await findings.build_findings(None, rows)
-    assert [d.parameter_id for d in drafts] == ["C4", "N1", "TS4", "N4"]
+    assert [d.parameter_id for d in drafts] == ["C4", "N1", "C1", "TS4"]
+
+
+@pytest.mark.asyncio
+async def test_with_the_score_every_fail_raises_its_finding_including_what_could_not_be_verified(monkeypatch):
+    from app.enterprise.scoring.engine import score
+    async def no_urls(db, refs):
+        return []
+    monkeypatch.setattr(findings, "_urls_for", no_urls)
+    current = [Assessment(p.id, MET, (f"ev:{p.id}",)) for p in cat.PARAMETERS if p.scored and p.id not in ("X1", "K1")]
+    current += [Assessment("X1", NOT_ASSESSED, (), None, "no cookie policy was found"), Assessment("K1", NOT_APPLICABLE, (), None, "no child-directed page")]
+    rows = [SimpleNamespace(parameter_id=a.parameter_id, state=a.state, note=a.note, confidence=None, evidence_refs=list(a.evidence_refs)) for a in current]
+    drafts = await findings.build_findings(None, rows, score(current, as_of=AFTER))
+    assert [d.parameter_id for d in drafts] == ["X1"]                      # K1 does not apply: a Pass, no finding; E1 (no points) raises none
+    assert drafts[0].human_review is True and "could not be verified" in drafts[0].observed
 
 
 # ---- the one word for where a scan stands ----------------------------------------------------------------------------------------------------------------------------
@@ -122,10 +140,10 @@ async def test_recalculate_scores_the_current_assessments_and_rewrites_the_findi
     monkeypatch.setattr(findings, "_urls_for", urls)
 
     result = await pipeline.recalculate(None, uuid.uuid4(), AFTER, actor="reviewer-1")
-    assert result.score == 95 and saved["score"] is result                                  # C4 is 5 points of 100
+    assert result.score == 96 and saved["score"] is result                                  # C4 is 4 points of 100
     assert [d.parameter_id for d in saved["findings"]] == ["C4"] and saved["findings"][0].severity == "high"
     actor, event, detail = saved["audit"][0]
-    assert (actor, event) == ("reviewer-1", "score_calculated") and detail["score"] == 95 and detail["findings"] == 1
+    assert (actor, event) == ("reviewer-1", "score_calculated") and detail["score"] == 96 and detail["findings"] == 1
 
 
 # ---- the pages a privacy assessment needs are read first, and absence is not a finding when the crawl was cut short -------------------------------------------------------------
@@ -134,12 +152,14 @@ from app.enterprise.crawl.scope import legal_priority
 
 
 @pytest.mark.parametrize("url,expected", [
-    ("https://x.test/privacy", 0), ("https://x.test/legal/cookie-policy", 0), ("https://x.test/terms-and-conditions", 0), ("https://x.test/contact", 0),
-    ("https://x.test/grievance-redressal", 0), ("https://x.test/", 1), ("https://x.test/products/widget", 1),
-    ("https://x.test/blog/dpdp-act-2023-compliance-guide", 1),        # an article about the law is not the policy: no priority
-    ("https://x.test/news/privacy-update", 1),
+    # owner's sequence (19 Nov 2026): privacy policies 0, the other legal pages 1, every other page 2 (the homepage is read before all of them by the runner)
+    ("https://x.test/privacy", 0), ("https://x.test/privacy-policy", 0), ("https://x.test/data-protection", 0),
+    ("https://x.test/legal/cookie-policy", 1), ("https://x.test/terms-and-conditions", 1), ("https://x.test/contact", 1), ("https://x.test/grievance-redressal", 1),
+    ("https://x.test/", 2), ("https://x.test/products/widget", 2),
+    ("https://x.test/blog/dpdp-act-2023-compliance-guide", 2),        # an article about the law is not the policy: no priority
+    ("https://x.test/news/privacy-update", 2),
 ])
-def test_legal_pages_are_claimed_first_and_an_article_never_is(url, expected):
+def test_privacy_pages_are_claimed_first_then_legal_pages_and_an_article_never_is(url, expected):
     assert legal_priority(url) == expected
 
 

@@ -134,10 +134,17 @@ def test_without_a_policy_absence_is_not_assessed():
 
 # ---- statements, N5, N6, G1, G3 ---------------------------------------------------------------------------------------------------------------------------------------
 
-def test_statement_only_parameters_met_when_stated_not_met_when_absent():
+def test_policy_duties_pass_when_every_component_is_stated_partly_when_some_and_fail_when_absent():
+    full = [fact("retention", "12 months", "We retain your personal data for 12 months."), fact("retention", "deleted", "We delete your data when it is no longer needed."),
+            fact("security", "encryption", "We use encryption of data in transit and at rest."), fact("security", "access control", "Access is restricted to authorised personnel only."),
+            fact("security", "monitoring", "We monitor and log access to our systems."),
+            fact("breach", "notify", "We will notify you of a personal data breach without delay."), fact("breach", "board", "We will inform the Data Protection Board of any breach.")]
+    r, _ = run(full)
+    assert (r["G5"].state, r["G7"].state, r["G8"].state) == (MET, MET, MET)
     r, _ = run([fact("retention", "12 months", "We retain your personal data for 12 months."), fact("security", "encryption", "We use encryption."),
                 fact("breach", "notify", "We will notify you of a personal data breach.")])
-    assert (r["G5"].state, r["G7"].state, r["G8"].state) == (MET, MET, MET)
+    assert (r["G5"].state, r["G7"].state, r["G8"].state) == (PARTLY, PARTLY, PARTLY)
+    assert "erasure: not stated" in r["G5"].note and "access control: not stated" in r["G7"].note
     r, _ = run([])
     assert (r["G5"].state, r["G7"].state, r["G8"].state) == (NOT_MET, NOT_MET, NOT_MET)
 
@@ -196,11 +203,12 @@ def test_n2_boundaries():
     assert run([], judgments={})[0]["N2"].state == NOT_MET
 
 
-def test_n2_model_dissent_lowers_confidence_and_low_confidence_reaches_a_person():
+def test_n2_model_dissent_lowers_confidence_and_the_result_is_marked_for_a_reviewer():
     a = run(items(4), judgments={"N2": J("no", "high")})[0]["N2"]
     assert a.state == PARTLY and a.confidence == "low"
     res = eng.score([a], as_of=AS_OF)
-    assert next(x for x in res.lines if x.parameter_id == "N2").state == HUMAN_REVIEW
+    n2 = next(x for x in res.lines if x.parameter_id == "N2")
+    assert n2.state == PARTLY and "reviewer" in n2.adjustment and res.needs_attention["review_recommended"] == ["N2"]
 
 
 def test_a_failed_interpretation_is_not_assessed_never_not_met():
@@ -269,9 +277,10 @@ def test_k1_both_duties_met_one_partly():
     assert run([consent], rows=rows)[0]["K1"].state == PARTLY
 
 
-def test_k1_only_weak_signs_go_to_a_person():
+def test_k1_only_weak_signs_do_not_make_it_apply_but_a_reviewer_is_asked_to_confirm():
     rows = base_rows() + [ev("page_text", "https://acme.test/schools/overview", "Software for schools. " * 30)]
-    assert run(rows=rows)[0]["K1"].state == HUMAN_REVIEW
+    k1 = run(rows=rows)[0]["K1"]
+    assert k1.state == NOT_APPLICABLE and k1.confidence == "low" and "reviewer should confirm" in k1.note
 
 
 def test_k1_a_guardian_form_field_makes_it_applicable():
@@ -281,14 +290,53 @@ def test_k1_a_guardian_form_field_makes_it_applicable():
 
 # ---- M1, S1, T1, E1 ---------------------------------------------------------------------------------------------------------------------------------------------------
 
-def test_m1_not_applicable_without_a_consent_manager_and_human_review_with():
+def test_m1_does_not_apply_without_a_consent_manager_and_needs_its_registration_stated_with_one():
     assert run()[0]["M1"].state == NOT_APPLICABLE
-    assert run([fact("consent_manager", "XYZ", "You may manage consent through XYZ, a registered Consent Manager.")])[0]["M1"].state == HUMAN_REVIEW
+    assert run([fact("consent_manager", "XYZ", "You may manage consent through XYZ, a registered Consent Manager.")])[0]["M1"].state == MET
+    unreg = run([fact("consent_manager", "XYZ", "You may manage consent through XYZ, our Consent Manager.")])[0]["M1"]
+    assert unreg.state == NOT_MET and unreg.confidence == "low"
 
 
-def test_records_and_exemption_parameters():
+def test_sdf_third_schedule_guardian_and_consent_manager_duties_do_not_apply_when_nothing_shows_they_do():
     r, _ = run()
-    assert r["S1"].state == NEEDS_RECORDS and r["T1"].state == NEEDS_RECORDS and r["E1"].state == HUMAN_REVIEW
+    assert (r["S1"].state, r["R1"].state, r["K2"].state, r["M2"].state) == (NOT_APPLICABLE, NOT_APPLICABLE, NOT_APPLICABLE, NOT_APPLICABLE)
+    assert r["E1"].state == NOT_APPLICABLE and "no exemption" in r["E1"].note
+
+
+def test_s1_applies_when_the_site_says_it_is_a_significant_data_fiduciary():
+    said = [fact("sdf_duty", "SDF", "As a Significant Data Fiduciary we appoint an independent data auditor."),
+            fact("sdf_duty", "DPIA", "As a Significant Data Fiduciary we carry out a data protection impact assessment every year.")]
+    s1 = run(said)[0]["S1"]
+    assert s1.state == PARTLY and "DPO based in India: not stated" in s1.note
+
+
+def test_t1_passes_with_where_the_data_goes_and_fails_when_third_parties_are_contacted_and_nothing_is_said():
+    assert run([fact("cross_border", "USA", "Your data may be stored on servers in the United States.", specific=True)])[0]["T1"].state == MET
+    assert run([fact("cross_border", "abroad", "Your data may be transferred abroad.", specific=False)])[0]["T1"].state == PARTLY
+    assert run(rows=only_net(("Google Analytics", "www.google-analytics.com")))[0]["T1"].state == NOT_MET
+
+
+def test_new_policy_duties_pass_on_a_quoted_statement_and_fail_when_the_policy_is_silent():
+    stated = [fact("log_retention", "1 year", "Access logs are kept for one year."), fact("request_identifier", "email", "Send the request from your registered email address."),
+              fact("identity_verification", "OTP", "We verify your identity with a one-time password."), fact("legal_ground", "consent", "We process your data on the basis of your consent."),
+              fact("processor_contract", "contract", "Our processors act under a contract that requires them to protect your data."),
+              fact("data_accuracy", "accurate", "We take steps to keep your personal data accurate and up to date."), fact("consent_record", "logs", "We keep a record of the consents you give.")]
+    r, _ = run(stated)
+    assert {p: r[p].state for p in ("G9", "G10", "L1", "P1", "P2", "C13")} == {p: MET for p in ("G9", "G10", "L1", "P1", "P2", "C13")}
+    assert all(r[p].evidence_refs for p in ("G9", "G10", "L1", "P1", "P2", "C13"))
+    r, _ = run([])
+    assert {p: r[p].state for p in ("G9", "G10", "L1", "P2", "C13")} == {p: NOT_MET for p in ("G9", "G10", "L1", "P2", "C13")}
+
+
+def test_g9_logs_without_a_year_partly_pass():
+    assert run([fact("log_retention", "30 days", "Server logs are kept for 30 days.")])[0]["G9"].state == PARTLY
+
+
+def test_c12_fails_on_a_term_that_waives_the_right_to_complain_and_passes_on_a_clean_policy():
+    bad = run([fact("rights_waiver", "complaint", "You agree to waive any right to complain to the Data Protection Board.")])[0]["C12"]
+    assert bad.state == NOT_MET and bad.evidence_refs
+    clean = run()[0]["C12"]
+    assert clean.state == MET and clean.evidence_refs
 
 
 # ---- X1, X2, X3 -------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -466,8 +514,8 @@ def test_every_assessment_is_accepted_by_the_scoring_engine():
 
 def test_only_catalogue_parameters_are_assessed_and_none_is_a_technical_or_cookie_consent_one():
     r, _ = run()
-    assert not {"TS1", "TS2", "TS3", "TS4", "TS5", "TS6", "C4", "C5", "C6", "C7", "C8"} & set(r)
-    assert len(r) == 28
+    assert not {"TS1", "TS2", "TS3", "TS4", "TS5", "TS6", "C4", "C5", "C6", "C7", "C8", "C10", "C11"} & set(r)
+    assert len(r) == 38
 
 
 def test_met_not_met_always_carry_evidence_refs():

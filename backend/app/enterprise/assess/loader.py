@@ -27,6 +27,8 @@ async def load_observations(db: AsyncSession, scan_id: uuid.UUID) -> dict:
             out["consent"][row.detection_method.removeprefix("consent_test:")] = item
         elif row.kind == "header" and row.detection_method == "tls_probe":
             out["tls"] = item
+        elif row.kind == "header" and row.detection_method == "five_page_inspection":
+            continue                                    # the 5-page sequence's own observations of a page, not that page's response record
         elif row.kind == "header":
             out["pages"].append(item)
         elif row.kind == "cookie":

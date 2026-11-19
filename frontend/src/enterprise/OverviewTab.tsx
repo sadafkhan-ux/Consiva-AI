@@ -8,10 +8,14 @@ const ANALYSIS_TONE: Record<string, Tone["tone"]> = { not_started: "muted", runn
 /** The assessment stage, read from the declaration and the score: the contract carries no separate field, so this states only what those say. */
 export function assessmentStage(score: EnterpriseScore | null, d: Declaration | null): { label: string; tone: Tone["tone"]; detail: string } {
   const pr = d?.parameters;
-  const detail = pr ? `${count(pr.assessed)} of ${count(pr.total)} parameters assessed` : "parameters: not recorded yet";
+  const scored = pr && typeof pr.pass === "number";
+  const detail = !pr ? "parameters: not recorded yet"
+    : scored ? `${count(pr.pass)} Pass, ${count(pr.partially_pass)} Partially Pass, ${count(pr.fail)} Fail of ${count(pr.total)}`
+    : `${count(pr.assessed)} of ${count(pr.total)} parameters assessed`;
   if (!score) return { label: "Not started", tone: "muted", detail };
   if (score.score === null) return { label: "Not scored", tone: "warn", detail };
-  const open = [pr?.not_assessed, pr?.needs_records, pr?.awaiting_human_review].reduce<number>((a, n) => a + (typeof n === "number" ? n : 0), 0);
+  // Method version 2: every parameter has a result; a Fail that rests on something not verifiable is what still needs a person.
+  const open = scored ? (pr?.fail_not_verified ?? 0) : [pr?.not_assessed, pr?.needs_records, pr?.awaiting_human_review].reduce<number>((a, n) => a + (typeof n === "number" ? n : 0), 0);
   return open > 0 ? { label: "Partial", tone: "warn", detail } : { label: "Complete", tone: "ok", detail };
 }
 
@@ -117,7 +121,10 @@ export function OverviewTab({ s }: { s: ScanSummary }) {
           ]} />
           <CountGrid title="Documents" rows={[["Discovered", d.documents.discovered], ["Extracted", d.documents.extracted], ["Partly extracted", d.documents.partly_extracted], ["Unreadable", d.documents.unreadable]]} />
           <CountGrid title="Evidence and parameters" rows={[
-            ["Evidence records", d.evidence.records], ["Parameters assessed", d.parameters.assessed], ["Awaiting human review", d.parameters.awaiting_human_review], ["Needs records", d.parameters.needs_records], ["Not assessed", d.parameters.not_assessed],
+            ["Evidence records", d.evidence.records],
+            ...(typeof d.parameters.pass === "number"
+              ? [["Pass", d.parameters.pass], ["Partially Pass", d.parameters.partially_pass], ["Fail", d.parameters.fail], ["Fail, not verifiable", d.parameters.fail_not_verified]] as [string, number | null | undefined][]
+              : [["Parameters assessed", d.parameters.assessed], ["Awaiting human review", d.parameters.awaiting_human_review], ["Needs records", d.parameters.needs_records], ["Not assessed", d.parameters.not_assessed]] as [string, number | null | undefined][]),
           ]} />
           {u && (u.not_recorded || u.pages_with_limits || u.pages_not_fully_analysed || u.pages_not_sent_to_model) ? (
             <CountGrid title="Where reading was limited" rows={[

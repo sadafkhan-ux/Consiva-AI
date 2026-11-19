@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enterprise.coverage import coverage_declaration
 from app.enterprise.scoring.catalogue import (
-    GROUP_LABELS, IN_FORCE_CONSENT_MANAGER, IN_FORCE_MAIN, LEGAL_REVIEW_STATUS, PARAMETERS, STATUTORY, TOTAL_POINTS,
+    DUTY_KINDS, GROUP_LABELS, IN_FORCE_CONSENT_MANAGER, IN_FORCE_MAIN, LEGAL_REVIEW_STATUS, PARAMETERS, STATUTORY, TOTAL_POINTS,
 )
 
 LISTING_CAP = 200          # URL rows shown in the report; the total is always stated
@@ -328,6 +328,8 @@ class ReportData:
     legal_review_status: str
     unreadable_observations: int = 0
     pages_observed: int = 0
+    #: What the browser held after Accept and after Reject on the entry page: {"accept"|"reject": {"tested", "cookies": [names], "services": [labels], "requests": int | None}}.
+    choice_states: dict = field(default_factory=dict)
 
 
 # ---- the queries --------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -611,6 +613,8 @@ def assemble(raw: dict, *, generated_at: datetime) -> ReportData:
         elif kind == "header":
             if ev["detection_method"] == "tls_probe":
                 tls = doc
+            elif ev["detection_method"] == "five_page_inspection":
+                pass                                      # the 5-page sequence's own observations of a page, not that page's response record
             else:
                 sec = doc.get("security") or {}
                 present = sorted((sec.get("present") or {}).keys())
@@ -685,7 +689,7 @@ def assemble(raw: dict, *, generated_at: datetime) -> ReportData:
 
     exposure = sorted(
         (ExposureRow(p.id, p.state, p.schedule_item, p.penalty_ceiling_cr, p.legal_refs) for p in parameters
-         if p.state in ("not_met", "partly_met") and p.kind == STATUTORY and p.penalty_ceiling_cr is not None),
+         if p.state in ("not_met", "partly_met") and p.kind in DUTY_KINDS and p.penalty_ceiling_cr is not None),
         key=lambda e: (-e.maximum_penalty_crore, e.parameter_id))
 
     # ---- evidence references: who cites which record
@@ -711,7 +715,22 @@ def assemble(raw: dict, *, generated_at: datetime) -> ReportData:
         forms=sorted(forms, key=lambda f: (f.page_url, f.action)), iframes=sorted(iframes, key=lambda i: (i.page_url, i.src)), security=security, consent=consent,
         pre_consent=PreConsent(pages_observed=len(network_pages), pages_with_non_essential=pre_with, non_essential=sorted(pre_vendors)), documents=documents, parameters=parameters,
         score=score, findings=findings, evidence=evidence[:EVIDENCE_CAP], evidence_total=len(evidence), exposure=exposure, legal=load_legal_framework(),
-        legal_review_status=LEGAL_REVIEW_STATUS, unreadable_observations=unreadable, pages_observed=len(network_pages))
+        legal_review_status=LEGAL_REVIEW_STATUS, unreadable_observations=unreadable, pages_observed=len(network_pages), choice_states=_choice_states(consent_raw))
+
+
+def _choice_states(consent_raw: dict) -> dict:
+    """The entry page after Accept and after Reject, as counts the two-page summary compares with the state before any choice."""
+    out: dict = {}
+    for name in ("accept", "reject"):
+        d = consent_raw.get(name) or {}
+        tested = bool(d.get("tested"))
+        out[name] = {
+            "tested": tested,
+            "cookies": sorted({str(c.get("name")) for c in d.get("cookies") or [] if isinstance(c, dict) and c.get("name")}) if tested else [],
+            "services": sorted({_vendor_label(x) for x in d.get("non_essential") or [] if isinstance(x, dict)}) if tested else [],
+            "requests": (d.get("requests") or {}).get("total_requests") if tested else None,
+        }
+    return out
 
 
 def points_total() -> int:

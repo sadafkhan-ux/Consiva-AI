@@ -114,7 +114,8 @@ def test_links_after_the_record_cap_are_counted_not_dropped_without_a_trace(monk
     monkeypatch.setattr(discovery.frontier, "add_url", fake_add)
     links = [f"https://acme.com/p{i}" for i in range(6)] + ["https://other.org/x", "mailto:a@b.c"]
     out = asyncio.run(discovery.add_links(None, None, "https://acme.com/", links, parent_depth=0, max_urls=2, max_depth=9))
-    assert out["added"] == 2 and out["limit"] == 4                  # the 4 in-scope links from the first refusal on; the other site and the mailto: are not counted
+    # the 4 same-host links from the first refusal on, and the other site's link (it would have been RECORDED as excluded_external_domain); the mailto: is not a URL to record
+    assert out["added"] == 2 and out["limit"] == 5
 
 
 # ---- the browser: accordions (B2), shadow DOM and iframes (B4) ----------------------------------------------------------------------------------------------------------

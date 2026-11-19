@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enterprise.models import EntReport
 from app.enterprise.report.data import ReportData, gather
-from app.enterprise.report.html import render_html
+from app.enterprise.report.html import MAX_LEVEL, MAX_PAGES, render_html
 from app.enterprise.report.pdf import render_pdf
 
 logger = logging.getLogger(__name__)
@@ -44,13 +44,24 @@ async def _store(db: AsyncSession, scan_id: uuid.UUID, **fields) -> EntReport:
     raise RuntimeError("unreachable")
 
 
+async def render_within_limit(data: ReportData) -> tuple[bytes, int]:
+    """Print the report, tightening the long lists one level at a time until it fits MAX_PAGES (40). Every capped list states its full size and the API that returns all of it, so a
+    tighter level drops rows from the PDF, never from the record. If even the tightest level is longer, that version is kept and the overrun is logged."""
+    pdf, pages = b"", 0
+    for level in range(MAX_LEVEL + 1):
+        pdf, pages = await render_pdf(render_html(data, level=level))
+        if pages <= MAX_PAGES:
+            return pdf, pages
+    logger.warning("enterprise report for scan %s is %d pages at the tightest level (limit %d)", data.scan.scan_id, pages, MAX_PAGES)
+    return pdf, pages
+
+
 async def generate_report(db: AsyncSession, scan_id: uuid.UUID) -> EntReport:
     """Gather, render, print and store a new report version. Returns the stored row: status `ready` with the PDF, or `failed` with the error."""
     data: ReportData | None = None
     try:
         data = await gather(db, scan_id)
-        html = render_html(data)
-        pdf, pages = await render_pdf(html)
+        pdf, pages = await render_within_limit(data)
     except Exception as exc:
         logger.exception("enterprise report for scan %s failed", scan_id)
         await db.rollback()

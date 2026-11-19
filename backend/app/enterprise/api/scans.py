@@ -134,11 +134,16 @@ async def cancel(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db
 
 @router.post("/{scan_id}/resume", response_model=ActionResponse, status_code=202, summary="Carry on a scan that stopped before it finished")
 async def resume(scan_id: uuid.UUID, user: CurrentUser = Depends(get_application_scan_caller), db: AsyncSession = Depends(get_db)) -> ActionResponse:
-    """For a scan still `running` whose worker is gone: queues it again. Pages already done are not visited again; pages the dead worker held are taken back."""
+    """For a scan still `running` whose worker is gone, or one the website stopped by blocking the scanner: queues it again. Pages already done are not visited again; pages the dead
+    worker held, and pages the site refused, are taken back."""
     scan = await _load(db, scan_id, user)
-    if scan.status not in ("queued", "running"):
-        raise errors.InvalidScanState(f"A {scan.status} scan cannot be resumed.")
     org_id = uuid.UUID(user.org_id)
+    if scans.is_blocked_stop(scan):
+        reopened = await frontier.reopen_blocked(db, scan_id)
+        scan = await scans.reopen_blocked(db, scan_id, org_id)
+        await store.audit(db, scan_id, user.user_id, "scan_reopened_after_block", {"pages_requeued": reopened})
+    elif scan.status not in ("queued", "running"):
+        raise errors.InvalidScanState(f"A {scan.status} scan cannot be resumed.")
     await queue.enqueue(db, org_id=org_id, job_type=JOB_TYPE, payload={"scan_id": str(scan_id), "org_id": str(org_id)})
     await store.audit(db, scan_id, user.user_id, "scan_resumed", {})
     await db.commit()
