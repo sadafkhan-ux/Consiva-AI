@@ -21,6 +21,7 @@ SECURITY_HEADERS = (
     "strict-transport-security", "content-security-policy", "x-content-type-options", "referrer-policy", "permissions-policy", "x-frame-options",
 )
 MAX_REQUESTS_KEPT = 5000
+EXAMPLES_PER_HOST, EXAMPLE_HOSTS = 3, 60
 SCROLL_MAX_STEPS, SCROLL_PAUSE_MS, SCROLL_DEADLINE_S = 80, 250, 30.0
 EXPAND_LIMIT = 100                    # per page; sections opened inside a section need a further round, so the rounds below share this total
 EXPAND_ROUNDS = 3
@@ -72,9 +73,19 @@ def summarise_requests(entries: list[dict], site_url: str, consent_state: str = 
     rows = sorted(hosts.values(), key=lambda h: (not h["third_party"], -h["requests"], h["host"]))
     # Requests made in clear text (http://) by a page that was itself loaded over HTTPS: mixed content. The page's own scheme is decided by the caller.
     insecure = sorted({e["url"].split("#")[0][:300] for e in entries if str(e.get("url", "")).lower().startswith("http://")})
+    # A few of the actual request URLs behind each third-party host (method 3.0.0 report: "the request URLs behind a finding"), capped so a page stays a small record.
+    examples: dict[str, list[str]] = {}
+    for e in entries:
+        host = (urlparse(e.get("url", "")).hostname or "").lower()
+        if host and registered_domain(host) != site:
+            lst = examples.setdefault(host, [])
+            u = str(e["url"]).split("#")[0][:300]
+            if len(lst) < EXAMPLES_PER_HOST and u not in lst:
+                lst.append(u)
     return {
         "consent_state": consent_state, "total_requests": sum(h["requests"] for h in rows), "hosts": rows, "insecure_requests": len(insecure), "insecure_examples": insecure[:5],
         "third_party_hosts": sum(1 for h in rows if h["third_party"]), "third_party_requests": sum(h["requests"] for h in rows if h["third_party"]),
+        "examples": dict(list(examples.items())[:EXAMPLE_HOSTS]),
     }
 
 

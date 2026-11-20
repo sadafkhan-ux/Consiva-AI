@@ -56,8 +56,31 @@ async def render_within_limit(data: ReportData) -> tuple[bytes, int]:
     return pdf, pages
 
 
+async def _generate_method3(db: AsyncSession, scan_id: uuid.UUID) -> EntReport | None:
+    """The method 3.0.0 report (owner's approval of 20 Nov 2026), when it is the configured report and the scan has a method 3.0.0 result. None means: print the 51-parameter report."""
+    from app.enterprise.config import get_enterprise_settings
+    from app.enterprise.method3 import service as method3
+    from app.enterprise.report import method3 as m3report
+    if get_enterprise_settings().report_method != "3" or await method3.latest(db, scan_id) is None:
+        return None
+    try:
+        data = await m3report.gather(db, scan_id)
+        pdf, pages = await render_pdf(m3report.render_html(data))
+    except Exception as exc:
+        logger.exception("enterprise method 3.0.0 report for scan %s failed", scan_id)
+        await db.rollback()
+        return await _store(db, scan_id, status="failed", error=f"method 3.0.0 report: {type(exc).__name__}: {exc}"[:1000])
+    from app.enterprise import store
+    score = await store.latest_score(db, scan_id)
+    return await _store(db, scan_id, score_result_id=score.id if score is not None else None, status="ready", pdf=pdf, sha256=hashlib.sha256(pdf).hexdigest(), byte_size=len(pdf),
+                        page_count=pages)
+
+
 async def generate_report(db: AsyncSession, scan_id: uuid.UUID) -> EntReport:
     """Gather, render, print and store a new report version. Returns the stored row: status `ready` with the PDF, or `failed` with the error."""
+    m3 = await _generate_method3(db, scan_id)
+    if m3 is not None:
+        return m3
     data: ReportData | None = None
     try:
         data = await gather(db, scan_id)

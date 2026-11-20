@@ -156,6 +156,10 @@ async def run_analysis_phase(scan_id: uuid.UUID, org_id: uuid.UUID, *, as_of: da
         logger.exception("enterprise scan %s: scoring failed", scan_id)
         problems.append(f"scoring: {type(exc).__name__}: {exc}"[:300])
 
+    # Method 3.0.0 (96 parameters, owner's approval of 20 Nov 2026), from the evidence and facts just committed. Its own failure is recorded and audited, never a problem of the scan.
+    from app.enterprise.method3 import service as method3
+    await method3.run_safe(scan_id, org_id, as_of=as_of)
+
     async with async_session_factory() as db:
         current = await db.scalar(text("select analysis_status from ent_scans where id = :i"), {"i": scan_id})
         if problems:

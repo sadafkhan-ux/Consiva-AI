@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, LargeBinary, Text, text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, LargeBinary, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -170,6 +171,23 @@ class EntScoreResult(Base):
     as_of: Mapped[date] = mapped_column(Date, nullable=False)
     score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     coverage: Mapped[int] = mapped_column(Integer, nullable=False)
+    basis: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class EntMethod3Result(Base):
+    """A method 3.0.0 calculation (96 parameters). The latest row is the current result; ent_score_results keeps the 51-parameter score and its API unchanged."""
+    __tablename__ = "ent_method3_results"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ent_scans.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    catalogue_fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    as_of: Mapped[date] = mapped_column(Date, nullable=False)
+    score: Mapped[Decimal | None] = mapped_column(Numeric(4, 1), nullable=True)
+    marks_earned: Mapped[Decimal] = mapped_column(Numeric(6, 3), nullable=False)
+    applicable_max: Mapped[Decimal] = mapped_column(Numeric(6, 3), nullable=False)
     basis: Mapped[str] = mapped_column(Text, nullable=False)
     result: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

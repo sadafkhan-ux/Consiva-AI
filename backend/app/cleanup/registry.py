@@ -68,6 +68,7 @@ ENTERPRISE = Agent(
         Step("ent_findings", _BY_SCAN, "findings"),
         Step("ent_reports", _BY_SCAN, "stored Enterprise report PDFs"),
         Step("ent_score_results", _BY_SCAN, "scores and score history"),
+        Step("ent_method3_results", _BY_SCAN, "method 3.0.0 results and their history"),
         Step("ent_audit_events", _BY_SCAN, "per-scan audit events"),
         Step("ent_evidence", _BY_SCAN, "extracted page text and HTML, documents, browser observations"),
         Step("ent_frontier", _BY_SCAN, "the URL queue and URL-level crawl status"),

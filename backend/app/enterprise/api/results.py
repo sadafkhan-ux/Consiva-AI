@@ -164,6 +164,8 @@ async def review_parameter(scan_id: uuid.UUID, parameter_id: str, body: ReviewBo
     await store.save_review(db, scan_id, parameter_id, state=body.state, reviewer=user.user_id, reason=body.reason)
     await pipeline.recalculate(db, scan_id, actor=user.user_id)
     await db.commit()
+    from app.enterprise.method3 import service as method3
+    await method3.run_safe(scan_id, uuid.UUID(user.org_id), actor=user.user_id)            # the 96-parameter result follows the review too; a failure there never fails the review
     return next(v for v in await parameter_views(db, scan_id) if v["id"] == parameter_id)
 
 
@@ -251,6 +253,27 @@ async def documents(scan_id: uuid.UUID, offset: int = Query(0, ge=0), limit: int
 
 
 # ---- history, changes ----------------------------------------------------------------------------------------------------------------------------------------------
+
+@router.get("/{scan_id}/method3", summary="The method 3.0.0 result: 96 parameters, URL-wise results, category marks and the score out of the applicable maximum")
+async def method3_result(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)) -> dict:
+    """Additive (20 Nov 2026): the 51-parameter endpoints keep their shape; this returns the latest method 3.0.0 calculation as stored."""
+    await _scan(db, scan_id, user)
+    from app.enterprise.method3 import service as method3
+    row = await method3.latest(db, scan_id)
+    if row is None:
+        raise NotFoundError("Method 3.0.0 has not been calculated for this scan yet (it runs after the analysis).")
+    return {"id": str(row.id), "created_at": row.created_at, **row.result}
+
+
+@router.get("/{scan_id}/method3/history", summary="Every method 3.0.0 calculation, newest first")
+async def method3_history(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)) -> dict:
+    await _scan(db, scan_id, user)
+    from app.enterprise.models import EntMethod3Result
+    rows = (await db.scalars(select(EntMethod3Result).where(EntMethod3Result.scan_id == scan_id).order_by(EntMethod3Result.created_at.desc()))).all()
+    items = [{"id": str(r.id), "version": r.version, "score": None if r.score is None else float(r.score), "marks_earned": float(r.marks_earned),
+              "applicable_max": float(r.applicable_max), "basis": r.basis, "as_of": r.as_of.isoformat(), "created_at": r.created_at} for r in rows]
+    return _page(items, len(items), 0, len(items))
+
 
 @router.get("/{scan_id}/score/history", summary="Every score calculation, newest first")
 async def score_history(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)) -> dict:

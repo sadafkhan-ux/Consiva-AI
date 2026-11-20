@@ -375,6 +375,48 @@ async def _keep_consent(scan_id, root_url: str, browser, settings) -> None:
         logger.warning("enterprise scan %s: the consent tests could not be kept", scan_id, exc_info=True)
 
 
+async def _keep_preconsent_recheck(scan_id, root_url: str, browser, settings) -> None:
+    """After every page was inspected: the pages that showed analytics or advertising before any choice are loaded again, one at a time and alone, in a clean browser, by the
+    5-page agent's own re-check (used by import, never changed). A page that fired once during the crawl and not again in clean loads is different evidence from one that fires every
+    time: method 3.0.0 records which. The homepage first, then the pages with the most such requests, at most `preconsent_recheck_pages`. Kept as consent evidence
+    `consent_test:pre_consent_recheck`; not repeated on a resumed scan that already has it. A failure here loses this observation, never the crawl."""
+    from app.enterprise.config import get_enterprise_settings
+    limit = get_enterprise_settings().preconsent_recheck_pages
+    if limit <= 0:
+        return
+    try:
+        from app.enterprise.method3.assess import tracking_cookie
+        from app.scanner.crawler import _recheck_one_page
+        async with async_session_factory() as db:
+            if await db.scalar(text("select count(*) from ent_evidence where scan_id = :s and kind = 'consent' and detection_method = 'consent_test:pre_consent_recheck'"), {"s": scan_id}):
+                return
+            rows = (await db.execute(text("select kind, source_url, content from ent_evidence where scan_id = :s and kind in ('network', 'cookie') order by captured_at"), {"s": scan_id})).all()
+        hits: dict[str, int] = {}
+        for r in rows:
+            try:
+                c = json.loads(r.content)
+            except ValueError:
+                continue
+            u = c.get("page_url") or r.source_url
+            n = len(c.get("non_essential") or []) if r.kind == "network" else sum(1 for k in c.get("cookies") or [] if tracking_cookie(k))
+            if n:
+                hits[u] = hits.get(u, 0) + n
+        if not hits:
+            return
+        home = root_url.rstrip("/")
+        urls = sorted(hits, key=lambda u: (u.rstrip("/") != home, -hits[u], u))[:limit]
+        results = [await _recheck_one_page(browser, u, root_url, settings, set()) for u in urls]
+        body = {"test": "pre_consent_recheck", "tested": bool(results), "reason": None, "crawl_hit_pages": len(hits), "pages": results,
+                "reproduced": any(x.get("fired") for x in results), "complete": bool(results) and all(x.get("loaded") for x in results)}
+        async with async_session_factory() as db:
+            await evidence.store(db, scan_id, kind="consent", source_url=root_url, content=json.dumps(body, sort_keys=True, ensure_ascii=False),
+                                 detection_method="consent_test:pre_consent_recheck", content_type="application/json")
+            await db.commit()
+        logger.info("enterprise scan %s: clean re-check of %d page(s) that tracked before a choice: %d repeated", scan_id, len(results), sum(1 for x in results if x.get("fired")))
+    except Exception:
+        logger.warning("enterprise scan %s: the clean re-check before consent could not be kept", scan_id, exc_info=True)
+
+
 async def _keep_observations(db, scan_id, claimed: frontier.Claimed, page, root_url: str, *, prints: Fingerprints | None = None) -> None:
     """What the browser saw on this page, kept as evidence rows: cookies, requests, forms, the response's headers with the inspection record, and what the 5-page agent's first-page sequence
     observed (and, for the homepage, its screenshot). Each row names its page and the consent state, which is always `pre_consent` here (a fresh context that has given no consent).
@@ -826,6 +868,10 @@ async def run(scan_id: uuid.UUID, org_id: uuid.UUID, *, worker_id: str = WORKER_
                             break
                     elif outcome == "done":
                         in_a_row = 0
+
+                # After the last page: the clean re-check of the pages that tracked before a choice (method 3.0.0), only for a crawl that ran to its end.
+                if go and block_stop is None and limit_hit is None:
+                    await _keep_preconsent_recheck(scan_id, root_url, browser, settings)
             finally:
                 await browser.close()
     except RobotsUnreadable as exc:

@@ -1,5 +1,44 @@
 # Enterprise DPDP scoring method
 
+**Current method: 3.0.0** (96 parameters, approved by the owner on 20 November 2026; section below). Method 2.0.0 (51 parameters, further down) still runs beside it for the same
+scan, keeps its API (`/assessment`, `/parameters`, `/score/history`) unchanged, and is what method 3.0.0 is compared against in its report's Appendix B.
+
+## Method 3.0.0 (current)
+
+Code: `backend/app/enterprise/method3/` (`catalogue.py`, `engine.py`, `context.py`, `assess.py`, `service.py`); report `backend/app/enterprise/report/method3.py`;
+table `ent_method3_results` (migration `0062`). Tests: `backend/tests/enterprise/test_enterprise_method3.py`.
+
+| Item | Status |
+|---|---|
+| 96 parameters, one per independently assessable DPDP requirement (13 Act sections, 13 Rules, First and Third Schedules) | **Approved by the owner, 20 Nov 2026**, after the swaransoft.com and consiva.ai demonstration reports |
+| Weights total 400; one weight point = 0.25 marks, so the marks total exactly 100 | Approved, 20 Nov 2026 |
+| Pass 100%, Partial 50% (only where a Partial criterion is written), Fail 0 | Approved, 20 Nov 2026 |
+| No "unable to verify": a duty internal to the organisation is judged from the published policy and labelled "internal records not inspected" | Owner's instruction, 20 Nov 2026 |
+| A conditional duty that does not apply is **Not applicable and removed from the maximum**, with the reason (replaces the 19 Nov rule "not applicable = Pass" for method 3.0.0) | Owner's approval of the demonstration ("everything is fine, build it"), 20 Nov 2026 |
+| URL-wise parameters: Pass if every applicable URL meets it, Partial if at least half do, Fail if fewer than half | Approved, 20 Nov 2026 |
+| Score = marks earned / applicable maximum x 100, one decimal; categories the same within the category | Approved, 20 Nov 2026 |
+| Legal readings | **Draft until a named person signs them off** (`LEGAL_REVIEW_STATUS`) |
+
+How it runs: after the analysis phase (and after every human review) `method3.service.run_safe` rebuilds the scan's context from what it stored (evidence, frontier, the facts the
+text analysis quoted, the model's few readings, the 51-parameter results) and assesses the 96 parameters deterministically: no model call, no browser. The result is stored as a
+new row of `ent_method3_results` and audited (`method3_scored`); a failure is recorded and audited (`method3_failed`) and never changes the scan or its 51-parameter score.
+`GET /api/v1/enterprise/scans/{id}/method3` returns the latest result; `/method3/history` every calculation. The report printed for a scan is the method 3.0.0 report when
+`ENTERPRISE_REPORT_METHOD=3` (default) and a method 3.0.0 result exists; `ENTERPRISE_REPORT_METHOD=2` prints the 51-parameter report.
+
+Rules worth knowing when reading a result:
+* Every result lists its evidence (a verbatim quote with its URL, or an observation) and, for URL-wise parameters, the result on every URL.
+* Where the extracted facts miss a statement the policy pages plainly hold, the page's own sentence is quoted (`A.sentences`); a policy that is silent is a Fail, marked for review when
+  part of it could not be analysed.
+* Children's duties apply when the site says it serves children or a form asks for a guardian; a policy saying it is not directed at children makes them Not applicable.
+* A cookie is declared when its name or the service it belongs to is named; a third party is named by its product name (Google Ads), not only its parent (Google).
+* Tracking seen before a choice on a page that did not repeat it in clean reloads (`consent_test:pre_consent_recheck`) counts as Pass on that page, marked for review.
+
+What the build added around it: the crawl keeps up to three example request URLs per third-party host on each page (`examples` in the network evidence); appends the site footer to
+the page text when the text left it out; and, after the last page, re-checks up to `ENTERPRISE_PRECONSENT_RECHECK_PAGES` (default 10) pages that tracked before a choice in a clean
+browser. A rights and grievance page at an address such as `/privacy-rights-and-grievance` or `/rights-request` is now read as a grievance page.
+
+## Method 2.0.0 (still calculated; its API is unchanged)
+
 Version `ent-dpdp-2.0.0` (catalogue `2.0.0`). Code: `backend/app/enterprise/scoring/` (`catalogue.py`, `engine.py`). Tests: `backend/tests/enterprise/test_enterprise_scoring.py`.
 This is independent of the 5-page agent's P1 to P12 scoring, which it does not import and which is unchanged.
 

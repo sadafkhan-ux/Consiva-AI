@@ -22,6 +22,8 @@ Already served (unchanged): `POST ""` (start), `GET /{id}/status`, `GET /{id}/co
 | `GET /{id}/urls?status=&q=&analysis_status=` | Paginated URL inventory (shape below) |
 | `GET /{id}/documents` | Paginated document inventory with extraction status |
 | `GET /{id}/score/history` | Every score calculation, newest first: `{ items: [{ id, version, score, coverage, basis, as_of, created_at }] }` |
+| `GET /{id}/method3` | Added 20 Nov 2026 (additive). The latest method 3.0.0 result: `{ id, created_at, name, version, score, marks_earned, applicable_max, not_applicable_max, basis, counts, review, categories, lines: [{ parameter_id, category, name, act, rule, max, earned, status, status_label, explanation, evidence, evidence_refs, basis, urls: [{ url, status, note }], review, limitation, differs }] }`; 404 until it has been calculated |
+| `GET /{id}/method3/history` | Added 20 Nov 2026 (additive). Every method 3.0.0 calculation, newest first: `{ items: [{ id, version, score, marks_earned, applicable_max, basis, as_of, created_at }] }` |
 | `GET /{id}/changes?against={scan_id}` | What changed since an earlier scan of the same site (shape below) |
 | `POST /{id}/analyze` | Run (or re-run) the analysis phase. 202 `{ scan_id, analysis_status, message }` |
 | `POST /{id}/report` | Generate a new report version. 202 `{ scan_id, version, status }` |

@@ -36,7 +36,9 @@ _SLUGS: tuple[tuple[str, re.Pattern], ...] = (
                           r"policy[-_]privacy|privacypolicy|dpdp[-_](policy|notice)|privacy[-_]and[-_]cookie[-_]policy")),
     (COOKIE, re.compile(r"cookies?([-_](policy|policies|notice|statement|settings|preferences))?|cookiepolicy")),
     (TERMS, re.compile(r"terms([-_](of[-_](use|service|services|sale)|and[-_]conditions|conditions|&[-_]conditions))?|tos|terms[-_]conditions|user[-_]agreement|legal[-_]terms|termsofuse")),
-    (GRIEVANCE, re.compile(r"grievances?([-_](redressal|redress|officer|policy|mechanism|procedure))*|complaints?([-_](policy|procedure))?|redressal")),
+    (GRIEVANCE, re.compile(r"grievances?([-_](redressal|redress|officer|policy|mechanism|procedure))*|complaints?([-_](policy|procedure))?|redressal|"
+                            r"(privacy|data[-_]principal|your|user|data[-_]subject)[-_]rights([-_](and|&)[-_](grievances?|requests?|complaints?|redressal))?|"
+                            r"(privacy|data|rights)[-_]requests?|exercise[-_]your[-_]rights|dsar")),
     (CONTACT, re.compile(r"contact([-_]us)?|contacts|get[-_]in[-_]touch|reach[-_]us|contact[-_]information|enquiry|enquiries")),
     (ABOUT, re.compile(r"about([-_]us)?|company|who[-_]we[-_]are|our[-_]story|our[-_]company")),
 )
@@ -45,7 +47,8 @@ _TITLE_NAMES: tuple[tuple[str, re.Pattern], ...] = (
     (PRIVACY, re.compile(r"^(our |the |website |online )?(privacy|data protection|data privacy)( (&|and) cookies?)?( (policy|notice|statement|policies|centre|center))?( for .{1,60})?$", re.I)),
     (COOKIE, re.compile(r"^(our |the )?cookies?( (policy|notice|statement|policies))$", re.I)),
     (TERMS, re.compile(r"^(our |the |website )?(terms( (of|and|&) (use|service|services|conditions|sale))?|conditions of use|user agreement)$", re.I)),
-    (GRIEVANCE, re.compile(r"^(grievance( redressal| redress)?( officer| policy| mechanism)?|complaints?( policy| procedure)?)$", re.I)),
+    (GRIEVANCE, re.compile(r"^(grievance( redressal| redress)?( officer| policy| mechanism)?|complaints?( policy| procedure)?|"
+                           r"(privacy|your|data principal) rights( (&|and) (grievances?|requests?|complaints?))?|rights requests?|exercise your rights)$", re.I)),
     (CONTACT, re.compile(r"^(contact( us)?|get in touch|reach us)$", re.I)),
     (ABOUT, re.compile(r"^(about( us)?|who we are|our story|our company)$", re.I)),
 )

@@ -122,6 +122,11 @@ async def deep_inspect(context: BrowserContext, url: str, *, root_url: str, sett
         except Exception:                                                        # noqa: BLE001
             settled_text, control_text = "", None
         inner = await page.evaluate("document.body ? document.body.innerText : ''")
+        try:
+            # The site footer (privacy contact, policy links): some sites draw it so that innerText leaves it out (consiva.ai, 20 Nov 2026: in the HTML of 94 pages, in the text of 9).
+            footer = await page.evaluate("[...document.querySelectorAll('footer, [role=\"contentinfo\"]')].map(f => (f.innerText || f.textContent || '').trim()).filter(Boolean).join('\\n')")
+        except Exception:                                                        # noqa: BLE001
+            footer = ""
         title = await page.title()
         headers = await response.all_headers() if response else {}
         cookies = await context.cookies()
@@ -143,6 +148,9 @@ async def deep_inspect(context: BrowserContext, url: str, *, root_url: str, sett
     for f in dom.get("frame_text", []):
         if f.get("text"):
             extra.append(f"[iframe {f['src']}]\n{f['text']}")
+    footer_text = " ".join((footer or "").split())[:20000]
+    if footer_text and footer_text[:120] not in " ".join((base or "").split()):
+        extra.insert(0, "[footer]\n" + footer_text)
     full_text = (base or "") + ("\n\n" + "\n\n".join(extra) if extra else "")
     five_page = {
         "sequence": "5-page first-page inspection" + (" (homepage)" if is_home else ""), "navigation_attempts": attempts, "scroll_steps": scroll_steps, "settled": settled,

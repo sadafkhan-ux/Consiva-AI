@@ -51,6 +51,11 @@ class EnterpriseSettings(BaseSettings):
     max_document_mb: int = Field(default=25, ge=1, le=500)
     #: Largest single piece of content kept as evidence, in bytes. Longer content is refused, never silently cut.
     max_evidence_bytes: int = Field(default=5_000_000, ge=1_000, le=100_000_000)
+    #: The report the Enterprise agent prints: "3" = method 3.0.0 (96 parameters, owner's approval of 20 Nov 2026); "2" = the 51-parameter report. A scan with no method 3.0.0
+    #: result yet is printed with the 51-parameter report whatever this says.
+    report_method: str = Field(default="3", pattern="^(2|3)$")
+    #: Pages that saw analytics or advertising before a choice during the crawl are loaded again, alone, in a clean browser, at most this many (0 = no re-check).
+    preconsent_recheck_pages: int = Field(default=10, ge=0, le=200)
 
 
 @lru_cache
