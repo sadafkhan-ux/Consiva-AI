@@ -13,8 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-CATALOGUE_VERSION = "3.0.0"
-METHOD_NAME = "Enterprise DPDP compliance score (method 3.0.0)"
+CATALOGUE_VERSION = "3.0.1"
+METHOD_NAME = "Enterprise DPDP compliance score (method 3.0.1)"
 LEGAL_REVIEW_STATUS = "draft: awaiting a named legal sign-off"
 #: Act sections 3 to 17 (except 6(9)) and Rules 3 and 5 to 16 come into force eighteen months after 13 Nov 2025; s.6(9) and Rule 4 one year after.
 IN_FORCE_MAIN = date(2027, 5, 13)
@@ -241,9 +241,9 @@ PARAMS = (
       "Signals that the site serves children (audience, forms, age fields).", "Decide applicability; if it applies, look for an age gate and parental consent.", "Applies and present.", "Applies, partly.", "Applies, absent."),
     P("K02", "K", "No detrimental processing of children's data", "No processing likely to cause a detrimental effect on a child's well-being.", "s.9(2)", "-", 2, CONDITIONAL,
       "As K01.", "As K01.", "Applies and met.", "Applies and partly met.", "Applies and not met."),
-    P("K03", "K", "No tracking or behavioural monitoring of children", "No tracking or behavioural monitoring of children.", "s.9(3)", "R12", 4, CONDITIONAL,
+    P("K03", "K", "No tracking or behavioural monitoring of children", "No tracking or behavioural monitoring of children.", "s.9(3)", "R12 and Fourth Schedule (exemptions only)", 4, CONDITIONAL,
       "Tracking on child-directed pages.", "As K01.", "Applies and met.", "Applies and partly met.", "Applies and not met."),
-    P("K04", "K", "No targeted advertising at children", "No targeted advertising directed at children.", "s.9(3)", "R12", 4, CONDITIONAL,
+    P("K04", "K", "No targeted advertising at children", "No targeted advertising directed at children.", "s.9(3)", "R12 and Fourth Schedule (exemptions only)", 4, CONDITIONAL,
       "Advertising on child-directed pages.", "As K01.", "Applies and met.", "Applies and partly met.", "Applies and not met."),
     P("K05", "K", "Guardian consent for persons with disability", "Consent of a verified lawful guardian for a person with disability.", "s.9(1)", "R11", 4, CONDITIONAL,
       "Signals the site serves such persons.", "As K01.", "Applies and met.", "Applies and partly met.", "Applies and not met."),
@@ -282,6 +282,24 @@ PARAMS = (
 )
 
 BY_ID: dict[str, P] = {p.id: p for p in PARAMS}
+
+# ---- 3.0.1 (owner's approval of 20 Nov 2026): applicability, duty category and severity of the conditional and contact duties --------------------------------------------
+#: Applicability of a result. Human review is a conditional duty the website evidence cannot settle (for example the Third Schedule user threshold): like Not applicable it is
+#: kept out of the maximum, but it is shown apart, as marks held back until the organisation confirms, never as a confirmed Not applicable.
+APPLICABLE, NOT_APPLICABLE, HUMAN_REVIEW = "applicable", "not_applicable", "human_review"
+#: Which kind of organisation the duty is about (shown in the report's Category column).
+DUTY_CATEGORY = {"K01": "Children", "K02": "Children", "K03": "Children", "K04": "Children", "K05": "Persons with disability",
+                 "RT4": "E-commerce / online gaming / social media (Third Schedule)", "G02": "General (every data fiduciary)"}
+#: The importance of the duty itself, never of the website category. A Fail shows it; a Partial one level lower; a Pass or an informational entry shows none.
+SEVERITY = {"K01": "high", "K03": "high", "K04": "high", "K05": "high", "K02": "medium", "RT4": "medium", "G02": "medium"}
+_LOWER = {"high": "medium", "medium": "low", "low": "low"}
+
+
+def severity_of(pid: str, status: str) -> str | None:
+    base = SEVERITY.get(pid)
+    if base is None or status not in ("fail", "partial"):
+        return None
+    return base if status == "fail" else _LOWER[base]
 TOTAL_WEIGHT = sum(p.weight for p in PARAMS)
 MARK_PER_WEIGHT = 0.25
 

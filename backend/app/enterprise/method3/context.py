@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from app.enterprise.analysis import consolidate as co
 from app.enterprise.analysis import sources as sr
@@ -23,6 +23,7 @@ from app.enterprise.analysis.repo import ChunkRow, EvRow, FrontierRow, SqlRepo
 #: The address of a notice, as a link points at it.
 NOTICE_HREF = re.compile(r"privacy|data-?protection|datenschutz|/legal/privacy", re.I)
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+MAILTO = re.compile(r"""href\s*=\s*["']mailto:([^"'?#\s]+)""", re.I)
 _VISIBLE_STRIP = re.compile(r"<(script|style|template|noscript)\b[^>]*>.*?</\1\s*>|<!--.*?-->", re.I | re.S)
 
 
@@ -67,6 +68,7 @@ class PageHtml:
     notice_link: bool
     emails: set[str]
     links: list[tuple[str, str]] = field(default_factory=list)
+    mailto: set[str] = field(default_factory=set)        # 3.0.1: the addresses the page's mailto: links open (G02 checks the link opens the address shown)
 
 
 @dataclass
@@ -142,7 +144,8 @@ def assemble(evidence: list[EvRow], frontier: list[FrontierRow], chunks: list[Ch
             content = _VISIBLE_STRIP.sub(" ", r.content or "")
             links = anchors(content, r.source_url) if r.source_url in policy_urls else []
             html[r.source_url] = PageHtml(r.source_url, bool(re.search(r"<a\b[^>]*href=\"[^\"]*(privacy|data-?protection)[^\"]*\"", content, re.I)),
-                                          {e.lower() for e in EMAIL.findall(content) if not e.lower().endswith((".png", ".jpg", ".webp", ".svg", ".gif"))}, links)
+                                          {e.lower() for e in EMAIL.findall(content) if not e.lower().endswith((".png", ".jpg", ".webp", ".svg", ".gif"))}, links,
+                                          {unquote(x).strip().lower() for x in MAILTO.findall(content) if EMAIL.fullmatch(unquote(x).strip())})
         elif r.kind == "header" and r.detection_method == "tls_probe":
             tls = sr._json(r.content)
     home = _home_url(root_url, [s.url for s in loaded.texts] + list(five))

@@ -183,7 +183,8 @@ def test_a_silent_policy_is_a_fail_never_unable_to_verify(results):
 
 def test_children_duties_do_not_apply_when_the_policy_says_so(results):
     for pid in ("K01", "K02", "K03", "K04"):
-        assert results[pid].status == NA and "not directed at children" in results[pid].explanation
+        assert results[pid].status == NA and "not for children" in results[pid].explanation and results[pid].applicability == cat.NOT_APPLICABLE
+        assert any("not directed at children" in e for e in results[pid].evidence)
 
 
 def test_tracking_before_a_choice_is_judged_url_by_url(results):

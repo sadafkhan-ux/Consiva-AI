@@ -22,6 +22,8 @@ from app.enterprise.analysis import textrules as tr
 from app.enterprise.method3 import catalogue as cat
 from app.enterprise.method3.context import NOTICE_HREF, M3Context, same_host
 from app.enterprise.method3.engine import FAIL, INFORMATION, NA, PARTIAL, PASS, Result, UrlCheck
+from app.enterprise.method3.site_category import CHILDREN, EDTECH, LABELS, THIRD_SCHEDULE, THRESHOLD_LABEL, SiteCategory
+from app.enterprise.method3.site_category import detect as detect_site
 from app.enterprise.scoring.engine import Assessment
 
 PRIVACY, COOKIE, GRIEVANCE, CONTACT, ABOUT, TERMS = co.PRIVACY, co.COOKIE, co.GRIEVANCE, co.CONTACT, co.ABOUT, co.TERMS
@@ -55,10 +57,11 @@ def blob(f: dict) -> str:
 class A:
     """The assessment run: the context, the 51-parameter results, and the results so far."""
 
-    def __init__(self, m: M3Context, v2: dict[str, Assessment]):
+    def __init__(self, m: M3Context, v2: dict[str, Assessment], site: SiteCategory | None = None):
         self.m, self.v2, self.ctx = m, v2, m.ctx
         self.out: dict[str, Result] = {}
         self.pages = self._pages()
+        self.site = site if site is not None else detect_site(m)
 
     # facts ------------------------------------------------------------------------------------------------------------------------------------------------------------
     def of(self, topic: str, *cats: str, pattern: str | None = None) -> list[dict]:
@@ -122,8 +125,10 @@ class A:
 
     # results ----------------------------------------------------------------------------------------------------------------------------------------------------------
     def put(self, pid: str, status: str, explanation: str, evidence=(), *, refs=(), basis: str = "", urls: list[UrlCheck] | None = None, review: bool = False,
-            limitation: str | None = None, differs: str | None = None) -> None:
+            limitation: str | None = None, differs: str | None = None, applicability: str | None = None) -> None:
         p = cat.BY_ID[pid]
+        if applicability == cat.HUMAN_REVIEW:
+            status, review = NA, True
         if p.kind == cat.INFO:
             status = INFORMATION
         if status == PARTIAL and not p.partial_allowed:
@@ -135,7 +140,8 @@ class A:
             a = self.v2.get(V2_SAME[pid])
             if a is not None and a.state in _V2_STATUS and _V2_STATUS[a.state] != status and status in (PASS, PARTIAL, FAIL, NA):
                 differs = f"Enterprise v2 {a.parameter_id} recorded {a.state.replace('_', ' ')} ({(a.note or '')[:180]})."
-        self.out[pid] = Result(pid, status, explanation, [e for e in evidence if e][:MAX_EV], list(dict.fromkeys(refs))[:12], basis or p.kind, urls or [], review, limitation, differs)
+        self.out[pid] = Result(pid, status, explanation, [e for e in evidence if e][:MAX_EV], list(dict.fromkeys(refs))[:12], basis or p.kind, urls or [], review, limitation, differs,
+                               applicability)
 
     def policy_result(self, pid: str, found_full: list[dict], found_part: list[dict], what: str, *, full_note: str, part_note: str, cats=POL, review: bool = False,
                       extra_ev: list[str] = ()) -> None:
@@ -889,20 +895,7 @@ def retention(a: A) -> None:
               (f"; none for {', '.join(k for k, f in covered if not f)}." if st != PASS else f" ({', '.join(k for k, _ in need)})."),
               [cite(f) for _, f in have[:3]], refs=refs_of([f for _, f in have]), basis="Read from the policy against the data observed")
 
-    v2r1 = a.v2.get("R1")
-    # The Third Schedule applies to e-commerce, online gaming and social media platforms (of the notified size): whether the site IS one decides applicability, never
-    # whether its policy mentions erasing data.
-    platform = [p.url for p in a.ctx.loaded.pages.values() if co._PLATFORM.search(" ".join([p.title, " ".join(p.headings[:8])]))] or \
-        a.sentences(r"\b(we are|is|as) an? (e-?commerce|online gaming|social media) (platform|marketplace|intermediary)", PRIVACY, TERMS, limit=1)
-    if not platform:
-        a.put("RT4", NA, "The site is not shown to be an e-commerce, online gaming or social media platform of the Third Schedule.", basis="Applicability",
-              differs=(f"Enterprise v2 R1 applied the duty because the policy describes erasure ({(v2r1.note or '')[:140]}); the site is not a Third Schedule platform."
-                       if v2r1 is not None and v2r1.state not in ("not_applicable", "not_assessed") else None))
-    elif v2r1 is None or v2r1.state in ("not_applicable", "not_assessed"):
-        a.put("RT4", NA, (v2r1.note if v2r1 is not None and v2r1.state == "not_applicable" else "") or "The site is not shown to be an e-commerce, online gaming or social media platform of the Third Schedule.",
-              basis="Applicability", review=bool(v2r1 is not None and v2r1.confidence == "low"))
-    else:
-        a.put("RT4", _V2_STATUS[v2r1.state], v2r1.note[:300], [v2r1.note[:300]], refs=list(v2r1.evidence_refs), basis="Read from the published policy")
+    rt4(a)
 
     one = [f for f in ret + a.of("log_retention", *cats) if re.search(r"rule 8\(3\)|one year|1 year|12 months|365 days", blob(f), re.I) and
            re.search(r"log|traffic|personal data|processing", blob(f), re.I)]
@@ -910,6 +903,54 @@ def retention(a: A) -> None:
         a.put("RT5", PASS, "Keeping personal data, traffic data and logs for one year is stated.", [cite(f) for f in one[:2]], refs=refs_of(one), basis="Read from the published policy")
     else:
         a.absent("RT5", "keeping personal data, traffic data and logs for one year", cats)
+
+
+_INACTIVE = (r"(inactiv|not (used|accessed|logged in|approached)|dormant|last (use|login|log-in|access)|three years|3 years)[^.]{0,200}(eras|delet)|"
+             r"(eras|delet)[^.]{0,200}(inactiv|not (used|accessed|logged in|approached)|dormant|last (use|login|log-in|access)|three years|3 years)")
+_NOTICE_48 = re.compile(r"48 hours|forty[- ]eight hours", re.I)
+
+
+def rt4(a: A) -> None:
+    """RT4, 3.0.1. Rule 8(1) and the Third Schedule cover only e-commerce entities, online gaming intermediaries and social media intermediaries with at least the notified
+    number of registered users in India. What the site IS decides applicability, never whether its policy mentions erasing data; and the user threshold is a fact the website
+    rarely shows, so an unconfirmed threshold is human review, never a Pass, a Fail or a confirmed Not applicable."""
+    v2r1 = a.v2.get("R1")
+    site = a.site
+    plat = [c for c in THIRD_SCHEDULE if site.has(c)]
+    if not plat:
+        weak = [LABELS[c] for c in THIRD_SCHEDULE if c in site.possible]
+        a.put("RT4", NA, f"Not a Third Schedule platform: the site reads as {LABELS[site.primary].lower()}, not as an e-commerce, online gaming or social media platform"
+              + (f" (only one weak signal of {', '.join(weak)}, not enough to apply the duty)" if weak else "") + ".",
+              [e for c in THIRD_SCHEDULE for e in site.evidence_for(c, 2)], basis="Applicability", applicability=cat.NOT_APPLICABLE,
+              differs=(f"Enterprise v2 R1 applied the duty because the policy describes erasure ({(v2r1.note or '')[:140]}); the site is not a Third Schedule platform."
+                       if v2r1 is not None and v2r1.state not in ("not_applicable", "not_assessed") else None))
+        return
+    ev = [e for c in plat for e in site.evidence_for(c, 3)]
+    labels = " and ".join(LABELS[c] for c in plat)
+    over = [(c, u) for c in plat for u in site.users_stated if u["count"] >= THIRD_SCHEDULE[c]]
+    if not over:
+        stated = site.users_stated[0] if site.users_stated else None
+        a.put("RT4", NA, f"The site reads as {labels}, a kind of platform the Third Schedule covers, but the website does not show that it has at least "
+              f"{' / '.join(THRESHOLD_LABEL[c] for c in plat)} registered users in India"
+              + (f' (it states "{stated["text"]}", which does not settle the number of registered users in India)' if stated else "")
+              + ". The organisation must confirm its registered users in India; until then this duty's marks are held back.",
+              ev + ([f'Stated on {stated["url"]}: "{stated["text"]}"'] if stated else []), basis="Applicability", applicability=cat.HUMAN_REVIEW,
+              limitation="The Third Schedule threshold (registered users in India) is not visible from a website; the organisation's own figure decides it.")
+        return
+    c, u = over[0]
+    sents = a.sentences(_INACTIVE, PRIVACY, TERMS, limit=4)
+    full = [f for f in sents if _NOTICE_48.search(f["quote"])]
+    basis_ev = [f'{LABELS[c]}; the site states "{u["text"]}" ({u["url"]}), at or above the {THRESHOLD_LABEL[c]} threshold'] + ev[:2]
+    lim = "The user figure is as the site states it; that it counts registered users in India is for the organisation to confirm."
+    if full:
+        a.put("RT4", PASS, "Erasure after the Third Schedule period of inactivity, with 48 hours' notice before erasure, is stated.", [cite(f) for f in full[:2]] + basis_ev,
+              refs=refs_of(full), basis="Read from the published policy", review=True, limitation=lim, applicability=cat.APPLICABLE)
+    elif sents:
+        a.put("RT4", PARTIAL, "Erasure after a period of inactivity is stated, but not the 48 hours' notice before erasure (Rule 8(2)).", [cite(f) for f in sents[:2]] + basis_ev,
+              refs=refs_of(sents), basis="Read from the published policy", review=True, limitation=lim, applicability=cat.APPLICABLE)
+    else:
+        a.put("RT4", FAIL, "The policy says nothing about erasing the data of people who have not used the service for the Third Schedule period, or about the 48 hours' notice.",
+              basis_ev + [f"Policy read: {x}" for x in a.policy_urls()[:2]], basis="Read from the published policy", review=True, limitation=lim, applicability=cat.APPLICABLE)
 
 
 def contact(a: A) -> None:
@@ -928,10 +969,19 @@ def contact(a: A) -> None:
         if h is None:
             return None, ""
         mine = h.emails & emails if emails else {e for e in h.emails if e.split("@")[-1].endswith((urlparse(a.m.root_url).hostname or "").removeprefix("www."))}
-        return (PASS, f"contact shown ({sorted(mine)[0]})") if mine else (FAIL, "no privacy contact on the page")
+        if not mine:
+            return FAIL, "no privacy contact on the page"
+        shown = sorted(mine)[0]
+        # 3.0.1: the contact must be usable. Where the page links the address (mailto:), the link must open an address shown, not a different one.
+        if h.mailto and not (h.mailto & mine) and not (h.mailto & emails):
+            return PARTIAL, f"contact shown ({shown}), but its link opens a different address ({sorted(h.mailto)[0]})"
+        return PASS, f"contact shown ({shown})" + (" and linked" if h.mailto & mine else "")
     st, res = a.per_url("G02", g02)
-    a.put("G02", st, f"{A.summary(res)}: the privacy contact" + (f" ({', '.join(sorted(emails)[:2])})" if emails else "") + " is shown on the page.",
-          [f"{r.url}: {r.note}" for r in res if r.status != PASS][:MAX_EV], urls=res, basis="Observed URL by URL (page HTML)")
+    a.put("G02", st, f"{A.summary(res)}: the privacy contact" + (f" ({', '.join(sorted(emails)[:2])})" if emails else "") + " is shown on the page"
+          + ("" if emails else "; no contact address of the site's own was identified") + ".",
+          [f"{r.url}: {r.note}" for r in res if r.status != PASS][:MAX_EV], urls=res, basis="Observed URL by URL (page HTML)",
+          applicability=cat.APPLICABLE if st != NA else None,
+          limitation="Rule 9 also requires the contact in every reply to a person's communication; replies cannot be seen from the website.")
 
     mech = a.of("grievance_mechanism", *cats, pattern=r"grievance|complain|redress|officer|concern|escalat")
     with_contact = sorted([f for f in mech if tr.EMAIL.search(blob(f)) or tr.PHONE.search(blob(f)) or re.search(r"officer|https?://", blob(f), re.I)],
@@ -1084,30 +1134,95 @@ def cross_checks(a: A) -> None:
                   [f"{r.url}: {r.note}" for r in res if r.status == FAIL][:MAX_EV], urls=res, basis="Observed URL by URL against the policy")
 
 
-def conditional(a: A) -> None:
-    k1 = a.v2.get("K1")
+def _children_applicability(a: A) -> tuple[str, str, list[str], list[str]]:
+    """K01-K04 (3.0.1): applicable, not applicable or human review, with the reason, the evidence and the evidence ids.
+
+    Applicable: something shows the site itself serves children (a parent or guardian field, its own statement, or a children's service read from two kinds of signal).
+    Not applicable: nothing shows it, or the policy excludes children and nothing contradicts it. Human review: the signals disagree (the policy excludes children but a form or
+    statement says otherwise) or are too weak to decide (an EdTech site that does not say whether its learners are under 18, one signal only). An EdTech site is never assumed
+    to process children's data, and missing information is never taken as proof either way."""
+    site, k1 = a.site, a.v2.get("K1")
     directed = a.of("children_directed", PRIVACY, TERMS)
-    not_directed = a.of("children_not_directed", PRIVACY, TERMS)
-    guardian = [pg["url"] for pg in a.pages.values() for f in pg["forms"] for x in f.get("fields") or []
-                if co._GUARDIAN_FIELD.search(" ".join(str(x.get(k) or "") for k in ("label", "name", "id", "placeholder")))]
     # a statement about the site's OWN audience; terms that tell business customers how to handle their users' children's data, or an industry offering, are not one
     directed = [f for f in directed if not re.search(r"customer|you have obtained|submitted|submit|industry|offering|edtech|on (its|their) behalf|processor|platform to process", blob(f), re.I)]
-    if guardian:
-        applies, why = True, f"a form asks for a parent or guardian ({guardian[0]})"
-    elif not_directed:
-        applies, why = False, f"The policy says the site is not directed at children: {cite(not_directed[0])}"
-    elif directed:
-        applies, why = True, f"the site says it serves children: {cite(directed[0])}"
+    not_directed = a.of("children_not_directed", PRIVACY, TERMS)
+    excl = [cite(not_directed[0])] if not_directed else [f'{x["url"]}: "{x["text"]}"' for x in site.not_for_children[:1]]
+    refs = refs_of(not_directed + directed)
+    strong, ev = [], []
+    if site.guardian_fields:
+        strong.append(f"a form asks for a parent or guardian ({site.guardian_fields[0]})")
+    if directed:
+        strong.append("the site says it serves children")
+        ev.append(cite(directed[0]))
+    if site.has(CHILDREN):
+        strong.append(f"the site reads as a children's service ({site.confidence[CHILDREN]} confidence)")
+        ev += site.evidence_for(CHILDREN, 3)
+    weak = []
+    if not strong:
+        if CHILDREN in site.possible:
+            weak.append("one signal of a children's service only")
+            ev += site.evidence_for(CHILDREN, 2)
+        if site.has(EDTECH):
+            weak.append("the site reads as EdTech / education and does not show whether its learners are under 18")
+            ev += site.evidence_for(EDTECH, 2)
+        if k1 is not None and k1.state not in ("not_applicable", "not_assessed"):
+            weak.append(f"the 51-parameter reading applied the duty ({(k1.note or '')[:140]})")
+    if strong and not excl:
+        why = "; ".join(strong)
+        return cat.APPLICABLE, why[0].upper() + why[1:] + ".", ev, refs
+    if strong:
+        return (cat.HUMAN_REVIEW, f"The evidence disagrees: {'; '.join(strong)}, but the policy says the site is not for children. The organisation must confirm whether it "
+                "processes children's data; until then these marks are held back.", ev + excl, refs)
+    if excl:
+        return (cat.NOT_APPLICABLE, "The policy says the site is not for children, and no form, page or statement shows otherwise"
+                + (" (weaker signals were seen, listed in the evidence, but they are not enough to apply the duty)" if weak else "") + ".",
+                excl + [f"Weaker signal: {x}" for x in weak] + ev, refs)
+    if weak:
+        return (cat.HUMAN_REVIEW, f"Not settled by the website: {'; '.join(weak)}. The organisation must confirm whether it processes the personal data of anyone under 18; "
+                "until then these marks are held back.", ev, refs)
+    return (cat.NOT_APPLICABLE, f"No evidence of children's data: the site reads as {LABELS[site.primary].lower()}, and no form, page or statement shows it serves anyone "
+            "under 18.", ev, refs)
+
+
+def k05(a: A) -> None:
+    """K05 (3.0.1): consent of a verified lawful guardian for a person with disability (s.9(1), Rule 11). A policy clause that repeats the law is not a sign that such persons
+    use the site; a guardian field together with the site's own words about persons with disability is."""
+    site, k2 = a.site, a.v2.get("K2")
+    dis = [f'{x["url"]}: "{x["text"]}"' for x in site.disability[:1]]
+    if site.guardian_fields and site.disability:
+        sents = a.sentences(r"lawful guardian|guardian of (a |the )?person with", PRIVACY, TERMS, limit=3)
+        ver = [f for f in sents if re.search(r"verif", f["quote"], re.I)]
+        why = f"Applies because a form asks for a guardian ({site.guardian_fields[0]}) and the site refers to persons with disability"
+        if ver:
+            a.put("K05", PASS, f"{why}; verified consent of the lawful guardian is described.", [cite(f) for f in ver[:2]] + dis, refs=refs_of(ver),
+                  basis="Read from the published policy", review=True, applicability=cat.APPLICABLE)
+        elif sents:
+            a.put("K05", PARTIAL, f"{why}; the guardian's consent is described, but not how the guardian is verified (Rule 11).", [cite(f) for f in sents[:2]] + dis,
+                  refs=refs_of(sents), basis="Read from the published policy", review=True, applicability=cat.APPLICABLE)
+        else:
+            a.put("K05", FAIL, f"{why}; the policy says nothing about the lawful guardian's verified consent.", dis, basis="Read from the published policy", review=True,
+                  applicability=cat.APPLICABLE)
+    elif k2 is not None and k2.state not in ("not_applicable", "not_assessed"):
+        a.put("K05", NA, f"Not settled by the website: the 51-parameter reading applied this duty ({(k2.note or '')[:160]}), but no form or page of the site shows persons with "
+              "disability who have a lawful guardian use it. The organisation must confirm; until then these marks are held back.", [k2.note[:300]] + dis,
+              refs=list(k2.evidence_refs), basis="Applicability", applicability=cat.HUMAN_REVIEW)
     else:
-        applies = k1 is not None and k1.state not in ("not_applicable", "not_assessed")
-        why = (k1.note if k1 is not None and k1.note else "No page, form or statement shows the site serves children.")
-    if not applies:
-        v2_applied = k1 is not None and k1.state not in ("not_applicable", "not_assessed")
+        a.put("K05", NA, "No evidence that persons with disability who have a lawful guardian use the site: no guardian form" +
+              (" (the policy mentions such persons, but a clause that restates the law is not a sign they use the site)" if dis else "") + ".",
+              dis, basis="Applicability", applicability=cat.NOT_APPLICABLE)
+
+
+def conditional(a: A) -> None:
+    applicability, why, ev, refs = _children_applicability(a)
+    k1 = a.v2.get("K1")
+    v2_applied = k1 is not None and k1.state not in ("not_applicable", "not_assessed")
+    if applicability != cat.APPLICABLE:
         for pid in ("K01", "K02", "K03", "K04"):
-            a.put(pid, NA, why, [cite(not_directed[0])] if not_directed else [], refs=refs_of(not_directed), basis="Applicability",
-                  review=pid == "K01" and bool(k1 is not None and (k1.confidence == "low" or v2_applied)),
-                  differs=(f"Enterprise v2 K1 read the site as serving children ({(k1.note or '')[:160]}); the policy says it is not, and no page, form or statement shows otherwise."
-                           if pid == "K01" and v2_applied else None))
+            a.put(pid, NA, why, ev, refs=refs, basis="Applicability", applicability=applicability,
+                  limitation=("Whether the organisation processes children's data is a fact about its users, not always visible on the website."
+                              if applicability == cat.HUMAN_REVIEW else None),
+                  differs=(f"Enterprise v2 K1 read the site as serving children ({(k1.note or '')[:160]}); no page, form or statement of the site itself shows it does."
+                           if pid == "K01" and v2_applied and applicability == cat.NOT_APPLICABLE else None))
     else:
         cats = (PRIVACY, TERMS)
         consent_f = a.of("children_consent", *cats, pattern=r"parent|guardian|verifiable|consent")
@@ -1119,12 +1234,11 @@ def conditional(a: A) -> None:
                         part_note="", cats=cats, review=True)
         a.policy_result("K03", notrack, [], "not tracking or monitoring children", full_note="The policy says children are not tracked or monitored.", part_note="", cats=cats, review=True)
         a.policy_result("K04", noads, [], "no targeted advertising at children", full_note="The policy says no advertising is targeted at children.", part_note="", cats=cats, review=True)
-    k2 = a.v2.get("K2")
-    if k2 is None or k2.state in ("not_applicable", "not_assessed"):
-        a.put("K05", NA, (k2.note if k2 is not None else "") or "Nothing indicates the site serves persons with disability who have a lawful guardian.", basis="Applicability")
-    else:
-        a.put("K05", _V2_STATUS.get(k2.state, FAIL), k2.note[:300], [k2.note[:300]], refs=list(k2.evidence_refs), basis="Read from the published policy")
-
+        for pid in ("K01", "K02", "K03", "K04"):
+            r = a.out[pid]
+            r.applicability = cat.APPLICABLE
+            r.evidence = ([f"Applies because {why[0].lower() + why[1:]}"] + r.evidence)[:MAX_EV]
+    k05(a)
     s1 = a.v2.get("S1")
     if s1 is None or s1.state in ("not_applicable", "not_assessed"):
         note = "The organisation is not shown to be notified as a Significant Data Fiduciary (a notification cannot be seen on a website; to be confirmed by the organisation)."
@@ -1254,9 +1368,9 @@ def technical(a: A) -> None:
               limitation="Confirm in the site code that submission is handled by a script (POST/fetch), or set method=\"post\"." if nget else None)
 
 
-def assess(m: M3Context, v2: list[Assessment]) -> list[Result]:
+def assess(m: M3Context, v2: list[Assessment], site: SiteCategory | None = None) -> list[Result]:
     """All 96 results, in catalogue order. A rule that fails on unexpected data is reported as a Fail with the error and marked for review; it never stops the others."""
-    a = A(m, {x.parameter_id: x for x in v2})
+    a = A(m, {x.parameter_id: x for x in v2}, site)
     for step in (notice, consent, lawful, fiduciary, retention, contact, rights, transfers, cross_checks, conditional, technical):
         try:
             step(a)

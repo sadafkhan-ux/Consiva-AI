@@ -16,6 +16,7 @@ from app.enterprise import store
 from app.enterprise.method3 import context
 from app.enterprise.method3.assess import assess
 from app.enterprise.method3.engine import score
+from app.enterprise.method3.site_category import detect as detect_site
 from app.enterprise.models import EntMethod3Result
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,9 @@ async def calculate(scan_id: uuid.UUID, *, as_of: date | None = None) -> dict:
     m = await context.load(scan_id, as_of=as_of)
     async with async_session_factory() as db:
         v2 = await store.load_current(db, scan_id)
-    out = score(assess(m, v2), as_of=as_of)
+    site = detect_site(m)
+    out = score(assess(m, v2, site), as_of=as_of)
+    out["site_category"] = site.to_dict()          # 3.0.1: the apparent category and the signals behind it (additive field)
     out["scan"] = {"scan_id": str(scan_id), "website_url": m.root_url, "pages_inspected": len({u for _, n in m.loaded.networks for u in [n.get("page_url")] if u})}
     return out
 

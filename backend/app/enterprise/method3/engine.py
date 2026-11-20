@@ -1,9 +1,10 @@
-"""Method 3.0.0 scoring: one result per parameter in, a reproducible score out. A pure function of its inputs.
+"""Method 3.0.x scoring: one result per parameter in, a reproducible score out. A pure function of its inputs.
 
 The rules (approved by the owner on 20 November 2026):
   * Pass earns 100% of a parameter's marks, Partial 50% (only where the catalogue writes a Partial criterion), Fail 0.
   * Not applicable (a duty the organisation does not have, or a check with nothing on the site to apply to) is REMOVED FROM THE MAXIMUM, with the reason. It is never a Pass or a Fail.
   * Information (E01) earns and loses nothing.
+  * 3.0.1: a conditional duty the website cannot settle is Human review: kept out of the maximum like Not applicable, but listed apart as marks held back.
   * There is no "unable to verify": every applicable parameter ends Pass, Partial or Fail. A duty internal to the organisation is judged from what the published policy says, and
     says so ("internal records not inspected").
   * score = marks earned / applicable maximum x 100, rounded to one decimal place (half up). Categories use the same formula within the category.
@@ -18,7 +19,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.enterprise.method3.catalogue import BY_ID, CATALOGUE_VERSION, CATS, CONDITIONAL, INFO, LEGAL_REVIEW_STATUS, METHOD_NAME, PARAMS
+from app.enterprise.method3.catalogue import (
+    APPLICABLE, BY_ID, CATALOGUE_VERSION, CATS, CONDITIONAL, DUTY_CATEGORY, HUMAN_REVIEW, INFO, LEGAL_REVIEW_STATUS, METHOD_NAME, NOT_APPLICABLE, PARAMS, severity_of,
+)
 
 PASS, PARTIAL, FAIL, NA, INFORMATION = "pass", "partial", "fail", "not_applicable", "information"
 STATUSES = (PASS, PARTIAL, FAIL, NA, INFORMATION)
@@ -51,6 +54,7 @@ class Result:
     review: bool = False                                       # a person should confirm it
     limitation: str | None = None                              # what the evidence cannot show (records not inspected, a page off the scanned host, ...)
     differs: str | None = None                                 # where it differs from the 51-parameter result for the same scan, and why
+    applicability: str | None = None                           # 3.0.1: applicable | not_applicable | human_review (None: worked out from the status)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -83,6 +87,12 @@ def check(results: list[Result]) -> dict[str, Result]:
             raise MethodError(f"{r.parameter_id}: only E01 is information")
         if r.status == PARTIAL and not p.partial_allowed:
             raise MethodError(f"{r.parameter_id}: the catalogue writes no Partial criterion, so Partial is not a valid result")
+        if r.applicability not in (None, APPLICABLE, NOT_APPLICABLE, HUMAN_REVIEW):
+            raise MethodError(f"{r.parameter_id}: unknown applicability {r.applicability!r}")
+        if r.applicability == HUMAN_REVIEW and (r.status != NA or not r.review):
+            raise MethodError(f"{r.parameter_id}: human review of applicability holds the marks back (status Not applicable) and is flagged for review")
+        if r.applicability == APPLICABLE and r.status == NA:
+            raise MethodError(f"{r.parameter_id}: an applicable duty is Pass, Partial or Fail")
         if r.status == NA and not r.explanation.strip():
             raise MethodError(f"{r.parameter_id}: Not applicable needs the reason")
         if r.status in CREDIT and not (r.evidence or r.urls or r.explanation.strip()):
@@ -107,9 +117,11 @@ def score(results: list[Result], *, as_of: date) -> dict:
             app_max += mx
         elif r.status == NA:
             na_max += mx
+        appl = r.applicability or (NOT_APPLICABLE if r.status == NA else APPLICABLE)
         lines.append({"parameter_id": p.id, "category": p.cat, "name": p.name, "kind": p.kind, "act": p.act, "rule": p.rule, "weight": p.weight, "max": float(mx),
                       "earned": None if e is None else float(e), "status": r.status, "status_label": LABEL[r.status],
-                      "in_force": None if p.in_force is None else p.in_force.isoformat(), **{k: v for k, v in r.to_dict().items() if k != "parameter_id" and k != "status"}})
+                      "severity": severity_of(p.id, r.status), "duty_category": DUTY_CATEGORY.get(p.id),
+                      "in_force": None if p.in_force is None else p.in_force.isoformat(), **{k: v for k, v in r.to_dict().items() if k not in ("parameter_id", "status", "applicability")}, "applicability": appl})
     value = _round1(earned * 100 / app_max) if app_max else None
     cats = {}
     for k, label in CATS.items():
@@ -127,4 +139,7 @@ def score(results: list[Result], *, as_of: date) -> dict:
         "counts": dict(Counter(x["status"] for x in lines)), "parameters": len(lines), "scored_parameters": sum(1 for p in PARAMS if p.weight),
         "review": [x["parameter_id"] for x in lines if x["review"]], "categories": cats, "lines": lines,
         "conditional_not_applicable": [x["parameter_id"] for x in lines if x["status"] == NA and BY_ID[x["parameter_id"]].kind == CONDITIONAL],
+        # 3.0.1: of the marks kept out of the maximum, those held back until the organisation confirms whether the duty applies (never a confirmed Not applicable)
+        "human_review_pending": [x["parameter_id"] for x in lines if x["applicability"] == HUMAN_REVIEW],
+        "human_review_max": float(sum((Decimal(str(x["max"])) for x in lines if x["applicability"] == HUMAN_REVIEW), Decimal("0"))),
     }

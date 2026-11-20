@@ -225,6 +225,16 @@ def chip(s: str) -> str:
     return f'<span class="chip {CHIP.get(s, "na")}">{e(STATUS_LABEL.get(s, s))}</span>'
 
 
+APPL_LABEL = {"applicable": "<b>Applicable</b>", "not_applicable": "Not applicable", "human_review": "<span class='flag'>Human review</span>"}
+SEV_LABEL = {"high": "<b style='color:#991b1b'>High</b>", "medium": "<b style='color:#92400e'>Medium</b>", "low": "<span style='color:#555'>Low</span>"}
+_CAT_LABEL = {"general": "General business", "ecommerce": "E-commerce", "gaming": "Online gaming", "social_media": "Social media", "edtech": "EdTech / education",
+              "children": "Children's service"}
+
+
+def cat_label(c: str) -> str:
+    return _CAT_LABEL.get(c, c)
+
+
 def legal(p) -> str:
     return "<br>".join(e(x) for x in (p.act, p.rule) if x and x != "-")
 
@@ -285,7 +295,7 @@ def render_html(d: M3ReportData) -> str:
 Crawl {_ist(d.scan.get('started_at'))} → {_ist(d.scan.get('completed_at'))} · analysis completed {_ist(d.scan.get('analysis_completed_at'))}<br>
 Scan {e(d.scan_id[:8])} · Assessed as of {e(r['as_of'])} · {'Readiness view: most duties apply from 13 May 2027' if r['basis'] == 'readiness' else 'Assessment of duties in force'}</div></div>
 <div class="score"><div class="big">{fm(r['score'])}</div><div class="sub">/ 100 DPDP compliance score</div>
-<div style="margin-top:6px;font-size:8.4pt"><b>{fm(r['marks_earned'])}</b> of <b>{fm(r['applicable_max'])}</b> applicable marks<br><span class="small">{fm(r['not_applicable_max'])} marks not applicable, removed from the maximum</span></div></div></div>
+<div style="margin-top:6px;font-size:8.4pt"><b>{fm(r['marks_earned'])}</b> of <b>{fm(r['applicable_max'])}</b> applicable marks<br><span class="small">{fm(r['not_applicable_max'])} marks not applicable, removed from the maximum{f" (of them {fm(r.get('human_review_max'))} held back for human review)" if r.get('human_review_max') else ""}</span></div></div></div>
 <div class="note">Automated assessment of the website's own evidence (pages, cookies, requests, forms, consent tests and published policies) under method {e(r['catalogue_version'])}: {r['parameters']} parameters,
 one per independently assessable requirement of the DPDP Act, 2023 and the DPDP Rules, 2025. Legal readings: {e(r['legal_review_status'])}. A readiness assessment, not a certification of compliance and not legal advice.</div>
 <div class="tiles">
@@ -475,9 +485,43 @@ one per independently assessable requirement of the DPDP Act, 2023 and the DPDP 
 
     # ---- 10. conditional
     w('<h2><span class="n">10</span>Conditional obligations</h2><p>These duties apply only to some organisations. Where one does not apply it is removed from the maximum with the reason below; it is never counted as passed or failed.</p>')
+    site_cat = r.get("site_category")
+    if site_cat:
+        conf = site_cat.get("confidence") or {}
+        others = ", ".join(f"{cat_label(c)} ({conf.get(c, '')})" for c in site_cat.get("categories") or [])
+        weak = ", ".join(cat_label(c) for c in site_cat.get("possible") or [])
+        sigs = "".join(f"<li>{e(s['category'].replace('_', ' '))}: {e(s['kind'])}, {e(s['detail'])}</li>" for s in (site_cat.get("signals") or [])[:8])
+        users = "; ".join(f'"{e(u["text"])}"' for u in (site_cat.get("users_stated") or [])[:2])
+        w(f"<div class='note'><b>Website category: {e(site_cat.get('label', ''))}</b>"
+          + (f" · with enough evidence: {others}" if others else "") + (f" · possible (one signal only, never applied alone): {e(weak)}" if weak else "")
+          + (f" · user numbers stated on the site: {users}" if users else "")
+          + "<br><span class='small'>Read from the site's own pages, forms, third-party services and policy text; a category needs two kinds of signal or the site's own statement. "
+            "It decides which conditional duties apply; it never changes the severity of a finding.</span>" + (f"<ul class='small'>{sigs}</ul>" if sigs else "") + "</div>")
+    hr = r.get("human_review_pending") or []
+    if hr:
+        w(f"<p><b>{fm(r.get('human_review_max'))} marks held back</b> ({', '.join(hr)}): the website does not settle whether these duties apply. They are kept out of the maximum, "
+          "like a duty that does not apply, but they are not a confirmed Not applicable: the organisation must confirm, and the score is recalculated.</p>")
+    w("<h3>Applicability, severity and status</h3><table class='fixed'><colgroup><col style='width:12%'><col style='width:10%'><col style='width:12%'><col style='width:8%'>"
+      "<col style='width:10%'><col style='width:18%'><col style='width:20%'><col style='width:10%'></colgroup><thead><tr><th>ID</th><th>Category</th><th>Applicability</th>"
+      "<th>Severity</th><th>Status</th><th>Evidence</th><th>Explanation</th><th>Act / Rule</th></tr></thead><tbody>")
+    for pid in ("K01", "K02", "K03", "K04", "K05", "RT4", "G02"):
+        p, x = cat.BY_ID[pid], lines[pid]
+        appl = x.get("applicability") or ("not_applicable" if x["status"] == "not_applicable" else "applicable")
+        dcat = x.get("duty_category") or ""
+        if pid == "RT4" and site_cat and any(c in (site_cat.get("categories") or []) for c in ("ecommerce", "gaming", "social_media")):
+            dcat = ", ".join(cat_label(c) for c in site_cat["categories"] if c in ("ecommerce", "gaming", "social_media")) + " (Third Schedule)"
+        sev = x.get("severity")
+        status = "Informational" if x["status"] == "not_applicable" else x["status_label"]
+        ev = "<br>".join(e(v) for v in (x.get("evidence") or [])[:3]) or "<span class='small'>none</span>"
+        w(f"<tr><td><b>{pid}</b><br><span class='small'>{e(p.name)}</span></td><td>{e(dcat)}</td><td>{APPL_LABEL.get(appl, e(appl))}</td>"
+          f"<td>{SEV_LABEL.get(sev, '<span class=small>None</span>')}</td><td>{chip(x['status']) if x['status'] != 'not_applicable' else e(status)}</td>"
+          f"<td class='small'>{ev}</td><td>{e(x['explanation'])}</td><td>{legal(p)}</td></tr>")
+    w("</tbody></table><p class='small'>Severity is the importance of the duty itself (High: significant statutory risk; Medium: a meaningful gap to correct; Low: a minor "
+      "presentation or disclosure issue). A Fail shows the duty's severity, a Partial one level lower; a Pass or an informational entry has none.</p>")
+    w("<h3>Other conditional obligations</h3>")
     w("<table><thead><tr><th>ID</th><th>Obligation</th><th>Act / Rule</th><th class='num'>Marks</th><th>Applies?</th><th>Reason</th></tr></thead><tbody>")
     for p in cat.PARAMS:
-        if p.kind in (cat.CONDITIONAL, cat.INFO):
+        if p.kind in (cat.CONDITIONAL, cat.INFO) and p.id not in ("K01", "K02", "K03", "K04", "K05", "RT4"):
             x = lines[p.id]
             w(f"<tr><td>{p.id}</td><td>{e(p.name)}</td><td>{legal(p)}</td><td class='num'>{fm(p.max_marks)}</td><td>{chip(x['status'])}{'<span class=flag>human review</span>' if x['review'] else ''}</td>"
               f"<td>{e(x['explanation'])}</td></tr>")

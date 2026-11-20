@@ -1,6 +1,6 @@
 # Enterprise DPDP scoring method
 
-**Current method: 3.0.0** (96 parameters, approved by the owner on 20 November 2026; section below). Method 2.0.0 (51 parameters, further down) still runs beside it for the same
+**Current method: 3.0.1** (96 parameters, approved by the owner on 20 November 2026; 3.0.1 adds website-category applicability, see below). Method 2.0.0 (51 parameters, further down) still runs beside it for the same
 scan, keeps its API (`/assessment`, `/parameters`, `/score/history`) unchanged, and is what method 3.0.0 is compared against in its report's Appendix B.
 
 ## Method 3.0.0 (current)
@@ -29,13 +29,46 @@ Rules worth knowing when reading a result:
 * Every result lists its evidence (a verbatim quote with its URL, or an observation) and, for URL-wise parameters, the result on every URL.
 * Where the extracted facts miss a statement the policy pages plainly hold, the page's own sentence is quoted (`A.sentences`); a policy that is silent is a Fail, marked for review when
   part of it could not be analysed.
-* Children's duties apply when the site says it serves children or a form asks for a guardian; a policy saying it is not directed at children makes them Not applicable.
+* Children's duties, RT4 and G02: see "3.0.1" below.
 * A cookie is declared when its name or the service it belongs to is named; a third party is named by its product name (Google Ads), not only its parent (Google).
 * Tracking seen before a choice on a page that did not repeat it in clean reloads (`consent_test:pre_consent_recheck`) counts as Pass on that page, marked for review.
 
 What the build added around it: the crawl keeps up to three example request URLs per third-party host on each page (`examples` in the network evidence); appends the site footer to
 the page text when the text left it out; and, after the last page, re-checks up to `ENTERPRISE_PRECONSENT_RECHECK_PAGES` (default 10) pages that tracked before a choice in a clean
 browser. A rights and grievance page at an address such as `/privacy-rights-and-grievance` or `/rights-request` is now read as a grievance page.
+
+### 3.0.1: conditional duties by website category (owner's approval, 20 Nov 2026)
+
+Universal: the same rules for every website, nothing specific to one site. Version `ent-dpdp-3.0.1`; the parameters, weights and scoring rules are unchanged (catalogue
+fingerprint unchanged). Code: `method3/site_category.py` (new), `assess.py` (`_children_applicability`, `conditional`, `k05`, `rt4`, `contact`), `engine.py`, `catalogue.py`
+(`DUTY_CATEGORY`, `SEVERITY`, `severity_of`). Tests: `backend/tests/enterprise/test_enterprise_method3_conditional.py`.
+
+**Website category.** `site_category.detect` reads the site's own evidence: page addresses, titles and headings; form fields; third-party services (payment gateways, store
+platforms); and the text of the notice, terms, about, contact and home pages (never blog or news pages, which describe other companies). Categories: general business,
+e-commerce, online gaming, social media, EdTech, children's service. A category needs two kinds of signal or the site's own statement ("we are an online marketplace"); one signal
+alone is listed as "possible" and never applies a duty. E-commerce also needs a shop page or the site's own statement (a payment gateway on a services site is not a store). An
+EdTech site is not a children's service unless something shows children use it.
+
+**Applicability** (a new field on every result): `applicable`, `not_applicable`, or `human_review`. Human review is a conditional duty the website cannot settle. Like Not
+applicable it is kept out of the maximum, but it is listed apart (`human_review_pending`, `human_review_max`) as marks held back until the organisation confirms. It is never a
+confirmed Not applicable, a Pass or a Fail.
+
+| Duty | Applicable | Not applicable | Human review |
+|---|---|---|---|
+| K01-K04 children (s.9, Rules 10, 12) | A parent or guardian field, the site's own statement that it serves children, or a children's service read from two kinds of signal (and the policy does not exclude children) | Nothing shows the site serves under-18s; or the policy excludes children and nothing contradicts it | The evidence disagrees (guardian field against a policy that excludes children), or is too weak (EdTech that does not say whether learners are under 18; one signal; the 51-parameter reading only) |
+| K05 disability (s.9(1), Rule 11) | A guardian field and the site's own words about persons with disability | No guardian form (a policy clause that restates the law is not a sign) | The 51-parameter reading applied it but no form or page shows it |
+| RT4 Third Schedule (s.8(8), Rule 8(1)-(2)) | E-commerce or social media with a stated figure of at least 2 crore users, or online gaming with at least 50 lakh; the policy is then read for erasure after inactivity and 48 hours' notice (always flagged for review: the figure must be registered users in India) | Not an e-commerce, gaming or social media platform | One of those platforms, size not shown (a figure below the threshold does not prove the size either) |
+| G02 contact (s.8(9), Rule 9) | Every site, URL by URL. A page passes when it shows the site's own contact address in visible text; a `mailto:` link that opens a different address is Partial on that page | Never | Never |
+
+**Severity** (K01-K05, RT4, G02): the importance of the duty itself, never the website category. High: K01, K03, K04, K05. Medium: K02, RT4, G02. A Fail shows it, a Partial one
+level lower, a Pass or an informational entry none.
+
+**Report:** section 10 shows the website category with its signals, the marks held back for human review, and an eight-column table (ID, Category, Applicability, Severity,
+Status, Evidence, Explanation, Act / Rule). The score box notes the held-back marks. K03 and K04 now cite s.9(3) as the duty and Rule 12 with the Fourth Schedule as the
+exemptions only.
+
+Checked on the stored scans (test database, no new scan): consiva.ai 77.1 and swaransoft.com 71.7, unchanged. Both read as general business; children's duties and RT4
+are not applicable, with the reason; G02 is applicable.
 
 ## Method 2.0.0 (still calculated; its API is unchanged)
 
