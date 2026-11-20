@@ -39,7 +39,7 @@ def header_footer(scan_id: str, site: str) -> tuple[str, str]:
     return header, footer
 
 
-async def _print(html: str, header: str, footer: str) -> bytes:
+async def _print(html: str, header: str, footer: str, margin: dict | None = None) -> bytes:
     args = ["--no-sandbox"] if hasattr(os, "geteuid") and os.geteuid() == 0 else []
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=True, args=args)
@@ -56,19 +56,21 @@ async def _print(html: str, header: str, footer: str) -> bytes:
             page = await context.new_page()
             await page.set_content(html, wait_until="load")
             await page.emulate_media(media="print")
-            return await page.pdf(format="A4", margin=MARGIN, print_background=True, display_header_footer=True, header_template=header, footer_template=footer, prefer_css_page_size=False)
+            return await page.pdf(format="A4", margin=margin or MARGIN, print_background=True, display_header_footer=True, header_template=header, footer_template=footer, prefer_css_page_size=False)
         finally:
             await browser.close()
 
 
-async def render_pdf(html: str, *, timeout_s: float = PDF_TIMEOUT_S) -> tuple[bytes, int]:
-    """(the PDF bytes, its page count). Raises PdfRenderError if Chromium fails or the time limit passes."""
+async def render_pdf(html: str, *, timeout_s: float = PDF_TIMEOUT_S, header: str | None = None, footer: str | None = None, margin: dict | None = None) -> tuple[bytes, int]:
+    """(the PDF bytes, its page count). Raises PdfRenderError if Chromium fails or the time limit passes. A report with its own running header and footer (the method 3 report)
+    passes them, and its margins; otherwise the shared ones are used."""
     scan_id, site = _identity(html)
     # The identity was escaped for HTML attributes; unescape once so the template escaping is not doubled.
     from html import unescape
-    header, footer = header_footer(unescape(scan_id), unescape(site))
+    if header is None or footer is None:
+        header, footer = header_footer(unescape(scan_id), unescape(site))
     try:
-        data = await asyncio.wait_for(_print(html, header, footer), timeout_s)
+        data = await asyncio.wait_for(_print(html, header, footer, margin), timeout_s)
     except asyncio.TimeoutError as exc:
         raise PdfRenderError(f"printing the report took longer than {timeout_s:g} seconds") from exc
     except Exception as exc:

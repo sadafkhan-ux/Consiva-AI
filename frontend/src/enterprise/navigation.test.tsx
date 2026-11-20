@@ -17,27 +17,30 @@ describe("navigation", () => {
   });
   afterEach(() => cleanup());
 
-  it("has an Enterprise DPDP item that opens the new console, next to the existing Enterprise item", async () => {
+  it("has one Enterprise item, and it opens the Enterprise DPDP agent (owner's decision, 20 Nov 2026)", async () => {
     render(<App />);
-    expect(screen.getByRole("button", { name: "Enterprise" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Enterprise DPDP" }));
+    expect(screen.queryByRole("button", { name: "Enterprise DPDP" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Enterprise" }));
     expect(await screen.findByTestId("enterprise-workspace")).toBeInTheDocument();
     expect(window.location.hash).toBe("#/dpdp");
   });
 
-  it("leaves the existing items working: Enterprise is still the uncapped 5-page screen and Privacy Policy is the 5-page one", async () => {
+  it("leaves Privacy Policy as the 5-page screen and the other items working", async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Enterprise" }));
-    expect(screen.getByTestId("consent-stub")).toHaveTextContent("whole-site");
     fireEvent.click(screen.getByRole("button", { name: "Privacy Policy" }));
     expect(screen.getByTestId("consent-stub")).toHaveTextContent("five-page");
     fireEvent.click(screen.getByRole("button", { name: "Breach" }));
     expect(await screen.findByText("breach")).toBeInTheDocument();
   });
 
+  it("an old #/enterprise address opens the Enterprise DPDP agent", async () => {
+    window.history.replaceState(null, "", "/#/enterprise");
+    render(<App />);
+    expect(await screen.findByTestId("enterprise-workspace")).toBeInTheDocument();
+  });
+
   it("reloads onto the new console from its address", () => {
     expect(agentFromHash("#/dpdp")).toBe("dpdp");
     expect(agentFromHash("#/dpdp/abc-123")).toBe("dpdp");
-    expect(agentFromHash("#/enterprise")).toBe("enterprise");
   });
 });

@@ -44,7 +44,11 @@ export default function App() {
 function Console() {
   const [profile, setProfile] = useState<Profile | null>(() => getProfile());
   // The active agent lives in the address (#/dsr/...), so a reload returns to it instead of to Consent.
-  const [agent, setAgentState] = useState<Agent>(() => agentFromHash(window.location.hash) ?? "consent");
+  // An old #/enterprise address opens the Enterprise item, which is now the Enterprise DPDP agent.
+  const [agent, setAgentState] = useState<Agent>(() => {
+    const a = agentFromHash(window.location.hash) ?? "consent";
+    return a === "enterprise" ? "dpdp" : a;
+  });
   function setAgent(next: Agent) {
     setAgentState(next);
     writeHash(`#/${next}`);
@@ -112,8 +116,9 @@ function Console() {
     { id: "dsr", label: "DSR" },
     { id: "breach", label: "Breach" },
     { id: "regwatch", label: "Regulatory Watch" },
-    { id: "enterprise", label: "Enterprise" },
-    { id: "dpdp", label: "Enterprise DPDP" },
+    // One Enterprise item (owner's decision, 20 Nov 2026): it opens the Enterprise DPDP agent (96 parameters, method 3). The whole-site 5-page screen is no longer
+    // in the menu; the 5-page agent itself (Privacy Policy) is unchanged.
+    { id: "dpdp", label: "Enterprise" },
     ...(profile.role === "admin" ? [{ id: "system" as const, label: "System health" }] : []),
   ];
 
@@ -177,7 +182,6 @@ function Console() {
 
         <div className="shell-content">
           {agent === "consent" && <ConsentAgentView />}
-          {agent === "enterprise" && <ConsentAgentView wholeSite />}
           {agent === "system" && <Suspense fallback={<div className="muted" style={{ padding: 16 }}>Loading…</div>}><SystemHealth /></Suspense>}
           <Suspense fallback={<div className="muted" style={{ padding: 16 }}>Loading…</div>}>
             {agent === "ropa" && <RopaDashboard />}

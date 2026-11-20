@@ -319,11 +319,21 @@ describe("Enterprise DPDP workspace", () => {
   it("requires the attestation before a scan can be started", async () => {
     on(/\/enterprise\/dashboard\/summary/, () => dashboard([]));
     await mount();
-    const start = screen.getByRole("button", { name: "Start scan" });
+    const start = screen.getByRole("button", { name: "Scan Whole Website" });
     fireEvent.change(screen.getByLabelText("Website address"), { target: { value: "example.com" } });
     expect(start).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox"));
     expect(start).toBeEnabled();
     expect(await screen.findByText(/No scans yet/)).toBeInTheDocument();
+  });
+});
+
+describe("withDefaultScheme", () => {
+  it("adds https:// when no scheme is typed and keeps an explicit one", async () => {
+    const { withDefaultScheme } = await import("./EnterpriseWorkspace");
+    expect(withDefaultScheme("consiva.ai")).toBe("https://consiva.ai");
+    expect(withDefaultScheme(" www.consiva.ai/about ")).toBe("https://www.consiva.ai/about");
+    expect(withDefaultScheme("http://consiva.ai")).toBe("http://consiva.ai");
+    expect(withDefaultScheme("")).toBe("");
   });
 });

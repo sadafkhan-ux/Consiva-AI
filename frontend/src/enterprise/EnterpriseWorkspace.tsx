@@ -1,10 +1,17 @@
-import { useState } from "react";
-import { enterpriseApi, enterpriseErrorMessage, siteHost } from "../api/enterprise";
+import { useEffect, useState } from "react";
+import { enterpriseApi, enterpriseErrorMessage, enterpriseScans, siteHost, type ScanListItem } from "../api/enterprise";
+import { dateTime } from "./format";
 import { getProfile } from "../api/auth";
 import { writeHash } from "../components/dsrRoute";
 import { PolicyKbPanel } from "./PolicyKbPanel";
 import { ScanDashboard } from "./ScanDashboard";
 import { ScanPage } from "./ScanPage";
+
+/** An address typed without http:// or https:// is scanned over https by default; an explicit scheme is kept. */
+export function withDefaultScheme(u: string): string {
+  const t = u.trim();
+  return !t || t.includes("://") ? t : `https://${t.replace(/^\/+/, "")}`;
+}
 
 function scanFromHash(): string | null {
   const m = /^#\/dpdp\/([0-9A-Za-z-]{1,64})$/.exec(window.location.hash);
@@ -25,7 +32,7 @@ function NewScan({ onStarted }: { onStarted: (id: string) => void }) {
     setError(null);
     setBusy(true);
     try {
-      const made = await enterpriseApi.createScan(url.trim(), authorized);
+      const made = await enterpriseApi.createScan(withDefaultScheme(url), authorized);
       onStarted(made.scan_id);
     } catch (err) {
       setError(enterpriseErrorMessage(err));
@@ -58,17 +65,17 @@ function NewScan({ onStarted }: { onStarted: (id: string) => void }) {
     }
   }
   return (
-    <form className="scan-form" onSubmit={start} data-testid="new-scan">
-      <div className="field grow">
-        <label htmlFor="dpdp-url">Website address</label>
-        <input id="dpdp-url" type="text" placeholder="https://example.com" value={url} onChange={(e) => setUrl(e.target.value)} autoComplete="off" />
+    <form onSubmit={start} data-testid="new-scan">
+      <div className="scan-form">
+        <input id="dpdp-url" type="text" aria-label="Website address" placeholder="https://example.com" value={url} onChange={(e) => setUrl(e.target.value)}
+          onBlur={() => setUrl((u) => withDefaultScheme(u))} autoComplete="off" disabled={busy} />
+        <label>
+          <input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} disabled={busy} />
+          I own / am authorized to scan this domain
+        </label>
+        <button type="submit" disabled={busy || !authorized || url.trim().length === 0}>{busy ? "Starting…" : "Scan Whole Website"}</button>
       </div>
-      <label className="checkbox-row">
-        <input type="checkbox" checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} />
-        <span>I own this website or am permitted to scan it.</span>
-      </label>
-      <button type="submit" disabled={busy || !authorized || url.trim().length === 0}>{busy ? "Starting…" : "Start scan"}</button>
-      <p className="hint">Only an organisation administrator can start a full-site scan. Where the server requires it, the domain must also pass DNS ownership verification.</p>
+      <div className="hint">SSRF-protected — private/internal/loopback addresses are always rejected regardless of this checkbox. Only an organisation administrator can start a full-site scan.</div>
       {error && <div className="banner banner-error" role="alert" data-testid="enterprise-error">{error}</div>}
       {(needsVerification || txt) && (
         <div data-testid="dpdp-verify">
@@ -95,18 +102,86 @@ export function EnterpriseWorkspace() {
     if (!id) setNonce((n) => n + 1);
   }
 
-  if (scanId) return <div className="section" data-testid="enterprise-workspace"><ScanPage scanId={scanId} canReview={canReview} onBack={() => open(null)} /></div>;
-
   return (
-    <div className="section" data-testid="enterprise-workspace">
-      <h2>Enterprise DPDP</h2>
-      <p className="muted">
-        Full-website DPDP readiness assessment. It reads the whole site, not five pages, and reports what it observed. It is a readiness assessment, not a certification.
-      </p>
-      <NewScan onStarted={open} />
-      <div style={{ marginTop: 20 }}><ScanDashboard onOpen={open} refreshKey={String(nonce)} /></div>
-      <h3 style={{ marginTop: 24 }}>Policy knowledge base</h3>
-      <PolicyKbPanel />
+    <div className="usage-layout" data-testid="enterprise-workspace">
+      <div className="usage-main">
+        {scanId ? <ScanPage scanId={scanId} canReview={canReview} onBack={() => open(null)} /> : (
+          <>
+            <div className="agent-intro">
+              <h1>Enterprise Scanner</h1>
+              <div className="tagline">
+                Enter a website address. Every page that can be reached is scanned, not just five. Each of the 96 DPDP requirements gets its own Pass, Partial or Fail with
+                its marks, URL by URL, and you get a detailed PDF report.
+              </div>
+            </div>
+            <NewScan onStarted={open} />
+            <div style={{ marginTop: 20 }}><ScanDashboard onOpen={open} refreshKey={String(nonce)} /></div>
+            <h3 style={{ marginTop: 24 }}>Policy knowledge base</h3>
+            <PolicyKbPanel />
+          </>
+        )}
+      </div>
+      <EarlierScans current={scanId} onOpen={open} refreshKey={nonce} />
     </div>
+  );
+}
+
+const STATUS_CHIP: Record<string, string> = { completed: "completed", failed: "failed", blocked: "failed", cancelled: "failed" };
+
+/** The right-hand panel, as on the earlier scanner screen: every Enterprise scan with its site, address, time, status and result, newest first. */
+function EarlierScans({ current, onOpen, refreshKey }: { current: string | null; onOpen: (id: string) => void; refreshKey: number }) {
+  const [open, setOpen] = useState(true);
+  const [items, setItems] = useState<ScanListItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [limit, setLimit] = useState(10);
+  const [total, setTotal] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => enterpriseScans.list({ limit }).then((p) => { if (alive) { setItems(p.items); setTotal(p.total); setError(null); } })
+      .catch((err) => { if (alive) setError(enterpriseErrorMessage(err)); });
+    void load();
+    const t = window.setInterval(load, 15_000);                 // a running scan's status and result update without a reload
+    return () => { alive = false; window.clearInterval(t); };
+  }, [limit, refreshKey, current]);
+
+  if (!open) {
+    return <aside className="usage-panel collapsed" data-testid="earlier-scans"><button className="usage-toggle" onClick={() => setOpen(true)}>Earlier scans ‹</button></aside>;
+  }
+  return (
+    <aside className="usage-panel" data-testid="earlier-scans" aria-label="Earlier Enterprise scans">
+      <div className="usage-head">
+        <h3>Enterprise scans</h3>
+        <span className="usage-chip">{total} {total === 1 ? "scan" : "scans"}</span>
+        <button className="usage-toggle" onClick={() => setOpen(false)} aria-label="Hide the scans panel">›</button>
+      </div>
+      <h4>Earlier scans</h4>
+      {error && <p className="usage-error">{error}</p>}
+      {items && items.length === 0 && <p className="usage-muted">No Enterprise scans yet.</p>}
+      {!items && !error && <p className="usage-muted">Reading the scans…</p>}
+      <ul className="usage-history">
+        {(items ?? []).map((s) => {
+          const host = siteHost(s.website_url) || s.website_url;
+          const chip = STATUS_CHIP[s.status] ?? "running";
+          return (
+            <li key={s.scan_id} className={`${current === s.scan_id ? "current " : ""}clickable`} data-testid="earlier-scan" tabIndex={0}
+                onClick={(e) => { if (!(e.target as HTMLElement).closest("button")) onOpen(s.scan_id); }}
+                onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onOpen(s.scan_id); } }}>
+              <div className="usage-history-top"><b title={s.website_url}>{host}</b><span className={`usage-chip usage-chip-${chip}`}>{s.status}</span></div>
+              <div className="usage-muted small usage-url-wrap">{s.website_url}</div>
+              <div className="usage-muted small">{dateTime(s.created_at)}{s.completed_at ? ` → ${dateTime(s.completed_at)}` : ""}</div>
+              <div className="usage-muted small usage-mono" title="Scan ID">{s.scan_id}</div>
+              <div className="usage-history-nums">
+                {s.analysis_status && <span>analysis {s.analysis_status}</span>}
+                {s.score != null && <span>score {s.score}</span>}
+                {s.coverage != null && <span>coverage {s.coverage}%</span>}
+              </div>
+              <button className="usage-link" onClick={() => onOpen(s.scan_id)} aria-label={`Open the Enterprise scan of ${host}`}>Open scan</button>
+            </li>
+          );
+        })}
+      </ul>
+      {items && total > items.length && <button type="button" className="usage-more" onClick={() => setLimit((n) => n + 10)}>Show older scans</button>}
+    </aside>
   );
 }

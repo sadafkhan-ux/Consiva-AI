@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -65,7 +66,8 @@ async def _generate_method3(db: AsyncSession, scan_id: uuid.UUID) -> EntReport |
         return None
     try:
         data = await m3report.gather(db, scan_id)
-        pdf, pages = await render_pdf(m3report.render_html(data))
+        header, footer = m3report.header_footer(urlparse(data.site).netloc or data.site, data.result.get("catalogue_version", ""), data.scan_id)
+        pdf, pages = await render_pdf(m3report.render_html(data), header=header, footer=footer, margin=m3report.MARGIN)
     except Exception as exc:
         logger.exception("enterprise method 3.0.0 report for scan %s failed", scan_id)
         await db.rollback()

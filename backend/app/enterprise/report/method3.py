@@ -167,7 +167,7 @@ def _classify_host(host: str, site: str) -> tuple[str, str]:
 CSS = """
 @page { size: A4; }
 * { box-sizing: border-box; }
-body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 8.6pt; color: #1b1d2e; margin: 0; }
+body { font-family: 'Segoe UI', 'Selawik', Arial, sans-serif; font-size: 8.6pt; color: #1b1d2e; margin: 0; }
 h1 { font-size: 22pt; margin: 0 0 4px; } h2 { font-size: 13pt; margin: 14px 0 6px; color: #1b1d2e; display:flex; align-items:center; gap:8px; page-break-after: avoid; }
 h2 .n { background:#6d4aff; color:#fff; border-radius:50%; width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center; font-size:10pt; }
 h3 { font-size: 10pt; margin: 10px 0 4px; color:#4b2fd6; page-break-after: avoid; }
@@ -278,6 +278,61 @@ ACTIONS = {
 }
 
 
+#: Page-level DPDP checks shown URL by URL (the demonstration report's columns).
+URL_COLS = ["N02", "C01", "C12", "N13", "C02", "C03", "G02"]
+#: What each reason a URL was not inspected means, in plain words.
+EXCLUDED_MEANING = {
+    "excluded_external_domain": "Another website (social networks, partners, tools): outside the exact-host scope.",
+    "excluded_subdomain": "Another host of the same organisation (for example www. or app.): outside the exact-host scope.",
+    "query_variant": "The same page with tracking or filter parameters.",
+    "soft_404": "Answered 200 but the page says it does not exist.",
+    "duplicate": "The same page under another address.",
+    "robots_txt": "The site's robots.txt asks crawlers not to open it.",
+    "non_html": "Not a web page (an image, an archive or another file).",
+    "limit": "Beyond the scan's page limit.",
+}
+_NA_DUTY = {"K": "children and persons with disability", "S": "Significant Data Fiduciary", "M": "Consent Manager", "RT": "Third Schedule", "E": "exemptions"}
+
+
+def _font_faces() -> str:
+    """Selawik (Microsoft's open-licence stand-in for Segoe UI, SIL OFL; LICENSE-Selawik.txt beside the files), embedded so the PDF looks the same on any server."""
+    import base64
+    from pathlib import Path
+    out = []
+    for f, weight in (("selawk.ttf", 400), ("selawksb.ttf", 600), ("selawkb.ttf", 700)):
+        p = Path(__file__).with_name("fonts") / f
+        if p.exists():
+            out.append(f"@font-face {{ font-family: 'Selawik'; font-weight: {weight}; src: url(data:font/ttf;base64,{base64.b64encode(p.read_bytes()).decode()}) format('truetype'); }}")
+    return "\n".join(out)
+
+
+_FONTS = _font_faces()
+
+
+def header_footer(site_host: str, version: str, scan_id: str) -> tuple[str, str]:
+    """The running header and footer of the demonstration report (Chromium templates; their text is escaped)."""
+    font = "font-family:'Segoe UI',Selawik,Arial,sans-serif;"
+    header = (f'<div style="width:100%;{font}font-size:7pt;padding:0 12mm;display:flex;justify-content:space-between;color:#444">'
+              f'<span><b style="color:#4b2fd6">Consiva.ai</b> · Enterprise DPDP Compliance Assessment · {e(site_host)}</span>'
+              f'<span style="color:#4b2fd6;font-weight:700">Method {e(version)} · Scan {e(scan_id[:8])}</span></div>')
+    footer = (f'<div style="width:100%;{font}font-size:6.5pt;padding:0 12mm;display:flex;justify-content:space-between;color:#777">'
+              '<span>Automated readiness assessment against the DPDP Act, 2023 and DPDP Rules, 2025. Informational, not legal advice.</span>'
+              '<span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span></div>')
+    return header, footer
+
+
+#: The demonstration report's page margins.
+MARGIN = {"top": "18mm", "bottom": "14mm", "left": "12mm", "right": "12mm"}
+
+
+def _named_list(expl: str, marker: str) -> set[str]:
+    """The names a cross-check lists after "not declared:" / "not named:" in its explanation."""
+    m = re.search(re.escape(marker) + r"\s*(.+?)\.?$", expl or "")
+    if not m:
+        return set()
+    return {re.sub(r"\s*\(.*?\)$", "", x).strip().lower() for x in re.split(r",\s*(?![^()]*\))", m.group(1)) if x.strip()}
+
+
 def render_html(d: M3ReportData) -> str:
     r = d.result
     lines = {x["parameter_id"]: x for x in r["lines"]}
@@ -288,23 +343,31 @@ def render_html(d: M3ReportData) -> str:
     scored = [x for x in r["lines"] if x["status"] in ("pass", "partial", "fail")]
     pages_inspected = len(d.pages)
     fr_status = Counter(x["status"] for x in d.frontier)
+    as_of = datetime.fromisoformat(r["as_of"]).strftime("%d %b %Y") if r.get("as_of") else ""
 
-    # ---- page 1
+    # ---- page 1: executive summary
     w(f"""<div class="hero"><div><div style="font-size:9pt;opacity:.8">ENTERPRISE DPDP COMPLIANCE ASSESSMENT · METHOD {e(r['catalogue_version'])}</div>
 <h1>{e(site_host)}</h1><div class="meta">Whole-site deep scan, exact host only ({e(d.site)})<br>
 Crawl {_ist(d.scan.get('started_at'))} → {_ist(d.scan.get('completed_at'))} · analysis completed {_ist(d.scan.get('analysis_completed_at'))}<br>
-Scan {e(d.scan_id[:8])} · Assessed as of {e(r['as_of'])} · {'Readiness view: most duties apply from 13 May 2027' if r['basis'] == 'readiness' else 'Assessment of duties in force'}</div></div>
+Scan run {e(d.scan_id[:8])} · Assessment date {e(as_of)} · {'Readiness view: most duties apply from 13 May 2027' if r['basis'] == 'readiness' else 'Assessment of duties in force'}</div></div>
 <div class="score"><div class="big">{fm(r['score'])}</div><div class="sub">/ 100 DPDP compliance score</div>
-<div style="margin-top:6px;font-size:8.4pt"><b>{fm(r['marks_earned'])}</b> of <b>{fm(r['applicable_max'])}</b> applicable marks<br><span class="small">{fm(r['not_applicable_max'])} marks not applicable, removed from the maximum{f" (of them {fm(r.get('human_review_max'))} held back for human review)" if r.get('human_review_max') else ""}</span></div></div></div>
-<div class="note">Automated assessment of the website's own evidence (pages, cookies, requests, forms, consent tests and published policies) under method {e(r['catalogue_version'])}: {r['parameters']} parameters,
-one per independently assessable requirement of the DPDP Act, 2023 and the DPDP Rules, 2025. Legal readings: {e(r['legal_review_status'])}. A readiness assessment, not a certification of compliance and not legal advice.</div>
+<div style="margin-top:6px;font-size:8.4pt"><b>{fm(r['marks_earned'])}</b> of <b>{fm(r['applicable_max'])}</b> applicable marks<br><span class="small">{fm(r['not_applicable_max'])} marks not applicable, removed from the
+maximum{f" (of them {fm(r.get('human_review_max'))} held back for human review)" if r.get('human_review_max') else ""}</span></div></div></div>
+<div class="note"><b>Enterprise DPDP compliance report.</b> Automated assessment of the website's own evidence (pages, cookies, requests, forms, consent tests and published policies) under
+method {e(r['catalogue_version'])}: {r['parameters']} parameters, one per independently assessable requirement of the DPDP Act, 2023 and the DPDP Rules, 2025. Legal readings:
+{e(r['legal_review_status'])}. A readiness assessment, not a certification of compliance and not legal advice.</div>
 <div class="tiles">
-<div class="tile"><b>{r['parameters']}</b>parameters in the catalogue</div><div class="tile"><b>{len(scored)}</b>assessed and scored</div>
-<div class="tile"><b style="color:#166534">{c.get('pass', 0)}</b>Pass</div><div class="tile"><b style="color:#92400e">{c.get('partial', 0)}</b>Partial</div>
-<div class="tile"><b style="color:#991b1b">{c.get('fail', 0)}</b>Fail</div><div class="tile"><b style="color:#555">{c.get('not_applicable', 0)}</b>not applicable (+{c.get('information', 0)} information)</div></div>
+<div class="tile"><b>{r['parameters']}</b>parameters in the catalogue</div>
+<div class="tile"><b>{len(scored)}</b>assessed and scored</div>
+<div class="tile"><b style="color:#166534">{c.get('pass', 0)}</b>Pass</div>
+<div class="tile"><b style="color:#92400e">{c.get('partial', 0)}</b>Partial</div>
+<div class="tile"><b style="color:#991b1b">{c.get('fail', 0)}</b>Fail</div>
+<div class="tile"><b style="color:#555">{c.get('not_applicable', 0)}</b>not applicable (+{c.get('information', 0)} information)</div></div>
 <div class="tiles">
-<div class="tile"><b>{len(d.frontier)}</b>URLs discovered</div><div class="tile"><b>{pages_inspected}</b>web pages inspected</div>
-<div class="tile"><b>{len(d.documents)}</b>documents read</div><div class="tile"><b>{sum(len(g['pages']) for g in d.forms)}</b>forms read (read-only)</div>
+<div class="tile"><b>{len(d.frontier)}</b>URLs discovered</div>
+<div class="tile"><b>{pages_inspected}</b>web pages inspected</div>
+<div class="tile"><b>{len(d.documents)}</b>PDF documents read</div>
+<div class="tile"><b>{sum(len(g['pages']) for g in d.forms)}</b>forms read (read-only)</div>
 <div class="tile"><b>{sum(1 for k in ('accept', 'reject', 'withdrawal') if (d.consent.get(k) or {}).get('tested'))}</b>consent states tested</div>
 <div class="tile"><b>{len(r['review'])}</b>results flagged for human review</div></div>
 <h2>Category-wise compliance</h2><table><thead><tr><th>Category</th><th class="num">Parameters</th><th class="num">Max marks</th><th class="num">Earned</th><th>Compliance</th><th>Pass / Partial / Fail / N.A.</th></tr></thead><tbody>""")
@@ -316,47 +379,33 @@ one per independently assessable requirement of the DPDP Act, 2023 and the DPDP 
           f"<td>{bar}</td><td>{cn.get('pass', 0)} / {cn.get('partial', 0)} / {cn.get('fail', 0)} / {cn.get('not_applicable', 0) + cn.get('information', 0)}</td></tr>")
     w(f"<tr><td><b>Total</b></td><td class='num'><b>{r['parameters']}</b></td><td class='num'><b>{fm(r['applicable_max'])}</b><span class='small'> / 100</span></td><td class='num'><b>{fm(r['marks_earned'])}</b></td>"
       f"<td><b>{fm(r['score'])}%</b></td><td></td></tr></tbody></table>")
-    gaps = sorted([x for x in scored if x["status"] != "pass"], key=lambda x: -(x["max"] - x["earned"]))[:8]
+    gaps = sorted([x for x in scored if x["status"] != "pass"], key=lambda x: (-(x["max"] - x["earned"]), x["parameter_id"]))[:8]
     w("<h2>Major compliance gaps (by marks lost)</h2><table><thead><tr><th>ID</th><th>Parameter</th><th>Act / Rule</th><th class='num'>Lost</th><th>Status</th></tr></thead><tbody>")
     for x in gaps:
         p = cat.BY_ID[x["parameter_id"]]
         w(f"<tr><td>{p.id}</td><td>{e(p.name)}<div class='small'>{e(x['explanation'])}</div></td><td>{legal(p)}</td><td class='num'>{fm(x['max'] - x['earned'])}</td><td>{chip(x['status'])}</td></tr>")
     w("</tbody></table>")
 
-    # ---- 1. method and transparency
+    # ---- 1. how the score is calculated
     acts = sorted({int(m) for p in cat.PARAMS for m in re.findall(r"s\.(\d+)", p.act)})
     rules = sorted({int(m) for p in cat.PARAMS for m in re.findall(r"R(\d+)", p.rule)})
-    recheck = d.consent.get("pre_consent_recheck") or {}
-    excluded = Counter((x.get("status_reason") or "").split(":")[0] for x in d.frontier if x["status"] == "excluded")
-    w(f"""<h2 class="pb"><span class="n">1</span>How the score is calculated, and what the scan covered</h2>
-<div class="grid2"><div class="box"><h3>Marks</h3><p>Each of the {r['parameters']} parameters is one independently assessable requirement. Its weight reflects its importance; weights total 400 and
-<b>one weight point = 0.25 marks</b>, so the maximum marks total exactly <b>100</b> and no parameter loses its relative weight.</p>
-<table><thead><tr><th>Status</th><th>Marks awarded</th></tr></thead><tbody><tr><td>{chip('pass')}</td><td>100% of the parameter's marks</td></tr><tr><td>{chip('partial')}</td><td>50%</td></tr>
-<tr><td>{chip('fail')}</td><td>0</td></tr><tr><td>{chip('not_applicable')}</td><td>Removed from the maximum, with the reason</td></tr></tbody></table></div>
+    na_kinds = [lbl for k, lbl in _NA_DUTY.items() if (r["categories"].get(k) or {}).get("counts", {}).get("not_applicable")]
+    w(f"""<h2 class="pb"><span class="n">1</span>How the score is calculated</h2>
+<div class="grid2"><div class="box"><h3>Marks</h3><p>Each of the {r['parameters']} parameters is one independently assessable requirement. Its weight reflects its importance (directly observed core consent and notice duties weigh most; supporting technical signals least).
+Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks across all parameters total exactly <b>100</b> and no parameter loses its relative weight.</p>
+<table><thead><tr><th>Status</th><th>Marks awarded</th></tr></thead><tbody><tr><td>{chip('pass')}</td><td>100% of the parameter's marks</td></tr><tr><td>{chip('partial')}</td><td>50%</td></tr><tr><td>{chip('fail')}</td><td>0</td></tr>
+<tr><td>{chip('not_applicable')}</td><td>Removed from the maximum, with the reason documented (conditional duties only)</td></tr></tbody></table></div>
 <div class="box"><h3>Score</h3><p><b>Score = marks earned ÷ applicable maximum × 100</b><br>= {fm(r['marks_earned'])} ÷ {fm(r['applicable_max'])} × 100 = <b>{fm(r['score'])}</b></p>
-<p>The applicable maximum is 100 minus the marks of parameters that do not apply ({fm(r['not_applicable_max'])} here). Category percentages use the same formula.</p>
-<h3>URL-wise parameters</h3><p>Where a requirement applies to every page or form, every applicable URL is assessed: <b>Pass</b> if every URL meets it, <b>Partial</b> if at least half do,
-<b>Fail</b> if fewer than half do. One good page never earns the marks alone.</p></div></div>
-<div class="grid2" style="margin-top:8px"><div class="box"><h3>No "unable to verify"</h3><p>Every applicable parameter receives Pass, Partial or Fail. A duty internal to the organisation
-(security measures, breach procedure, contracts, records) is judged from what the published policy states, and the row says so: <i>"Published policy; internal records not inspected"</i>.</p>
-<h3>Coverage of the law</h3><p><b>{len(acts)} Act sections:</b> {', '.join('s.' + str(a) for a in acts)}<br><b>{len(rules)} Rules:</b> {', '.join('Rule ' + str(x) for x in rules)}<br>
-<b>Schedules:</b> First (Consent Managers), Third (erasure periods)</p></div>
-<div class="box"><h3>Scan transparency</h3><table><tbody>
-<tr><td>URLs discovered</td><td class="num">{len(d.frontier)}</td></tr><tr><td>Pages inspected one at a time</td><td class="num">{fr_status.get('done', 0)}</td></tr>
-<tr><td>Failed or not reached</td><td class="num">{fr_status.get('failed', 0) + fr_status.get('pending', 0)}</td></tr>
-<tr><td>Excluded (another host, duplicate, variant)</td><td class="num">{fr_status.get('excluded', 0)}</td></tr>
-<tr><td>Consent tests</td><td class="num">{', '.join(k for k in ('accept', 'reject', 'reject_persistence', 'withdrawal', 'purposes') if (d.consent.get(k) or {}).get('tested')) or 'none'}</td></tr>
-<tr><td>Clean reloads of pages that tracked before a choice</td><td class="num">{len(recheck.get('pages') or []) if recheck else 'not run'}</td></tr>
-<tr><td>Crawl</td><td class="num">{_ist(d.scan.get('started_at'))} → {_ist(d.scan.get('completed_at'))}</td></tr>
-<tr><td>Analysis</td><td class="num">{_ist(d.scan.get('analysis_started_at'))} → {_ist(d.scan.get('analysis_completed_at'))}</td></tr></tbody></table>
-<p class="small">Pages were found from the homepage's links, every page's links and the sitemap, on the submitted host only; privacy pages were inspected first, then other legal pages, then the rest.
-{('Excluded: ' + ', '.join(f'{v} {k.replace("_", " ")}' for k, v in excluded.most_common())) if excluded else ''}</p></div></div>""")
+<p>The applicable maximum is 100 minus the marks of parameters that do not apply ({fm(r['not_applicable_max'])} here{': ' + ', '.join(na_kinds) + ' duties' if na_kinds else ''}). Category percentages use the same formula within the category.</p>
+<h3>URL-wise parameters</h3><p>Where a requirement applies to every page or form, every applicable URL is assessed and the result is: <b>Pass</b> if every URL meets it, <b>Partial</b> if at least half do, <b>Fail</b> if fewer than half do. One good page never earns the marks alone.</p></div></div>
+<div class="grid2" style="margin-top:8px"><div class="box"><h3>No “unable to verify”</h3><p>Every applicable parameter receives Pass, Partial or Fail. Where a duty is internal to the organisation (security measures, breach procedure, contracts, records), it is judged from what the published policy states and the row says so: <i>“Published policy; internal records not inspected”</i>. A statement in the policy is not proof the practice exists, and its absence is reported as a missing statement.</p></div>
+<div class="box"><h3>Coverage of the law</h3><p><b>{len(acts)} Act sections:</b> {', '.join('s.' + str(a) for a in acts)}<br><b>{len(rules)} Rules:</b> {', '.join('Rule ' + str(x) for x in rules)}<br><b>Schedules:</b> First (Consent Managers), Third (erasure periods)<br>
+<b>{r['parameters']} parameters</b>, {r['scored_parameters']} scored, 1 information only. Applicability: Act ss.3-17 (except 6(9)) and Rules 3, 5-16 apply from 13 May 2027; s.6(9) and Rule 4 from 13 Nov 2026 — results are readiness findings, not violations.</p></div></div>""")
 
-    # ---- 2. complete parameter table
+    # ---- 2. complete parameter-wise marking
     w('<h2 class="pb"><span class="n">2</span>Complete parameter-wise marking</h2><p>Every parameter in the catalogue, in category order. Evidence is quoted exactly or is a stored observation; each item names its URL.</p>')
-    w("<table class='fixed'><colgroup><col style='width:6%'><col style='width:17%'><col style='width:9%'><col style='width:5%'><col style='width:6%'><col style='width:8%'>"
-      "<col style='width:28%'><col style='width:21%'></colgroup><thead><tr><th style='width:6%'>ID</th><th style='width:17%'>Compliance parameter</th><th style='width:9%'>DPDP Act / Rule</th><th class='num' style='width:5%'>Max</th>"
-      "<th class='num' style='width:5%'>Earned</th><th style='width:7%'>Status</th><th style='width:29%'>Evidence</th><th style='width:22%'>Explanation</th></tr></thead><tbody>")
+    w("<table class='fixed'><colgroup><col style='width:6%'><col style='width:17%'><col style='width:9%'><col style='width:5%'><col style='width:6%'><col style='width:7%'><col style='width:28%'><col style='width:22%'></colgroup>"
+      "<thead><tr><th>ID</th><th>Compliance parameter</th><th>DPDP Act / Rule</th><th class='num'>Max</th><th class='num'>Earned</th><th>Status</th><th>Evidence</th><th>Explanation</th></tr></thead><tbody>")
     for k, label in cat.CATS.items():
         cc = r["categories"][k]
         w(f"<tr class='cathead'><td colspan='3'>{e(label)}</td><td class='num'>{fm(cc['max_all'])}</td><td class='num'>{fm(cc['earned'])}</td><td colspan='3'>"
@@ -366,116 +415,144 @@ one per independently assessable requirement of the DPDP Act, 2023 and the DPDP 
             ev = "".join(f"<div>{e(str(i)[:420])}</div>" for i in x["evidence"][:4]) or ("<div class='small'>Per-URL results in section 3.</div>" if x["urls"] else "")
             flags = ("<span class='flag'>human review</span>" if x["review"] else "") + ("<span class='flag'>records not inspected</span>" if p.kind == cat.RECORDS else "") + \
                     ("<span class='flag'>differs from v2</span>" if x.get("differs") else "")
-            expl = e(x["explanation"]) + (f"<div class='small'>{e(x['limitation'])}</div>" if x.get("limitation") and x["limitation"] != _REC else "")
+            expl = e(x["explanation"]) + (f"<div class='small'>{e(x['limitation'])}</div>" if x.get("limitation") else "")
             w(f"<tr><td><b>{p.id}</b></td><td>{e(p.name)}<div class='small'>{e(p.kind)}</div>{flags}</td><td>{legal(p)}</td><td class='num'>{fm(p.max_marks)}</td><td class='num'>{fm(x['earned'])}</td>"
               f"<td>{chip(x['status'])}</td><td class='ev'>{ev}</td><td>{expl}</td></tr>")
     w(f"<tr class='cathead'><td colspan='3'>Total</td><td class='num'>100</td><td class='num'>{fm(r['marks_earned'])}</td><td colspan='3'>of {fm(r['applicable_max'])} applicable → score {fm(r['score'])}</td></tr></tbody></table>")
 
     # ---- 3. URL-wise
     checks: dict[str, dict] = defaultdict(dict)
-    for pid in URLP:
+    for pid in URL_COLS:
         for u in lines[pid]["urls"]:
             checks[u["url"]][pid] = (u["status"], u["note"])
-    w(f'<h2 class="pb"><span class="n">3</span>Complete URL-wise assessment</h2><p>All {pages_inspected} web pages inspected. ✓ meets, ✗ does not, · not applicable (for example, no form on the page). '
-      f'<b>DPDP result</b> covers the page-level DPDP checks ({", ".join(URLP)}); technical headers are reported in section 9.</p>')
-    w("<table class='fixed'><colgroup><col style='width:4%'><col style='width:22%'><col style='width:9%'>" + "<col style='width:4.5%'>" * len(URLP) +
-      "<col style='width:5%'><col style='width:8%'><col style='width:16%'></colgroup>"
-      f"<thead><tr><th>#</th><th>Page ({e(site_host)})</th><th>Type</th>" + "".join(f"<th class='c'>{x}</th>" for x in URLP) + "<th class='c'>Forms</th><th>DPDP result</th><th>Note</th></tr></thead><tbody>")
+    all_header_fail = [pid for pid in ("TS05", "TS06") if lines[pid]["urls"] and all(u["status"] != "pass" for u in lines[pid]["urls"])]
+    w(f'<h2 class="pb"><span class="n">3</span>Complete URL-wise assessment</h2><p>All {pages_inspected} web pages inspected one at a time. ✓ meets, ✗ does not, · not applicable (no form on the page). '
+      f'<b>DPDP result</b> covers the DPDP checks ({", ".join(URL_COLS)}); technical headers are shown separately'
+      + (f". {' and '.join('HSTS' if p == 'TS05' else 'CSP' for p in all_header_fail)} {'are' if len(all_header_fail) > 1 else 'is'} missing on every page, so "
+         f"{'they are' if len(all_header_fail) > 1 else 'it is'} reported once in section 9 rather than marking every URL" if all_header_fail else "") + ".</p>")
+    w(f"<table><thead><tr><th>#</th><th>Page ({e(site_host)})</th><th>Type</th>" + "".join(f"<th class='c'>{x}</th>" for x in URL_COLS) +
+      "<th class='c'>Forms</th><th>DPDP result</th><th>Note</th></tr></thead><tbody>")
     url_status = Counter()
     for i, pgx in enumerate(d.pages, 1):
         row = checks.get(pgx["url"], {})
         cells, okc, n = [], 0, 0
-        for pid in URLP:
+        for pid in URL_COLS:
             if pid in row:
                 st, _ = row[pid]
                 n += 1
                 okc += st == "pass"
-                cells.append("<td class='c' style='color:#166534'>✓</td>" if st == "pass" else "<td class='c' style='color:#92400e'><b>~</b></td>" if st == "partial" else "<td class='c' style='color:#991b1b'><b>✗</b></td>")
+                cells.append("<td class='c' style='color:#166534'>✓</td>" if st == "pass" else "<td class='c' style='color:#991b1b'><b>✗</b></td>")
             else:
                 cells.append("<td class='c small'>·</td>")
         st = "pass" if okc == n else ("partial" if okc * 2 >= n else "fail")
         url_status[st] += 1
-        notes = "; ".join(v[1] for k2, v in row.items() if v[0] != "pass")
+        notes = "; ".join(v[1] for v in row.values() if v[0] != "pass")
         w(f"<tr><td>{i}</td><td class='url'>{e(_path(pgx['url'], d.site))}</td><td class='small'>{e(pgx['category'] or '')}</td>{''.join(cells)}<td class='c'>{pgx['forms'] or '·'}</td>"
-          f"<td>{chip(st)}</td><td class='small'>{e(notes[:160])}</td></tr>")
+          f"<td>{chip(st)}</td><td class='small'>{e(notes[:200])}</td></tr>")
     w("</tbody></table>")
-    w(f"<p><b>URL results:</b> {url_status['pass']} pages pass every page-level DPDP check, {url_status['partial']} partly, {url_status['fail']} fail.</p>")
-    w(f"<h3>Every URL found, and what became of it ({len(d.frontier)})</h3><table><thead><tr><th>#</th><th>URL</th><th>Found by</th><th>Status</th><th>Reason</th></tr></thead><tbody>")
-    for i, x in enumerate(d.frontier, 1):
-        w(f"<tr><td>{i}</td><td class='url'>{e(x['original_url'])}</td><td class='small'>{e(str(x.get('discovery_source') or ''))}</td><td>{e(x['status'])}"
-          f"{(' (HTTP ' + str(x['http_status']) + ')') if x.get('http_status') and x['http_status'] != 200 else ''}</td><td class='small'>{e((x.get('status_reason') or '')[:180])}</td></tr>")
-    w("</tbody></table>")
+    w(f"<p><b>URL results:</b> {url_status['pass']} pages pass every DPDP check, {url_status['partial']} partly, {url_status['fail']} fail.</p>")
+    excluded = Counter((x.get("status_reason") or "other").split(":")[0] for x in d.frontier if x["status"] == "excluded")
+    failed = [x for x in d.frontier if x["status"] in ("failed", "pending")]
+    w("<h3>URLs not inspected, and why</h3><table><thead><tr><th>Reason</th><th class='num'>URLs</th><th>Meaning</th></tr></thead><tbody>")
+    for k2, v in excluded.most_common():
+        w(f"<tr><td>{e(k2)}</td><td class='num'>{v}</td><td>{e(EXCLUDED_MEANING.get(k2, ''))}</td></tr>")
+    for x in failed:
+        w(f"<tr><td>{e(x['status'])}</td><td class='num'>1</td><td class='url'>{e(x['original_url'])}: {e((x.get('status_reason') or '')[:160])}"
+          f"{(' (HTTP ' + str(x['http_status']) + ')') if x.get('http_status') else ''}</td></tr>")
+    if not excluded and not failed:
+        w("<tr><td colspan='3' class='small'>Every URL found on the host was inspected.</td></tr>")
+    w("</tbody></table><p class='small'>Every URL found, with how it was found and what became of it, is listed in Appendix C.</p>")
     if d.documents:
-        w("<h3>Documents read</h3><table><thead><tr><th>Document</th><th class='num'>Pages read</th></tr></thead><tbody>" +
+        w("<h3>PDF documents read</h3><table><thead><tr><th>Document</th><th class='num'>Pages read</th></tr></thead><tbody>" +
           "".join(f"<tr><td class='url'>{e(_path(x['source_url'], d.site))}</td><td class='num'>{x['n']}</td></tr>" for x in d.documents) + "</tbody></table>")
 
-    # ---- 4. policy analysis
-    pol = [x for x in r["lines"] if cat.BY_ID[x["parameter_id"]].kind in (cat.POLICY, cat.RECORDS)]
-    w('<h2 class="pb"><span class="n">4</span>Privacy policy analysis</h2><p>What the published notice, the cookie policy and the rights and grievance pages say, requirement by requirement, with the passage relied on.</p>')
-    w("<table><thead><tr><th>ID</th><th>What the notice must say</th><th>Act / Rule</th><th>Status</th><th>What it says (verbatim) or why it falls short</th></tr></thead><tbody>")
-    for x in pol:
-        p = cat.BY_ID[x["parameter_id"]]
-        w(f"<tr><td>{p.id}</td><td>{e(p.name)}</td><td>{legal(p)}</td><td>{chip(x['status'])}</td><td class='ev'>{e((x['evidence'][0] if x['evidence'] else x['explanation'])[:380])}</td></tr>")
+    # ---- 4. privacy policy analysis
+    policy_pages = [x for x in d.frontier if x["status"] == "done" and (x.get("page_category") or "") in ("privacy_policy", "cookie_policy", "grievance")]
+    read = ", ".join(f"<b>{e(x.get('final_url') or x['original_url'])}</b>" for x in policy_pages[:4]) or "the policy pages found on the site"
+    w(f'<h2 class="pb"><span class="n">4</span>Privacy policy analysis</h2><p>Notice read in full at {read}. Each requirement the notice must state, with its status and the passage relied on.</p>')
+    w("<table><thead><tr><th>ID</th><th>What the notice must say</th><th>Act / Rule</th><th>Status</th><th>What it says (verbatim)</th></tr></thead><tbody>")
+    for p in cat.PARAMS:
+        if p.kind in (cat.POLICY, cat.RECORDS):
+            x = lines[p.id]
+            w(f"<tr><td>{p.id}</td><td>{e(p.name)}</td><td>{legal(p)}</td><td>{chip(x['status'])}</td><td class='ev'>{e((x['evidence'][0] if x['evidence'] else x['explanation'])[:380])}</td></tr>")
     w("</tbody></table>")
 
-    # ---- 5. consent
+    # ---- 5. consent and withdrawal
     acc = d.consent.get("accept") or {}
-    w('<h2><span class="n">5</span>Consent and withdrawal assessment</h2><p>Accept, Reject and withdrawal were each tested on the homepage in a fresh browser; the state before any choice was observed on every page.</p>')
+    recheck = d.consent.get("pre_consent_recheck") or {}
+    banner = next((v.get("cmp_vendor") or v.get("vendor") for v in d.consent.values() if isinstance(v, dict) and (v.get("cmp_vendor") or v.get("vendor"))), None)
+    w(f'<h2><span class="n">5</span>Consent and withdrawal assessment</h2><p>{("Consent tool: " + e(str(banner)) + ". ") if banner else ""}'
+      f'Accept, Reject and withdrawal were tested on the homepage in fresh browsers; before-consent behaviour on every page.</p>')
     w("<table><thead><tr><th>State</th><th>Result</th><th>What was observed</th></tr></thead><tbody>")
-    for label, pid in (("Before a choice (every page)", "C12"), ("Reject", "C13"), ("Reject on further pages", "C14"), ("Withdrawal", "C16"), ("After withdrawal", "C17"), ("Per-purpose choice", "C04"),
-                       ("Reject as easy as Accept", "C15")):
-        w(f"<tr><td>{e(label)}</td><td>{chip(lines[pid]['status'])}</td><td>{e(lines[pid]['explanation'])}</td></tr>")
+    w(f"<tr><td>Before a choice (every page)</td><td>{chip(lines['C12']['status'])}</td><td>{e(lines['C12']['explanation'])}</td></tr>")
     if acc.get("tested"):
-        w(f"<tr><td>After Accept</td><td><span class='chip na'>observed</span></td><td>{len(acc.get('cookies') or [])} cookies; services started: "
+        w(f"<tr><td>After Accept</td><td><span class='chip na'>observed</span></td><td>{len(acc.get('cookies') or [])} cookies set"
+          f"{(' (' + e(', '.join(str(k.get('name')) for k in (acc.get('cookies') or [])[:8])) + ')') if acc.get('cookies') else ''}; services started: "
           f"{e(', '.join(sorted({x.get('vendor') or x.get('host') for x in acc.get('non_essential') or []})) or 'none')}</td></tr>")
-    w("</tbody></table>")
+    w(f"<tr><td>After Reject</td><td>{chip(lines['C13']['status'])}</td><td>{e(lines['C13']['explanation'])} {e(lines['C14']['explanation'])}</td></tr>")
+    w(f"<tr><td>Withdrawal</td><td>{chip(lines['C16']['status'])}</td><td>{e(lines['C16']['explanation'])}</td></tr>")
+    w(f"<tr><td>After withdrawal</td><td>{chip(lines['C17']['status'])}</td><td>{e(lines['C17']['explanation'])}</td></tr>")
+    w(f"<tr><td>Per-purpose choice</td><td>{chip(lines['C04']['status'])}</td><td>{e(lines['C04']['explanation'])}</td></tr></tbody></table>")
     if recheck.get("pages"):
         w("<h3>Clean reloads of pages that tracked before a choice</h3><table><thead><tr><th>Page</th><th class='num'>Loads</th><th class='num'>Fired</th><th>Result</th></tr></thead><tbody>" +
           "".join(f"<tr><td class='url'>{e(x.get('url', ''))}</td><td class='num'>{x.get('loads', 0)}</td><td class='num'>{x.get('fired_loads', 0)}</td><td>{'repeated' if x.get('fired') else 'not repeated'}</td></tr>"
                   for x in recheck["pages"]) + "</tbody></table>")
 
-    # ---- 6. cookies
-    w('<h2 class="pb"><span class="n">6</span>Cookies and tracker findings</h2>')
-    w("<table><thead><tr><th>Cookie</th><th>Domain</th><th>Provider and purpose</th><th>Seen</th><th class='num'>Pages</th><th>Lifetime</th><th>Secure</th><th>SameSite</th></tr></thead><tbody>")
+    # ---- 6. cookies and trackers
+    undeclared = _named_list(lines["X01"]["explanation"], "not declared:")
+    w('<h2><span class="n">6</span>Cookies and tracker findings</h2><table><thead><tr><th>Cookie</th><th>Domain</th><th>Service</th><th>Seen</th><th>Lifetime</th><th>Secure</th><th>SameSite</th><th>In the notice</th></tr></thead><tbody>')
     ref = d.scan.get("completed_at") or d.generated_at
     ref_ts = (ref if isinstance(ref, datetime) else datetime.fromisoformat(str(ref))).timestamp()
     for k in d.cookies:
         exp = k.get("expires")
         days = (exp - ref_ts) / 86400 if exp else None
-        life = "session" if k.get("session") else ("" if days is None else f"{round(days * 24)} hours" if days < 1 else f"{round(days)} days" if days < 45 else f"{round(days / 30.4)} months")
-        seen = ", ".join(CONSENT_STATES.get(s, s) for s in sorted(k["states"]))
-        w(f"<tr><td class='mono'>{e(k.get('name') or '')}</td><td>{e(k.get('domain') or '')}</td><td>{e(k.get('provider') or 'not identified')}<div class='small'>{e(k.get('purpose') or '')}</div></td>"
-          f"<td>{e(seen)}</td><td class='num'>{len([p for p in k['pages'] if p])}</td><td>{life}</td><td>{'yes' if k.get('secure') else 'no'}</td><td>{e(str(k.get('same_site') or ''))}</td></tr>")
+        life = "session" if k.get("session") or days is None or days < 0 else (f"{round(days * 24)} hours" if days < 1 else f"{round(days)} days" if days < 45 else f"{round(days / 30.4)} months")
+        seen = ", ".join(CONSENT_STATES.get(s, s).replace("before a choice", "pre consent").replace("after Accept", "post accept").replace("after Reject", "post reject") for s in sorted(k["states"]))
+        named = "n/a" if lines["X01"]["status"] == "not_applicable" else ("not named" if (k.get("name") or "").lower() in undeclared else (f"{k['provider']} named" if k.get("provider") else "named"))
+        w(f"<tr><td class='mono'>{e(k.get('name') or '')}</td><td>{e(k.get('domain') or '')}</td><td>{e(k.get('provider') or 'unidentified')}</td><td>{e(seen)}</td><td>{life}</td>"
+          f"<td>{'yes' if k.get('secure') else 'no'}</td><td>{e(str(k.get('same_site') or ''))}</td><td>{e(named)}</td></tr>")
+    if not d.cookies:
+        w("<tr><td colspan='8' class='small'>No cookie was observed.</td></tr>")
     w("</tbody></table>")
-    bad = [u for u in lines["C12"]["urls"] if u["status"] == "fail"]
-    if bad:
-        cnt = Counter(lbl for u in bad for lbl in {h.split(" (")[0] for h in re.split(r", (?![^()]*\))", u["note"].split(" (repeated")[0].replace("before a choice: ", ""))})
-        w(f"<h3>Before a choice: what was observed, and on how many of the {pages_inspected} pages</h3><table><thead><tr><th>Cookie or service (before any click on the banner)</th><th class='num'>Pages</th></tr></thead><tbody>" +
-          "".join(f"<tr><td>{e(k)}</td><td class='num'>{v}</td></tr>" for k, v in cnt.most_common()) + "</tbody></table>")
+    hits = [u for u in lines["C12"]["urls"] if u["status"] != "pass"]
+    if hits:
+        w("<h3>Pages where an analytics cookie appeared before a choice</h3><table><thead><tr><th>URL</th><th>Observed</th></tr></thead><tbody>" +
+          "".join(f"<tr><td class='url'>{e(u['url'])}</td><td>{e(u['note'][:220])}</td></tr>" for u in hits[:60]) + "</tbody></table>")
+        if len(hits) > 60:
+            w(f"<p class='small'>{len(hits) - 60} further pages show the same; every page is listed in section 3.</p>")
 
     # ---- 7. forms
     w(f'<h2 class="pb"><span class="n">7</span>Form-wise assessment</h2><p>{sum(len(g["pages"]) for g in d.forms)} data-collecting forms on {len({u for g in d.forms for u in g["pages"]})} pages, '
-      'grouped by identical design. Forms are read, never filled or submitted. A box that only takes a website address is not counted as personal data.</p>')
+      'grouped by identical design. Forms are read, never filled or submitted.</p>')
     w("<table><thead><tr><th>Form (submit text)</th><th>Collects</th><th class='num'>Instances</th><th class='c'>Consent box</th><th class='c'>Pre-ticked</th><th class='c'>Notice link</th><th>Method</th><th>Example page</th></tr></thead><tbody>")
     for g in d.forms:
         w(f"<tr><td>{e(g['label'] or '(no text)')}</td><td>{e(', '.join(g['collects']))}</td><td class='num'>{len(g['pages'])}</td><td class='c'>{'✓' if g['consent'] else '<b style=color:#991b1b>✗</b>'}</td>"
-          f"<td class='c'>{'<b style=color:#991b1b>yes</b>' if g['preticked'] else 'no'}</td><td class='c'>{'✓' if g['notice'] else '<b style=color:#991b1b>✗</b>'}</td><td>{e(g['method'])}</td>"
-          f"<td class='url small'>{e(_path(g['pages'][0], d.site))}</td></tr>")
+          f"<td class='c'>{'<b style=color:#991b1b>yes</b>' if g['preticked'] else 'no'}</td><td class='c'>{'✓' if g['notice'] else '<b style=color:#991b1b>✗</b>'}</td>"
+          f"<td>{e(g['method'])}{' (same page)' if g['method'] == 'GET' else ''}</td><td class='url small'>{e(_path(g['pages'][0], d.site))}</td></tr>")
+    if not d.forms:
+        w("<tr><td colspan='8' class='small'>No form that collects personal data was found.</td></tr>")
     w("</tbody></table>")
 
-    # ---- 8. third parties
-    w('<h2><span class="n">8</span>Third-party service analysis</h2><p>Every third-party host the pages contacted, the service it belongs to, and examples of the request URLs behind it (a request shows the browser contacted the service, not what it sent).</p>')
-    w("<table><thead><tr><th>Host</th><th>Service</th><th>Category</th><th>Seen</th><th class='num'>Pages</th><th class='num'>Requests</th><th>Example request URLs</th></tr></thead><tbody>")
+    # ---- 8. third-party services
+    not_named = _named_list(lines["X02"]["explanation"], "not named:")
+    w('<h2><span class="n">8</span>Third-party service analysis</h2><table><thead><tr><th>Host</th><th>Service</th><th>Category</th><th class="num">Pages</th><th class="num">Requests</th><th>Named in notice</th></tr></thead><tbody>')
     for h in d.hosts:
-        w(f"<tr><td class='mono'>{e(h['host'])}</td><td>{e(h['vendor'])}</td><td>{e(h['category'])}</td><td class='small'>{e(', '.join(sorted(h['states'])))}</td><td class='num'>{h['pages'] or '—'}</td>"
-          f"<td class='num'>{h['requests'] or '—'}</td><td class='mono'>{'<br>'.join(e(u[:160]) for u in h['examples']) or '<span class=small>not recorded</span>'}</td></tr>")
+        functional = h["category"] in ("functional", "not classified") or "functional" in h["category"]
+        named = "n/a" if functional else ("no" if (h["vendor"] or "").lower() in not_named else "yes")
+        after = "" if "before a choice" in h["states"] else " (after Accept)" if "after Accept" in h["states"] else ""
+        ex = "".join(f"<div class='mono small'>{e(u[:150])}</div>" for u in h["examples"][:2])
+        w(f"<tr><td class='mono'>{e(h['host'])}</td><td>{e(h['vendor'])}{ex}</td><td>{e(h['category'])}{after}</td><td class='num'>{h['pages'] or 'homepage'}</td>"
+          f"<td class='num'>{h['requests'] or '—'}</td><td>{named}</td></tr>")
+    if not d.hosts:
+        w("<tr><td colspan='6' class='small'>No third-party host was contacted.</td></tr>")
     w("</tbody></table>")
 
     # ---- 9. technical
-    w('<h2 class="pb"><span class="n">9</span>Technical security assessment</h2><p class="small">Supporting signals for s.8(5) and Rule 6. Rule 6 names no website control, so these carry '
-      f'{sum(p.weight for p in cat.PARAMS if p.cat == "TS")} of 400 weight points and are never described as legal duties.</p>')
+    ts = [p for p in cat.PARAMS if p.cat == "TS"]
+    w(f'<h2><span class="n">9</span>Technical security assessment</h2><p class="small">Supporting signals for s.8(5) and Rule 6. Rule 6 names no website control, so these carry '
+      f'{sum(p.weight for p in ts)} of 400 weight points ({fm(sum(p.max_marks for p in ts))} marks) and are never described as legal duties.</p>')
     w("<table><thead><tr><th>ID</th><th>Signal</th><th class='num'>Max</th><th class='num'>Earned</th><th>Status</th><th>Result</th></tr></thead><tbody>")
-    for p in [p for p in cat.PARAMS if p.cat == "TS"]:
+    for p in ts:
         x = lines[p.id]
         w(f"<tr><td>{p.id}</td><td>{e(p.name)}</td><td class='num'>{fm(p.max_marks)}</td><td class='num'>{fm(x['earned'])}</td><td>{chip(x['status'])}</td><td>{e(x['explanation'])}</td></tr>")
     w("</tbody></table>")
@@ -483,24 +560,31 @@ one per independently assessable requirement of the DPDP Act, 2023 and the DPDP 
         w(f"<p class='small'>Certificate: {e(str(d.tls.get('subject')))}, issuer {e(str(d.tls.get('issuer')))}, valid {e(str(d.tls.get('not_before'))[:10])} to {e(str(d.tls.get('not_after'))[:10])}, "
           f"{'verified' if d.tls.get('verified') else 'not verified'}. {e(str(d.tls.get('negotiated') or ''))} negotiated; TLS 1.3 {'supported' if d.tls.get('tls13_supported') else 'not supported'}.</p>")
 
-    # ---- 10. conditional
-    w('<h2><span class="n">10</span>Conditional obligations</h2><p>These duties apply only to some organisations. Where one does not apply it is removed from the maximum with the reason below; it is never counted as passed or failed.</p>')
+    # ---- 10. conditional obligations
+    w('<h2 class="pb"><span class="n">10</span>Conditional obligations</h2><p>These duties apply only to some organisations. Where one does not apply, it is removed from the maximum with the reason below; it is never counted as passed or failed.</p>')
     site_cat = r.get("site_category")
     if site_cat:
         conf = site_cat.get("confidence") or {}
-        others = ", ".join(f"{cat_label(c)} ({conf.get(c, '')})" for c in site_cat.get("categories") or [])
-        weak = ", ".join(cat_label(c) for c in site_cat.get("possible") or [])
-        sigs = "".join(f"<li>{e(s['category'].replace('_', ' '))}: {e(s['kind'])}, {e(s['detail'])}</li>" for s in (site_cat.get("signals") or [])[:8])
+        others = ", ".join(f"{cat_label(c2)} ({conf.get(c2, '')})" for c2 in site_cat.get("categories") or [])
+        weak = ", ".join(cat_label(c2) for c2 in site_cat.get("possible") or [])
         users = "; ".join(f'"{e(u["text"])}"' for u in (site_cat.get("users_stated") or [])[:2])
         w(f"<div class='note'><b>Website category: {e(site_cat.get('label', ''))}</b>"
           + (f" · with enough evidence: {others}" if others else "") + (f" · possible (one signal only, never applied alone): {e(weak)}" if weak else "")
           + (f" · user numbers stated on the site: {users}" if users else "")
-          + "<br><span class='small'>Read from the site's own pages, forms, third-party services and policy text; a category needs two kinds of signal or the site's own statement. "
-            "It decides which conditional duties apply; it never changes the severity of a finding.</span>" + (f"<ul class='small'>{sigs}</ul>" if sigs else "") + "</div>")
+          + "<br><span class='small'>Read from the site's own pages, forms, third-party services and policy text. It decides which conditional duties apply; it never changes a finding's severity.</span></div>")
     hr = r.get("human_review_pending") or []
     if hr:
-        w(f"<p><b>{fm(r.get('human_review_max'))} marks held back</b> ({', '.join(hr)}): the website does not settle whether these duties apply. They are kept out of the maximum, "
-          "like a duty that does not apply, but they are not a confirmed Not applicable: the organisation must confirm, and the score is recalculated.</p>")
+        w(f"<p><b>{fm(r.get('human_review_max'))} marks held back</b> ({', '.join(hr)}): the website does not settle whether these duties apply. They are kept out of the maximum like a duty "
+          "that does not apply, but they are not a confirmed Not applicable: the organisation confirms, and the score is recalculated.</p>")
+    w("<table><thead><tr><th>ID</th><th>Obligation</th><th>Act / Rule</th><th class='num'>Marks</th><th>Applies?</th><th>Reason</th></tr></thead><tbody>")
+    for p in cat.PARAMS:
+        if p.kind in (cat.CONDITIONAL, cat.INFO):
+            x = lines[p.id]
+            appl = x.get("applicability")
+            tag = ("<span class='flag'>human review</span>" if x["review"] else "") + (f"<span class='flag'>severity {e(x['severity'])}</span>" if x.get("severity") else "")
+            label = chip(x["status"]) if appl != "human_review" else "<span class='chip part'>Human review</span>"
+            w(f"<tr><td>{p.id}</td><td>{e(p.name)}</td><td>{legal(p)}</td><td class='num'>{fm(p.max_marks)}</td><td>{label}{tag}</td><td>{e(x['explanation'])}</td></tr>")
+    w("</tbody></table>")
     w("<h3>Applicability, severity and status</h3><table class='fixed'><colgroup><col style='width:12%'><col style='width:10%'><col style='width:12%'><col style='width:8%'>"
       "<col style='width:10%'><col style='width:18%'><col style='width:20%'><col style='width:10%'></colgroup><thead><tr><th>ID</th><th>Category</th><th>Applicability</th>"
       "<th>Severity</th><th>Status</th><th>Evidence</th><th>Explanation</th><th>Act / Rule</th></tr></thead><tbody>")
@@ -508,28 +592,19 @@ one per independently assessable requirement of the DPDP Act, 2023 and the DPDP 
         p, x = cat.BY_ID[pid], lines[pid]
         appl = x.get("applicability") or ("not_applicable" if x["status"] == "not_applicable" else "applicable")
         dcat = x.get("duty_category") or ""
-        if pid == "RT4" and site_cat and any(c in (site_cat.get("categories") or []) for c in ("ecommerce", "gaming", "social_media")):
-            dcat = ", ".join(cat_label(c) for c in site_cat["categories"] if c in ("ecommerce", "gaming", "social_media")) + " (Third Schedule)"
-        sev = x.get("severity")
+        if pid == "RT4" and site_cat and any(c2 in (site_cat.get("categories") or []) for c2 in ("ecommerce", "gaming", "social_media")):
+            dcat = ", ".join(cat_label(c2) for c2 in site_cat["categories"] if c2 in ("ecommerce", "gaming", "social_media")) + " (Third Schedule)"
         status = "Informational" if x["status"] == "not_applicable" else x["status_label"]
         ev = "<br>".join(e(v) for v in (x.get("evidence") or [])[:3]) or "<span class='small'>none</span>"
         w(f"<tr><td><b>{pid}</b><br><span class='small'>{e(p.name)}</span></td><td>{e(dcat)}</td><td>{APPL_LABEL.get(appl, e(appl))}</td>"
-          f"<td>{SEV_LABEL.get(sev, '<span class=small>None</span>')}</td><td>{chip(x['status']) if x['status'] != 'not_applicable' else e(status)}</td>"
+          f"<td>{SEV_LABEL.get(x.get('severity'), '<span class=small>None</span>')}</td><td>{chip(x['status']) if x['status'] != 'not_applicable' else e(status)}</td>"
           f"<td class='small'>{ev}</td><td>{e(x['explanation'])}</td><td>{legal(p)}</td></tr>")
     w("</tbody></table><p class='small'>Severity is the importance of the duty itself (High: significant statutory risk; Medium: a meaningful gap to correct; Low: a minor "
       "presentation or disclosure issue). A Fail shows the duty's severity, a Partial one level lower; a Pass or an informational entry has none.</p>")
-    w("<h3>Other conditional obligations</h3>")
-    w("<table><thead><tr><th>ID</th><th>Obligation</th><th>Act / Rule</th><th class='num'>Marks</th><th>Applies?</th><th>Reason</th></tr></thead><tbody>")
-    for p in cat.PARAMS:
-        if p.kind in (cat.CONDITIONAL, cat.INFO) and p.id not in ("K01", "K02", "K03", "K04", "K05", "RT4"):
-            x = lines[p.id]
-            w(f"<tr><td>{p.id}</td><td>{e(p.name)}</td><td>{legal(p)}</td><td class='num'>{fm(p.max_marks)}</td><td>{chip(x['status'])}{'<span class=flag>human review</span>' if x['review'] else ''}</td>"
-              f"<td>{e(x['explanation'])}</td></tr>")
-    w("</tbody></table>")
 
-    # ---- 11. human review
-    w('<h2 class="pb"><span class="n">11</span>Evidence limits and human-review requirements</h2><h3>Results that need a person to confirm</h3>'
-      "<table><thead><tr><th>ID</th><th>Parameter</th><th>Status</th><th>What to confirm</th></tr></thead><tbody>")
+    # ---- 11. evidence limits and human review
+    w('<h2><span class="n">11</span>Evidence limits and human-review requirements</h2>')
+    w("<h3>Results that need a person to confirm</h3><table><thead><tr><th>ID</th><th>Parameter</th><th>Status</th><th>What to confirm</th></tr></thead><tbody>")
     for p in cat.PARAMS:
         x = lines[p.id]
         if x["review"]:
@@ -538,27 +613,27 @@ one per independently assessable requirement of the DPDP Act, 2023 and the DPDP 
     w(", ".join(f"<b>{p.id}</b> {e(p.name)}" for p in cat.PARAMS if p.kind == cat.RECORDS))
     w(". For these, Pass means the policy states the practice; the organisation's records (contracts, logs, breach procedure, security controls) would confirm it.</p>")
     w("<h3>Other limits</h3><p>Only the submitted host was scanned: other hosts and subdomains (for example a separate application or login site) were not opened. Pages behind a login were not reached. "
-      "Forms were read, not submitted. Consent tests ran on the homepage in fresh browsers; the state before a choice was observed on every inspected page.</p>")
+      "Forms were read, not submitted. Consent tests ran on the homepage; before-consent behaviour was observed on every page.</p>")
 
-    # ---- 12. actions
+    # ---- 12. prioritised corrective actions
     todo = sorted([x for x in scored if x["status"] != "pass"], key=lambda x: (-(x["max"] - x["earned"]), x["parameter_id"]))
     w('<h2 class="pb"><span class="n">12</span>Prioritised corrective actions</h2><p>Ordered by marks recoverable. Fixing every item would raise the score to 100.</p>')
     w("<table><thead><tr><th>#</th><th>ID</th><th>Action</th><th>Act / Rule</th><th class='num'>Marks</th><th>Owner</th><th>Effort</th></tr></thead><tbody>")
     for i, x in enumerate(todo, 1):
         p = cat.BY_ID[x["parameter_id"]]
         a = ACTIONS.get(p.id) or ("Meet the requirement: " + p.requirement, "Engineering" if p.cat == "TS" else ("Legal / privacy lead" if p.kind == cat.RECORDS else "Privacy lead"), "Low")
-        w(f"<tr><td>{i}</td><td>{p.id}</td><td>{e(a[0])}<div class='small'>{e(x['explanation'][:200])}</div></td><td>{legal(p)}</td><td class='num'>+{fm(x['max'] - x['earned'])}</td><td>{e(a[1])}</td><td>{e(a[2])}</td></tr>")
+        w(f"<tr><td>{i}</td><td>{p.id}</td><td>{e(a[0])}</td><td>{legal(p)}</td><td class='num'>+{fm(x['max'] - x['earned'])}</td><td>{e(a[1])}</td><td>{e(a[2])}</td></tr>")
     w("</tbody></table>")
 
-    # ---- 13. summary
+    # ---- 13. final scoring summary
     w('<h2><span class="n">13</span>Final scoring summary</h2><table><thead><tr><th>Category</th><th class="num">Applicable max</th><th class="num">Earned</th><th class="num">%</th></tr></thead><tbody>')
     for k, cc in ((k, r["categories"][k]) for k in cat.CATS if k in r["categories"]):
         w(f"<tr><td>{e(cc['label'])}</td><td class='num'>{fm(cc['max'])}</td><td class='num'>{fm(cc['earned'])}</td><td class='num'>{fm(cc['pct']) if cc['pct'] is not None else 'n/a'}</td></tr>")
     w(f"<tr class='cathead'><td>Overall</td><td class='num'>{fm(r['applicable_max'])}</td><td class='num'>{fm(r['marks_earned'])}</td><td class='num'>{fm(r['score'])}</td></tr></tbody></table>")
-    w(f"<p><b>DPDP compliance score: {fm(r['score'])} / 100</b>: {c.get('pass', 0)} Pass, {c.get('partial', 0)} Partial, {c.get('fail', 0)} Fail across {len(scored)} applicable parameters; "
-      f"{c.get('not_applicable', 0)} parameters do not apply.</p>")
+    w(f"<p><b>DPDP compliance score: {fm(r['score'])} / 100</b> — {c.get('pass', 0)} Pass, {c.get('partial', 0)} Partial, {c.get('fail', 0)} Fail across {len(scored)} applicable parameters; "
+      f"{c.get('not_applicable', 0)} conditional parameters do not apply.</p>")
 
-    # ---- appendices
+    # ---- appendix A: inventory and criteria
     w(f'<h2 class="pb">Appendix A — Parameter inventory and marking criteria (catalogue {e(r["catalogue_version"])})</h2>'
       '<p>For each parameter: the requirement, the law, the marks, the evidence needed, how it is assessed, and the Pass / Partial / Fail criteria.</p>')
     for k, label in cat.CATS.items():
@@ -568,16 +643,37 @@ one per independently assessable requirement of the DPDP Act, 2023 and the DPDP 
               f"<dt>Requirement</dt><dd>{e(p.requirement)}</dd><dt>DPDP Act</dt><dd>{e(p.act)}</dd><dt>DPDP Rules</dt><dd>{e(p.rule)}</dd><dt>Type</dt><dd>{e(p.kind)}</dd>"
               f"<dt>Evidence required</dt><dd>{e(p.evidence)}</dd><dt>Method</dt><dd>{e(p.method)}</dd><dt>Pass</dt><dd>{e(p.pass_)}</dd><dt>Partial</dt><dd>{e(p.partial)}</dd>"
               f"<dt>Fail</dt><dd>{e(p.fail)}</dd></dl></div>")
+
+    # ---- appendix B: differences from the 51-parameter method
     diffs = [x for x in r["lines"] if x.get("differs")]
-    w('<h2 class="pb">Appendix B — Where this result differs from the 51-parameter method</h2><p>Same scan, same evidence. Listed so a change of result can be reviewed, not hidden.</p>')
+    w('<h2 class="pb">Appendix B — Where this result differs from the 51-parameter method (v2)</h2><p>Same scan, same evidence. These are the results where the method 3 criteria, or a closer reading of the '
+      'stored evidence, give a different answer from method 2.0.0. They are listed so the change can be reviewed, not hidden.</p>')
     if diffs:
         w("<table><thead><tr><th>ID</th><th>Parameter</th><th>This result</th><th>Why it differs</th></tr></thead><tbody>" +
           "".join(f"<tr><td>{x['parameter_id']}</td><td>{e(cat.BY_ID[x['parameter_id']].name)}</td><td>{chip(x['status'])}</td><td>{e(x['differs'])}</td></tr>" for x in diffs) + "</tbody></table>")
     else:
         w("<p>No result differs from the 51-parameter method's reading of the same evidence.</p>")
+    w("<h3>How the 51 v2 parameters map to the 96</h3><p>Combined v2 parameters are split so each requirement has its own marks: v2 G7 (security safeguards) → F04-F07; v2 G3 (rights) → R01, R03, R04, R06; "
+      "v2 C3 (affirmative action) → C02, C03; v2 K1 (children) → K01-K04; v2 S1 (SDF) → S01-S06; v2 G8 (breach) → F10, F11; v2 TS4 (headers) → TS05-TS10; v2 C1 → C08, C09. "
+      "New parameters with no v2 equivalent: N02, N07, N11, N14, C05, C07, C14, L02, F03, RT2, RT3, RT5, G02, G04, R02, R08, T02, TS15.</p>")
+
+    # ---- appendix C: every URL found, and the scan's transparency
+    w(f'<h2 class="pb">Appendix C — Every URL found, and what became of it ({len(d.frontier)})</h2>')
+    w("<table><tbody>"
+      f"<tr><td>URLs discovered</td><td class='num'>{len(d.frontier)}</td></tr><tr><td>Pages inspected one at a time</td><td class='num'>{fr_status.get('done', 0)}</td></tr>"
+      f"<tr><td>Failed or not reached</td><td class='num'>{fr_status.get('failed', 0) + fr_status.get('pending', 0)}</td></tr>"
+      f"<tr><td>Excluded (another host, duplicate, variant)</td><td class='num'>{fr_status.get('excluded', 0)}</td></tr>"
+      f"<tr><td>Clean reloads of pages that tracked before a choice</td><td class='num'>{len(recheck.get('pages') or []) if recheck else 'not run'}</td></tr>"
+      f"<tr><td>Crawl</td><td class='num'>{_ist(d.scan.get('started_at'))} → {_ist(d.scan.get('completed_at'))}</td></tr>"
+      f"<tr><td>Analysis</td><td class='num'>{_ist(d.scan.get('analysis_started_at'))} → {_ist(d.scan.get('analysis_completed_at'))}</td></tr></tbody></table>"
+      "<p class='small'>Pages were found from the homepage's links, every page's links and the sitemap, on the submitted host only; privacy pages were inspected first, then other legal pages, then the rest.</p>")
+    w("<h3>Every URL found</h3><table><thead><tr><th>#</th><th>URL</th><th>Found by</th><th>Status</th><th>Reason</th></tr></thead><tbody>")
+    for i, x in enumerate(d.frontier, 1):
+        w(f"<tr><td>{i}</td><td class='url'>{e(x['original_url'])}</td><td class='small'>{e(str(x.get('discovery_source') or ''))}</td><td>{e(x['status'])}"
+          f"{(' (HTTP ' + str(x['http_status']) + ')') if x.get('http_status') and x['http_status'] != 200 else ''}</td><td class='small'>{e((x.get('status_reason') or '')[:180])}</td></tr>")
+    w("</tbody></table>")
     body = "".join(H)
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name=\"consiva-report-scan\" content=\"{e(d.scan_id, quote=True)}\">"
-            f"<meta name=\"consiva-report-site\" content=\"{e(site_host, quote=True)}\"><title>Enterprise DPDP assessment — {e(site_host)}</title><style>{CSS}</style></head><body>{body}</body></html>")
+            f"<meta name=\"consiva-report-site\" content=\"{e(site_host, quote=True)}\"><meta name=\"consiva-report-version\" content=\"{e(r['catalogue_version'], quote=True)}\">"
+            f"<title>Enterprise DPDP assessment — {e(site_host)}</title><style>{_FONTS}{CSS}</style></head><body>{body}</body></html>")
 
-
-_REC = "Published policy only: the organisation's internal records were not inspected, so this reflects what the policy states, not what is done."
