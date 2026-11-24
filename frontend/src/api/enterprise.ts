@@ -177,7 +177,9 @@ export interface ScanListItem {
   status: string;
   analysis_status: string | null;
   completion: Completion | null;
+  /** The official score: the 96-parameter (method 3) score the report prints. */
   score: number | null;
+  score_version?: string | null;
   coverage: number | null;
   created_at: string;
   completed_at: string | null;
@@ -250,7 +252,10 @@ export interface ScanSummary {
   crawl_status: EnterpriseScanState;
   analysis_status: AnalysisState;
   completion: Completion;
+  /** The earlier 51-parameter result, kept for compatibility; not the official score. */
   score: EnterpriseScore | null;
+  /** The official score: the 96-parameter (method 3) result, as the report prints it. */
+  official_score?: { score: number | null; marks_earned: number; applicable_max: number; version: string; basis: string; as_of: string; calculated_at: string } | null;
   declaration: Declaration | null;
   legal_review_status: string | null;
   report_available: boolean;
@@ -518,7 +523,50 @@ export const enterpriseScans = {
   reports: (id: string) => request<{ items: ReportVersion[] }>(`${sid(id)}/reports`),
   cancel: (id: string) => request<{ scan_id: string; status: string; message: string }>(`${sid(id)}/cancel`, { method: "POST" }),
   resume: (id: string) => request<{ scan_id: string; status: string; message: string }>(`${sid(id)}/resume`, { method: "POST" }),
+  /** The method 3 (96-parameter) result: the score the PDF report prints. */
+  method3: (id: string) => request<Method3Result>(`${sid(id)}/method3`),
 };
+
+export type Method3Status = "pass" | "partial" | "fail" | "not_applicable" | "information";
+
+export interface Method3Line {
+  parameter_id: string;
+  category: string;
+  name: string;
+  rule: string | null;
+  max: number;
+  earned: number | null;
+  status: Method3Status;
+  status_label: string;
+  severity: string | null;
+  explanation: string;
+  applicability: string | null;
+}
+
+export interface Method3Category {
+  label: string;
+  parameters: number;
+  applicable: number;
+  max: number;
+  earned: number;
+  pct: number | null;
+  counts: Partial<Record<Method3Status, number>>;
+}
+
+export interface Method3Result {
+  version: string;
+  as_of: string;
+  score: number | null;
+  marks_earned: number;
+  applicable_max: number;
+  counts: Partial<Record<Method3Status, number>>;
+  parameters: number;
+  categories: Record<string, Method3Category>;
+  lines: Method3Line[];
+  human_review_pending?: string[];
+  legal_review_status?: string | null;
+  created_at: string;
+}
 
 /** The report PDF needs the bearer token, so it is fetched to a blob (a plain link would be refused). */
 export async function fetchEnterpriseReportPdf(scanId: string, version?: number): Promise<{ blob: Blob; filename: string }> {

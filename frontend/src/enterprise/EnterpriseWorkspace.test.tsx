@@ -4,7 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const saved = vi.hoisted(() => ({ saveBlob: vi.fn() }));
 vi.mock("../api/client", async (orig) => ({ ...(await orig<typeof import("../api/client")>()), saveBlob: saved.saveBlob }));
 
+import { getProfile } from "../api/auth";
 import { EnterpriseWorkspace } from "./EnterpriseWorkspace";
+import { ScanPage } from "./ScanPage";
 
 type Handler = (url: string, init?: RequestInit) => unknown | Promise<unknown>;
 let routes: [RegExp, Handler][] = [];
@@ -50,10 +52,13 @@ async function mount(path?: string) {
   render(<EnterpriseWorkspace />);
 }
 
+// The detailed tabbed scan page is no longer on the Enterprise screen (owner's decision, 24 Nov 2026); the component is kept and tested on its own.
+function renderScanPage() {
+  render(<ScanPage scanId={ID} canReview={getProfile()?.role === "admin"} onBack={() => {}} />);
+}
+
 async function openScan() {
-  on(/\/enterprise\/scans\?/, page([listItem()]));
-  await mount();
-  fireEvent.click(await screen.findByRole("button", { name: /Open scan of/ }));
+  renderScanPage();
   await screen.findByTestId("overview");
 }
 
@@ -81,9 +86,8 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); saved.saveBlob.mockReset(); });
 
 describe("Enterprise DPDP workspace", () => {
-  it("lists scans with status, score, coverage and date, and opens one", async () => {
+  it("reads the scan with the bearer token", async () => {
     await openScan();
-    expect(calls.some((c) => /\/enterprise\/dashboard\/summary/.test(c.url))).toBe(true);
     expect(calls.every((c) => (c.init?.headers as Record<string, string>)?.Authorization === "Bearer tok")).toBe(true);
   });
 
@@ -151,10 +155,7 @@ describe("Enterprise DPDP workspace", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let n = 0;
     on(/\/summary$/, () => { n += 1; return n < 3 ? summary({ crawl_status: "running", completion: "crawling", analysis_status: "not_started" }) : summary({ completion: "complete", analysis_status: "completed" }); });
-    on(/\/enterprise\/scans\?/, page([listItem()]));
-    await mount();
-    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
-    fireEvent.click(screen.getByRole("button", { name: /Open scan of/ }));
+    renderScanPage();
     await act(async () => { await vi.advanceTimersByTimeAsync(10); });
     expect(n).toBe(1);
     expect(screen.getByTestId("live-note")).toBeInTheDocument();
@@ -171,10 +172,7 @@ describe("Enterprise DPDP workspace", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let n = 0;
     on(/\/summary$/, () => { n += 1; return summary({ crawl_status: "running", completion: "crawling" }); });
-    on(/\/enterprise\/scans\?/, page([listItem()]));
-    await mount();
-    await act(async () => { await vi.advanceTimersByTimeAsync(10); });
-    fireEvent.click(screen.getByRole("button", { name: /Open scan of/ }));
+    renderScanPage();
     await act(async () => { await vi.advanceTimersByTimeAsync(10); });
     cleanup();
     const before = n;
@@ -310,21 +308,79 @@ describe("Enterprise DPDP workspace", () => {
 
   it("shows a plain error for a failed read and does not leave a rejected promise", async () => {
     on(/\/summary$/, () => json({ detail: "Scan not found" }, 404));
-    on(/\/enterprise\/scans\?/, page([listItem()]));
-    await mount();
-    fireEvent.click(await screen.findByRole("button", { name: /Open scan of/ }));
+    renderScanPage();
     expect(await screen.findByRole("alert")).toHaveTextContent("Scan not found");
   });
 
   it("requires the attestation before a scan can be started", async () => {
-    on(/\/enterprise\/dashboard\/summary/, () => dashboard([]));
+    on(/\/enterprise\/scans\?/, page([]));
     await mount();
     const start = screen.getByRole("button", { name: "Scan Whole Website" });
     fireEvent.change(screen.getByLabelText("Website address"), { target: { value: "example.com" } });
     expect(start).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox"));
     expect(start).toBeEnabled();
-    expect(await screen.findByText(/No scans yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No Enterprise scans yet/)).toBeInTheDocument();
+  });
+});
+
+const m3 = (o: object = {}) => ({
+  id: "m", created_at: "2026-11-24T07:05:00Z", version: "ent-dpdp-3.0.1", as_of: "2026-11-24", score: 20, marks_earned: 16.25, applicable_max: 81.25, parameters: 3,
+  counts: { pass: 1, partial: 1, fail: 1 }, legal_review_status: null, human_review_pending: [],
+  categories: { notice: { label: "Notice", parameters: 3, applicable: 3, max: 10, earned: 4, pct: 40, counts: { pass: 1, partial: 1, fail: 1 } } },
+  lines: [
+    { parameter_id: "N01", category: "notice", name: "Notice is given", rule: "R3", max: 4, earned: 4, status: "pass", status_label: "Pass", severity: null, explanation: "found", applicability: "applicable" },
+    { parameter_id: "N02", category: "notice", name: "Notice is itemised", rule: "R3", max: 3, earned: 0, status: "partial", status_label: "Partial", severity: "low", explanation: "partly", applicability: "applicable" },
+    { parameter_id: "K01", category: "notice", name: "Grievance officer named", rule: "R14", max: 3, earned: 0, status: "fail", status_label: "Fail", severity: "high", explanation: "no officer named", applicability: "applicable" },
+  ], ...o,
+});
+
+describe("Enterprise screen, laid out like the Privacy Policy screen", () => {
+  it("opens a scan below the form with the 96-parameter score in the circle, the report bar and the details, and no tabs or URL lists", async () => {
+    on(/\/enterprise\/scans\?/, page([listItem()]));
+    on(/\/summary$/, () => summary({ completion: "complete", analysis_status: "completed" }));
+    on(/\/method3$/, m3());
+    await mount(`/#/dpdp/${ID}`);
+    await waitFor(() => expect(screen.getByTestId("ring-value")).toHaveTextContent("20"));
+    expect(screen.getByLabelText("Website address")).toBeInTheDocument();
+    expect(screen.getByTestId("status-text")).toHaveTextContent("Scan complete");
+    expect(screen.getByTestId("hero-band")).toHaveTextContent("Major gaps");
+    expect(screen.getByTestId("hero-basis")).toHaveTextContent("16.25 of 81.25");
+    expect(screen.getByTestId("download-report")).toBeEnabled();
+    expect(screen.getByTestId("major-gaps")).toHaveTextContent("K01");
+    expect(screen.getByTestId("req-N02")).toHaveTextContent("Partial");
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(calls.some((c) => /\/urls|\/dashboard\//.test(c.url))).toBe(false);
+  });
+
+  it("shows progress in the circle while the scan runs, and a Stop button", async () => {
+    on(/\/enterprise\/scans\?/, page([listItem({ status: "running" })]));
+    on(/\/summary$/, () => summary({ crawl_status: "running", completion: "crawling", analysis_status: "not_started", declaration: declaration({ urls: { eligible: 100, crawled: 30, analysed: 0 } }) }));
+    await mount(`/#/dpdp/${ID}`);
+    expect(await screen.findByTestId("ring-value")).toHaveTextContent("15%");
+    expect(screen.getByRole("button", { name: "Stop scan" })).toBeInTheDocument();
+    expect(screen.getByTestId("download-report")).toBeDisabled();
+    expect(calls.some((c) => /\/method3$/.test(c.url))).toBe(false);
+  });
+
+  it("the history lists only Enterprise scans, with the same score as the report", async () => {
+    on(/\/enterprise\/scans\?/, page([listItem({ score: 20, score_version: "ent-dpdp-3.0.1" })]));
+    await mount();
+    expect(await screen.findByTestId("earlier-score")).toHaveTextContent("score 20 / 100");
+    expect(calls.some((c) => /\/method3$/.test(c.url))).toBe(false);
+    expect(calls.some((c) => /consent-agent\/(scans|usage)|dashboard\/summary/.test(c.url))).toBe(false);
+  });
+
+  it("downloads the PDF after making the newest report", async () => {
+    on(/\/enterprise\/scans\?/, page([listItem()]));
+    on(/\/summary$/, () => summary({ completion: "complete", analysis_status: "completed" }));
+    on(/\/method3$/, m3());
+    on(/\/report$/, () => json({ scan_id: ID, version: 3, status: "ready" }, 202));
+    on(/\/reports$/, { items: [{ version: 3, status: "ready" }] });
+    on(/\/report\.pdf/, () => new Response(new Blob(["%PDF"]), { status: 200, headers: { "content-type": "application/pdf", "content-disposition": 'attachment; filename="r.pdf"' } }));
+    await mount(`/#/dpdp/${ID}`);
+    fireEvent.click(await screen.findByTestId("download-report"));
+    await waitFor(() => expect(saved.saveBlob).toHaveBeenCalled());
   });
 });
 

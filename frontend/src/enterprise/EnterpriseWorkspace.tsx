@@ -1,11 +1,8 @@
 import { useEffect, useState } from "react";
 import { enterpriseApi, enterpriseErrorMessage, enterpriseScans, siteHost, type ScanListItem } from "../api/enterprise";
 import { dateTime } from "./format";
-import { getProfile } from "../api/auth";
 import { writeHash } from "../components/dsrRoute";
-import { PolicyKbPanel } from "./PolicyKbPanel";
-import { ScanDashboard } from "./ScanDashboard";
-import { ScanPage } from "./ScanPage";
+import { EnterpriseScanView } from "./EnterpriseScanView";
 
 /** An address typed without http:// or https:// is scanned over https by default; an explicit scheme is kept. */
 export function withDefaultScheme(u: string): string {
@@ -90,36 +87,31 @@ function NewScan({ onStarted }: { onStarted: (id: string) => void }) {
   );
 }
 
-/** The Enterprise DPDP workspace: the list of scans, a form to start one, and the scan page. Separate from the 5-page consent scanner. */
+/**
+ * The Enterprise DPDP workspace, laid out like the Privacy Policy screen: the address form at the top, the open scan (its progress circle, score, report
+ * button and details) beneath it, and the Enterprise scan history at the right. It reads and writes only Enterprise scans; the 5-page agent's history is its own.
+ */
 export function EnterpriseWorkspace() {
   const [scanId, setScanId] = useState<string | null>(() => scanFromHash());
   const [nonce, setNonce] = useState(0);
-  const canReview = getProfile()?.role === "admin";
 
   function open(id: string | null) {
     setScanId(id);
     writeHash(id ? `#/dpdp/${id}` : "#/dpdp");
-    if (!id) setNonce((n) => n + 1);
+    setNonce((n) => n + 1);
   }
 
   return (
     <div className="usage-layout" data-testid="enterprise-workspace">
       <div className="usage-main">
-        {scanId ? <ScanPage scanId={scanId} canReview={canReview} onBack={() => open(null)} /> : (
-          <>
-            <div className="agent-intro">
-              <h1>Enterprise Scanner</h1>
-              <div className="tagline">
-                Enter a website address. Every page that can be reached is scanned, not just five. Each of the 96 DPDP requirements gets its own Pass, Partial or Fail with
-                its marks, URL by URL, and you get a detailed PDF report.
-              </div>
-            </div>
-            <NewScan onStarted={open} />
-            <div style={{ marginTop: 20 }}><ScanDashboard onOpen={open} refreshKey={String(nonce)} /></div>
-            <h3 style={{ marginTop: 24 }}>Policy knowledge base</h3>
-            <PolicyKbPanel />
-          </>
-        )}
+        <div className="agent-intro">
+          <h1>Enterprise Scanner</h1>
+          <div className="tagline">
+            Enter a website address. Every page that can be reached is scanned, not just five, and checked against the 96 DPDP requirements. You get a score and a detailed PDF report.
+          </div>
+        </div>
+        <NewScan onStarted={open} />
+        {scanId && <div style={{ marginTop: 16 }}><EnterpriseScanView key={scanId} scanId={scanId} /></div>}
       </div>
       <EarlierScans current={scanId} onOpen={open} refreshKey={nonce} />
     </div>
@@ -144,6 +136,7 @@ function EarlierScans({ current, onOpen, refreshKey }: { current: string | null;
     const t = window.setInterval(load, 15_000);                 // a running scan's status and result update without a reload
     return () => { alive = false; window.clearInterval(t); };
   }, [limit, refreshKey, current]);
+
 
   if (!open) {
     return <aside className="usage-panel collapsed" data-testid="earlier-scans"><button className="usage-toggle" onClick={() => setOpen(true)}>Earlier scans ‹</button></aside>;
@@ -172,9 +165,7 @@ function EarlierScans({ current, onOpen, refreshKey }: { current: string | null;
               <div className="usage-muted small">{dateTime(s.created_at)}{s.completed_at ? ` → ${dateTime(s.completed_at)}` : ""}</div>
               <div className="usage-muted small usage-mono" title="Scan ID">{s.scan_id}</div>
               <div className="usage-history-nums">
-                {s.analysis_status && <span>analysis {s.analysis_status}</span>}
-                {s.score != null && <span>score {s.score}</span>}
-                {s.coverage != null && <span>coverage {s.coverage}%</span>}
+                {s.score != null && <span data-testid="earlier-score">score {s.score} / 100</span>}
               </div>
               <button className="usage-link" onClick={() => onOpen(s.scan_id)} aria-label={`Open the Enterprise scan of ${host}`}>Open scan</button>
             </li>

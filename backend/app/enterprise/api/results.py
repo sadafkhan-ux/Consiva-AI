@@ -61,14 +61,30 @@ async def list_scans(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, 
     org = uuid.UUID(user.org_id)
     total = await db.scalar(select(func.count()).select_from(EntScan).where(EntScan.org_id == org)) or 0
     rows = (await db.scalars(select(EntScan).where(EntScan.org_id == org).order_by(EntScan.created_at.desc()).offset(offset).limit(limit))).all()
+    from app.enterprise.method3 import service as method3
     items = []
     for s in rows:
         decl = await coverage_declaration(db, s.id)
         sc = await store.latest_score(db, s.id)
+        m3 = await method3.latest(db, s.id)
+        # `score` is the official score: the 96-parameter method 3 score, the one the report prints (owner's decision, 24 Nov 2026). The field keeps its name and type.
         items.append({
             "scan_id": str(s.id), "website_url": s.website_url, "status": s.status, "analysis_status": s.analysis_status, "completion": decl["completion"],
-            "score": sc.score if sc else None, "coverage": sc.coverage if sc else None, "created_at": s.created_at, "completed_at": s.completed_at})
+            "score": _m3_score(m3), "score_version": m3.version if m3 is not None else None,
+            "coverage": sc.coverage if sc else None, "created_at": s.created_at, "completed_at": s.completed_at})
     return _page(items, total, offset, limit)
+
+
+def _m3_score(row) -> float | None:
+    return None if row is None or row.score is None else float(row.score)
+
+
+def _official_score(row) -> dict | None:
+    """The official score of an Enterprise scan: the 96-parameter method 3 result, as the report prints it. None until it has been calculated."""
+    if row is None:
+        return None
+    return {"score": _m3_score(row), "marks_earned": float(row.marks_earned), "applicable_max": float(row.applicable_max), "version": row.version, "basis": row.basis,
+            "as_of": row.as_of.isoformat(), "calculated_at": row.created_at}
 
 
 # ---- summary and declaration ----------------------------------------------------------------------------------------------------------------------------------------
@@ -91,7 +107,9 @@ async def _has_report(db: AsyncSession, scan_id: uuid.UUID) -> bool:
 async def summary(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)) -> dict:
     scan = await _scan(db, scan_id, user)
     decl = await coverage_declaration(db, scan_id)
+    from app.enterprise.method3 import service as method3
     return {
+        "official_score": _official_score(await method3.latest(db, scan_id)),        # additive: the 96-parameter score; `score` below is the earlier 51-parameter result, kept for compatibility
         "scan_id": str(scan.id), "website_url": scan.website_url, "domain": scan.domain, "crawl_status": scan.status, "analysis_status": scan.analysis_status, "completion": decl["completion"],
         "score": _score_view(await store.latest_score(db, scan_id)), "declaration": decl, "legal_review_status": LEGAL_REVIEW_STATUS, "report_available": await _has_report(db, scan_id),
         "options": scan.options, "created_at": scan.created_at, "started_at": scan.started_at, "completed_at": scan.completed_at, "error": scan.error or scan.analysis_error,

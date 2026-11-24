@@ -140,3 +140,20 @@ A parameter with no assessment yet is returned with `state: "not_assessed"` and 
 
 The coverage declaration's `urls` object gains `not_recorded` (links found after the record cap, counted by occurrence), `pages_with_limits`, `pages_not_fully_analysed` and `pages_not_sent_to_model`.
 A page that ends at the same address as one already read, or has identical text (400 characters or more), is excluded with the reason `duplicate_page: the same page as <url>`; its links are still recorded.
+
+## Official score: the 96-parameter method 3 score (24 Nov 2026)
+
+The method 3 score is the one official Enterprise score. It is calculated over 96 parameters and is the same number the PDF prints.
+
+- `GET /api/v1/enterprise/scans`:
+  - `score` in each item is now the method 3 score. Its name and type are unchanged (number or null).
+  - New field `score_version` names the method.
+  - `coverage` is still the 51-parameter coverage figure.
+- `GET /api/v1/enterprise/scans/{id}/summary` adds `official_score`:
+  - fields: `score`, `marks_earned`, `applicable_max`, `version`, `basis`, `as_of`, `calculated_at`;
+  - it is null until method 3 has been calculated;
+  - the existing `score` object is the earlier 51-parameter result. It is kept only for compatibility and is not the official score.
+- The report (`POST .../report`, `GET .../report.pdf`) is always the 96-parameter report:
+  - a scan with no method 3 result is scored before the report is made;
+  - if it cannot be scored, the report version fails with that reason;
+  - it never falls back to the 51-parameter report.

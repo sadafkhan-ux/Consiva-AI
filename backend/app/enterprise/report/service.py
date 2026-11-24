@@ -10,7 +10,7 @@ import logging
 import uuid
 from urllib.parse import urlparse
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,8 +62,16 @@ async def _generate_method3(db: AsyncSession, scan_id: uuid.UUID) -> EntReport |
     from app.enterprise.config import get_enterprise_settings
     from app.enterprise.method3 import service as method3
     from app.enterprise.report import method3 as m3report
-    if get_enterprise_settings().report_method != "3" or await method3.latest(db, scan_id) is None:
+    if get_enterprise_settings().report_method != "3":
         return None
+    if await method3.latest(db, scan_id) is None:
+        # The report is the 96-parameter report only (owner's decision, 24 Nov 2026): a scan with no 96-parameter result yet is scored now, and if that cannot be done the
+        # report fails with the reason. It never falls back to the 51-parameter report.
+        org_id = await db.scalar(text("select org_id from ent_scans where id = :s"), {"s": scan_id})
+        if org_id is not None:
+            await method3.run_safe(scan_id, org_id, actor="report")
+        if await method3.latest(db, scan_id) is None:
+            return await _store(db, scan_id, status="failed", error="The 96-parameter (method 3) score could not be calculated for this scan, so no report was printed. Re-run the analysis, then generate the report again.")
     try:
         data = await m3report.gather(db, scan_id)
         header, footer = m3report.header_footer(urlparse(data.site).netloc or data.site, data.result.get("catalogue_version", ""), data.scan_id)
