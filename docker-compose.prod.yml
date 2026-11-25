@@ -303,7 +303,7 @@ services:
       WEBHOOK_SIGNING_SECRET: "${WEBHOOK_SIGNING_SECRET:-}"
       # The Enterprise pipeline asks for a cleanup pass when a scan ends; it only runs against the database named here (see the cleanup service).
       CLEANUP_CONFIRM_DATABASE: "consiva@db"
-      CLEANUP_GRACE_MINUTES: "${CLEANUP_GRACE_MINUTES:-15}"
+      CLEANUP_GRACE_MINUTES: "${CLEANUP_GRACE_MINUTES:-1440}"   # 24 hours (owner, 25 Nov 2026)
     networks:
       - consiva
     depends_on:
@@ -352,7 +352,7 @@ services:
       APP_ENV: "${APP_ENV:?set APP_ENV in /opt/consiva/.env (use: production)}"
       DATABASE_URL: *database_url
       CLEANUP_CONFIRM_DATABASE: "consiva@db"
-      CLEANUP_GRACE_MINUTES: "${CLEANUP_GRACE_MINUTES:-15}"
+      CLEANUP_GRACE_MINUTES: "${CLEANUP_GRACE_MINUTES:-1440}"   # 24 hours (owner, 25 Nov 2026)
       DB_POOL_SIZE: "3"
       DB_MAX_OVERFLOW: "2"
     volumes:

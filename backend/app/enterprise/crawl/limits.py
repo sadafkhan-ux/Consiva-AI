@@ -1,7 +1,9 @@
 """Resource limits of an Enterprise crawl: a memory budget and a runtime deadline.
 
 Both exist so that one huge or hostile site cannot take the worker down. Neither hides anything: when a limit ends the crawl, the scan records WHY (`stop_reason` = `memory_limit` or
-`time_limit`), the URLs it did not reach stay `pending` in the inventory, and the coverage declaration reports the scan as partial. A scan stopped this way can be resumed.
+`time_limit`), the URLs it did not reach stay `pending` in the inventory, and the coverage declaration reports the scan as partial. A scan stopped this way can be resumed
+(POST /resume, scans.reopen_limit_stopped). Each run of the crawl gets the full budget again: the limit protects the worker from one long run, it is not a lifetime limit of the scan,
+and a lifetime limit would make a time-limited scan impossible to resume.
 
 Memory is the resident memory of this process and of the browsers it started (Chromium runs as child processes, so the process alone would understate it). The clock, the memory reading
 and the sleep are parameters so the behaviour is tested without waiting or allocating.

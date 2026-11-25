@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { enterpriseErrorMessage, enterpriseScans, type ScanSummary } from "../api/enterprise";
-import { completionTone, isLive, text } from "./format";
+import { canResume, completionTone, isLive, text } from "./format";
 import { DocumentsTab, EvidenceTab, UrlsTab } from "./ListTabs";
 import { ChangesTab, FindingsTab, ReportTab } from "./MoreTabs";
 import { OverviewTab } from "./OverviewTab";
@@ -86,7 +86,7 @@ export function ScanPage({ scanId, canReview, onBack }: { scanId: string; canRev
 
   const live = s ? isLive(s.completion, s.crawl_status, s.analysis_status) : false;
   const cancelWhy = s && !live ? "The scan is not running." : null;
-  const resumeWhy = s && !["queued", "running", "failed"].includes(s.crawl_status) ? "Only a scan that is waiting, running or failed can be resumed." : null;
+  const resumeWhy = s && !canResume(s.crawl_status, s.stop_reason, s.analysis_status) ? "Only a scan that is waiting or running, was blocked by the website, or was stopped by a time or memory limit can be resumed." : null;
   const analyzeWhy = s && (s.crawl_status !== "completed" ? "The crawl has to finish before analysis can run." : s.analysis_status === "running" ? "Analysis is already running." : null);
   const ct = s ? completionTone(s.completion) : null;
 

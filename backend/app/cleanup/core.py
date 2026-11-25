@@ -43,19 +43,21 @@ class TargetNotVerified(RuntimeError):
 @dataclass
 class Settings:
     enabled: bool = True
-    grace_minutes: int = 15
+    grace_minutes: int = 1440            # 24 hours (owner, 25 Nov 2026)
     allowed_hosts: tuple[str, ...] = ("db", "localhost", "127.0.0.1")
     allowed_databases: tuple[str, ...] = ("consiva",)
     confirm: str = ""                     # must equal "<database>@<host>"
     respect_paused_reviews: bool = False
+    keep_enterprise: bool = True          # owner's decision, 25 Nov 2026: Enterprise results (score, PDF, evidence) are kept, never cleared automatically; CLEANUP_KEEP_ENTERPRISE=false clears them again
 
     @classmethod
     def from_env(cls) -> "Settings":
         def csv_(name, default):
             return tuple(x.strip() for x in os.environ.get(name, default).split(",") if x.strip())
-        return cls(enabled=os.environ.get("CLEANUP_ENABLED", "true").lower() in ("1", "true", "yes"), grace_minutes=int(os.environ.get("CLEANUP_GRACE_MINUTES", "15")),
+        return cls(enabled=os.environ.get("CLEANUP_ENABLED", "true").lower() in ("1", "true", "yes"), grace_minutes=int(os.environ.get("CLEANUP_GRACE_MINUTES", "1440")),
                    allowed_hosts=csv_("CLEANUP_ALLOWED_DB_HOSTS", "db,localhost,127.0.0.1"), allowed_databases=csv_("CLEANUP_ALLOWED_DB_NAMES", "consiva"),
-                   confirm=os.environ.get("CLEANUP_CONFIRM_DATABASE", ""), respect_paused_reviews=os.environ.get("CLEANUP_RESPECT_PAUSED_REVIEWS", "false").lower() in ("1", "true", "yes"))
+                   confirm=os.environ.get("CLEANUP_CONFIRM_DATABASE", ""), respect_paused_reviews=os.environ.get("CLEANUP_RESPECT_PAUSED_REVIEWS", "false").lower() in ("1", "true", "yes"),
+                   keep_enterprise=os.environ.get("CLEANUP_KEEP_ENTERPRISE", "true").lower() in ("1", "true", "yes"))
 
 
 @dataclass
@@ -230,6 +232,10 @@ async def run(*, execute: bool = False, settings: Settings | None = None, agents
               only_scan: uuid.UUID | None = None, only_orgs: list[uuid.UUID] | None = None, history_copies: bool = True) -> Report:
     """One clean-up pass. With execute false nothing is changed: the report says what would be."""
     settings = settings or Settings.from_env()
+    if settings.keep_enterprise and agents != ("enterprise",):
+        # Enterprise results are kept (owner's decision, 25 Nov 2026): the automatic passes (the cleanup service and the pass after each Enterprise scan) clear the 5-page agent only.
+        # Only an explicit `--agent enterprise` run still clears Enterprise scans. The 5-page agent's cleanup is unchanged.
+        agents = tuple(a for a in agents if a != "enterprise")
     t0 = time.monotonic()
     async with async_session_factory() as lock_db:
         target = await verify_target(lock_db, settings)

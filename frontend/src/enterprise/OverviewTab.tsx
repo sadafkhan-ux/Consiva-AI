@@ -119,7 +119,7 @@ export function OverviewTab({ s }: { s: ScanSummary }) {
           <CountGrid title="Pages" rows={[
             ["Discovered", u?.discovered], ["Eligible", u?.eligible], ["Crawled", u?.crawled], ["Analysed", u?.analysed], ["Pending", u?.pending], ["Excluded", u?.excluded], ["Failed", u?.failed],
           ]} />
-          <CountGrid title="Documents" rows={[["Discovered", d.documents.discovered], ["Extracted", d.documents.extracted], ["Partly extracted", d.documents.partly_extracted], ["Unreadable", d.documents.unreadable]]} />
+          <CountGrid title="Documents" rows={[["Discovered (incl. on other hosts, not read)", d.documents.discovered], ["Extracted", d.documents.extracted], ["Partly extracted", d.documents.partly_extracted], ["Unreadable", d.documents.unreadable]]} />
           <CountGrid title="Evidence and parameters" rows={[
             ["Evidence records", d.evidence.records],
             ...(typeof d.parameters.pass === "number"

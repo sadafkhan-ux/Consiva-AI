@@ -177,6 +177,14 @@ async def reopen_blocked(db: AsyncSession, scan_id: uuid.UUID) -> int:
     return res.rowcount or 0
 
 
+async def reopen_unreached(db: AsyncSession, scan_id: uuid.UUID) -> int:
+    """For a resumed scan that a time or memory limit had stopped: the URLs left pending lose their "not inspected" note (they will be inspected now). Pages already done are kept.
+    Returns how many URLs are waiting."""
+    res = await db.execute(text("update ent_frontier set status_reason = null, updated_at = now() where scan_id = :s and status = 'pending' and status_reason like 'not inspected:%'"),
+                           {"s": scan_id})
+    return res.rowcount or 0
+
+
 async def mark_done(db: AsyncSession, row_id: uuid.UUID, *, http_status: int | None, final_url: str | None, content_type: str | None, note: str | None = None) -> None:
     """The page was read. `note` records anything left unread (for a document: the pages that had no text and need OCR)."""
     await db.execute(

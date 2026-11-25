@@ -251,6 +251,8 @@ export interface ScanSummary {
   domain: string;
   crawl_status: EnterpriseScanState;
   analysis_status: AnalysisState;
+  /** Why the crawl stopped (a limit, a block, a cancel); null when it ran to its end. */
+  stop_reason?: string | null;
   completion: Completion;
   /** The earlier 51-parameter result, kept for compatibility; not the official score. */
   score: EnterpriseScore | null;

@@ -50,6 +50,7 @@ class M3ReportData:
     consent: dict = field(default_factory=dict)
     documents: list[dict] = field(default_factory=list)
     tls: dict = field(default_factory=dict)
+    sitemap: dict = field(default_factory=dict)                     # the crawl's `sitemap_read` audit: how many URLs the sitemap gave and whether the reader's cap was reached
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -72,6 +73,8 @@ async def gather(db: AsyncSession, scan_id: uuid.UUID) -> M3ReportData:
     docs = (await db.execute(text("select source_url, count(*) n from ent_evidence where scan_id = :s and kind = 'document_text' group by source_url order by source_url"),
                              {"s": scan_id})).mappings().all()
     d = M3ReportData(str(scan_id), str(scan["org_id"]), scan["website_url"], dict(scan), row.result, str(row.id), frontier, documents=[dict(x) for x in docs])
+    sm = await db.scalar(text("select detail from ent_audit_events where scan_id = :s and event = 'sitemap_read' order by created_at desc limit 1"), {"s": scan_id})
+    d.sitemap = sm if isinstance(sm, dict) else {}
 
     def js(c):
         try:
@@ -96,8 +99,8 @@ async def gather(db: AsyncSession, scan_id: uuid.UUID) -> M3ReportData:
                 vendor_of.setdefault(t.get("host"), (t.get("vendor") or t.get("host"), t.get("category") or ""))
             examples = c.get("examples") or {}
             for h in c.get("hosts") or []:
-                if not h.get("third_party"):
-                    continue
+                if not h.get("third_party") or "." not in (h.get("host") or ""):
+                    continue                 # scans stored before page_inspect skipped non-web addresses: a chrome-extension id has no dot and is not a host
                 x = hosts.setdefault(h["host"], {"host": h["host"], "pages": 0, "requests": 0, "types": Counter(), "examples": [], "states": {"before a choice"}})
                 x["pages"] += 1
                 x["requests"] += h.get("requests", 0)
@@ -186,6 +189,7 @@ th { background: #eef0fb; text-align:left; font-size: 7.4pt; text-transform: upp
 td { padding: 4px 5px; border-bottom: 1px solid #ebedf5; vertical-align: top; line-height: 1.35; }
 td.num, th.num { text-align: right; white-space: nowrap; }
 .chip { display:inline-block; padding: 1px 7px; border-radius: 9px; font-size: 7.4pt; font-weight: 600; white-space: nowrap; }
+table.fixed td .chip { white-space: normal; max-width: 100%; text-align: center; line-height: 1.25; }   /* a narrow Status column: wrap, never overlap the Evidence column */
 .ok { background:#dcfce7; color:#166534 } .part { background:#fef3c7; color:#92400e } .bad { background:#fee2e2; color:#991b1b } .na { background:#eceef5; color:#555 }
 .ev { color:#3b3f58; font-size: 7.6pt; word-break: break-word; } .ev div { margin-bottom: 2px } .small { font-size: 7.4pt; color:#5b6078 }
 .flag { font-size: 7pt; color:#7c2d12; background:#ffedd5; border-radius: 6px; padding: 0 5px; margin-left: 3px; white-space: nowrap }
@@ -394,7 +398,7 @@ method {e(r['catalogue_version'])}: {r['parameters']} parameters, one per indepe
 <div class="grid2"><div class="box"><h3>Marks</h3><p>Each of the {r['parameters']} parameters is one independently assessable requirement. Its weight reflects its importance (directly observed core consent and notice duties weigh most; supporting technical signals least).
 Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks across all parameters total exactly <b>100</b> and no parameter loses its relative weight.</p>
 <table><thead><tr><th>Status</th><th>Marks awarded</th></tr></thead><tbody><tr><td>{chip('pass')}</td><td>100% of the parameter's marks</td></tr><tr><td>{chip('partial')}</td><td>50%</td></tr><tr><td>{chip('fail')}</td><td>0</td></tr>
-<tr><td>{chip('not_applicable')}</td><td>Removed from the maximum, with the reason documented (conditional duties only)</td></tr></tbody></table></div>
+<tr><td>{chip('not_applicable')}</td><td>Removed from the maximum, with the reason documented (a conditional duty that does not apply, a check with nothing to test on this site, or a result held for human review)</td></tr></tbody></table></div>
 <div class="box"><h3>Score</h3><p><b>Score = marks earned ÷ applicable maximum × 100</b><br>= {fm(r['marks_earned'])} ÷ {fm(r['applicable_max'])} × 100 = <b>{fm(r['score'])}</b></p>
 <p>The applicable maximum is 100 minus the marks of parameters that do not apply ({fm(r['not_applicable_max'])} here{': ' + ', '.join(na_kinds) + ' duties' if na_kinds else ''}). Category percentages use the same formula within the category.</p>
 <h3>URL-wise parameters</h3><p>Where a requirement applies to every page or form, every applicable URL is assessed and the result is: <b>Pass</b> if every URL meets it, <b>Partial</b> if at least half do, <b>Fail</b> if fewer than half do. One good page never earns the marks alone.</p></div></div>
@@ -574,8 +578,9 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
           + "<br><span class='small'>Read from the site's own pages, forms, third-party services and policy text. It decides which conditional duties apply; it never changes a finding's severity.</span></div>")
     hr = r.get("human_review_pending") or []
     if hr:
-        w(f"<p><b>{fm(r.get('human_review_max'))} marks held back</b> ({', '.join(hr)}): the website does not settle whether these duties apply. They are kept out of the maximum like a duty "
-          "that does not apply, but they are not a confirmed Not applicable: the organisation confirms, and the score is recalculated.</p>")
+        w(f"<p><b>{fm(r.get('human_review_max'))} marks held back for human review</b> ({', '.join(hr)}): the website does not settle these results (for a conditional duty, whether it "
+          "applies; for N01, whether a notice is published on a page the crawl did not reach). They are kept out of the maximum, like a duty that does not apply, but they are not a "
+          "confirmed Not applicable. The score in this report is calculated without them; a person should confirm each one (section 11) before the score is relied on.</p>")
     w("<table><thead><tr><th>ID</th><th>Obligation</th><th>Act / Rule</th><th class='num'>Marks</th><th>Applies?</th><th>Reason</th></tr></thead><tbody>")
     for p in cat.PARAMS:
         if p.kind in (cat.CONDITIONAL, cat.INFO):
@@ -594,13 +599,13 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
         dcat = x.get("duty_category") or ""
         if pid == "RT4" and site_cat and any(c2 in (site_cat.get("categories") or []) for c2 in ("ecommerce", "gaming", "social_media")):
             dcat = ", ".join(cat_label(c2) for c2 in site_cat["categories"] if c2 in ("ecommerce", "gaming", "social_media")) + " (Third Schedule)"
-        status = "Informational" if x["status"] == "not_applicable" else x["status_label"]
+        status = "Not applicable" if x["status"] == "not_applicable" else x["status_label"]
         ev = "<br>".join(e(v) for v in (x.get("evidence") or [])[:3]) or "<span class='small'>none</span>"
         w(f"<tr><td><b>{pid}</b><br><span class='small'>{e(p.name)}</span></td><td>{e(dcat)}</td><td>{APPL_LABEL.get(appl, e(appl))}</td>"
           f"<td>{SEV_LABEL.get(x.get('severity'), '<span class=small>None</span>')}</td><td>{chip(x['status']) if x['status'] != 'not_applicable' else e(status)}</td>"
           f"<td class='small'>{ev}</td><td>{e(x['explanation'])}</td><td>{legal(p)}</td></tr>")
     w("</tbody></table><p class='small'>Severity is the importance of the duty itself (High: significant statutory risk; Medium: a meaningful gap to correct; Low: a minor "
-      "presentation or disclosure issue). A Fail shows the duty's severity, a Partial one level lower; a Pass or an informational entry has none.</p>")
+      "presentation or disclosure issue). A Fail shows the duty's severity, a Partial one level lower; a Pass, a Not applicable or the information-only entry (E01) has none.</p>")
 
     # ---- 11. evidence limits and human review
     w('<h2><span class="n">11</span>Evidence limits and human-review requirements</h2>')
@@ -613,7 +618,10 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
     w(", ".join(f"<b>{p.id}</b> {e(p.name)}" for p in cat.PARAMS if p.kind == cat.RECORDS))
     w(". For these, Pass means the policy states the practice; the organisation's records (contracts, logs, breach procedure, security controls) would confirm it.</p>")
     w("<h3>Other limits</h3><p>Only the submitted host was scanned: other hosts and subdomains (for example a separate application or login site) were not opened. Pages behind a login were not reached. "
-      "Forms were read, not submitted. Consent tests ran on the homepage; before-consent behaviour was observed on every page.</p>")
+      "Forms were read, not submitted. Consent tests ran on the homepage; before-consent behaviour was observed on every page. Pages were opened one at a time.</p>")
+    if d.sitemap.get("sitemap_capped"):
+        w(f"<p>The sitemap reader stops at {d.sitemap.get('sitemap_cap', 500)} URLs and this site's sitemap reached that limit: sitemap entries past it were found only where "
+          "a page links to them, so a page listed only in the sitemap may not have been inspected.</p>")
 
     # ---- 12. prioritised corrective actions
     todo = sorted([x for x in scored if x["status"] != "pass"], key=lambda x: (-(x["max"] - x["earned"]), x["parameter_id"]))
@@ -630,8 +638,16 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
     for k, cc in ((k, r["categories"][k]) for k in cat.CATS if k in r["categories"]):
         w(f"<tr><td>{e(cc['label'])}</td><td class='num'>{fm(cc['max'])}</td><td class='num'>{fm(cc['earned'])}</td><td class='num'>{fm(cc['pct']) if cc['pct'] is not None else 'n/a'}</td></tr>")
     w(f"<tr class='cathead'><td>Overall</td><td class='num'>{fm(r['applicable_max'])}</td><td class='num'>{fm(r['marks_earned'])}</td><td class='num'>{fm(r['score'])}</td></tr></tbody></table>")
+    na_lines = [x for x in lines.values() if x["status"] == "not_applicable"]
+    na_review = [x for x in na_lines if x.get("applicability") == cat.HUMAN_REVIEW]
+    na_cond = [x for x in na_lines if x not in na_review and cat.BY_ID[x["parameter_id"]].kind == cat.CONDITIONAL]
+    na_other = len(na_lines) - len(na_review) - len(na_cond)
+    why = [f"{len(na_cond)} conditional duties that do not apply to this organisation"] if na_cond else []
+    why += [f"{na_other} checks with nothing to test on this site (for example no form, no cookie or no third-party service)"] if na_other else []
+    why += [f"{len(na_review)} held back for human review"] if na_review else []
     w(f"<p><b>DPDP compliance score: {fm(r['score'])} / 100</b> — {c.get('pass', 0)} Pass, {c.get('partial', 0)} Partial, {c.get('fail', 0)} Fail across {len(scored)} applicable parameters; "
-      f"{c.get('not_applicable', 0)} conditional parameters do not apply.</p>")
+      f"{len(na_lines)} parameters not applicable" + (f" ({'; '.join(why)})" if why else "") + "; "
+      f"{c.get('information', 0)} shown for information only.</p>")
 
     # ---- appendix A: inventory and criteria
     w(f'<h2 class="pb">Appendix A — Parameter inventory and marking criteria (catalogue {e(r["catalogue_version"])})</h2>'
@@ -660,7 +676,7 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
     # ---- appendix C: every URL found, and the scan's transparency
     w(f'<h2 class="pb">Appendix C — Every URL found, and what became of it ({len(d.frontier)})</h2>')
     w("<table><tbody>"
-      f"<tr><td>URLs discovered</td><td class='num'>{len(d.frontier)}</td></tr><tr><td>Pages inspected one at a time</td><td class='num'>{fr_status.get('done', 0)}</td></tr>"
+      f"<tr><td>URLs discovered</td><td class='num'>{len(d.frontier)}</td></tr><tr><td>Web pages inspected one at a time</td><td class='num'>{len(d.pages)}</td></tr><tr><td>Documents read (PDF, DOCX)</td><td class='num'>{len(d.documents)}</td></tr>"
       f"<tr><td>Failed or not reached</td><td class='num'>{fr_status.get('failed', 0) + fr_status.get('pending', 0)}</td></tr>"
       f"<tr><td>Excluded (another host, duplicate, variant)</td><td class='num'>{fr_status.get('excluded', 0)}</td></tr>"
       f"<tr><td>Clean reloads of pages that tracked before a choice</td><td class='num'>{len(recheck.get('pages') or []) if recheck else 'not run'}</td></tr>"

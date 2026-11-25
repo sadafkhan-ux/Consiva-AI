@@ -7,7 +7,9 @@ import pytest
 from app.enterprise.models import EntAnalysisChunk, EntAssessment, EntAuditEvent, EntFinding, EntReport, EntScoreResult
 
 SQL = (Path(__file__).resolve().parents[2] / "migrations" / "0055_enterprise_assessment.sql").read_text(encoding="utf-8")
-LATER = (Path(__file__).resolve().parents[2] / "migrations" / "0058_enterprise_policy_kb.sql").read_text(encoding="utf-8")
+_MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
+#: Columns later migrations add to these tables (0058 the policy knowledge base, 0063 the report's method 3.0.0 link).
+LATER = "\n".join((_MIGRATIONS / f).read_text(encoding="utf-8") for f in ("0058_enterprise_policy_kb.sql", "0063_enterprise_report_method3_link.sql"))
 NEW = ("ent_assessments", "ent_score_results", "ent_findings", "ent_analysis_chunks", "ent_reports", "ent_audit_events")
 
 

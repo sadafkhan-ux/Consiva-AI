@@ -350,6 +350,10 @@ async def _keep_tls(scan_id, root_url: str) -> None:
         logger.warning("enterprise scan %s: TLS probe of %s could not be kept", scan_id, host, exc_info=True)
 
 
+#: Reasons a consent test did not run that say nothing about the site's banner, so the test is worth one more try.
+_CONSENT_RETRY_REASONS = ("error", "page_not_loaded", "homepage_not_loaded")
+
+
 async def _keep_consent(scan_id, root_url: str, browser, settings) -> None:
     """The consent tests on the homepage, right after the homepage was inspected and before any other page (the owner's sequence): Accept, Reject, Reject carried to further pages,
     withdrawal, purpose by purpose and the buttons compared, ONE browser session at a time. The further pages are the first same-site pages the homepage links to (legal pages first).
@@ -359,13 +363,26 @@ async def _keep_consent(scan_id, root_url: str, browser, settings) -> None:
             done = await db.scalar(text("select count(*) from ent_evidence where scan_id = :s and kind = 'consent'"), {"s": scan_id})
             if done:
                 return
+            # Further pages: only URLs still to be inspected or already read (never an excluded, failed or off-host one), on the scanned host itself.
             rows = (await db.execute(text(
-                r"select original_url from ent_frontier where scan_id = :s and depth = 1 and original_url !~* '\.(pdf|docx?|odt|rtf|xlsx?|pptx?)($|\?)' "
-                "order by priority, discovered_at limit 12"), {"s": scan_id})).all()
-        root_key = root_url.rstrip("/")
-        further = [r.original_url for r in rows if r.original_url.rstrip("/") != root_key][:3]
+                r"select original_url from ent_frontier where scan_id = :s and depth = 1 and status in ('pending', 'in_progress', 'done') "
+                r"and original_url !~* '\.(pdf|docx?|odt|rtf|xlsx?|pptx?)($|\?)' order by priority, discovered_at limit 12"), {"s": scan_id})).all()
+            # The homepage as it was actually reached (after a same-host redirect such as / -> /en/), so the tests open the page that was inspected.
+            home_final = await db.scalar(text("select final_url from ent_frontier where scan_id = :s and depth = 0 and status = 'done' order by discovered_at limit 1"), {"s": scan_id})
+        host = (urlparse(root_url).hostname or "").lower()
+        start = home_final if home_final and (urlparse(home_final).hostname or "").lower() == host else root_url
+        skip = {root_url.rstrip("/"), start.rstrip("/")}
+        further = [r.original_url for r in rows if r.original_url.rstrip("/") not in skip and (urlparse(r.original_url).hostname or "").lower() == host][:3]
         make_context, goto = make_session_tools(browser, settings, host_guard(root_url), _new_context_kwargs)
-        results = await run_consent_suite(make_context, goto, root_url, further, max_parallel=1)
+        results = await run_consent_suite(make_context, goto, start, further, max_parallel=1)
+        # A test that failed for a passing reason (an error, the page did not load) is run once more; a real observation (no control found, a click that did nothing) is kept as it is.
+        again = [n for n, r in results.items() if not r.get("tested", True) and r.get("reason") in _CONSENT_RETRY_REASONS]
+        if again:
+            logger.info("enterprise scan %s: retrying consent test(s) %s once", scan_id, ", ".join(sorted(again)))
+            retry = await run_consent_suite(make_context, goto, start, further, max_parallel=1)
+            for n in again:
+                if retry.get(n, {}).get("tested") or retry.get(n, {}).get("reason") not in _CONSENT_RETRY_REASONS:
+                    results[n] = {**retry[n], "retried": True}
         async with async_session_factory() as db:
             for name, result in sorted(results.items()):
                 await evidence.store(db, scan_id, kind="consent", source_url=root_url, content=json.dumps({"test": name, **result}, sort_keys=True, ensure_ascii=False),
@@ -502,6 +519,7 @@ async def _process_document(db, claimed: frontier.Claimed, *, scan_id, root_url,
 #: Audit events that mark a finished phase, so a resumed scan does not repeat it.
 DISCOVERY_DONE = "url_discovery_completed"
 PRIVACY_REVIEWED = "privacy_policy_reviewed"
+SITEMAP_READ = "sitemap_read"          # what the sitemap gave (and whether the shared reader's cap was reached), for the report
 
 
 async def _audit_has(scan_id, event: str) -> bool:
@@ -784,6 +802,7 @@ async def run(scan_id: uuid.UUID, org_id: uuid.UUID, *, worker_id: str = WORKER_
                     if sum((await frontier.counts(db, scan_id)).values()) == 0:
                         seeded = await discovery.seed(db, scan_id, context, root_url, rules, max_urls=recorded, max_depth=max_depth)
                         await frontier.add_not_recorded(db, scan_id, seeded.get("not_recorded", 0))
+                        await store.audit(db, scan_id, "system", SITEMAP_READ, {k: v for k, v in seeded.items() if isinstance(v, int)} | {"sitemap_cap": discovery.SITEMAP_CAP})
                     await db.commit()
 
                 # PHASE 1. The whole URL inventory, discovered and recorded before any page is deeply inspected.
@@ -909,7 +928,9 @@ async def run(scan_id: uuid.UUID, org_id: uuid.UUID, *, worker_id: str = WORKER_
         return await _finish(scan_id, org_id, "failed", error=f"no page could be scanned ({why})")
     if limit_hit:
         async with async_session_factory() as db:
-            await frontier.mark_unreached(db, scan_id, f"the crawl stopped at the {limit_hit.replace('_', ' ')}; resume the scan to inspect it")
+            then = ("scan again with a higher page limit to inspect it" if limit_hit == "url_limit"
+                    else "resume the scan to inspect it (the resumed run gets a new runtime and memory budget)")
+            await frontier.mark_unreached(db, scan_id, f"the crawl stopped at the {limit_hit.replace('_', ' ')}; {then}")
             await db.commit()
     return await _finish(scan_id, org_id, "completed", stop_reason=limit_hit)
 

@@ -250,6 +250,8 @@ class EntReport(Base):
     scan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("ent_scans.id", ondelete="CASCADE"), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     score_result_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ent_score_results.id", ondelete="SET NULL"), nullable=True)
+    # The method 3.0.0 result the PDF was printed from (migration 0063); null for a 51-parameter report or an older one.
+    method3_result_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("ent_method3_results.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'ready'"))
     pdf: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     sha256: Mapped[str | None] = mapped_column(Text, nullable=True)

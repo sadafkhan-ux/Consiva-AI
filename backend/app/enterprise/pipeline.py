@@ -78,6 +78,28 @@ async def apply_crawl_completeness_guard(db: AsyncSession, scan_id: uuid.UUID) -
     return True
 
 
+class _HoldFinalStatus:
+    """The text analysis' repository inside the analysis phase. The text analysis is not the last step (the knowledge base, the v2 score and the method 3.0.0 score follow), so it must not
+    mark the scan's analysis finished: a screen that sees "completed" stops polling before the official score exists. A terminal status it writes is kept here instead, with its error,
+    and the analysis stays "running"; run_analysis_phase writes the final status once every step, method 3.0.0 included, has run."""
+
+    TERMINAL = ("completed", "partial", "failed")
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.status: str | None = None
+        self.error: str | None = None
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def set_scan_status(self, scan_id, status, *, started=False, completed=False, error=None) -> None:
+        if status in self.TERMINAL:
+            self.status, self.error = status, error
+            return None
+        return await self._inner.set_scan_status(scan_id, status, started=started, completed=completed, error=error)
+
+
 def _text_analysis():
     """The model-assisted text analysis, if it is installed. None when it is not, which leaves the parameters it feeds not assessed."""
     try:
@@ -133,12 +155,15 @@ async def run_analysis_phase(scan_id: uuid.UUID, org_id: uuid.UUID, *, as_of: da
         problems.append(f"rule assessors: {type(exc).__name__}: {exc}"[:300])
 
     outcome_status = None
+    held: _HoldFinalStatus | None = None
     run_text = _text_analysis()
     if run_text is None:
         problems.append("text analysis is not installed: the notice, contact, rights and cross-check parameters were not assessed")
     else:
         try:
-            outcome = await run_text(scan_id, org_id, llm=llm, as_of=as_of) if llm is not None else await run_text(scan_id, org_id, as_of=as_of)
+            from app.enterprise.analysis.repo import SqlRepo
+            held = _HoldFinalStatus(SqlRepo())
+            outcome = await run_text(scan_id, org_id, as_of=as_of, repo=held, **({"llm": llm} if llm is not None else {}))
             outcome_status = getattr(outcome, "status", None)
         except Exception as exc:
             logger.exception("enterprise scan %s: the text analysis failed", scan_id)
@@ -161,12 +186,13 @@ async def run_analysis_phase(scan_id: uuid.UUID, org_id: uuid.UUID, *, as_of: da
     await method3.run_safe(scan_id, org_id, as_of=as_of)
 
     async with async_session_factory() as db:
-        current = await db.scalar(text("select analysis_status from ent_scans where id = :i"), {"i": scan_id})
+        current = (held.status if held is not None else None) or await db.scalar(text("select analysis_status from ent_scans where id = :i"), {"i": scan_id})
         if problems:
             final = "failed" if current == "failed" and not outcome_status else "partial"
         else:
             final = current if current in ("completed", "partial", "failed") else "completed"
-        await set_analysis_status(db, scan_id, final, error="; ".join(problems) or None)
+        # Only now, after method 3.0.0 has run, is the analysis marked finished (and analysis_completed_at stamped).
+        await set_analysis_status(db, scan_id, final, error="; ".join(problems) or (held.error if held is not None else None))
         await store.audit(db, scan_id, "system", "analysis_finished", {"status": final, "problems": problems})
         await db.commit()
     from app.cleanup import core as cleanup

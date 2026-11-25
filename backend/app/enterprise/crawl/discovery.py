@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.enterprise.crawl import frontier, scope
 from app.scanner.crawler import _fetch_robots          # existing, unchanged: robots.txt per RFC 9309 with the SSRF checks
 from app.scanner.robots import RobotsRules
+from app.scanner.sitemap import _MAX_URLS as SITEMAP_CAP          # read-only: the shared reader's ceiling, so the scan can report that it was reached
 from app.scanner.sitemap import discover_sitemap_urls
 from app.scanner.url_safety import assert_safe_url
 
@@ -42,6 +43,8 @@ async def seed(db: AsyncSession, scan_id: uuid.UUID, context: BrowserContext, ro
         return ok
 
     urls = await discover_sitemap_urls(context, root_url, list(rules.sitemaps), in_scope)
+    # The 5-page sitemap reader (shared, unchanged) stops at SITEMAP_CAP URLs. Say so when it did: entries past the cap are found only if a page links to them (phase 1).
+    out["sitemap_listed"], out["sitemap_capped"] = len(urls), int(len(urls) >= SITEMAP_CAP)
     for i, url in enumerate(urls):
         kind = scope.classify(url, root_url)
         if kind == scope.SKIP:

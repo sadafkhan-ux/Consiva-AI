@@ -29,7 +29,7 @@ from app.enterprise.crawl import page_inspect
 from app.enterprise.crawl.renderer import Rendered, RenderFailed, _links, _redirect_chain
 from app.monitoring import blocks
 from app.scanner.crawler import (
-    _CMP_GLOBAL_VAR_CANDIDATES, _FORM_CHECKED_JS, _STORAGE_KEYS_JS, _TRACKER_SETTLE_MS, _capture_homepage_screenshot, _collect_iframe_signal_evidence,
+    _CMP_GLOBAL_VAR_CANDIDATES, _FORM_CHECKED_JS, _SCROLL_MAX_STEPS, _STORAGE_KEYS_JS, _TRACKER_SETTLE_MS, _capture_homepage_screenshot, _collect_iframe_signal_evidence,
     _drain_set_cookie_reads, _navigate_with_retry, _page_is_a_block_page, _page_says_it_was_not_found, _progressive_scroll, _settled_control_text, _settled_text,
     _wait_for_load_event, _watch_set_cookies,
 )
@@ -90,6 +90,13 @@ async def deep_inspect(context: BrowserContext, url: str, *, root_url: str, sett
             raise NotFoundPage("the page answered 200 but says it was not found")
         screenshot = await _capture_homepage_screenshot(page, http_status=status, final_url=page.url) if is_home else None
         scroll_steps = await _progressive_scroll(page, request_count=lambda: len(request_records))
+        scroll_stopped = None
+        if scroll_steps >= _SCROLL_MAX_STEPS:          # the 5-page scroll is bounded; say when it ran out before the bottom, so the page's evidence note can tell the reader
+            try:
+                at_bottom = await page.evaluate("() => window.innerHeight + window.scrollY >= document.body.scrollHeight - 2")
+            except Exception:                                              # noqa: BLE001
+                at_bottom = True                                           # unknown: never claim a limit that may not have been reached
+            scroll_stopped = None if at_bottom else "max_steps"
 
         # The Enterprise extras, on top of the 5-page sequence: whatever goes wrong in them, the page is still read and the problem is recorded.
         expanded: dict = {}
@@ -165,4 +172,4 @@ async def deep_inspect(context: BrowserContext, url: str, *, root_url: str, sett
     return Rendered(
         url=url, final_url=final_url, http_status=status, content_type=headers.get("content-type"), title=title or None, html=html, text=full_text, links=_links(html, final_url),
         headers=headers, redirect_chain=chain, requests=[{"url": u, "type": t} for u, t in request_records], cookies=cookies, dom=dom,
-        scroll={"steps": scroll_steps, "settled": settled, "method": "5-page progressive scroll"}, expanded=expanded, five_page=five_page)
+        scroll={"steps": scroll_steps, "settled": settled, "method": "5-page progressive scroll", **({"stopped": scroll_stopped} if scroll_stopped else {})}, expanded=expanded, five_page=five_page)

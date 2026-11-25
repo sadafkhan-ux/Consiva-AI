@@ -279,3 +279,112 @@ def test_migration_0062_is_additive():
     sql = (Path(__file__).resolve().parents[2] / "migrations" / "0062_enterprise_method3.sql").read_text(encoding="utf-8").lower()
     assert "create table if not exists ent_method3_results" in sql
     assert "drop " not in sql and "alter table ent_score_results" not in sql
+
+
+# ---- N01 when the crawl was cut short (audit fix, 25 Nov 2026) ----------------------------------------------------------------------------------------------------------------
+
+def _without_policy():
+    ev, fr, _chunks = rows()
+    pol = SITE + "privacy-policy"
+    return [e for e in ev if e.source_url != pol], [f for f in fr if f.final_url != pol]
+
+
+def test_no_notice_on_a_full_crawl_is_a_fail():
+    ev, fr = _without_policy()
+    out = {r.parameter_id: r for r in assess(assemble(ev, fr, [], scan_id="s", root_url=SITE, as_of=AS_OF), [])}
+    assert out["N01"].status == FAIL
+
+
+def test_no_notice_on_a_cut_short_crawl_is_held_for_human_review_never_a_fail():
+    from app.enterprise.scoring.engine import Assessment
+    ev, fr = _without_policy()
+    v2 = [Assessment("N1", "not_assessed", (), None, "No privacy notice was found in the pages reached, but the crawl stopped early (time_limit).")]
+    out = {r.parameter_id: r for r in assess(assemble(ev, fr, [], scan_id="s", root_url=SITE, as_of=AS_OF), v2)}
+    n01 = out["N01"]
+    assert n01.status == NA and n01.review and n01.applicability == cat.HUMAN_REVIEW and "time_limit" in (n01.limitation or "")
+    scored = score(list(out.values()), as_of=AS_OF)
+    assert "N01" in scored["human_review_pending"]                     # held out of the maximum, not counted as a Fail
+
+
+def test_report_says_what_not_applicable_means_and_promises_no_recalculation(results):
+    import re as _re
+    from app.enterprise.report.method3 import M3ReportData, render_html
+    out = score(list(results.values()), as_of=AS_OF)
+    d = M3ReportData("s", "o", SITE, {"started_at": None, "completed_at": None}, out, "r", pages=[{"url": SITE, "category": "other", "forms": 0}],
+                     sitemap={"sitemap_capped": 1, "sitemap_cap": 500})
+    html = render_html(d)
+    assert "Informational" not in html                                           # Not applicable is never labelled as information
+    assert "the score is recalculated" not in html                               # no screen exists for it
+    na = sum(1 for x in out["lines"] if x["status"] == "not_applicable")
+    assert _re.search(rf"{na} parameters not applicable \(", html)               # split into conditional duties / nothing to test / human review
+    assert "sitemap reader stops at 500 URLs" in html
+
+
+# ---- the analysis phase holds "completed" until method 3.0.0 has run (audit fix, 25 Nov 2026) -------------------------------------------------------------------------------
+
+async def test_the_text_analysis_cannot_mark_the_analysis_finished():
+    from app.enterprise.pipeline import _HoldFinalStatus
+
+    class Inner:
+        def __init__(self):
+            self.calls = []
+
+        async def set_scan_status(self, scan_id, status, **kw):
+            self.calls.append(status)
+
+    inner = Inner()
+    held = _HoldFinalStatus(inner)
+    await held.set_scan_status("s", "running", started=True)
+    await held.set_scan_status("s", "partial", completed=True, error="2 unit(s) of analysis failed")
+    assert inner.calls == ["running"]                                           # the screen keeps polling: the scan is still "running"
+    assert held.status == "partial" and held.error == "2 unit(s) of analysis failed"
+
+
+# ---- resume after a time or memory limit (audit fix, 25 Nov 2026) ------------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("status,stop,analysis,cleared,ok", [
+    ("completed", "time_limit", "completed", False, True),
+    ("completed", "memory_limit", "partial", False, True),
+    ("completed", "url_limit", "completed", False, False),                    # would stop again at once: scan again with a higher limit
+    ("completed", "time_limit", "running", False, False),                     # not while the analysis runs
+    ("completed", "time_limit", "completed", True, False),                    # the stored page text was cleared
+    ("completed", None, "completed", False, False),
+    ("failed", "time_limit", "not_started", False, False),
+])
+def test_which_limit_stopped_scans_can_be_resumed(status, stop, analysis, cleared, ok):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from app.enterprise import scans
+    s = SimpleNamespace(status=status, stop_reason=stop, analysis_status=analysis, purge_summary=None, text_cleared_at=datetime.now(timezone.utc) if cleared else None)
+    assert scans.is_resumable_limit_stop(s) is ok
+
+
+# ---- report and capture fixes after the swaransoft.com review (25 Nov 2026) -------------------------------------------------------------------------------------------------
+
+def test_a_browser_extension_address_is_not_a_third_party_host():
+    from app.enterprise.crawl import page_inspect as pi
+    s = pi.summarise_requests([{"url": "chrome-extension://liecbddmkiiihnedobmlmillhodjkdmb/img/installed.jpg", "type": "image"},
+                               {"url": "data:image/png;base64,AAAA", "type": "image"},
+                               {"url": "https://t.example.net/c", "type": "xhr"}], SITE)
+    assert [h["host"] for h in s["hosts"]] == ["t.example.net"]
+
+
+def test_report_counts_web_pages_and_documents_apart_and_explains_not_applicable(results):
+    from app.enterprise.report.method3 import M3ReportData, render_html
+    out = score(list(results.values()), as_of=AS_OF)
+    pages = [{"url": SITE, "category": "other", "forms": 0}, {"url": SITE + "privacy-policy", "category": "privacy_policy", "forms": 0}]
+    d = M3ReportData("s", "o", SITE, {"started_at": None, "completed_at": None}, out, "r", pages=pages,
+                     frontier=[{"original_url": SITE, "status": "done"}, {"original_url": SITE + "privacy-policy", "status": "done"}, {"original_url": SITE + "a.pdf", "status": "done"}],
+                     documents=[{"source_url": SITE + "a.pdf", "n": 3}])
+    html = render_html(d)
+    assert "Web pages inspected one at a time</td><td class='num'>2<" in html        # web pages only; the PDF is counted on its own line
+    assert "Documents read (PDF, DOCX)</td><td class='num'>1<" in html
+    assert "conditional duties only" not in html
+    assert "table.fixed td .chip { white-space: normal" in html                      # a status badge wraps in its narrow column instead of covering the evidence
+
+
+def test_counted_parameters_print_the_at_least_half_rule_they_are_scored_by():
+    """X01-X03 are scored Partial when at least half are declared/named/itemised (assess.py), like every other counted parameter; the printed criteria must say the same."""
+    for pid in ("X01", "X02", "X03"):
+        p = cat.BY_ID[pid]
+        assert p.partial.startswith("At least half") and p.fail.startswith("Fewer than half"), pid

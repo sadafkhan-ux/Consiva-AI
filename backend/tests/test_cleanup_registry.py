@@ -138,3 +138,45 @@ def test_the_settings_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("CLEANUP_ENABLED", "false")
     s = core.Settings.from_env()
     assert (s.grace_minutes, s.confirm, s.enabled) == (0, "consiva@db", False)
+
+
+def test_enterprise_results_are_kept_by_the_automatic_cleanup(monkeypatch):
+    """Owner's decision, 25 Nov 2026: the automatic passes clear only the 5-page agent; Enterprise scores, PDFs and evidence are kept. `--agent enterprise` still clears them."""
+    seen = {}
+
+    async def fake_locked(execute, settings, agents, *rest):
+        seen["agents"] = agents
+        return "ok"
+
+    class _Lock:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def scalar(self, *a, **k):
+            return True
+
+        async def execute(self, *a, **k):
+            return None
+
+        async def commit(self):
+            return None
+
+    async def fake_verify(_db, _s):
+        return "consiva@db"
+
+    monkeypatch.setattr(core, "async_session_factory", lambda: _Lock())
+    monkeypatch.setattr(core, "verify_target", fake_verify)
+    monkeypatch.setattr(core, "_run_locked", fake_locked)
+    asyncio.run(core.run(settings=core.Settings(confirm="consiva@db")))
+    assert seen["agents"] == ("five_page",)
+    asyncio.run(core.run(settings=core.Settings(confirm="consiva@db"), agents=("enterprise",)))
+    assert seen["agents"] == ("enterprise",)
+    asyncio.run(core.run(settings=core.Settings(confirm="consiva@db", keep_enterprise=False)))
+    assert seen["agents"] == ("five_page", "enterprise")
+    monkeypatch.setenv("CLEANUP_KEEP_ENTERPRISE", "false")
+    assert core.Settings.from_env().keep_enterprise is False
+    monkeypatch.delenv("CLEANUP_KEEP_ENTERPRISE")
+    assert core.Settings.from_env().keep_enterprise is True

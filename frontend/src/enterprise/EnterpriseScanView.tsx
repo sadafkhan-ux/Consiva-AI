@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { saveBlob } from "../api/client";
 import { enterpriseErrorMessage, enterpriseScans, fetchEnterpriseReportPdf, siteHost, type Method3Line, type Method3Result, type ScanSummary } from "../api/enterprise";
-import { dateTime, isLive, text } from "./format";
+import { canResume, categoriesInOrder, dateTime, isLive, text } from "./format";
 
 export const POLL_MS = 4000;
 
@@ -105,7 +105,7 @@ function StatusBanner({ s, live, failed, cancelled, busy, onStop, onResume }: { 
         <span className="dot" />
         <span data-testid="status-text">{message}</span>
         {live && <button type="button" className="stop-btn" onClick={onStop} disabled={busy} style={{ marginLeft: "auto" }}>Stop scan</button>}
-        {failed && <button type="button" className="secondary small" onClick={onResume} disabled={busy} style={{ marginLeft: "auto" }}>Resume</button>}
+        {!live && canResume(s.crawl_status, s.stop_reason, s.analysis_status) && <button type="button" className="secondary small" onClick={onResume} disabled={busy} style={{ marginLeft: "auto" }}>Resume</button>}
       </div>
       {s.error && <p className="muted small" data-testid="scan-error-reason">{s.error}</p>}
       <p className="muted small" style={{ margin: 0 }}>
@@ -246,7 +246,7 @@ function marks(l: Method3Line): string {
 }
 
 function ReportDetails({ m3 }: { m3: Method3Result }) {
-  const cats = Object.entries(m3.categories);
+  const cats = categoriesInOrder(m3.categories);
   const gaps = m3.lines.filter((l) => l.status === "fail" && l.max > 0)
     .sort((a, b) => (SEVERITY_RANK[a.severity ?? ""] ?? 3) - (SEVERITY_RANK[b.severity ?? ""] ?? 3) || b.max - a.max).slice(0, 10);
   return (

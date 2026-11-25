@@ -82,8 +82,8 @@ async def _generate_method3(db: AsyncSession, scan_id: uuid.UUID) -> EntReport |
         return await _store(db, scan_id, status="failed", error=f"method 3.0.0 report: {type(exc).__name__}: {exc}"[:1000])
     from app.enterprise import store
     score = await store.latest_score(db, scan_id)
-    return await _store(db, scan_id, score_result_id=score.id if score is not None else None, status="ready", pdf=pdf, sha256=hashlib.sha256(pdf).hexdigest(), byte_size=len(pdf),
-                        page_count=pages)
+    return await _store(db, scan_id, score_result_id=score.id if score is not None else None, method3_result_id=uuid.UUID(data.result_id), status="ready", pdf=pdf,
+                        sha256=hashlib.sha256(pdf).hexdigest(), byte_size=len(pdf), page_count=pages)
 
 
 async def generate_report(db: AsyncSession, scan_id: uuid.UUID) -> EntReport:

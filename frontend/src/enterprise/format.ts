@@ -89,7 +89,22 @@ export function completionTone(c: string | null | undefined): Tone {
 }
 
 /** States in which the scan can still change: poll while in one of these. */
+/** Mirrors the backend's resume rules (api/scans.py resume): a waiting or running scan, a failed scan the website blocked, or a completed scan a time or memory limit stopped. */
+export function canResume(crawl: string, stopReason: string | null | undefined, analysis?: string): boolean {
+  const stop = (stopReason ?? "").toLowerCase();
+  if (crawl === "queued" || crawl === "running") return true;
+  if (crawl === "failed") return stop === "bot_blocked" || stop === "access_blocked";
+  if (crawl === "completed") return (stop === "time_limit" || stop === "memory_limit") && analysis !== "running";
+  return false;
+}
+
 export function isLive(completion: string | null | undefined, crawl?: string, analysis?: string): boolean {
   if (completion === "queued" || completion === "crawling" || completion === "analysing") return true;
   return crawl === "queued" || crawl === "running" || analysis === "running";
+}
+
+/** The categories in catalogue order. The stored result is JSONB, which reorders object keys, so the order is taken from each label's leading number ("1. Privacy notice"). */
+export function categoriesInOrder<T extends { label: string }>(cats: Record<string, T> | null | undefined): [string, T][] {
+  const n = (l: string) => { const m = /^(\d+)\./.exec(l); return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER; };
+  return Object.entries(cats ?? {}).sort(([, a], [, b]) => n(a.label) - n(b.label) || a.label.localeCompare(b.label));
 }

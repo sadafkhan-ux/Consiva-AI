@@ -68,7 +68,7 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="python -m app.cleanup", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--execute", action="store_true", help="really delete (the default only reports)")
     p.add_argument("--agent", choices=("all", "five_page", "enterprise"), default="all")
-    p.add_argument("--grace-minutes", type=int, default=None, help="how long after a scan finished before its data is cleared (default CLEANUP_GRACE_MINUTES, 15)")
+    p.add_argument("--grace-minutes", type=int, default=None, help="how long after a scan finished before its data is cleared (default CLEANUP_GRACE_MINUTES, 1440 = 24 hours)")
     p.add_argument("--history-dir", default=None, help="write the scan history (CSV) here before clearing")
     p.add_argument("--loop", type=int, default=0, metavar="SECONDS", help="repeat every SECONDS for ever")
     p.add_argument("--scan-id", default=None, help="only this scan")

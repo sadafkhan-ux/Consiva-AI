@@ -63,9 +63,10 @@ def summarise_requests(entries: list[dict], site_url: str, consent_state: str = 
     site = registered_domain(site_url)
     hosts: dict[str, dict] = {}
     for e in entries:
-        host = (urlparse(e.get("url", "")).hostname or "").lower()
-        if not host:
-            continue
+        parsed = urlparse(e.get("url", ""))
+        host = (parsed.hostname or "").lower()
+        if not host or parsed.scheme not in ("http", "https", "ws", "wss"):
+            continue                         # a browser-extension, data: or blob: address is not a host the page contacted (e.g. chrome-extension://<id>)
         h = hosts.setdefault(host, {"host": host, "third_party": registered_domain(host) != site, "requests": 0, "types": {}})
         h["requests"] += 1
         t = e.get("type") or "other"

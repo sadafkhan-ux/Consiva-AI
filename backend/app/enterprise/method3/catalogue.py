@@ -230,12 +230,12 @@ PARAMS = (
     # ---------------- 9. Cross-checks
     P("X01", "X", "Cookies observed are declared", "Every cookie the site sets is declared in its cookie or privacy notice.", "s.5(1)(i)", "R3(b)(i)", 5, URL,
       "Every cookie observed (before consent, after Accept) against the cookie policy text.", "Match each cookie name or its service against the declared list.",
-      "All declared.", "Some declared.", "None declared."),
+      "All declared.", "At least half declared, but not all.", "Fewer than half declared."),
     P("X02", "X", "Third parties contacted are named", "The analytics, advertising and embedded third parties the pages contact are named in the notice.", "s.5(1), s.11(1)(b)", "-", 5, URL,
       "Third-party hosts contacted on every URL, before consent and after Accept, against the notice.", "Match each non-functional service to the notice text.",
-      "All named.", "Some named.", "None named."),
+      "All named.", "At least half named, but not all.", "Fewer than half named."),
     P("X03", "X", "Form data matches the notice", "The data the forms collect is itemised in the notice.", "s.5(1)(i)", "R3(b)(i)", 4, URL,
-      "Fields of every distinct form against the notice items.", "Match each field kind to the notice.", "All itemised.", "Some itemised.", "None itemised."),
+      "Fields of every distinct form against the notice items.", "Match each field kind to the notice.", "All itemised.", "At least half itemised, but not all.", "Fewer than half itemised."),
     # ---------------- 10. Children and disability (conditional)
     P("K01", "K", "Verifiable parental consent", "Verifiable consent of a parent is obtained before processing a child's data.", "s.9(1)", "R10", 6, CONDITIONAL,
       "Signals that the site serves children (audience, forms, age fields).", "Decide applicability; if it applies, look for an age gate and parental consent.", "Applies and present.", "Applies, partly.", "Applies, absent."),

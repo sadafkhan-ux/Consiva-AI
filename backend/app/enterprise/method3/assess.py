@@ -284,7 +284,13 @@ def notice(a: A) -> None:
                   refs=list(a.ctx.refs(PRIVACY)), basis="Observed (crawl)")
     else:
         lim = (v2.note if v2 is not None and v2.state == "not_assessed" else None)
-        a.put("N01", FAIL, "No page or document classified as a privacy notice was found on the crawled pages.", basis="Observed (crawl)", review=bool(lim), limitation=lim)
+        if lim:
+            # The crawl was cut short (a limit, or URLs never reached): "not found" is not a finding, as in v2 N1. The marks are held back for human review, never a Fail.
+            a.put("N01", NA, "No privacy notice was found in the pages reached, but the crawl did not reach every page, so this is not a finding. "
+                  "Held back for human review: confirm where the notice is published, or scan again with a higher limit.", basis="Observed (crawl)", review=True, limitation=lim,
+                  applicability=cat.HUMAN_REVIEW)
+        else:
+            a.put("N01", FAIL, "No page or document classified as a privacy notice was found on the crawled pages.", basis="Observed (crawl)")
 
     notice_paths = {urlparse(u).path.rstrip("/") for u in a.policy_urls()}
 
@@ -1053,7 +1059,7 @@ def transfers(a: A) -> None:
     cats = (PRIVACY, TERMS, COOKIE)
     xb = a.of("cross_border", *cats)
     dest = [f for f in xb if f.get("specific") or re.search(r"united states|usa|\bus\b|europe|\beu\b|singapore|uk|ireland|country|countries", blob(f), re.I)]
-    third = {h["host"] for _, n in a.ctx.loaded.networks for h in n.get("hosts", []) if h.get("third_party")}
+    third = {h["host"] for _, n in a.ctx.loaded.networks for h in n.get("hosts", []) if h.get("third_party") and "." in (h.get("host") or "")}   # a browser-extension id is not a host
     if not xb and not third:
         a.put("T01", NA, "No third party was contacted and the policy names no recipient, so no transfer outside India is indicated.", basis="Applicability")
         a.put("T02", NA, "No transfer outside India is indicated.", basis="Applicability")

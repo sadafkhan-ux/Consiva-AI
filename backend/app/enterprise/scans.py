@@ -1,7 +1,7 @@
 """Enterprise scan records (ent_scans): create one, and move it through its lifecycle.
 
-Lifecycle: queued -> running -> completed | failed | cancelled. A completed, failed or cancelled scan is final; `resume` (a later phase) starts a new run of the SAME scan from its frontier,
-so it is a separate move from running only after a crash. A failure always carries its reason.
+Lifecycle: queued -> running -> completed | failed | cancelled. A completed, failed or cancelled scan is final, with two exceptions that `resume` reopens (back to queued, carrying on from
+the frontier): a failed scan the website blocked (reopen_blocked) and a completed scan a time or memory limit stopped (reopen_limit_stopped). A failure always carries its reason.
 """
 
 from __future__ import annotations
@@ -90,6 +90,39 @@ async def reopen_blocked(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID
         raise LookupError(f"Enterprise scan {scan_id} not found")
     if not is_blocked_stop(scan):
         raise InvalidTransition(f"a {scan.status} scan that was not stopped by blocking cannot be reopened")
+    await db.execute(update(EntScan).where(EntScan.id == scan_id, EntScan.org_id == org_id).values(
+        status="queued", error=None, stop_reason=None, completed_at=None, analysis_status="not_started", analysis_error=None, updated_at=func.now()))
+    await db.refresh(scan)
+    return scan
+
+
+#: The stop reasons of a crawl a run limit ended (crawl/limits.py) with URLs still pending. Such a completed scan can be resumed: the next run gets its own runtime and memory budget and
+#: carries on from the frontier. `url_limit` is NOT here: the page limit counts every page the scan has read, so a resumed run would stop again at once; scan again with a higher limit.
+RESUMABLE_LIMIT_STOPS = ("time_limit", "memory_limit")
+
+#: The mark the scan-data cleanup leaves on a scan whose results it deleted (the same value as app/cleanup/registry.py in the privacy-policy-agent copy). The shared cleanup here does not
+#: write it yet, so in this copy no scan reads as cleared; the resume rule still refuses a scan whose page text is gone (text_cleared_at).
+FULL_CLEAR_MARK = "local scan-data cleanup"
+
+
+def results_cleared(scan: EntScan) -> bool:
+    """True once the scan-data cleanup has deleted this scan's results; only its history row (website, status, times) is left."""
+    return bool(scan.purge_summary) and scan.purge_summary.get("cleared_by") == FULL_CLEAR_MARK
+
+
+def is_resumable_limit_stop(scan: EntScan) -> bool:
+    return (scan.status == "completed" and (scan.stop_reason or "").lower() in RESUMABLE_LIMIT_STOPS and scan.analysis_status != "running"
+            and not results_cleared(scan) and scan.text_cleared_at is None)          # the analysis is made again from the stored page text, so it must still be there
+
+
+async def reopen_limit_stopped(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID) -> EntScan:
+    """Resume a scan a run limit stopped: it becomes queued again, keeps every page already inspected, and its analysis, score and report are made again when the crawl finishes
+    (the earlier ones stay in their history)."""
+    scan = await get_scan(db, scan_id, org_id)
+    if scan is None:
+        raise LookupError(f"Enterprise scan {scan_id} not found")
+    if not is_resumable_limit_stop(scan):
+        raise InvalidTransition(f"a {scan.status} scan that was not stopped by a time or memory limit cannot be reopened")
     await db.execute(update(EntScan).where(EntScan.id == scan_id, EntScan.org_id == org_id).values(
         status="queued", error=None, stop_reason=None, completed_at=None, analysis_status="not_started", analysis_error=None, updated_at=func.now()))
     await db.refresh(scan)
