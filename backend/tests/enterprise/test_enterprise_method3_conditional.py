@@ -82,7 +82,8 @@ def test_rt4_is_human_review_when_the_platform_size_is_not_shown():
     x = r["RT4"]
     assert x.status == NA and x.applicability == cat.HUMAN_REVIEW and x.review and "registered users in India" in x.explanation
     out = score(list(r.values()), as_of=AS_OF)
-    assert out["human_review_pending"] == ["RT4"] and out["human_review_max"] == cat.BY_ID["RT4"].max_marks
+    # 3.0.2: the synthetic shop's consent tests used a banner whose wording is not in its evidence, so C07/C09/C10 are held for review too; RT4 is the one this test is about
+    assert "RT4" in out["human_review_pending"] and out["human_review_max"] >= cat.BY_ID["RT4"].max_marks
     line = next(x for x in out["lines"] if x["parameter_id"] == "RT4")
     assert line["earned"] is None and line["severity"] is None
 

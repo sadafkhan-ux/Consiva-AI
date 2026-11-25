@@ -155,7 +155,9 @@ _HOST_CLASSES = ((r"googletagmanager", "Google Tag Manager", "analytics"), (r"go
                  (r"doubleclick|googlesyndication|googleadservices", "Google Ads", "advertising"), (r"clarity\.ms", "Microsoft Clarity", "analytics"),
                  (r"bing\.com", "Microsoft Bing", "advertising"), (r"facebook|fbcdn", "Meta", "advertising"), (r"linkedin", "LinkedIn", "advertising"),
                  (r"gstatic|googleapis", "Google Fonts / static", "functional"), (r"loom\.com", "Loom video embed", "embedded content"),
-                 (r"youtube|ytimg", "YouTube embed", "embedded content"), (r"cloudfront|cdn|static", "Content delivery (CDN)", "functional"))
+                 (r"youtube|ytimg", "YouTube embed", "embedded content"), (r"vimeo", "Vimeo embed", "embedded content"), (r"calendly", "Calendly booking", "embedded content"),
+                 (r"typeform|jotform|hsforms|hubspot", "Form or CRM widget", "embedded content"), (r"intercom|tawk\.to|zendesk|zdassets|drift|crisp\.chat", "Chat widget", "embedded content"),
+                 (r"wistia", "Wistia embed", "embedded content"), (r"cloudfront|cdn|static", "Content delivery (CDN)", "functional"))
 
 
 def _classify_host(host: str, site: str) -> tuple[str, str]:
@@ -504,6 +506,7 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
 
     # ---- 6. cookies and trackers
     undeclared = _named_list(lines["X01"]["explanation"], "not declared:")
+    no_notice = lines["N01"]["status"] in ("fail", "not_applicable")        # 3.0.2: with no notice nothing can be named in it, so the tables never say "named"
     w('<h2><span class="n">6</span>Cookies and tracker findings</h2><table><thead><tr><th>Cookie</th><th>Domain</th><th>Service</th><th>Seen</th><th>Lifetime</th><th>Secure</th><th>SameSite</th><th>In the notice</th></tr></thead><tbody>')
     ref = d.scan.get("completed_at") or d.generated_at
     ref_ts = (ref if isinstance(ref, datetime) else datetime.fromisoformat(str(ref))).timestamp()
@@ -512,7 +515,7 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
         days = (exp - ref_ts) / 86400 if exp else None
         life = "session" if k.get("session") or days is None or days < 0 else (f"{round(days * 24)} hours" if days < 1 else f"{round(days)} days" if days < 45 else f"{round(days / 30.4)} months")
         seen = ", ".join(CONSENT_STATES.get(s, s).replace("before a choice", "pre consent").replace("after Accept", "post accept").replace("after Reject", "post reject") for s in sorted(k["states"]))
-        named = "n/a" if lines["X01"]["status"] == "not_applicable" else ("not named" if (k.get("name") or "").lower() in undeclared else (f"{k['provider']} named" if k.get("provider") else "named"))
+        named = "n/a" if lines["X01"]["status"] == "not_applicable" else "not named (no notice)" if no_notice else             ("not named" if (k.get("name") or "").lower() in undeclared else (f"{k['provider']} named" if k.get("provider") else "named"))
         w(f"<tr><td class='mono'>{e(k.get('name') or '')}</td><td>{e(k.get('domain') or '')}</td><td>{e(k.get('provider') or 'unidentified')}</td><td>{e(seen)}</td><td>{life}</td>"
           f"<td>{'yes' if k.get('secure') else 'no'}</td><td>{e(str(k.get('same_site') or ''))}</td><td>{e(named)}</td></tr>")
     if not d.cookies:
@@ -542,7 +545,7 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
     w('<h2><span class="n">8</span>Third-party service analysis</h2><table><thead><tr><th>Host</th><th>Service</th><th>Category</th><th class="num">Pages</th><th class="num">Requests</th><th>Named in notice</th></tr></thead><tbody>')
     for h in d.hosts:
         functional = h["category"] in ("functional", "not classified") or "functional" in h["category"]
-        named = "n/a" if functional else ("no" if (h["vendor"] or "").lower() in not_named else "yes")
+        named = "n/a" if functional else "no (no notice)" if no_notice else ("no" if (h["vendor"] or "").lower() in not_named else "yes")
         after = "" if "before a choice" in h["states"] else " (after Accept)" if "after Accept" in h["states"] else ""
         ex = "".join(f"<div class='mono small'>{e(u[:150])}</div>" for u in h["examples"][:2])
         w(f"<tr><td class='mono'>{e(h['host'])}</td><td>{e(h['vendor'])}{ex}</td><td>{e(h['category'])}{after}</td><td class='num'>{h['pages'] or 'homepage'}</td>"

@@ -302,6 +302,10 @@ def _inspection_notes(page, root_url: str) -> list[str]:
     """Anything that limited what was read from this page, in words a reader can act on. Each note is a fact the renderer recorded; none is a guess."""
     notes: list[str] = []
     scroll, opened = page.scroll or {}, page.expanded or {}
+    nav = opened.get("in_app_navigation") or {}
+    if nav:
+        notes.append(f"the address answered HTTP {nav.get('direct_status')} when opened directly; the page was reached through the site itself from the homepage "
+                     f"({'by its link' if nav.get('how') == 'link' else 'by the app router'}), so the server does not serve this page's own address")
     if scroll.get("stopped") in ("max_steps", "deadline"):
         notes.append(f"scrolling stopped at the {scroll['stopped'].replace('_', ' ')} limit, so content further down may not have loaded")
     if opened.get("candidates", 0) > opened.get("opened", 0):

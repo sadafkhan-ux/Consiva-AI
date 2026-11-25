@@ -520,17 +520,21 @@ def consent(a: A) -> None:
     else:
         a.put("C04", FAIL, "The consent request is all-or-nothing: no per-purpose choice was found.", [f"Consent test 'purposes': {pur.get('reason') or 'not run'}"], basis="Observed (banner and consent test)")
 
-    further = rp.get("further_pages") or []
+    # 3.0.2: a further page that did not load at all (an HTTP error such as 404) is not a cookie wall: a cookie wall serves the page and covers it. Only pages that loaded count,
+    # for C05 and C14 alike; the ones that failed are named so the reader sees why they were left out.
+    further_all = rp.get("further_pages") or []
+    further = [x for x in further_all if x.get("loaded")]
+    unloaded = [x.get("url") for x in further_all if not x.get("loaded")]
+    unloaded_note = (f"{len(unloaded)} further page(s) could not be loaded at all after Reject ({', '.join(u for u in unloaded[:2] if u)}); a page that does not load is an HTTP error, "
+                     "not a cookie wall, and is left out.") if unloaded else None
     if not tracking_anywhere:
         a.put("C05", NA, no_tracking, basis="Observed (consent test)")
     elif further:
-        loaded = [x for x in further if x.get("loaded")]
-        st = PASS if len(loaded) == len(further) else PARTIAL if loaded else FAIL
-        a.put("C05", st, "After Reject, further pages loaded and worked: no cookie wall." if st == PASS else "Some pages did not load after Reject.",
-              [f"After Reject: {x.get('url')} loaded={x.get('loaded')}" for x in further], refs=[rp_ref] if rp_ref else [], basis="Observed (consent test)")
+        a.put("C05", PASS, "After Reject, further pages loaded and worked: no cookie wall.", [f"After Reject: {x.get('url')} loaded=True" for x in further],
+              refs=[rp_ref] if rp_ref else [], basis="Observed (consent test)", limitation=unloaded_note)
     else:
         a.put("C05", PASS, f"Every one of the {len(a.pages)} crawled pages was read without any consent being given: access does not depend on consenting.",
-              [f"{len(a.pages)} pages inspected in a browser that gave no consent"], basis="Observed (crawl)")
+              [f"{len(a.pages)} pages inspected in a browser that gave no consent"], basis="Observed (crawl)", limitation=unloaded_note)
 
     v2c9 = a.v2.get("C9")
     form_urls = [UrlCheck(pg["url"], PASS, ", ".join(sorted({k for f in pii_forms(pg) for k in f.get("collects", [])}))) for pg in a.pages.values() if pii_forms(pg)]
@@ -545,12 +549,22 @@ def consent(a: A) -> None:
               review=True, limitation="A reviewer should confirm each form asks only for what its purpose needs; if so this becomes Pass.")
 
     has_banner = bool(re.search(r"cookie|consent|accept|reject|decline", banner, re.I))
-    if not tracking_anywhere and not has_banner:
+    # 3.0.2: the consent tests open the live banner in their own browsers. When they found and used it (Accept or Reject clicked, the purposes listed, the choice reopened) but the
+    # homepage text did not capture its wording (a banner drawn late or in a closed shadow root), the banner exists: the checks below never report "no banner" against the tests' own result.
+    banner_seen = has_banner or bool(acc.get("tested") or rej.get("tested") or pur.get("tested") or wd.get("reopen_control"))
+    banner_unread = banner_seen and not has_banner
+    unread_why = "A consent banner was found and used by the consent tests, but its wording could not be captured from the page"
+    if not tracking_anywhere and not banner_seen:
         a.put("C07", NA, no_tracking, basis="Observed (banner)")
     elif has_banner and re.search(r"privacy|cookie (policy|notice)", banner, re.I):
         a.put("C07", PASS, "The consent banner refers the person to the privacy or cookie notice.", [f'Banner: "{_banner_snippet(banner)}"'], basis="Observed (banner text)")
     elif has_banner:
         a.put("C07", FAIL, "The consent banner does not refer to the notice.", [f'Banner: "{_banner_snippet(banner)}"'], basis="Observed (banner text)")
+    elif banner_unread and not a.has_policy():
+        a.put("C07", FAIL, "The consent banner was found and used by the consent tests, but the site publishes no privacy or cookie notice for it to link to.", basis="Observed (consent test)")
+    elif banner_unread:
+        a.put("C07", NA, f"{unread_why}, so whether it links to the notice could not be checked.", basis="Observed (consent test)", review=True, applicability=cat.HUMAN_REVIEW,
+              limitation="A reviewer should open the banner and confirm it links to the privacy or cookie notice.")
     else:
         a.put("C07", FAIL, "Analytics or advertising runs, but no consent banner was found to link to the notice.", basis="Observed (banner text)")
 
@@ -562,6 +576,9 @@ def consent(a: A) -> None:
     elif has_banner:
         a.put("C08", PARTIAL, "The banner's wording was not read by the model; a person should confirm it is plain and specific.", [f'Banner: "{_banner_snippet(banner)}"'],
               basis="Observed (banner text)", review=True, limitation="Held at Partial until a person confirms the wording.")
+    elif banner_unread:
+        a.put("C08", PARTIAL, f"{unread_why}; a person should confirm it is plain and specific.", basis="Observed (consent test)", review=True,
+              limitation="Held at Partial until a person confirms the wording.")
     elif not tracking_anywhere:
         a.put("C08", NA, "No consent request (banner or form) was found, and none is needed: no analytics or advertising runs.", basis="Observed")
     else:
@@ -569,7 +586,10 @@ def consent(a: A) -> None:
 
     langs = re.search(r"(?:\b(?:english|hindi|हिंदी|বাংলা|தமிழ்|తెలుగు|ಕನ್ನಡ|മലയാളം|ગુજરાતી|ਪੰਜਾਬੀ|ଓଡ଼ିଆ|मराठी|اردو)\b.*){3,}", (a.m.banner_text or "").split("[shadow DOM]")[-1][-6000:], re.I | re.S)
     reqs = co.consent_requests(a.ctx)
-    if has_banner or reqs:
+    if banner_unread and not reqs:
+        a.put("C09", NA, f"{unread_why}, so its language could not be checked.", basis="Observed (consent test)", review=True, applicability=cat.HUMAN_REVIEW,
+              limitation="A reviewer should confirm the banner is in English or an Eighth Schedule language.")
+    elif has_banner or reqs:
         script = tr.detect_language(banner + " " + " ".join(" ".join([f.get("text") or "", f.get("label_text") or ""]) for _, _, f in reqs[:20]))["language"]
         if script in ("en", "eighth_schedule"):
             a.put("C09", PASS, "The consent request is in English" + (", with a selector for Eighth Schedule languages." if langs else "."),
@@ -592,7 +612,10 @@ def consent(a: A) -> None:
     total = len(reqs) + (1 if has_banner else 0)
     good = len(have) + (1 if banner_has else 0)
     footer = sum(1 for pg in a.pages.values() if (a.m.html.get(pg["url"]) and a.m.html[pg["url"]].emails & _contact_emails(a)))
-    if total == 0:
+    if banner_unread and not reqs:
+        a.put("C10", NA, f"{unread_why}, so whether it gives the contact of a DPO or a person who answers questions could not be checked.", basis="Observed (consent test)",
+              review=True, applicability=cat.HUMAN_REVIEW, limitation="A reviewer should open the banner and its preferences and confirm the contact given there belongs to this organisation.")
+    elif total == 0:
         a.put("C10", NA if not tracking_anywhere else FAIL, "No consent request was found." if not tracking_anywhere else "No consent request was found where one is needed.", basis="Observed")
     else:
         st = PASS if good == total else PARTIAL if good else FAIL
@@ -610,8 +633,7 @@ def consent(a: A) -> None:
         a.put("C11", PASS, "No consent term waives a right or limits the complaint to the Board in the policy and terms read.", [f"Read: {u}" for u in a.policy_urls()[:2]],
               refs=list(a.ctx.refs(PRIVACY, TERMS)), basis="Read from the published policy", review=bool(un), limitation=un)
     else:
-        a.put("C11", PASS, "No consent term was found anywhere on the pages read, so none waives a right.", basis="Read from the pages", review=True,
-              limitation="No privacy policy or terms were found to read.")
+        a.put("C11", NA, "No privacy policy or terms were found, so there is no consent term to check.", basis="Read from the pages")
 
     # C12: before any choice, page by page; a page that did not fire again in clean reloads is recorded as such
     rechecked = {p["url"].rstrip("/"): p for p in recheck.get("pages") or [] if p.get("loaded")}
@@ -620,7 +642,7 @@ def consent(a: A) -> None:
         services: dict[str, list[str]] = {}
         for c in pg["cookies"]:
             if tracking_cookie(c):
-                services.setdefault(describe(c).get("provider") or c.get("domain") or "unidentified", []).append(c["name"])
+                services.setdefault(_cookie_service(c), []).append(c["name"])
         for x in pg["net"].get("non_essential") or []:
             services.setdefault(x.get("vendor") or x.get("host"), [])
         hits = [f"{k} ({', '.join(sorted(set(v))[:4])} cookie{'s' if len(set(v)) > 1 else ''})" if v else f"{k} (request)" for k, v in sorted(services.items())]
@@ -664,6 +686,10 @@ def consent(a: A) -> None:
                   refs=[rej_ref] if rej_ref else [], basis="Observed (consent test)")
         if not rp.get("tested"):
             a.put("C14", FAIL, f"Reject could not be carried to further pages: {rp.get('reason') or 'not tested'}.", basis="Observed (consent test)")
+        elif not further:
+            a.put("C14", NA, "None of the further pages chosen for the test loaded after Reject (HTTP errors), so whether the refusal holds on other pages could not be observed.",
+                  [f"Not loaded: {u}" for u in unloaded[:3] if u], refs=[rp_ref] if rp_ref else [], basis="Observed (consent test)", review=True, applicability=cat.HUMAN_REVIEW,
+                  limitation="A reviewer should open further pages after Reject and confirm no analytics or advertising runs.")
         else:
             leaky = [x for x in further if x.get("non_essential")]
             st = PASS if not leaky else PARTIAL if len(leaky) < len(further) else FAIL
@@ -683,6 +709,9 @@ def consent(a: A) -> None:
         cont = (on_page | later) & started if started else on_page | later
         if not wd.get("tested"):
             a.put("C17", FAIL, f"Withdrawal could not be exercised, so processing cannot be shown to stop ({wd.get('reason') or 'not tested'}).", refs=[wd_ref] if wd_ref else [], basis="Observed (consent test)")
+        elif not started and not (on_page | later):
+            a.put("C17", NA, "Accept started no analytics or advertising service, so there was nothing for withdrawal to stop.", ["Started by Accept: none"],
+                  refs=[wd_ref] if wd_ref else [], basis="Observed (consent test)")
         elif not (on_page | later):
             a.put("C17", PASS, f"After withdrawal, none of the {len(started)} services started by Accept was contacted, on the page or on further pages.", [f"Started by Accept: {', '.join(sorted(started))}"],
                   refs=[wd_ref] if wd_ref else [], basis="Observed (consent test)")
@@ -698,13 +727,14 @@ def consent(a: A) -> None:
     ctl = banner
     acc_w = re.search(r"\baccept( all)?\b|\ballow( all)?\b|\bagree\b|\bi accept\b|\bok\b", ctl, re.I)
     rej_w = re.search(r"\breject( all)?\b|\bdecline\b|\bdeny\b|\brefuse\b|\bdisagree\b|\bonly (necessary|essential)\b|\bnecessary only\b", ctl, re.I)
-    if not tracking_anywhere and not has_banner:
+    if not tracking_anywhere and not banner_seen:
         a.put("C15", NA, no_tracking, basis="Observed (banner)")
     elif acc_w and rej_w:
         a.put("C15", PASS, f"'{acc_w.group(0)}' and '{rej_w.group(0)}' are both on the banner's first layer.", [f'Banner: "{_banner_snippet(banner)}"'], basis="Observed (banner text)")
-    elif rej.get("tested") and rej.get("clicked") not in (None, "", "preferences"):
-        a.put("C15", PASS, "A reject control was found and clicked on the banner.", [f"Reject control clicked: {rej.get('clicked')}"], refs=[rej_ref] if rej_ref else [],
-              basis="Observed (consent test)", review=True)
+    elif rej.get("tested") and rej.get("clicked") != "preferences":
+        a.put("C15", PASS, "A reject control was found and clicked on the banner, in a fresh browser, as Accept was.", ["Reject test: control found and clicked"],
+              refs=[rej_ref] if rej_ref else [], basis="Observed (consent test)", review=True,
+              limitation="A reviewer may compare how prominent Reject is against Accept (size, colour).")
     elif pref_words:
         a.put("C15", PARTIAL, "Refusing is possible only one layer deeper, in the preferences.", [f'Banner: "{_banner_snippet(banner)}"'], basis="Observed (banner text)")
     else:
@@ -720,6 +750,36 @@ def consent(a: A) -> None:
 def _home(a: A) -> str:
     want = a.m.root_url.rstrip("/")
     return next((u for u in a.m.five_page if u.rstrip("/") == want), a.m.root_url)
+
+
+_EMBEDDED = ((r"(^|\.)loom\.com$", "Loom"), (r"(^|\.)(youtube\.com|youtube-nocookie\.com|ytimg\.com)$", "YouTube"), (r"(^|\.)(vimeo\.com|vimeocdn\.com)$", "Vimeo"),
+             (r"(^|\.)calendly\.com$", "Calendly"), (r"(^|\.)typeform\.com$", "Typeform"), (r"(^|\.)(hubspot\.com|hsforms\.net|hs-scripts\.com)$", "HubSpot"),
+             (r"(^|\.)(intercom\.io|intercomcdn\.com)$", "Intercom"), (r"(^|\.)tawk\.to$", "Tawk.to"), (r"(^|\.)(zendesk\.com|zdassets\.com)$", "Zendesk"),
+             (r"(^|\.)(drift\.com|driftt\.com)$", "Drift"), (r"(^|\.)(crisp\.chat)$", "Crisp"), (r"(^|\.)(wistia\.com|wistia\.net)$", "Wistia"),
+             (r"(^|\.)(soundcloud\.com)$", "SoundCloud"), (r"(^|\.)(spotify\.com)$", "Spotify"), (r"(^|\.)(maps\.googleapis\.com|maps\.gstatic\.com)$", "Google Maps"),
+             (r"(^|\.)(platform\.twitter\.com|twimg\.com)$", "X (Twitter)"), (r"(^|\.)(connect\.facebook\.net)$", "Meta"), (r"(^|\.)(cdninstagram\.com)$", "Instagram"),
+             (r"(^|\.)(disqus\.com|disquscdn\.com)$", "Disqus"), (r"(^|\.)(jotform\.com)$", "Jotform"), (r"(^|\.)(forms\.office\.com)$", "Microsoft Forms"))
+
+
+def _embedded_service(host: str) -> str | None:
+    """The embedded third-party service (video player, booking, form, chat or social widget) a host belongs to, or None. Such a service receives the visitor's data, so the notice must name it."""
+    for rx, name in _EMBEDDED:
+        if re.search(rx, host or "", re.I):
+            return name
+    return None
+
+
+def _cookie_service(c: dict) -> str:
+    """A cookie's service in words: its provider, and for a third-party cookie also the site that set it when the provider's name does not say so
+    (ajs_anonymous_id on loom.com is Loom's own cookie, written by the Segment library: 'Segment (set by loom.com)')."""
+    prov = describe(c).get("provider") or ""
+    dom = (c.get("domain") or "").lstrip(".").lower()
+    if not prov:
+        return dom or "unidentified"
+    label = dom.split(".")[-2] if dom.count(".") >= 1 else dom
+    if not c.get("first_party") and dom and label and label not in prov.lower().replace(" ", ""):
+        return f"{prov} (set by {dom})"
+    return prov
 
 
 _BANNER_START = re.compile(r"we use cookies|this (web)?site uses cookies|cookie (preferences|settings|consent|notice)|your privacy choices|manage consent", re.I)
@@ -983,8 +1043,10 @@ def contact(a: A) -> None:
             return PARTIAL, f"contact shown ({shown}), but its link opens a different address ({sorted(h.mailto)[0]})"
         return PASS, f"contact shown ({shown})" + (" and linked" if h.mailto & mine else "")
     st, res = a.per_url("G02", g02)
-    a.put("G02", st, f"{A.summary(res)}: the privacy contact" + (f" ({', '.join(sorted(emails)[:2])})" if emails else "") + " is shown on the page"
-          + ("" if emails else "; no contact address of the site's own was identified") + ".",
+    shown_as = f"the privacy contact ({', '.join(sorted(emails)[:2])})" if emails else "a privacy contact"
+    a.put("G02", st, f"{A.summary(res)}: " + (f"{shown_as} is shown on the page." if st == PASS else
+                                               f"{shown_as} is not shown on every page." if emails else
+                                               "no privacy contact address of the site's own was identified on the pages read."),
           [f"{r.url}: {r.note}" for r in res if r.status != PASS][:MAX_EV], urls=res, basis="Observed URL by URL (page HTML)",
           applicability=cat.APPLICABLE if st != NA else None,
           limitation="Rule 9 also requires the contact in every reply to a person's communication; replies cannot be seen from the website.")
@@ -1104,6 +1166,17 @@ def cross_checks(a: A) -> None:
             vendors.setdefault(t.get("vendor") or t.get("host"), t.get("host") or "")
     for t in (acc.get("non_essential") or []) + (a.consent("withdrawal")[1].get("accepted_non_essential") or []):
         vendors.setdefault(t.get("vendor") or t.get("host"), t.get("host") or "")
+    # 3.0.2: embedded third-party players, widgets and booking or chat tools the pages load, and third-party tracking cookies, are services the notice must name too.
+    for _, n in a.ctx.loaded.networks:
+        for h in n.get("hosts") or []:
+            host = (h.get("host") or "").lower()
+            name = _embedded_service(host) if h.get("third_party") else None
+            if name:
+                vendors.setdefault(name, host)
+    for pg in a.pages.values():
+        for c in pg["cookies"]:
+            if tracking_cookie(c) and not c.get("first_party"):
+                vendors.setdefault(_cookie_service(c), (c.get("domain") or "").lstrip("."))
     if not vendors:
         a.put("X02", NA, "No analytics, advertising or embedded service was contacted, before or after a choice.", basis="Observed against the policy")
     elif not a.has_policy():
@@ -1112,7 +1185,7 @@ def cross_checks(a: A) -> None:
         named = {v: vendor_named(v, h, text) for v, h in vendors.items()}
         nn = sum(named.values())
         st = PASS if nn == len(named) else PARTIAL if nn * 2 >= len(named) else FAIL
-        a.put("X02", st, f"{nn} of {len(named)} analytics or advertising services contacted are named in the policy" +
+        a.put("X02", st, f"{nn} of {len(named)} analytics, advertising or embedded services contacted are named in the policy" +
               (f"; not named: {', '.join(v for v, ok in named.items() if not ok)}." if nn < len(named) else "."),
               [f"{v} ({vendors[v]}): {'named' if ok else 'not named'}" for v, ok in sorted(named.items())][:10], basis="Observed against the policy (product names, not the parent company)",
               review=st != PASS)

@@ -49,6 +49,53 @@ def _verdict_for_failure(http_status: int | None, exc: BaseException | None):
     return v if v.blocked else None
 
 
+_IN_APP_NAV_JS = r"""(want) => {
+  const norm = (p) => (p || '/').replace(/\/+$/, '') || '/';
+  const target = norm(want.path);
+  const a = [...document.querySelectorAll('a[href]')].find((x) => {
+    try {
+      const u = new URL(x.getAttribute('href'), location.href);
+      return u.origin === location.origin && norm(u.pathname) === target && (u.search || '') === (want.search || '') && (!x.target || x.target === '_self');
+    } catch (e) { return false; }
+  });
+  if (a) { a.click(); return 'link'; }
+  history.pushState({}, '', want.path + (want.search || ''));
+  window.dispatchEvent(new PopStateEvent('popstate', { state: {} }));
+  return 'router';
+}"""
+
+
+async def _open_in_app(page, url: str, root_url: str, settings: Settings, *, reset=None):
+    """Reach `url` inside a single-page app whose server answers 404 for it: open the homepage, then follow the page's own link (or the app's router when no link names it), as a
+    person clicking the menu would. The homepage's requests and cookies are cleared first (`reset`, context.clear_cookies), so what is recorded is this page's own. Returns
+    (the homepage response, 'link' | 'router') or None when the page cannot be reached this way: a page that is really missing, or a site that is not such an app."""
+    from urllib.parse import urlparse
+    t, root = urlparse(url), urlparse(root_url)
+    if t.netloc.lower() != root.netloc.lower():
+        return None
+    try:
+        home = await page.goto(root_url, timeout=settings.scanner_timeout_seconds * 1000, wait_until="domcontentloaded")
+        if home is None or home.status >= 400:
+            return None
+        await _wait_for_load_event(page, root_url)
+        await page.wait_for_timeout(1500)
+        before = await page.evaluate("document.body ? document.body.innerText : ''")
+        if reset is not None:
+            reset()
+        await page.context.clear_cookies()
+        how = await page.evaluate(_IN_APP_NAV_JS, {"path": t.path or "/", "search": ("?" + t.query) if t.query else ""})
+        await page.wait_for_timeout(2500)
+        here = urlparse(page.url)
+        if (here.path.rstrip("/") or "/") != (t.path.rstrip("/") or "/"):
+            return None
+        after = await page.evaluate("document.body ? document.body.innerText : ''")
+        if not after.strip() or after.strip() == before.strip() or await _page_says_it_was_not_found(page):
+            return None
+        return home, how
+    except Exception:                                                            # noqa: BLE001
+        return None
+
+
 async def deep_inspect(context: BrowserContext, url: str, *, root_url: str, settings: Settings, is_home: bool) -> Rendered:
     """Inspect one page in `context` (a fresh browser session that has given no consent). Returns what it showed; raises RenderFailed or NotFoundPage."""
     await assert_safe_url(url)
@@ -69,6 +116,15 @@ async def deep_inspect(context: BrowserContext, url: str, *, root_url: str, sett
     try:
         window = settings.scanner_nav_retry_seconds_seed if is_home else settings.scanner_nav_retry_seconds_page
         response, outcome, exc, attempts = await _navigate_with_retry(page, url, settings.scanner_timeout_seconds * 1000, window_s=window)
+        # 3.0.2: a single-page app whose server answers 404 for its own page addresses (only the homepage is served; the app draws every page in the browser) is read the way a
+        # person reaches those pages: from the homepage, through the app. The direct answer is kept, so the report can say the address itself is broken.
+        in_app = None
+        direct_status = (getattr(exc, "status", None) if outcome != "success" else (response.status if response else None))
+        if not is_home and direct_status in (404, 410):
+            got = await _open_in_app(page, url, root_url, settings, reset=request_records.clear)
+            if got is not None:
+                response, how = got
+                outcome, in_app = "success", {"direct_status": direct_status, "how": how}
         if outcome != "success":
             http_status = getattr(exc, "status", None)
             verdict = _verdict_for_failure(http_status, exc)
@@ -108,6 +164,8 @@ async def deep_inspect(context: BrowserContext, url: str, *, root_url: str, sett
             dom = await page_inspect.collect_dom(page, root_url)
         except Exception as e:                                                   # noqa: BLE001
             expanded = expanded or {"error": f"{type(e).__name__}: {e}"[:200]}
+        if in_app:
+            expanded = {**expanded, "in_app_navigation": in_app}
 
         html = await page.content()
         try:
@@ -137,7 +195,7 @@ async def deep_inspect(context: BrowserContext, url: str, *, root_url: str, sett
         title = await page.title()
         headers = await response.all_headers() if response else {}
         cookies = await context.cookies()
-        chain = await _redirect_chain(response)
+        chain = [] if in_app else await _redirect_chain(response)          # reached through the app: the homepage's redirect chain is not this page's
         final_url = page.url
     finally:
         await _drain_set_cookie_reads(set_cookie_reads)
