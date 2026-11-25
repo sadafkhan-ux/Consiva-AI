@@ -27,6 +27,13 @@ class AttestationRequired(ConsivaError):
     status_code = 400
 
 
+class ScanResultsCleared(ConsivaError):
+    """The scan-data cleanup has deleted this scan's results (findings, parameters, evidence, reports); only its history row is kept. 410 Gone, so a
+    client can tell it apart from a scan that does not exist (404) and never mistakes the empty tables for "no findings" or "every parameter failed"."""
+
+    status_code = 410
+
+
 class InvalidScanState(ConsivaError):
     """The scan is not in a state this operation accepts."""
 

@@ -41,12 +41,22 @@ def _require_enabled() -> None:
         raise errors.EnterpriseDisabled("Not found")
 
 
-async def _scan(db: AsyncSession, scan_id: uuid.UUID, user: CurrentUser) -> EntScan:
+async def _scan(db: AsyncSession, scan_id: uuid.UUID, user: CurrentUser, *, allow_cleared: bool = False) -> EntScan:
+    """The caller's scan. A scan whose results the cleanup has deleted answers 410 (ScanResultsCleared) unless `allow_cleared`: its empty tables
+    would otherwise read as "no findings" and "every parameter failed"."""
     _require_enabled()
     scan = await scans.get_scan(db, scan_id, uuid.UUID(user.org_id))
     if scan is None:
         raise NotFoundError(f"Enterprise scan {scan_id} not found")
+    if not allow_cleared and scans.results_cleared(scan):
+        raise errors.ScanResultsCleared(cleared_message(scan))
     return scan
+
+
+def cleared_message(scan: EntScan) -> str:
+    when = scan.text_cleared_at.strftime("%d %b %Y %H:%M UTC") if scan.text_cleared_at else "after it finished"
+    return (f"The results of this scan were cleared on {when}. Only its history is kept (website, status and times). "
+            "Fetch results when a scan completes, or start a new scan of the website.")
 
 
 def _page(items: list, total: int, offset: int, limit: int) -> dict:
@@ -68,12 +78,16 @@ async def list_scans(offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, 
         sc = await store.latest_score(db, s.id)
         m3 = await method3.latest(db, s.id)
         # `score` is the official score: the 96-parameter method 3 score, the one the report prints (owner's decision, 24 Nov 2026). The field keeps its name and type.
+        # A cleared scan has no method 3 row left, so its score is null.
         items.append({
             "scan_id": str(s.id), "website_url": s.website_url, "status": s.status, "analysis_status": s.analysis_status, "completion": decl["completion"],
             "score": _m3_score(m3), "score_version": m3.version if m3 is not None else None,
-            "coverage": sc.coverage if sc else None, "created_at": s.created_at, "completed_at": s.completed_at})
+            "coverage": sc.coverage if sc else None, "created_at": s.created_at, "completed_at": s.completed_at,
+            "data_cleared": scans.results_cleared(s)})
     return _page(items, total, offset, limit)
 
+
+# ---- summary and declaration ----------------------------------------------------------------------------------------------------------------------------------------
 
 def _m3_score(row) -> float | None:
     return None if row is None or row.score is None else float(row.score)
@@ -86,8 +100,6 @@ def _official_score(row) -> dict | None:
     return {"score": _m3_score(row), "marks_earned": float(row.marks_earned), "applicable_max": float(row.applicable_max), "version": row.version, "basis": row.basis,
             "as_of": row.as_of.isoformat(), "calculated_at": row.created_at}
 
-
-# ---- summary and declaration ----------------------------------------------------------------------------------------------------------------------------------------
 
 def _score_view(sc) -> dict | None:
     if sc is None:
@@ -105,13 +117,18 @@ async def _has_report(db: AsyncSession, scan_id: uuid.UUID) -> bool:
 
 @router.get("/{scan_id}/summary", summary="Everything the scan page needs in one call")
 async def summary(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller), db: AsyncSession = Depends(get_db)) -> dict:
-    scan = await _scan(db, scan_id, user)
+    scan = await _scan(db, scan_id, user, allow_cleared=True)
+    cleared = scans.results_cleared(scan)
     decl = await coverage_declaration(db, scan_id)
     from app.enterprise.method3 import service as method3
     return {
-        "official_score": _official_score(await method3.latest(db, scan_id)),        # additive: the 96-parameter score; `score` below is the earlier 51-parameter result, kept for compatibility
         "scan_id": str(scan.id), "website_url": scan.website_url, "domain": scan.domain, "crawl_status": scan.status, "analysis_status": scan.analysis_status, "completion": decl["completion"],
-        "score": _score_view(await store.latest_score(db, scan_id)), "declaration": decl, "legal_review_status": LEGAL_REVIEW_STATUS, "report_available": await _has_report(db, scan_id),
+        # additive: the 96-parameter score; `score` below is the earlier 51-parameter result, kept for compatibility. Null for a cleared scan.
+        "official_score": None if cleared else _official_score(await method3.latest(db, scan_id)),
+        # A cleared scan has no score, declaration or report left: null, never zeros that look like a result.
+        "data_cleared": cleared, "data_cleared_at": scan.text_cleared_at if cleared else None, "data_cleared_note": cleared_message(scan) if cleared else None,
+        "score": None if cleared else _score_view(await store.latest_score(db, scan_id)), "declaration": None if cleared else decl,
+        "legal_review_status": LEGAL_REVIEW_STATUS, "report_available": False if cleared else await _has_report(db, scan_id),
         "options": scan.options, "created_at": scan.created_at, "started_at": scan.started_at, "completed_at": scan.completed_at, "error": scan.error or scan.analysis_error,
         "stop_reason": scan.stop_reason, "previous_scan_id": str(scan.previous_scan_id) if scan.previous_scan_id else None}
 

@@ -96,7 +96,8 @@ async def get_status(scan_id: uuid.UUID, user: CurrentUser = Depends(get_caller)
     c = _counts(await frontier.counts(db, scan_id))
     return EnterpriseScanStatus(
         scan_id=scan.id, website_url=scan.website_url, status=scan.status, urls=c, progress=_progress(c), stop_reason=scan.stop_reason,
-        error=scan.error, options=scan.options, created_at=scan.created_at, started_at=scan.started_at, completed_at=scan.completed_at)
+        error=scan.error, options=scan.options, created_at=scan.created_at, started_at=scan.started_at, completed_at=scan.completed_at,
+        data_cleared=scans.results_cleared(scan))
 
 
 @router.get("/{scan_id}/coverage", response_model=CoverageResponse, summary="Every discovered URL and what became of it")
@@ -108,7 +109,10 @@ async def get_coverage(
     user: CurrentUser = Depends(get_caller),
     db: AsyncSession = Depends(get_db),
 ) -> CoverageResponse:
-    await _load(db, scan_id, user)
+    scan = await _load(db, scan_id, user)
+    if scans.results_cleared(scan):                      # the URL queue was deleted with the results
+        from app.enterprise.api.results import cleared_message
+        raise errors.ScanResultsCleared(cleared_message(scan))
     where = [EntFrontier.scan_id == scan_id] + ([EntFrontier.status == status] if status else [])
     total = await db.scalar(select(func.count()).select_from(EntFrontier).where(*where)) or 0
     rows = (await db.scalars(

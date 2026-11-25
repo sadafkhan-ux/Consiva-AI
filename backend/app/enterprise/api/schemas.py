@@ -60,6 +60,7 @@ class EnterpriseScanStatus(BaseModel):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    data_cleared: bool = Field(False, description="True once the scan-data cleanup has deleted this scan's results; its detail routes then answer 410.")
 
 
 class CoverageUrl(BaseModel):

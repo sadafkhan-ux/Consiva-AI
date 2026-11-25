@@ -60,6 +60,10 @@ FIVE_PAGE = Agent(
     ),
 )
 
+# Written into ent_scans.purge_summary.cleared_by when the cleanup deletes an Enterprise scan's results. The Enterprise API reads it to answer
+# 410 for that scan (app/enterprise/scans.py: results_cleared). Kept here so the cleanup never has to import the Enterprise package.
+FULL_CLEAR_MARK = "local scan-data cleanup"
+
 ENTERPRISE = Agent(
     key="enterprise", label="Enterprise agent", scans_table="ent_scans",
     steps=(

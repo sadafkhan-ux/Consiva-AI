@@ -550,22 +550,38 @@ export interface Method3Category {
   parameters: number;
   applicable: number;
   max: number;
+  /** The category's marks before Not applicable parameters are taken out. */
+  max_all?: number;
   earned: number;
   pct: number | null;
   counts: Partial<Record<Method3Status, number>>;
 }
 
+/**
+ * The method 3.0.0 result (96 parameters) as stored by the backend, from GET /scans/{id}/method3. This is the official Enterprise score: the PDF
+ * report prints this same stored row, so the screen and the report always agree. Score = marks earned / applicable maximum x 100, one decimal.
+ */
 export interface Method3Result {
+  id?: string;
+  name?: string;
   version: string;
   as_of: string;
   score: number | null;
   marks_earned: number;
   applicable_max: number;
+  not_applicable_max?: number;
+  max_total?: number;
+  basis?: "readiness" | "assessment";
+  not_yet_in_force?: string[];
   counts: Partial<Record<Method3Status, number>>;
   parameters: number;
+  scored_parameters?: number;
+  /** Parameters whose result a person should confirm. */
+  review?: string[];
   categories: Record<string, Method3Category>;
   lines: Method3Line[];
   human_review_pending?: string[];
+  human_review_max?: number;
   legal_review_status?: string | null;
   created_at: string;
 }
@@ -592,4 +608,14 @@ export async function fetchEnterpriseReportPdf(scanId: string, version?: number)
   const blob = await res.blob();
   const named = /filename="?([^";]+)"?/i.exec(res.headers.get("content-disposition") ?? "")?.[1];
   return { blob, filename: named ?? `consiva-enterprise-report-${scanId.slice(0, 8)}${version ? `-v${version}` : ""}.pdf` };
+}
+
+/** The official (method 3.0.0) score of a scan, or null when there is none: not calculated yet (404) or the scan's results were cleared (410). Any other error is thrown. */
+export async function officialScore(scanId: string): Promise<Method3Result | null> {
+  try {
+    return await enterpriseScans.method3(scanId);
+  } catch (e) {
+    if (e instanceof ApiError && (e.status === 404 || e.status === 410)) return null;
+    throw e;
+  }
 }

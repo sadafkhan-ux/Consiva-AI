@@ -7,7 +7,7 @@ The original five-page agent's code, checks, scoring, prompts, APIs and PDF layo
 > **Enterprise results are kept (owner's decision, 25 Nov 2026).** The automatic passes (the `cleanup` service and the pass the Enterprise pipeline asks for when a scan ends) clear
 > **only the five-page agent**. Enterprise scans keep everything: the method 3 score, findings, evidence, the URL inventory and the stored PDF reports. This is
 > `CLEANUP_KEEP_ENTERPRISE` (default `true`, `Settings.keep_enterprise` in `core.py`). Enterprise data is cleared only by an explicit `--agent enterprise` run, or by setting
-> `CLEANUP_KEEP_ENTERPRISE=false`; after that, a cleared scan keeps only its history row (website, status, times). The five-page agent's cleanup is unchanged. The Enterprise column below
+> `CLEANUP_KEEP_ENTERPRISE=false`; a scan cleared that way answers `410 Gone` on its detail routes. The five-page agent's cleanup is unchanged. The Enterprise column below
 > describes what such an explicit run clears.
 
 ## What is kept, and what is cleared
@@ -67,7 +67,7 @@ Restore a backup: `docker compose -f docker-compose.prod.yml exec -T db pg_resto
 
 ## Things to know
 
-* **A cleared scan's report cannot be opened.** The five-page report is drawn from the scan's stored data. After cleanup the existing five-page `report.pdf` endpoint (frozen, not changed) still answers, but with a blank "No score, 0 pages scanned" document, and caches it again (the next pass deletes the cache). The five-page console's own download button behaves the same for a cleared scan. Enterprise scans are kept by the automatic passes; one cleared by an explicit `--agent enterprise` run keeps only its history row, and its results and stored PDFs are gone.
+* **A cleared scan's report cannot be opened.** The five-page report is drawn from the scan's stored data. After cleanup the existing five-page `report.pdf` endpoint (frozen, not changed) still answers, but with a blank "No score, 0 pages scanned" document, and caches it again (the next pass deletes the cache). The five-page console's own download button behaves the same for a cleared scan. Enterprise scans are kept by the automatic passes; one cleared by an explicit `--agent enterprise` run answers `410 Gone` on its detail routes, `report.pdf` included.
 * **The grace period matters for five-page scans.** A partner that fetches a five-page report after a scan finishes (for example after the status webhook) must do so within `CLEANUP_GRACE_MINUTES`. Enterprise results are kept. Pending human reviews of a cleared five-page scan's findings are gone with the findings (`CLEANUP_RESPECT_PAUSED_REVIEWS=true` keeps scans whose run is paused for review).
 * Clearing the Enterprise fact cache means a repeat scan calls the model again (the cross-scan reuse saves nothing once its cache is cleared).
 * Rows are deleted; disk space comes back only after `VACUUM FULL` (the `--vacuum` option).

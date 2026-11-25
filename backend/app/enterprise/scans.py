@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.enterprise.config import get_enterprise_settings
 from app.enterprise.models import EntScan
+from app.cleanup.registry import FULL_CLEAR_MARK
 
 TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"running", "cancelled"}),
@@ -45,6 +46,13 @@ async def create_scan(db: AsyncSession, *, org_id: uuid.UUID, website_url: str, 
     db.add(scan)
     await db.flush()
     return scan
+
+
+
+def results_cleared(scan: EntScan) -> bool:
+    """True once the scan-data cleanup has deleted this scan's results; only its history row (website, status, times) is left.
+    Only the cleanup's FULL_CLEAR_MARK counts: the lighter retention pass (retention.py) also sets text_cleared_at but keeps every result."""
+    return bool(scan.purge_summary) and scan.purge_summary.get("cleared_by") == FULL_CLEAR_MARK
 
 
 async def get_scan(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID) -> EntScan | None:
@@ -99,15 +107,6 @@ async def reopen_blocked(db: AsyncSession, scan_id: uuid.UUID, org_id: uuid.UUID
 #: The stop reasons of a crawl a run limit ended (crawl/limits.py) with URLs still pending. Such a completed scan can be resumed: the next run gets its own runtime and memory budget and
 #: carries on from the frontier. `url_limit` is NOT here: the page limit counts every page the scan has read, so a resumed run would stop again at once; scan again with a higher limit.
 RESUMABLE_LIMIT_STOPS = ("time_limit", "memory_limit")
-
-#: The mark the scan-data cleanup leaves on a scan whose results it deleted (the same value as app/cleanup/registry.py in the privacy-policy-agent copy). The shared cleanup here does not
-#: write it yet, so in this copy no scan reads as cleared; the resume rule still refuses a scan whose page text is gone (text_cleared_at).
-FULL_CLEAR_MARK = "local scan-data cleanup"
-
-
-def results_cleared(scan: EntScan) -> bool:
-    """True once the scan-data cleanup has deleted this scan's results; only its history row (website, status, times) is left."""
-    return bool(scan.purge_summary) and scan.purge_summary.get("cleared_by") == FULL_CLEAR_MARK
 
 
 def is_resumable_limit_stop(scan: EntScan) -> bool:

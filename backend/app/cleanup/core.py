@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import json
 import logging
 import os
 import time
@@ -286,7 +287,7 @@ async def _run_locked(execute, settings, agents, history_dir, only_scan, target,
                         ar.kept_because_referenced[step.table] = ", ".join(sorted(set(behind)))
                 if execute and agent.key == "enterprise":
                     await db.execute(text("update ent_scans set text_cleared_at = coalesce(text_cleared_at, now()), purge_summary = cast(:p as jsonb) where id = any(cast(:ids as uuid[]))"),
-                                     {"ids": ids, "p": '{"cleared_by": "local scan-data cleanup", "kept": "scan id, website, status, times"}'})
+                                     {"ids": ids, "p": json.dumps({"cleared_by": reg.FULL_CLEAR_MARK, "kept": "scan id, website, status, times"})})
                 if execute:
                     await db.commit()
                 ar.scans_cleaned += len(ids) if execute else 0

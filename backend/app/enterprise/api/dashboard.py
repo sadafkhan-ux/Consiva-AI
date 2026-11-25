@@ -26,6 +26,7 @@ from app.db.session import get_db
 from app.enterprise import errors
 from app.enterprise.cache import TTLCache
 from app.enterprise.config import get_enterprise_settings
+from app.enterprise.scans import FULL_CLEAR_MARK
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 _cache = TTLCache(ttl_seconds=15.0)
@@ -59,7 +60,7 @@ _HISTORY = """
                     when s.status = 'failed' or s.analysis_status = 'failed' then coalesce(nullif(s.analysis_error, ''), nullif(s.error, ''), 'the scan failed')
                     when s.status = 'completed' and s.analysis_status in ('not_started', 'running') and s.created_at <= now() - interval '1 day' then 'the analysis did not complete'
                     else '' end,
-               s.text_cleared_at is not null
+               coalesce(s.purge_summary->>'cleared_by', '') = '""" + FULL_CLEAR_MARK.replace("'", "''") + """'
         from ent_scans s where s.org_id = :o
     ) h"""
 
@@ -101,10 +102,21 @@ async def summary(outcome: Literal["all", "completed", "failed", "pending", "blo
 async def retention_status(user: CurrentUser = Depends(get_caller)) -> dict:
     if not get_enterprise_settings().enabled:
         raise errors.EnterpriseDisabled("Not found")
-    grace = int(os.environ.get("CLEANUP_GRACE_MINUTES", "15"))
+    grace = int(os.environ.get("CLEANUP_GRACE_MINUTES", "1440"))            # the same default as app/cleanup/core.py
+    span = f"{grace // 60} hours" if grace >= 120 and grace % 60 == 0 else f"{grace} minutes"
+    # Owner's decision, 25 Nov 2026: Enterprise results are kept (app/cleanup/core.py Settings.keep_enterprise, CLEANUP_KEEP_ENTERPRISE, default true).
+    if os.environ.get("CLEANUP_KEEP_ENTERPRISE", "true").lower() in ("1", "true", "yes"):
+        return {
+            "grace_minutes": grace,
+            "keeps": "every Enterprise scan in full (its score, findings, evidence and stored PDF reports), and for every 5-page scan its id, the website address, when it "
+                     "started and finished, whether it completed or failed, and the reason it failed",
+            "clears": "everything else a 5-page scan produced: extracted page text and HTML, evidence, findings, scores, intermediate analysis state and its stored reports. "
+                      "Enterprise results are never cleared automatically",
+            "when": f"{span} after a 5-page scan has completed, failed or been cancelled, by the cleanup service",
+        }
     return {
         "grace_minutes": grace,
         "keeps": "for every scan of both agents: its id, the website address, when it started and finished, whether it completed or failed, and the reason it failed",
         "clears": "everything else a scan produced: extracted page text and HTML, evidence, passages, findings, assessments, scores, embeddings, intermediate analysis state and the stored reports of both agents",
-        "when": f"{grace} minutes after a scan has completed, failed or been cancelled, by the cleanup service",
+        "when": f"{span} after a scan has completed, failed or been cancelled, by the cleanup service",
     }
