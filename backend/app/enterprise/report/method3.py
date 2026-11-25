@@ -126,9 +126,11 @@ async def gather(db: AsyncSession, scan_id: uuid.UUID) -> M3ReportData:
             vendor_of.setdefault(t.get("host"), (t.get("vendor") or t.get("host"), t.get("category") or ""))
             x = hosts.setdefault(t["host"], {"host": t["host"], "pages": 0, "requests": 0, "types": Counter(), "examples": [], "states": set()})
             x["states"].add(CONSENT_STATES[state])
+    from app.enterprise.method3.assess import _cookie_service
     for (name, domain), x in cookies.items():
         desc = describe_cookie(name or "")
-        x.update(provider=desc.get("provider") or "", purpose=desc.get("purpose") or "")
+        # The site that set a third-party cookie is shown with its library ("Segment (set by loom.com)"), never the library alone, as in the assessment.
+        x.update(provider=_cookie_service(x) if desc.get("provider") else "", purpose=desc.get("purpose") or "")
     d.cookies = sorted(cookies.values(), key=lambda x: (min(("pre_consent" in x["states"]) and 0 or 1, 1), x.get("name") or ""))
     for h, x in hosts.items():
         v = vendor_of.get(h)
@@ -545,7 +547,10 @@ Weights total 400; <b>one weight point = 0.25 marks</b>, so the maximum marks ac
     w('<h2><span class="n">8</span>Third-party service analysis</h2><table><thead><tr><th>Host</th><th>Service</th><th>Category</th><th class="num">Pages</th><th class="num">Requests</th><th>Named in notice</th></tr></thead><tbody>')
     for h in d.hosts:
         functional = h["category"] in ("functional", "not classified") or "functional" in h["category"]
-        named = "n/a" if functional else "no (no notice)" if no_notice else ("no" if (h["vendor"] or "").lower() in not_named else "yes")
+        vend = (h["vendor"] or "").lower()
+        # X02 names a service by product ("Loom"), this table by what the host serves ("Loom video embed"): match either way round
+        missing = any(n and (n in vend or vend in n) for n in not_named)
+        named = "n/a" if functional else "no (no notice)" if no_notice else ("no" if missing else "yes")
         after = "" if "before a choice" in h["states"] else " (after Accept)" if "after Accept" in h["states"] else ""
         ex = "".join(f"<div class='mono small'>{e(u[:150])}</div>" for u in h["examples"][:2])
         w(f"<tr><td class='mono'>{e(h['host'])}</td><td>{e(h['vendor'])}{ex}</td><td>{e(h['category'])}{after}</td><td class='num'>{h['pages'] or 'homepage'}</td>"

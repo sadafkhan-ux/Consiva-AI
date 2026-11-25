@@ -78,3 +78,39 @@ def test_g02_wording_never_reads_like_a_pass_on_a_fail():
     if g.status != PASS:
         assert "is shown on the page." not in g.explanation
     assert g.status in (PASS, FAIL, "partial")
+
+
+# ---- merged from the privacy-policy-agent copy (25 Nov 2026) ---------------------------------------------------------------------------------------------------------------
+
+def test_the_banner_text_saved_by_the_consent_tests_is_read_by_the_banner_checks():
+    """The homepage capture can miss a banner that draws late; the text the Accept / Reject test saved just before its click is the banner the checks read."""
+    import json as _json
+    from app.enterprise.analysis.repo import EvRow
+    from app.enterprise.method3.assess import assess
+    from app.enterprise.method3.context import assemble
+    from tests.enterprise.test_enterprise_method3 import AS_OF, SITE, rows
+    ev, fr, chunks = rows()
+    ev = [EvRow(e.id, e.kind, e.source_url, e.page_number, e.frontier_id, e.detection_method,
+                e.content.split("\n[shadow DOM]")[0] if e.id == "5" else e.content) for e in ev if e.detection_method != "consent_test:accept"]
+    text = "We use cookies\nRead our Privacy Policy\nAccept All\nReject All"
+    for name in ("accept", "reject"):
+        ev.append(EvRow(f"t-{name}", "consent", SITE, 0, None, f"consent_test:{name}", _json.dumps({"test": name, "tested": True, "non_essential": [], "cookies": [], "banner_text": text})))
+    out = {r.parameter_id: r for r in assess(assemble(ev, fr, chunks, scan_id="s", root_url=SITE, as_of=AS_OF), [])}
+    assert out["C07"].status == "pass" and out["C15"].status == "pass" and not out["C07"].review
+
+
+def test_report_matches_a_product_name_to_the_host_description():
+    """X02 says "not named: Loom"; section 8 lists the host as "Loom video embed". The table must say "no", not "yes"."""
+    from app.enterprise.method3.engine import score
+    from app.enterprise.report.method3 import M3ReportData, render_html
+    from tests.enterprise.test_enterprise_method3 import AS_OF, SITE, assemble, assess, rows
+    ev, fr, chunks = rows()
+    out = score(assess(assemble(ev, fr, chunks, scan_id="s", root_url=SITE, as_of=AS_OF), []), as_of=AS_OF)
+    for x in out["lines"]:
+        if x["parameter_id"] == "X02":
+            x["explanation"] = "1 of 2 analytics, advertising or embedded services contacted are named in the policy; not named: Loom."
+    d = M3ReportData("s", "o", SITE, {"started_at": None, "completed_at": None}, out, "r", pages=[{"url": SITE, "category": "other", "forms": 0}],
+                     hosts=[{"host": "www.loom.com", "vendor": "Loom video embed", "category": "embedded content", "pages": 1, "requests": 3, "examples": [], "states": {"before a choice"}}])
+    import re as _re
+    row = _re.search(r"<tr><td class='mono'>www\.loom\.com</td>.*?</tr>", render_html(d), _re.S)
+    assert row and row.group(0).endswith("<td>no</td></tr>")

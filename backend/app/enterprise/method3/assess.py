@@ -459,7 +459,9 @@ def consent(a: A) -> None:
     rc_ref, recheck = a.consent("pre_consent_recheck")
     tracking_anywhere = any(n.get("non_essential") for _, n in a.ctx.loaded.networks) or bool(acc.get("non_essential")) or bool(wd.get("accepted_non_essential")) \
         or any(tracking_cookie(c) for pg in a.pages.values() for c in pg["cookies"]) or any(tracking_cookie(c) for c in acc.get("cookies") or [])
-    banner = _banner_core(a.m.banner_text or "")
+    # The banner the consent tests opened and clicked is the banner these checks read: its text, saved by the test just before the click (consent/run.py), is added to the
+    # homepage's own capture, which can miss a banner that draws late. Scans from before that capture have no such text and fall back to "banner_unread" below.
+    banner = _banner_core("\n".join(x for x in (a.m.banner_text or "", rej.get("banner_text") or "", acc.get("banner_text") or "") if x))
     no_tracking = "The site was not seen running any analytics or advertising service, before or after a choice, so there is nothing to consent to or refuse."
 
     def cmp_on(pg):

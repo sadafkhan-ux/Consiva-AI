@@ -30,6 +30,30 @@ logger = logging.getLogger(__name__)
 SETTLE_MS = 3000
 NAV_TIMEOUT_MS = 30_000
 MAX_PARALLEL = 3
+BANNER_TEXT_MAX = 6000
+
+#: The text of the consent banner as the test sees it, read just before the click: dialogs and elements whose id or class names a cookie, consent, CMP or banner layer, and every
+#: shadow root (consent tools draw there). The homepage's own capture can miss a banner that draws late; the banner the test clicked is the one the method 3 banner checks
+#: (C07-C10, C15) must read. Text only: no form value, no cookie.
+_BANNER_TEXT_JS = r"""() => {
+  const sel = '[role=dialog],[aria-modal=true],[id*=cookie i],[class*=cookie i],[id*=consent i],[class*=consent i],[id*=cmp i],[class*=cmp i],[id*=banner i],[class*=banner i]';
+  const out = []; const seen = new Set();
+  const take = (t) => { t = (t || '').trim(); if (t.length >= 20 && !seen.has(t)) { seen.add(t); out.push(t); } };
+  const walk = (root, depth) => {
+    if (depth > 6) return;
+    root.querySelectorAll(sel).forEach((el) => take(el.innerText || el.textContent));
+    root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) { take(el.shadowRoot.textContent); walk(el.shadowRoot, depth + 1); } });
+  };
+  walk(document, 0);
+  return out.join('\n').slice(0, %d);
+}""" % BANNER_TEXT_MAX
+
+
+async def _banner_text(page: Page) -> str:
+    try:
+        return str(await page.evaluate(_BANNER_TEXT_JS) or "")
+    except Exception:                                                  # noqa: BLE001
+        return ""
 
 
 def make_session_tools(browser, settings, guard, new_context_kwargs) -> tuple[Callable[[], Awaitable], Callable[[Page, str], Awaitable[bool]]]:
@@ -67,17 +91,19 @@ async def observe_state(make_context, goto, root_url: str, *, accept: bool) -> d
             pass
         await page.wait_for_timeout(SETTLE_MS)
         await pass_consent_gate(page)
+        banner_text = await _banner_text(page)                       # the banner about to be clicked, before the click closes it
         # What counts is everything requested from the moment of the click: a tag released by Accept fires at once, not after a pause.
         mark = len(records)
         clicked = await (click_accept if accept else click_reject)(page)
         if clicked != "clicked":
-            return {**base, "reason": "control_not_found" if clicked == "not_found" else "click_failed"}
+            return {**base, "reason": "control_not_found" if clicked == "not_found" else "click_failed", "banner_text": banner_text}
         confirmed = await confirm_interaction_completed(page, accept=accept)
         await page.wait_for_timeout(SETTLE_MS)
         after = records[mark:]
         site = urlparse(root_url).netloc
         return {
-            **base, "tested": True, "confirmed": bool(confirmed), "page_url": root_url, "cookies": normalize_cookies(await context.cookies(), root_url, state),
+            **base, "tested": True, "confirmed": bool(confirmed), "page_url": root_url, "banner_text": banner_text,
+            "cookies": normalize_cookies(await context.cookies(), root_url, state),
             "non_essential": non_essential_requests(after, site), "requests": summarise_requests([{"url": u, "type": t} for u, t in after], root_url, state),
         }
     except Exception as exc:
