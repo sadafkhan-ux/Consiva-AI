@@ -216,9 +216,34 @@ async def _process_one(job: AgentJob) -> None:
         # The Enterprise full-site crawl (app/enterprise): resumable, so a job re-run after a crash continues rather than starts over.
         from app.enterprise.jobs import run_enterprise_scan
 
-        await run_enterprise_scan(job.payload)
+        # An Enterprise scan runs for as long as the site needs (a 150-page site took 28 minutes), far past the reaper's threshold, which is sized for the 5-page
+        # scan. Without a heartbeat the reaper took the job back while it was still running and this same worker started it a second time: two runs of one scan,
+        # which deadlocked on ent_frontier (swaransoft.com, 27 Nov 2026; 8 of 21 Enterprise jobs had been reaped). The lease is renewed while the scan runs, so a
+        # live scan is never reaped and a dead worker's scan is still recovered after the usual threshold.
+        heartbeat = asyncio.create_task(_renew_lease_while_running(job.id))
+        try:
+            await run_enterprise_scan(job.payload)
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
     else:
         raise ValueError(f"Unknown job_type: {job.job_type}")
+
+
+LEASE_RENEW_SECONDS = 60
+
+
+async def _renew_lease_while_running(job_id: uuid.UUID) -> None:
+    """Renews a running job's lease every LEASE_RENEW_SECONDS until cancelled. A failed renewal is logged and retried on the next beat; it never stops the job."""
+    while True:
+        await asyncio.sleep(LEASE_RENEW_SECONDS)
+        try:
+            async with async_session_factory() as db:
+                await queue.renew_lease(db, job_id, worker_id=WORKER_ID)
+                await db.commit()
+        except Exception:
+            logger.warning("Could not renew the lease of job %s; will try again", job_id, exc_info=True)
 
 
 async def _sleep_or_stop(stopping: asyncio.Event, seconds: float) -> None:

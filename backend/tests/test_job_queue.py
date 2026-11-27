@@ -227,3 +227,63 @@ def test_the_stage_response_carries_the_servers_own_timestamps():
 
     assert response.model_dump(mode="json")["started_at"].startswith("2026-10-20T12:29:14")
     assert StageResponse(stage="x", status="completed", duration_ms=1, error=None, metadata={}).started_at is None
+
+
+# ── A long Enterprise scan renews its lease, so the reaper never takes it mid-run ──
+# swaransoft.com (27 Nov 2026): a 28-minute Enterprise scan was reaped at 18 minutes and started again by the same worker; the two runs deadlocked on ent_frontier.
+
+async def test_renew_lease_only_touches_the_running_job_held_by_this_worker():
+    import uuid as _uuid
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=MagicMock(rowcount=1))
+    job_id = _uuid.uuid4()
+
+    assert await queue.renew_lease(db, job_id, worker_id="w-1") is True
+    sql = str(db.execute.await_args.args[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "locked_at" in sql and "'running'" in sql and "'w-1'" in sql and job_id.hex in sql.replace("-", "")
+
+
+async def test_renew_lease_reports_a_job_it_no_longer_holds():
+    import uuid as _uuid
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=MagicMock(rowcount=0))
+    assert await queue.renew_lease(db, _uuid.uuid4(), worker_id="w-1") is False
+
+
+async def test_an_enterprise_scan_renews_its_lease_while_it_runs(monkeypatch):
+    import asyncio as _asyncio
+    import uuid as _uuid
+
+    from app.jobs import worker
+
+    renewed: list = []
+
+    class _Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def commit(self):
+            pass
+
+    async def fake_renew(db, job_id, *, worker_id):
+        renewed.append((job_id, worker_id))
+        return True
+
+    async def slow_scan(payload):
+        await _asyncio.sleep(0.05)
+
+    monkeypatch.setattr(worker, "LEASE_RENEW_SECONDS", 0.01)
+    monkeypatch.setattr(worker, "async_session_factory", _Session)
+    monkeypatch.setattr(queue, "renew_lease", fake_renew)
+    monkeypatch.setattr("app.enterprise.jobs.run_enterprise_scan", slow_scan)
+    job = SimpleNamespace(id=_uuid.uuid4(), job_type="enterprise_scan", payload={})
+
+    await worker._process_one(job)
+    count = len(renewed)
+    await _asyncio.sleep(0.03)
+
+    assert count >= 2 and all(r == (job.id, worker.WORKER_ID) for r in renewed)
+    assert len(renewed) == count        # the heartbeat stops when the scan ends

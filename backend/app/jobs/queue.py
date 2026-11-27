@@ -213,6 +213,17 @@ async def _close_orphaned_stages(db: AsyncSession, job: AgentJob) -> None:
     )
 
 
+async def renew_lease(db: AsyncSession, job_id: uuid.UUID, *, worker_id: str) -> bool:
+    """A live worker's heartbeat for a long job: moves the job's `locked_at` to now, so the reaper (which only sees elapsed time) never takes a job whose worker is
+    still running it. Only the worker that holds the job can renew it, and only while it is running. Returns whether the lease was renewed."""
+    result = await db.execute(
+        update(AgentJob)
+        .where(AgentJob.id == job_id, AgentJob.status == "running", AgentJob.locked_by == worker_id)
+        .values(locked_at=datetime.now(UTC))
+    )
+    return bool(result.rowcount)
+
+
 async def reap_stale_jobs(db: AsyncSession) -> int:
     """Requeues (or fails, if attempts are already exhausted) any job stuck at
     status="running" whose worker evidently died without releasing it. Returns the
