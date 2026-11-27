@@ -49,6 +49,30 @@ _BANNER_TEXT_JS = r"""() => {
 }""" % BANNER_TEXT_MAX
 
 
+#: The wording of a gate a consent tool shows BEFORE its choice (an age or parent/guardian question), for K01-K05. Only what a visitor sees: the visible text of the shadow roots
+#: and consent layers, with style sheets and scripts left out (a consent tool's style sheet alone can fill the banner capture above) and short button labels kept
+#: ("Yes, I am 18+"). Read only when a gate was found; the banner capture above is unchanged.
+_GATE_TEXT_JS = r"""() => {
+  const out = []; const seen = new Set();
+  const take = (t) => { (t || '').split('\n').forEach((x) => { x = x.trim(); if (x.length >= 2 && !seen.has(x)) { seen.add(x); out.push(x); } }); };
+  const visible = (root) => { Array.from(root.children).forEach((el) => { if (!['STYLE', 'SCRIPT', 'TEMPLATE', 'LINK'].includes(el.tagName)) take(el.innerText); }); };
+  const walk = (root, depth) => {
+    if (depth > 6) return;
+    root.querySelectorAll('*').forEach((el) => { if (el.shadowRoot) { visible(el.shadowRoot); walk(el.shadowRoot, depth + 1); } });
+  };
+  walk(document, 0);
+  document.querySelectorAll('[aria-modal=true],[id*=cmp i],[class*=cmp i],[id*=age-gate i],[class*=age-gate i],[id*=agegate i],[class*=agegate i]').forEach((el) => take(el.innerText));
+  return out.join('\n').slice(0, %d);
+}""" % BANNER_TEXT_MAX
+
+
+async def _gate_text(page: Page) -> str:
+    try:
+        return str(await page.evaluate(_GATE_TEXT_JS) or "")
+    except Exception:                                                  # noqa: BLE001
+        return ""
+
+
 async def _banner_text(page: Page) -> str:
     try:
         return str(await page.evaluate(_BANNER_TEXT_JS) or "")
@@ -90,7 +114,12 @@ async def observe_state(make_context, goto, root_url: str, *, accept: bool) -> d
         except Exception:
             pass
         await page.wait_for_timeout(SETTLE_MS)
-        await pass_consent_gate(page)
+        # A gate the consent tool shows first (an age or parent/guardian question) is evidence for K01-K05: its wording is read BEFORE the scanner answers it, and what was
+        # answered is kept beside the result (additive keys; older scans simply do not have them).
+        before_gate = await _gate_text(page)
+        gate = await pass_consent_gate(page)
+        if gate:
+            base = {**base, "consent_gate": gate, "gate_text": before_gate}
         banner_text = await _banner_text(page)                       # the banner about to be clicked, before the click closes it
         # What counts is everything requested from the moment of the click: a tag released by Accept fires at once, not after a pause.
         mark = len(records)

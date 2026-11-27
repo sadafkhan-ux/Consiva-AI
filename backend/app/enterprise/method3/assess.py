@@ -1215,8 +1215,58 @@ def cross_checks(a: A) -> None:
                   [f"{r.url}: {r.note}" for r in res if r.status == FAIL][:MAX_EV], urls=res, basis="Observed URL by URL against the policy")
 
 
-def _children_applicability(a: A) -> tuple[str, str, list[str], list[str]]:
+# ---- the consent banner's age, parent and guardian wording (K01-K05) ------------------------------------------------------------------------------------------------------------
+_BANNER_PARENT = re.compile(r"parent(al)?(\(s\))?\s*(or|/|and)\s*(legal |lawful )?guardian|parental consent|guardian'?s? consent|consent (of|from) (a|the|your) (parent|guardian)"
+                            r"|\b(i am|i'm) (a |the )?(parent|guardian)\b|on behalf of (a|my|your) (child|minor)|\b(child|minor)'?s? (parent|guardian)\b", re.I)
+_BANNER_AGE = re.compile(r"\b(are you|i am|i'm|confirm (that )?you are|you must be)\s+(at least |over |above )?(18|eighteen)\b|\b18\s*\+|\b(under|below) (the age of )?(18|eighteen)\b"
+                         r"|\bage (verification|gate|confirmation)\b|\bverify your age\b|\bconfirm your age\b", re.I)
+_BANNER_VERIFY = re.compile(r"verif|digilocker|virtual token|\botp\b|identity (proof|document)|government[- ]issued", re.I)
+_BANNER_DISABILITY = re.compile(r"person(s)? with (a )?disabilit|differently[- ]abled|on behalf of a person with", re.I)
+_BANNER_CHILD = re.compile(r"\bchild(ren)?\b|\bkids?\b|\bminors?\b|\bunder (the age of )?(18|eighteen)\b", re.I)
+_BANNER_NO_TRACK = re.compile(r"\b(no|not|never|do not|don't|does not|doesn't)\b[^.]{0,60}\b(track|monitor|profil)", re.I)
+_BANNER_NO_ADS = re.compile(r"\b(no|not|never|do not|don't|does not|doesn't)\b[^.]{0,60}\b(advertis|targeted ads|ads)\b", re.I)
+
+
+def _banner_parental(a: A) -> dict:
+    """What the consent banner itself shows about age, parents and guardians: its wording (the homepage's shadow-DOM capture and the text the consent tests read just before
+    their click), the gate the consent tool showed BEFORE its choice (an age question, kept by the consent test with the wording it showed) and the evidence ids. The page menu
+    and footer are not the banner, and the consent tool's style sheet is never read as wording."""
+    acc_ref, acc = a.consent("accept")
+    rej_ref, rej = a.consent("reject")
+    shadow = a.m.banner_text.split("[shadow DOM]", 1)[1] if "[shadow DOM]" in (a.m.banner_text or "") else ""
+    sources = [shadow] + [t.get(k) or "" for t in (acc, rej) for k in ("gate_text", "banner_text")]
+    lines: list[str] = []
+    child_lines: list[str] = []
+    for src in sources:
+        for ln in src.splitlines():
+            ln = " ".join(ln.split())
+            if not ln or len(ln) > 500 or re.search(r"[{};]|^\.|^@media|^\[dir=", ln) or ln in lines or ln in child_lines:
+                continue
+            if _BANNER_PARENT.search(ln) or _BANNER_AGE.search(ln) or _BANNER_DISABILITY.search(ln):
+                lines.append(ln)
+            elif _BANNER_CHILD.search(ln) and (_BANNER_NO_TRACK.search(ln) or _BANNER_NO_ADS.search(ln)):
+                child_lines.append(ln)
+    gate = next((t["consent_gate"] for t in (acc, rej) if isinstance(t.get("consent_gate"), dict)), None)
+    refs = [r for r, t in ((acc_ref, acc), (rej_ref, rej)) if r and (t.get("consent_gate") or t.get("gate_text") or t.get("banner_text"))] if lines or child_lines or gate else []
+    evidence = [f'Consent banner: "{ln[:240]}"' for ln in lines[:3]]
+    if gate:
+        evidence.append(f"Consent tool {gate.get('cmp') or ''} showed {'an age gate' if gate.get('kind') == 'age_gate' else 'a gate'} before its choice; the scanner answered as an adult "
+                        f"visitor (outcome: {gate.get('outcome') or 'unknown'}).")
+    return {"lines": lines, "evidence": evidence, "refs": refs, "gate": gate,
+            "parental": any(_BANNER_PARENT.search(ln) for ln in lines),
+            "age_gate": bool(gate and gate.get("kind") == "age_gate") or any(_BANNER_AGE.search(ln) for ln in lines),
+            "verified": any(_BANNER_VERIFY.search(ln) and (_BANNER_PARENT.search(ln) or _BANNER_AGE.search(ln)) for ln in lines),
+            "disability": any(_BANNER_DISABILITY.search(ln) for ln in lines),
+            "no_tracking": [ln for ln in lines + child_lines if _BANNER_NO_TRACK.search(ln) and (_BANNER_CHILD.search(ln) or _BANNER_PARENT.search(ln))],
+            "no_ads": [ln for ln in lines + child_lines if _BANNER_NO_ADS.search(ln) and (_BANNER_CHILD.search(ln) or _BANNER_PARENT.search(ln))]}
+
+
+def _children_applicability(a: A, bp: dict | None = None) -> tuple[str, str, list[str], list[str]]:
     """K01-K04 (3.0.1): applicable, not applicable or human review, with the reason, the evidence and the evidence ids.
+
+    The consent banner (owner's rule, 27 Nov 2026): a parent or guardian consent option on the site's own consent banner shows the organisation collects consent for
+    children, so the duties apply and are assessed, even where the policy says the site is not for children (that statement is kept in the evidence). An age question alone,
+    with no parent or guardian route, is only a weaker signal: it can be a gate that turns children away.
 
     Applicable: something shows the site itself serves children (a parent or guardian field, its own statement, or a children's service read from two kinds of signal).
     Not applicable: nothing shows it, or the policy excludes children and nothing contradicts it. Human review: the signals disagree (the policy excludes children but a form or
@@ -1238,7 +1288,20 @@ def _children_applicability(a: A) -> tuple[str, str, list[str], list[str]]:
     if site.has(CHILDREN):
         strong.append(f"the site reads as a children's service ({site.confidence[CHILDREN]} confidence)")
         ev += site.evidence_for(CHILDREN, 3)
+    bp = bp or {}
+    if bp.get("parental"):
+        strong.insert(0, "the site's consent banner offers a parent or guardian consent option")
+        ev = bp["evidence"] + ev
+        refs = list(bp["refs"]) + refs
     weak = []
+    if not strong and bp.get("age_gate"):
+        weak.append("the consent banner asks the visitor's age, but offers no parent or guardian route")
+        ev = bp["evidence"] + ev
+        refs = list(bp["refs"]) + refs
+    if bp.get("parental") and excl:
+        why = "; ".join(strong)
+        return (cat.APPLICABLE, why[0].upper() + why[1:] + ". The policy says the site is not for children, but the banner's own parent or guardian option shows consent "
+                "is collected for them, so the duty is assessed.", ev + excl, refs)
     if not strong:
         if CHILDREN in site.possible:
             weak.append("one signal of a children's service only")
@@ -1265,36 +1328,62 @@ def _children_applicability(a: A) -> tuple[str, str, list[str], list[str]]:
             "under 18.", ev, refs)
 
 
-def k05(a: A) -> None:
-    """K05 (3.0.1): consent of a verified lawful guardian for a person with disability (s.9(1), Rule 11). A policy clause that repeats the law is not a sign that such persons
-    use the site; a guardian field together with the site's own words about persons with disability is."""
+def k05(a: A, bp: dict | None = None) -> None:
+    """K05 (3.0.1): consent of a verified lawful guardian for a person with disability (s.9(1), Rule 11). Owner's rule (27 Nov 2026): counted only when the website's consent
+    banner offers consent by the lawful guardian of a person with disability; otherwise it is left out of the score (N/A), with any other signals kept in the evidence."""
     site, k2 = a.site, a.v2.get("K2")
     dis = [f'{x["url"]}: "{x["text"]}"' for x in site.disability[:1]]
-    if site.guardian_fields and site.disability:
+    bp = bp or {}
+    banner_dis = [ln for ln in bp.get("lines") or [] if _BANNER_DISABILITY.search(ln)]
+    if banner_dis:
         sents = a.sentences(r"lawful guardian|guardian of (a |the )?person with", PRIVACY, TERMS, limit=3)
         ver = [f for f in sents if re.search(r"verif", f["quote"], re.I)]
-        why = f"Applies because a form asks for a guardian ({site.guardian_fields[0]}) and the site refers to persons with disability"
-        if ver:
-            a.put("K05", PASS, f"{why}; verified consent of the lawful guardian is described.", [cite(f) for f in ver[:2]] + dis, refs=refs_of(ver),
-                  basis="Read from the published policy", review=True, applicability=cat.APPLICABLE)
-        elif sents:
-            a.put("K05", PARTIAL, f"{why}; the guardian's consent is described, but not how the guardian is verified (Rule 11).", [cite(f) for f in sents[:2]] + dis,
-                  refs=refs_of(sents), basis="Read from the published policy", review=True, applicability=cat.APPLICABLE)
+        bev = [f'Consent banner: "{ln[:240]}"' for ln in banner_dis[:2]]
+        why = "Applies because the site's consent banner offers consent by the lawful guardian of a person with disability"
+        refs = list(bp.get("refs") or [])
+        if ver or any(_BANNER_VERIFY.search(ln) for ln in banner_dis):
+            a.put("K05", PASS, f"{why}; verified consent of the lawful guardian is described.", bev + [cite(f) for f in ver[:2]] + dis, refs=refs + refs_of(ver),
+                  basis="Observed (consent banner) and read from the policy", review=True, applicability=cat.APPLICABLE)
         else:
-            a.put("K05", FAIL, f"{why}; the policy says nothing about the lawful guardian's verified consent.", dis, basis="Read from the published policy", review=True,
-                  applicability=cat.APPLICABLE)
-    elif k2 is not None and k2.state not in ("not_applicable", "not_assessed"):
-        a.put("K05", NA, f"Not settled by the website: the 51-parameter reading applied this duty ({(k2.note or '')[:160]}), but no form or page of the site shows persons with "
-              "disability who have a lawful guardian use it. The organisation must confirm; until then these marks are held back.", [k2.note[:300]] + dis,
-              refs=list(k2.evidence_refs), basis="Applicability", applicability=cat.HUMAN_REVIEW)
+            a.put("K05", PARTIAL, f"{why}; the guardian's consent is offered, but not how the guardian is verified (Rule 11).", bev + [cite(f) for f in sents[:2]] + dis,
+                  refs=refs + refs_of(sents), basis="Observed (consent banner) and read from the policy", review=True, applicability=cat.APPLICABLE)
+    elif (site.guardian_fields and site.disability) or (k2 is not None and k2.state not in ("not_applicable", "not_assessed")):
+        seen = (f"a form asks for a guardian ({site.guardian_fields[0]}) and the site refers to persons with disability" if site.guardian_fields and site.disability
+                else f"the 51-parameter reading applied this duty ({(k2.note or '')[:160]})")
+        a.put("K05", NA, f"Not counted: the website's consent banner offers no consent by a lawful guardian of a person with disability. Signals seen: {seen}.",
+              dis + ([k2.note[:300]] if k2 is not None and k2.note else []), refs=list(k2.evidence_refs) if k2 is not None else [], basis="Applicability",
+              applicability=cat.NOT_APPLICABLE)
     else:
         a.put("K05", NA, "No evidence that persons with disability who have a lawful guardian use the site: no guardian form" +
               (" (the policy mentions such persons, but a clause that restates the law is not a sign they use the site)" if dis else "") + ".",
               dis, basis="Applicability", applicability=cat.NOT_APPLICABLE)
 
 
+def _k01(a: A, bp: dict, consent_f: list[dict]) -> None:
+    """K01: verifiable parental consent. Only reached when the website's consent banner offers a parent or guardian consent option (owner's rule, 27 Nov 2026). Pass when how the
+    parent or guardian is verified is also described, on the banner or in the policy (Rule 10); Partial when it is not."""
+    pol_ver = [f for f in consent_f if re.search(r"verif", blob(f), re.I)]
+    verified = bp.get("verified") or bool(pol_ver)
+    ev = (bp.get("evidence") or [])[:3] + [cite(f) for f in (pol_ver or consent_f)[:2]]
+    refs = list(bp.get("refs") or []) + refs_of(pol_ver or consent_f)
+    basis = "Observed (consent banner) and read from the policy"
+    if verified:
+        a.put("K01", PASS, "The consent banner offers a parent or guardian consent option, and how the parent or guardian is verified is described.", ev, refs=refs, basis=basis,
+              review=True)
+    else:
+        a.put("K01", PARTIAL, "The consent banner offers a parent or guardian consent option, but not how the parent or guardian is verified (Rule 10).", ev, refs=refs,
+              basis=basis, review=True)
+
+
 def conditional(a: A) -> None:
-    applicability, why, ev, refs = _children_applicability(a)
+    bp = _banner_parental(a)
+    applicability, why, ev, refs = _children_applicability(a, bp)
+    # Owner's rule (27 Nov 2026): K01-K04 are counted only when the website itself offers a parent or guardian consent option on its consent banner. Without one they are
+    # left out of the score (N/A), whatever else suggests children; those signals stay in the evidence for a reviewer.
+    left_out = applicability != cat.NOT_APPLICABLE and not bp.get("parental")
+    if left_out:
+        applicability, why = cat.NOT_APPLICABLE, ("Not counted: the website's consent banner offers no parent or guardian consent option. Signals seen: "
+                                                  + why[0].lower() + why[1:])
     k1 = a.v2.get("K1")
     v2_applied = k1 is not None and k1.state not in ("not_applicable", "not_assessed")
     if applicability != cat.APPLICABLE:
@@ -1303,23 +1392,28 @@ def conditional(a: A) -> None:
                   limitation=("Whether the organisation processes children's data is a fact about its users, not always visible on the website."
                               if applicability == cat.HUMAN_REVIEW else None),
                   differs=(f"Enterprise v2 K1 read the site as serving children ({(k1.note or '')[:160]}); no page, form or statement of the site itself shows it does."
-                           if pid == "K01" and v2_applied and applicability == cat.NOT_APPLICABLE else None))
+                           if pid == "K01" and v2_applied and applicability == cat.NOT_APPLICABLE and not left_out else None))
     else:
         cats = (PRIVACY, TERMS)
         consent_f = a.of("children_consent", *cats, pattern=r"parent|guardian|verifiable|consent")
         notrack = a.of("children_no_tracking", *cats, pattern=r"track|profil|monitor")
         noads = a.of("children_no_tracking", *cats, pattern=r"advertis|target")
-        a.policy_result("K01", [f for f in consent_f if re.search(r"verif", blob(f), re.I)], consent_f, "verifiable parental consent", full_note="Verifiable parental consent is described.",
-                        part_note="Parental consent is described, but not how it is verified.", cats=cats, review=True)
+        _k01(a, bp, consent_f)
         a.policy_result("K02", a.of("children_no_tracking", *cats) + consent_f[:0], [], "protecting children from detrimental processing", full_note="The policy limits processing of children's data.",
                         part_note="", cats=cats, review=True)
-        a.policy_result("K03", notrack, [], "not tracking or monitoring children", full_note="The policy says children are not tracked or monitored.", part_note="", cats=cats, review=True)
-        a.policy_result("K04", noads, [], "no targeted advertising at children", full_note="The policy says no advertising is targeted at children.", part_note="", cats=cats, review=True)
+        for pid, facts, said, what, note in (("K03", notrack, bp["no_tracking"], "not tracking or monitoring children", "children are not tracked or monitored"),
+                                             ("K04", noads, bp["no_ads"], "no targeted advertising at children", "no advertising is targeted at children")):
+            if facts or not said:
+                a.policy_result(pid, facts, [], what, full_note=f"The policy says {note}.", part_note="", cats=cats, review=True,
+                                extra_ev=[f'Consent banner: "{x[:240]}"' for x in said[:1]])
+            else:
+                a.put(pid, PASS, f"The consent banner says {note}; the policy does not repeat it.", [f'Consent banner: "{x[:240]}"' for x in said[:2]], refs=bp["refs"],
+                      basis="Observed (consent banner)", review=True)
         for pid in ("K01", "K02", "K03", "K04"):
             r = a.out[pid]
             r.applicability = cat.APPLICABLE
             r.evidence = ([f"Applies because {why[0].lower() + why[1:]}"] + r.evidence)[:MAX_EV]
-    k05(a)
+    k05(a, bp)
     s1 = a.v2.get("S1")
     if s1 is None or s1.state in ("not_applicable", "not_assessed"):
         note = "The organisation is not shown to be notified as a Significant Data Fiduciary (a notification cannot be seen on a website; to be confirmed by the organisation)."

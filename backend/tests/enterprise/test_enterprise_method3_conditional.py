@@ -17,7 +17,7 @@ from app.enterprise.report.method3 import M3ReportData, render_html
 from tests.enterprise.test_enterprise_method3 import AS_OF, SITE, all_results, rows
 
 
-def site(*, pages=(), home_text=None, children_excluded=True, forms=(), hosts=(), html=None):
+def site(*, pages=(), home_text=None, children_excluded=True, forms=(), hosts=(), html=None, reject_extra=None):
     """The synthetic shop of test_enterprise_method3, with extra pages, home text, forms and third-party hosts."""
     ev, fr, chunks = rows()
     if not children_excluded:
@@ -39,6 +39,9 @@ def site(*, pages=(), home_text=None, children_excluded=True, forms=(), hosts=()
                                                                                                     "fields": [{"type": "text", "name": n, "label": n} for n in forms]}]})))
     if html is not None:
         ev = [EvRow(r.id, r.kind, r.source_url, r.page_number, r.frontier_id, r.detection_method, html) if r.id == "3" else r for r in ev]
+    if reject_extra is not None:                                       # keys the consent test adds to its reject result (the gate, its wording)
+        ev = [EvRow(r.id, r.kind, r.source_url, r.page_number, r.frontier_id, r.detection_method, json.dumps({**json.loads(r.content), **reject_extra})) if r.id == "rej" else r
+              for r in ev]
     m = assemble(ev, fr, chunks, scan_id="s", root_url=SITE, as_of=AS_OF)
     return m, {r.parameter_id: r for r in assess(m, [])}
 
@@ -112,25 +115,91 @@ def test_no_evidence_of_children_is_not_applicable_with_the_reason():
 def test_an_edtech_site_is_not_assumed_to_serve_children():
     m, r = site(children_excluded=False, home_text="We are an online learning platform. Learners enrol in courses.", pages=[("courses", "Online courses. Enrol now.")])
     assert detect(m).has(EDTECH)
-    assert all(r[p].applicability == cat.HUMAN_REVIEW and r[p].status == NA for p in ("K01", "K02", "K03", "K04"))
+    # owner's rule (27 Nov 2026): no parent or guardian option on the banner -> not counted; the EdTech signal stays in the explanation
+    assert all(r[p].applicability == cat.NOT_APPLICABLE and r[p].status == NA and "Not counted" in r[p].explanation and "EdTech" in r[p].explanation
+               for p in ("K01", "K02", "K03", "K04"))
     _, r = site(home_text="We are an online learning platform. Learners enrol in courses.", pages=[("courses", "Online courses. Enrol now.")])
     assert r["K01"].applicability == cat.NOT_APPLICABLE                  # the policy excludes children and nothing contradicts it
 
 
-def test_a_parent_field_makes_the_children_duties_apply_and_a_silent_policy_fails_high():
+def test_a_parent_field_without_a_banner_parent_option_is_not_counted():
+    # owner's rule (27 Nov 2026): K01-K04 count only when the banner offers a parent or guardian option; the form signal is kept for a reviewer
     _, r = site(children_excluded=False, forms=["Parent name", "Child's name", "Class"])
-    assert r["K01"].applicability == cat.APPLICABLE and r["K01"].status == FAIL and cat.severity_of("K01", FAIL) == "high"
-    assert r["K01"].evidence[0].startswith("Applies because a form asks for a parent or guardian")
+    assert all(r[p].applicability == cat.NOT_APPLICABLE and r[p].status == NA for p in ("K01", "K02", "K03", "K04"))
+    assert "Not counted" in r["K01"].explanation and "a form asks for a parent or guardian" in r["K01"].explanation
+    assert r["K01"].differs is None
 
 
-def test_a_parent_field_against_a_policy_that_excludes_children_goes_to_human_review():
+def test_a_parent_field_against_a_policy_that_excludes_children_is_not_counted_without_a_banner_option():
     _, r = site(forms=["Parent name", "Child's name"])
-    assert r["K01"].applicability == cat.HUMAN_REVIEW and "disagrees" in r["K01"].explanation
+    assert r["K01"].applicability == cat.NOT_APPLICABLE and r["K01"].status == NA and "disagrees" in r["K01"].explanation
+    _, r = site(forms=["Parent name", "Child's name"], home_text=banner("Parental consent: a parent or guardian must consent for users under 18."))
+    assert r["K01"].applicability == cat.APPLICABLE and r["K01"].status == PARTIAL
 
 
 def test_k05_needs_more_than_a_policy_clause_that_restates_the_law():
     _, r = site(pages=[("about", "For a person with disability, consent is given by the lawful guardian.")])
     assert r["K05"].applicability == cat.NOT_APPLICABLE
+
+
+# ---- the consent banner's parent / guardian option (owner's rule, 27 Nov 2026) ----------------------------------------------------------------------------------------------------
+
+def banner(*lines):
+    return ("Welcome to the shop. We sell tea.\n[shadow DOM]\n.cmp-parental-consent { color: red; }\nWe use cookies to improve the site. Privacy Policy\n"
+            + "\n".join(lines) + "\nAccept All\nReject All")
+
+
+def test_a_banner_parent_option_with_verification_applies_and_passes_even_when_the_policy_excludes_children():
+    _, r = site(home_text=banner("I am a parent or guardian giving consent for my child. We verify the parent through DigiLocker."))
+    k = r["K01"]
+    assert k.applicability == cat.APPLICABLE and k.status == PASS and k.review
+    assert "not for children" in k.evidence[0] and any(e.startswith('Consent banner: "I am a parent or guardian') for e in k.evidence)
+    assert all(r[p].applicability == cat.APPLICABLE for p in ("K02", "K03", "K04"))
+
+
+def test_a_banner_parent_option_without_verification_is_partial():
+    _, r = site(children_excluded=False, home_text=banner("Parental consent: if you are under 18, ask your parent or guardian to consent."))
+    assert r["K01"].applicability == cat.APPLICABLE and r["K01"].status == PARTIAL and "Rule 10" in r["K01"].explanation
+
+
+def test_an_age_question_alone_is_a_weak_signal_never_marks():
+    _, r = site(children_excluded=False, home_text=banner("Are you 18 or older?"))
+    assert all(r[p].applicability == cat.NOT_APPLICABLE and r[p].status == NA for p in ("K01", "K02", "K03", "K04"))
+    _, r = site(home_text=banner("Are you 18 or older?"))                # the policy excludes children: an age gate agrees with it
+    assert r["K01"].applicability == cat.NOT_APPLICABLE and "Weaker signal" in " ".join(r["K01"].evidence)
+
+
+def test_no_banner_parent_option_is_never_counted_and_the_rest_is_scored_without_it():
+    m, r = site(children_excluded=False, forms=["Parent name", "Child's name"], home_text=banner("Are you 18 or older?"))
+    assert all(r[p].status == NA and r[p].applicability == cat.NOT_APPLICABLE for p in ("K01", "K02", "K03", "K04", "K05"))
+    out = score(list(r.values()), as_of=AS_OF)
+    assert all(x["earned"] is None for x in out["lines"] if x["parameter_id"].startswith("K"))     # K01-K05 add nothing to the maximum: the rest is scored without them
+
+
+def test_the_consent_tools_style_sheet_is_not_banner_wording():
+    _, r = site(children_excluded=False)
+    assert r["K01"].applicability == cat.NOT_APPLICABLE                  # ".cmp-parental-consent { ... }" alone is never a parent option
+    _, r = site(children_excluded=False, home_text=banner())
+    assert r["K01"].applicability == cat.NOT_APPLICABLE
+
+
+def test_the_gate_the_consent_test_answered_is_recorded_as_evidence():
+    gate = {"kind": "age_gate", "cmp": "Consiva Consent SDK", "answer": "adult", "outcome": "passed"}
+    _, r = site(children_excluded=False, reject_extra={"consent_gate": gate, "gate_text": "Are you 18 or older?\nYes\nNo, my parent or guardian will consent"})
+    k = r["K01"]
+    assert k.applicability == cat.APPLICABLE and k.status == PARTIAL and "ev:rej" in k.evidence_refs
+    assert any("answered as an adult" in e for e in k.evidence)
+
+
+def test_a_banner_statement_that_children_are_not_tracked_counts_for_k03():
+    _, r = site(children_excluded=False, home_text=banner("Parent or guardian consent is required for users under 18.", "We do not track or profile children."))
+    assert r["K03"].status == PASS and r["K03"].evidence and "Consent banner" in " ".join(r["K03"].evidence)
+    assert r["K04"].status == FAIL                                       # nothing said about advertising: no marks
+
+
+def test_a_banner_guardian_option_for_a_person_with_disability_applies_k05():
+    _, r = site(home_text=banner("Consent on behalf of a person with disability by the lawful guardian."))
+    assert r["K05"].applicability == cat.APPLICABLE and r["K05"].status == PARTIAL and "Rule 11" in r["K05"].explanation
 
 
 # ---- G02 ----------------------------------------------------------------------------------------------------------------------------------------------------------------------
